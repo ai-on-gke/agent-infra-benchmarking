@@ -116,6 +116,9 @@ func newTestConfig(t *testing.T, srv *pingServer, cfg *userclass.Config) *usercl
 	if cfg.Tracer == nil {
 		cfg.Tracer = otel.Tracer("test")
 	}
+	if cfg.Atespace == "" {
+		cfg.Atespace = "benchmark"
+	}
 	if cfg.Dyn == nil {
 		cfg.Dyn = dynconfig.NewHolder(dynconfig.Config{})
 	}
@@ -130,7 +133,6 @@ func newTestTTFIUser(t *testing.T, srv *pingServer, cfg *userclass.Config) *ttfi
 	return &ttfiUser{
 		cfg:          c,
 		actorName:    "ttfiactor",
-		hostHeader:   "ttfiactor.benchmark." + actorDomain,
 		templateName: defaultTTFITemplate,
 		userClass:    ttfiUserClass,
 	}

@@ -41,18 +41,8 @@ FROM gcr.io/distroless/python3-debian12
 WORKDIR /app
 COPY --from=pydeps /app/deps /app/deps
 COPY --from=goboomer /out/boomer-worker /app/boomer-worker
-# No locust Python payload yet: the image carries the boomer-worker binary
-# only, so the manifest's boomer container runs and the master/worker ones
-# have nothing to load. To install it, uncomment all five. The first four are
-# substrate's, read from the submodule so a bump carries them forward
-# untouched; ttfi.py is this repo's only locust file and layers last into the
-# same /app/tests the master loads by ${BENCHMARK_USER_CLASS}. It has to stay
-# paired with common/ — it imports common.boomer_config.
-# COPY dependency-repos/substrate/benchmarking/locust/runner.py /app/runner.py
-# COPY dependency-repos/substrate/benchmarking/locust/common/   /app/common/
-# COPY dependency-repos/substrate/benchmarking/locust/shapes/   /app/shapes/
-# COPY dependency-repos/substrate/benchmarking/locust/tests/    /app/tests/
-# COPY benchmarking/locust/tests/ttfi.py /app/tests/ttfi.py
+COPY benchmarking/locust/common/ /app/common/
+COPY benchmarking/locust/tests/ /app/tests/
 
 ENV PYTHONPATH=/app:/app/deps
 ENV PYTHONUNBUFFERED=1

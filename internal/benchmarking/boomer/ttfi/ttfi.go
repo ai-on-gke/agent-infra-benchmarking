@@ -59,6 +59,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
@@ -77,13 +78,12 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Addressing and workload-surface constants, mirrored from the glutton
-// benchmark rather than imported from it. They describe substrate's actor DNS
-// scheme, the atespace workloads/deploy.sh creates, and glutton's own HTTP
-// surface — none of which belong to either benchmark's load generator, so
-// neither should have to depend on the other to reach them.
+// Workload-surface constants, mirrored from the glutton benchmark rather than
+// imported from it: the atespace workloads/deploy.sh creates, and glutton's
+// own HTTP surface. Neither belongs to either benchmark's load generator, so
+// neither should have to depend on the other to reach them. Actor addressing
+// is not here — the router takes it from atenet.TargetActorHeader.
 const (
-	actorDomain      = "actors.resources.substrate.ate.dev"
 	templateAtespace = "benchmark-workloads"
 	pingPath         = "/ping"
 )
@@ -210,7 +210,6 @@ func (r *ttfiRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config, tc
 		templateName: tmpl,
 		userClass:    ttfiUserClass,
 	}
-	u.hostHeader = u.actorName + "." + u.cfg.Atespace + "." + actorDomain
 	bmetrics.UpdateUsers(ttfiUserClass, 1)
 	if err := u.ensureAtespace(ctx); err != nil {
 		bmetrics.UpdateUsers(ttfiUserClass, -1)
@@ -240,7 +239,6 @@ func (r *ttfiRuntime) shutdown(ctx context.Context) {
 type ttfiUser struct {
 	cfg          *userclass.Config
 	actorName    string
-	hostHeader   string
 	templateName string
 	userClass    string
 }
@@ -380,7 +378,10 @@ func (u *ttfiUser) sendInstruction(ctx context.Context) (retry bool, err error) 
 	if err != nil {
 		return false, err
 	}
-	httpReq.Host = u.hostHeader
+	// The router resolves the actor from this header alone — atenet's ingress
+	// handler parses it and 404s with "invalid actor reference" when it is
+	// absent, regardless of the request's Host.
+	httpReq.Header.Set(atenet.TargetActorHeader, u.cfg.Atespace+"/"+u.actorName)
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
 

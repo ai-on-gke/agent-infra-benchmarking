@@ -21,6 +21,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/atenet"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 	"google.golang.org/protobuf/proto"
 )
@@ -45,8 +46,18 @@ type pingServer struct {
 	// echo sees a mismatch.
 	PingEcho string
 
-	mu        sync.Mutex
-	pingCount int
+	mu          sync.Mutex
+	pingCount   int
+	targetActor string
+}
+
+// RecordedTargetActor returns the ate-target-actor header from the most recent
+// request. The router resolves the actor from this alone, so a request that
+// omits or misformats it is routed nowhere regardless of its Host.
+func (s *pingServer) RecordedTargetActor() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.targetActor
 }
 
 // Start serves the fake until the test ends.
@@ -78,6 +89,9 @@ func (s *pingServer) serve(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	s.pingCount++
+	// Recorded before the activating check so a rejected ping still shows what
+	// it addressed.
+	s.targetActor = r.Header.Get(atenet.TargetActorHeader)
 	activating := s.pingCount <= s.PingFailures
 	s.mu.Unlock()
 	if activating {

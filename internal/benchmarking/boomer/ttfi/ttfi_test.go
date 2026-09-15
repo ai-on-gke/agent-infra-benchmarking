@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"go.opentelemetry.io/otel/attribute"
@@ -302,5 +303,31 @@ func TestTTFIUserClassIsRegistered(t *testing.T) {
 	}
 	if entry.LocustFile != "ttfi.py" {
 		t.Errorf("LocustFile: got %q, want %q", entry.LocustFile, "ttfi.py")
+	}
+}
+
+// The router resolves the actor from ate-target-actor and nothing else: an
+// absent or misformatted value is a 404 "invalid actor reference" no matter
+// what the request's Host says. Asserted through substrate's own parser rather
+// than by string compare, so this fails if the wire format moves again.
+func TestTTFIAddressesTheActorWithTheTargetActorHeader(t *testing.T) {
+	srv := &pingServer{}
+	u, _ := newTTFITestUser(t, srv, dynconfig.Config{}, &fakeControlClient{})
+
+	if _, _, err := u.firstInstruction(context.Background(), 5*time.Second); err != nil {
+		t.Fatalf("firstInstruction failed: %v", err)
+	}
+
+	got := srv.RecordedTargetActor()
+	if got == "" {
+		t.Fatal("no ate-target-actor header sent; the router would 404 this request")
+	}
+	ref, err := atenet.ParseTargetActor(got)
+	if err != nil {
+		t.Fatalf("router would reject %q: %v", got, err)
+	}
+	if ref.Atespace != u.cfg.Atespace || ref.Name != u.actorName {
+		t.Errorf("target actor: got %s/%s, want %s/%s",
+			ref.Atespace, ref.Name, u.cfg.Atespace, u.actorName)
 	}
 }

@@ -67,6 +67,9 @@ OTLP_ENDPOINT=""
 # The timeout, in whole seconds, for waiting for the ateom worker pods to be
 # ready.
 WAIT_TIMEOUT_SECS=300
+# How often the golden-snapshot wait reports that it is still waiting. Only
+# affects output, not the 5s poll interval.
+PROGRESS_EVERY_SECS=30
 
 usage() {
   echo "Usage: $0 [options]"
@@ -167,26 +170,82 @@ wait_actortemplate_ready() {
   local atespace="$1"
   local template="$2"
   local timeout_secs="${3:-300}"
+  local started=${SECONDS}
   local deadline=$((SECONDS + timeout_secs))
-  local json snapshot error_message
+  local json snapshot error_message elapsed
+  local last_json="" last_get_err="" next_report=$((SECONDS + PROGRESS_EVERY_SECS))
+  # The poll's stderr is kept rather than discarded: a get that fails on every
+  # attempt otherwise looks exactly like a snapshot that is merely slow, and
+  # both end in the same bare timeout.
+  local err_file
+  err_file="$(mktemp)"
 
   while ((SECONDS < deadline)); do
-    if json=$(run_kubectl_ate get actor-template "${template}" -a "${atespace}" -o json 2>/dev/null); then
+    if json=$(run_kubectl_ate get actor-template "${template}" -a "${atespace}" -o json 2>"${err_file}"); then
+      last_get_err=""
+      last_json="${json}"
       snapshot=$(jq -r '.status.goldenSnapshotStatus.goldenSnapshot.snapshotUri // empty' <<<"${json}")
       if [[ -n "${snapshot}" ]]; then
+        rm -f "${err_file}"
+        echo "  ${template}: golden snapshot ready after $((SECONDS - started))s"
+        echo "  ${template}: ${snapshot}"
         return 0
       fi
       error_message=$(jq -r '.status.goldenSnapshotStatus.errorMessage // empty' <<<"${json}")
       if [[ -n "${error_message}" ]]; then
+        rm -f "${err_file}"
         echo "actor template ${atespace}/${template} failed: ${error_message}" >&2
         return 1
       fi
+    else
+      last_get_err="$(<"${err_file}")"
+    fi
+
+    # Without this the script is silent for the whole timeout, so a stuck
+    # reconciler and a slow one look the same while it is running.
+    if ((SECONDS >= next_report)); then
+      elapsed=$((SECONDS - started))
+      if [[ -n "${last_get_err}" ]]; then
+        echo "  ${template}: ${elapsed}s/${timeout_secs}s — get failing: ${last_get_err//$'\n'/ }"
+      else
+        echo "  ${template}: ${elapsed}s/${timeout_secs}s — no golden snapshot yet$(describe_template_state "${last_json}")"
+      fi
+      next_report=$((SECONDS + PROGRESS_EVERY_SECS))
     fi
     sleep 5
   done
 
-  echo "timed out waiting for actor template ${atespace}/${template} golden snapshot" >&2
+  rm -f "${err_file}"
+  echo "timed out after ${timeout_secs}s waiting for actor template ${atespace}/${template} golden snapshot" >&2
+  if [[ -n "${last_get_err}" ]]; then
+    echo "  every poll failed; last error from kubectl-ate get:" >&2
+    echo "${last_get_err}" | sed 's/^/    /' >&2
+  elif [[ -n "${last_json}" ]]; then
+    echo "  the template exists but reported neither a snapshot nor an error." >&2
+    echo "  last observed .status:" >&2
+    jq '.status // {}' <<<"${last_json}" 2>/dev/null | sed 's/^/    /' >&2
+  fi
+  echo "  snapshots are written to gs://${BUCKET_NAME}/${atespace}/${template}/ — check that the" >&2
+  echo "  bucket exists and the ateom workers can write to it, then check the workers:" >&2
+  echo "    kubectl get pods -n ${atespace}" >&2
+  echo "    kubectl logs -n ${atespace} deployment/benchmark-ateom --tail=50" >&2
   return 1
+}
+
+# describe_template_state turns whatever the template reports into a short
+# suffix for the progress line, so a pending snapshot still says something
+# about why. Prints nothing when the status carries no recognizable field.
+describe_template_state() {
+  local json="$1"
+  [[ -n "${json}" ]] || return 0
+  local phase
+  phase=$(jq -r '
+    [ .status.goldenSnapshotStatus.phase?,
+      .status.goldenSnapshotStatus.state?,
+      .status.phase?,
+      .status.state? ] | map(select(. != null and . != "")) | first // empty
+  ' <<<"${json}" 2>/dev/null) || return 0
+  [[ -n "${phase}" ]] && printf ' (%s)' "${phase}"
 }
 
 # wait_templates_ready blocks until every benchmark template's golden
@@ -197,16 +256,29 @@ wait_templates_ready() {
     echo "jq is required to wait for the benchmark actor templates" >&2
     return 1
   fi
-  local template
+  local template i=0
+  local total=${#TEMPLATES[@]}
   for template in "${TEMPLATES[@]}"; do
-    echo "Waiting for the benchmark-workloads/${template} golden snapshot..."
+    i=$((i + 1))
+    echo "[${i}/${total}] Waiting for the benchmark-workloads/${template} golden snapshot (timeout ${WAIT_TIMEOUT_SECS}s)..."
     wait_actortemplate_ready benchmark-workloads "${template}" "${WAIT_TIMEOUT_SECS}"
   done
+  echo "All ${total} golden snapshots ready."
 }
 
 deploy() {
   resolve_otlp_endpoint
-  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, otlp_endpoint=${OTLP_ENDPOINT})..."
+  # Echoed up front because every later failure is explained by one of these:
+  # the bucket receives the golden snapshots, the templates are what the wait
+  # below blocks on, and the sandbox class has to match the WorkerPool's.
+  echo "Deploying workloads:"
+  echo "  templates:      ${TEMPLATES[*]}"
+  echo "  worker_count:   ${WORKER_COUNT}"
+  echo "  sandbox_class:  ${SANDBOX_CLASS}"
+  echo "  actor_memory:   ${ACTOR_MEMORY}"
+  echo "  otlp_endpoint:  ${OTLP_ENDPOINT}"
+  echo "  bucket:         gs://${BUCKET_NAME}/benchmark-workloads/"
+  echo "  substrate:      ${SUBSTRATE_DIR} ($(cd "${SUBSTRATE_DIR}" && git rev-parse --short HEAD 2>/dev/null || echo 'unknown rev'))"
   substitute "${POOL_MANIFEST}" | run_ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
   kubectl wait --for=create deployment/benchmark-ateom \
