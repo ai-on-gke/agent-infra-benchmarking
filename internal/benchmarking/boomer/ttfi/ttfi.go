@@ -24,8 +24,11 @@
 //
 // Two windows are measured, because they answer different questions:
 //
-//   - TTFIColdStart: the actor has just been created and has no snapshot of
-//     its own. This is starting a new session.
+//   - TTFIFirstResume: the actor has just been created and has no snapshot of
+//     its own, so substrate activates it from whatever source its template
+//     resolves to — the template's golden snapshot when it has one, the OCI
+//     image when it does not. Point ttfi_template at a template without
+//     snapshotsConfig to measure a true cold boot.
 //   - TTFIWarmStart: the actor exists and was suspended to object storage.
 //     This is resuming an existing session, and is the number substrate's
 //     100ms activation target is about.
@@ -50,6 +53,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -101,7 +105,7 @@ const (
 	// retry granularity does not show up in the measurement.
 	ttfiRetryDelay = 25 * time.Millisecond
 
-	ttfiColdMetric        = "TTFIColdStart"
+	ttfiFirstResumeMetric = "TTFIFirstResume"
 	ttfiWarmMetric        = "TTFIWarmStart"
 	ttfiResumeMetric      = "TTFIResume"
 	ttfiInstructionMetric = "TTFIInstruction"
@@ -128,12 +132,19 @@ func initTTFI(cfg *userclass.Config) (taskFn func(), shutdown func(context.Conte
 	if cfg.Tracer == nil {
 		cfg.Tracer = otel.Tracer("substrate-boomer/glutton-ttfi")
 	}
-	rt := &ttfiRuntime{cfg: cfg}
+	tcfg, err := loadTTFIConfig()
+	if err != nil {
+		slog.Error("fatal: invalid TTFI keys in --config-json",
+			slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	rt := &ttfiRuntime{cfg: cfg, tcfg: tcfg}
 	return rt.iterate, rt.shutdown
 }
 
 type ttfiRuntime struct {
 	cfg   *userclass.Config
+	tcfg  ttfiConfig
 	users sync.Map // goroutineID -> *ttfiUser
 }
 
@@ -153,7 +164,7 @@ func (r *ttfiRuntime) iterate() {
 	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
-		u, err := r.startUser(context.Background(), r.cfg.Dyn.Load())
+		u, err := r.startUser(context.Background(), r.cfg.Dyn.Load(), r.tcfg)
 		if err != nil {
 			slog.Warn("ttfi on_start failed; goroutine will retry next iter",
 				slog.String("err", err.Error()))
@@ -182,13 +193,13 @@ func (r *ttfiRuntime) iterate() {
 	// Suspend is the precondition for a warm measurement, not part of it:
 	// it runs outside the TTFI span and reports its own row.
 	user.suspend(ctx)
-	user.measure(ctx, ttfiWarmMetric, dynCfg, false)
+	user.measure(ctx, ttfiWarmMetric, dynCfg, r.tcfg, false)
 
 	time.Sleep(r.dynamicWait())
 }
 
-func (r *ttfiRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config) (*ttfiUser, error) {
-	tmpl := dynCfg.TTFITemplate
+func (r *ttfiRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config, tcfg ttfiConfig) (*ttfiUser, error) {
+	tmpl := tcfg.Template
 	if tmpl == "" {
 		tmpl = defaultTTFITemplate
 	}
@@ -210,10 +221,10 @@ func (r *ttfiRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config) (*
 		return nil, err
 	}
 
-	// A failed cold window is a result, not a reason to drop the actor: it
-	// is already recorded as a TTFIColdStart failure, and the next
+	// A failed first-resume window is a result, not a reason to drop the
+	// actor: it is already recorded as a TTFIFirstResume failure, and the next
 	// iteration's suspend normalizes whatever state the actor was left in.
-	u.measure(ctx, ttfiColdMetric, dynCfg, true)
+	u.measure(ctx, ttfiFirstResumeMetric, dynCfg, tcfg, true)
 	return u, nil
 }
 
@@ -239,9 +250,9 @@ func (u *ttfiUser) ref() *ateapipb.ObjectRef {
 }
 
 // budget is the ceiling on the instruction retry loop.
-func (u *ttfiUser) budget(dynCfg dynconfig.Config) time.Duration {
-	if dynCfg.TTFITimeout > 0 {
-		return dynCfg.TTFITimeout
+func (u *ttfiUser) budget(tcfg ttfiConfig) time.Duration {
+	if tcfg.Timeout > 0 {
+		return tcfg.Timeout
 	}
 	return defaultTTFITimeout
 }
@@ -249,7 +260,7 @@ func (u *ttfiUser) budget(dynCfg dynconfig.Config) time.Duration {
 // measure times one TTFI window and reports it as metricName. The parent
 // span's duration is the measurement, so every phase that a client would
 // wait through runs inside it and nothing else does.
-func (u *ttfiUser) measure(ctx context.Context, metricName string, dynCfg dynconfig.Config, cold bool) {
+func (u *ttfiUser) measure(ctx context.Context, metricName string, dynCfg dynconfig.Config, tcfg ttfiConfig, firstResume bool) {
 	mode := dynCfg.ResumeMode
 	if mode == "" {
 		// Matches common/resume_mode.py's default, so the mode is the same
@@ -259,31 +270,19 @@ func (u *ttfiUser) measure(ctx context.Context, metricName string, dynCfg dyncon
 		// matrix measures both rather than assuming one.
 		mode = dynconfig.ResumeModeExplicit
 	}
-	coldSource := dynCfg.TTFIColdSource
-	if coldSource == "" {
-		coldSource = dynconfig.ColdSourceGolden
-	}
-
 	ctx, span := u.cfg.Tracer.Start(ctx, metricName)
 	defer span.End()
 	span.SetAttributes(
 		attribute.String("ttfi.template", u.templateName),
 		attribute.String("ttfi.resume_mode", mode),
-		attribute.Bool("ttfi.cold", cold),
+		attribute.Bool("ttfi.first_resume", firstResume),
 	)
-	// Only an explicit ResumeActor carries the boot flag, so the source of a
-	// cold activation is a property of that RPC. Under implicit resume the
-	// router issues the resume, and the attribute would claim a choice this
-	// run never made.
-	if cold && mode == dynconfig.ResumeModeExplicit {
-		span.SetAttributes(attribute.String("ttfi.cold_source", coldSource))
-	}
 
 	start := time.Now()
 
 	var controlPlane time.Duration
 	if mode == dynconfig.ResumeModeExplicit {
-		elapsed, err := u.resume(ctx, cold && coldSource == dynconfig.ColdSourceColdBoot)
+		elapsed, err := u.resume(ctx)
 		controlPlane = elapsed
 		if err != nil {
 			u.recordTTFI(span, metricName, time.Since(start), 0, controlPlane, 0, err)
@@ -291,7 +290,7 @@ func (u *ttfiUser) measure(ctx context.Context, metricName string, dynCfg dyncon
 		}
 	}
 
-	attempts, instruction, err := u.firstInstruction(ctx, u.budget(dynCfg))
+	attempts, instruction, err := u.firstInstruction(ctx, u.budget(tcfg))
 	u.recordTTFI(span, metricName, time.Since(start), attempts, controlPlane, instruction, err)
 }
 
@@ -413,12 +412,11 @@ func (u *ttfiUser) sendInstruction(ctx context.Context) (retry bool, err error) 
 // resume issues the explicit ResumeActor that opens an explicit-mode TTFI
 // window, and returns the server-side handler duration so the parent can
 // attribute how much of TTFI ateapi owns.
-func (u *ttfiUser) resume(ctx context.Context, boot bool) (time.Duration, error) {
+func (u *ttfiUser) resume(ctx context.Context) (time.Duration, error) {
 	var serverElapsed time.Duration
 	err := u.tracedCall(ctx, ttfiResumeMetric, &serverElapsed, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
 			Actor: u.ref(),
-			Boot:  boot,
 		}, grpc.Trailer(tr))
 		return err
 	})

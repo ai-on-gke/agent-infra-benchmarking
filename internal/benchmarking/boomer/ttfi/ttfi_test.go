@@ -23,7 +23,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	"github.com/agent-substrate/substrate/internal/benchmarking/glutton/fake"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -79,7 +78,7 @@ func mustAttr(t *testing.T, s sdktrace.ReadOnlySpan, key string) attribute.Value
 }
 
 // newTTFITestUser builds a user whose spans are recorded, returning both.
-func newTTFITestUser(t *testing.T, srv *fake.Server, dyn dynconfig.Config, ctrl *fakeControlClient) (*ttfiUser, *tracetest.SpanRecorder) {
+func newTTFITestUser(t *testing.T, srv *pingServer, dyn dynconfig.Config, ctrl *fakeControlClient) (*ttfiUser, *tracetest.SpanRecorder) {
 	t.Helper()
 	tracer, sr := newRecordingTracer(t)
 	cfg := &userclass.Config{
@@ -119,12 +118,12 @@ func TestTTFIResumeModeSelectsTheControlPlaneCall(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := &fake.Server{}
+			srv := &pingServer{}
 			ctrl := &fakeControlClient{}
 			dyn := dynconfig.Config{ResumeMode: tc.resumeMode}
 			u, _ := newTTFITestUser(t, srv, dyn, ctrl)
 
-			u.measure(context.Background(), ttfiWarmMetric, dyn, false)
+			u.measure(context.Background(), ttfiWarmMetric, dyn, ttfiConfig{}, false)
 
 			if got := ctrl.recordedCalls(); !reflect.DeepEqual(got, tc.wantGRPCCall) {
 				t.Errorf("gRPC calls: got %v, want %v", got, tc.wantGRPCCall)
@@ -136,70 +135,10 @@ func TestTTFIResumeModeSelectsTheControlPlaneCall(t *testing.T) {
 	}
 }
 
-func TestTTFIColdSourceMapsToTheBootFlag(t *testing.T) {
-	tests := []struct {
-		name       string
-		cold       bool
-		coldSource string
-		wantBoot   bool
-	}{
-		{
-			// The golden snapshot is the path substrate's activation target
-			// is about, so it is what an unset source measures.
-			name:       "cold from golden is the default",
-			cold:       true,
-			coldSource: "",
-			wantBoot:   false,
-		},
-		{
-			name:       "cold from golden",
-			cold:       true,
-			coldSource: dynconfig.ColdSourceGolden,
-			wantBoot:   false,
-		},
-		{
-			name:       "cold boot skips the golden snapshot",
-			cold:       true,
-			coldSource: dynconfig.ColdSourceColdBoot,
-			wantBoot:   true,
-		},
-		{
-			// A warm actor restores its own snapshot; booting from the image
-			// would discard the state the warm window exists to measure.
-			name:       "warm never boots from scratch",
-			cold:       false,
-			coldSource: dynconfig.ColdSourceColdBoot,
-			wantBoot:   false,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := &fake.Server{}
-			ctrl := &fakeControlClient{}
-			dyn := dynconfig.Config{
-				ResumeMode:     dynconfig.ResumeModeExplicit,
-				TTFIColdSource: tc.coldSource,
-			}
-			u, _ := newTTFITestUser(t, srv, dyn, ctrl)
-
-			u.measure(context.Background(), ttfiColdMetric, dyn, tc.cold)
-
-			boots := ctrl.recordedBoots()
-			if len(boots) != 1 {
-				t.Fatalf("ResumeActor calls: got %d, want 1", len(boots))
-			}
-			if boots[0] != tc.wantBoot {
-				t.Errorf("ResumeActor boot flag: got %v, want %v", boots[0], tc.wantBoot)
-			}
-		})
-	}
-}
-
 func TestTTFIRetriesWhileTheActorActivates(t *testing.T) {
 	// Three rejections then success: a client cannot use the sandbox until
 	// the fourth attempt, so all four are inside the window.
-	srv := &fake.Server{PingFailures: 3}
+	srv := &pingServer{PingFailures: 3}
 	dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeImplicit}
 	u, sr := newTTFITestUser(t, srv, dyn, &fakeControlClient{})
 
@@ -223,18 +162,18 @@ func TestTTFIRetriesWhileTheActorActivates(t *testing.T) {
 func TestTTFIDoesNotRetryUnrecoverableFailures(t *testing.T) {
 	tests := []struct {
 		name string
-		srv  *fake.Server
+		srv  *pingServer
 	}{
 		{
 			// A 4xx is a misrouted or misconfigured request; waiting will
 			// not turn it into a running sandbox.
 			name: "client error",
-			srv:  &fake.Server{Status: http.StatusNotFound},
+			srv:  &pingServer{Status: http.StatusNotFound},
 		},
 		{
 			// The actor answered, but did not run the instruction.
 			name: "echo mismatch",
-			srv:  &fake.Server{PingEcho: "not-what-was-sent"},
+			srv:  &pingServer{PingEcho: "not-what-was-sent"},
 		},
 	}
 
@@ -257,7 +196,7 @@ func TestTTFIDoesNotRetryUnrecoverableFailures(t *testing.T) {
 func TestTTFIFailsWhenTheBudgetElapses(t *testing.T) {
 	// Never becomes ready, so the loop must be stopped by the budget rather
 	// than run for the rest of the test.
-	srv := &fake.Server{PingFailures: 1 << 30}
+	srv := &pingServer{PingFailures: 1 << 30}
 	dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeImplicit}
 	u, _ := newTTFITestUser(t, srv, dyn, &fakeControlClient{})
 
@@ -275,10 +214,10 @@ func TestTTFIFailsWhenTheBudgetElapses(t *testing.T) {
 
 func TestTTFIBudget(t *testing.T) {
 	u := &ttfiUser{}
-	if got := u.budget(dynconfig.Config{}); got != defaultTTFITimeout {
+	if got := u.budget(ttfiConfig{}); got != defaultTTFITimeout {
 		t.Errorf("unset budget: got %v, want %v", got, defaultTTFITimeout)
 	}
-	if got := u.budget(dynconfig.Config{TTFITimeout: 5 * time.Second}); got != 5*time.Second {
+	if got := u.budget(ttfiConfig{Timeout: 5 * time.Second}); got != 5*time.Second {
 		t.Errorf("configured budget: got %v, want 5s", got)
 	}
 }
@@ -287,25 +226,19 @@ func TestTTFIBudget(t *testing.T) {
 // its attributes, so one sampled trace has to explain its own total without
 // the reader joining it to anything else.
 func TestTTFISpanCarriesTheBreakdown(t *testing.T) {
-	srv := &fake.Server{}
+	srv := &pingServer{}
 	ctrl := &fakeControlClient{serverElapsedUs: "4000"} // 4ms of ateapi handler time
-	dyn := dynconfig.Config{
-		ResumeMode:     dynconfig.ResumeModeExplicit,
-		TTFIColdSource: dynconfig.ColdSourceGolden,
-	}
+	dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit}
 	u, sr := newTTFITestUser(t, srv, dyn, ctrl)
 
-	u.measure(context.Background(), ttfiColdMetric, dyn, true)
+	u.measure(context.Background(), ttfiFirstResumeMetric, dyn, ttfiConfig{}, true)
 
-	parent := spanByName(t, sr, ttfiColdMetric)
+	parent := spanByName(t, sr, ttfiFirstResumeMetric)
 	if got := mustAttr(t, parent, "ttfi.resume_mode").AsString(); got != dynconfig.ResumeModeExplicit {
 		t.Errorf("ttfi.resume_mode: got %q, want %q", got, dynconfig.ResumeModeExplicit)
 	}
-	if got := mustAttr(t, parent, "ttfi.cold").AsBool(); !got {
-		t.Error("ttfi.cold: got false, want true")
-	}
-	if got := mustAttr(t, parent, "ttfi.cold_source").AsString(); got != dynconfig.ColdSourceGolden {
-		t.Errorf("ttfi.cold_source: got %q, want %q", got, dynconfig.ColdSourceGolden)
+	if got := mustAttr(t, parent, "ttfi.first_resume").AsBool(); !got {
+		t.Error("ttfi.first_resume: got false, want true")
 	}
 	if got := mustAttr(t, parent, "ttfi.template").AsString(); got != defaultTTFITemplate {
 		t.Errorf("ttfi.template: got %q, want %q", got, defaultTTFITemplate)
@@ -330,38 +263,20 @@ func TestTTFISpanCarriesTheBreakdown(t *testing.T) {
 	for _, child := range []string{ttfiResumeMetric, ttfiInstructionMetric} {
 		s := spanByName(t, sr, child)
 		if s.Parent().SpanID() != parent.SpanContext().SpanID() {
-			t.Errorf("span %q is not a child of %q", child, ttfiColdMetric)
+			t.Errorf("span %q is not a child of %q", child, ttfiFirstResumeMetric)
 		}
-	}
-}
-
-func TestTTFIColdSourceAttributeOmittedUnderImplicitResume(t *testing.T) {
-	// Implicit resume hands the wake to the router, which does not take a
-	// boot flag. Recording a source would claim a choice the run never made.
-	srv := &fake.Server{}
-	dyn := dynconfig.Config{
-		ResumeMode:     dynconfig.ResumeModeImplicit,
-		TTFIColdSource: dynconfig.ColdSourceColdBoot,
-	}
-	u, sr := newTTFITestUser(t, srv, dyn, &fakeControlClient{})
-
-	u.measure(context.Background(), ttfiColdMetric, dyn, true)
-
-	parent := spanByName(t, sr, ttfiColdMetric)
-	if _, ok := attrValue(t, parent, "ttfi.cold_source"); ok {
-		t.Error("ttfi.cold_source set under implicit resume, want absent")
 	}
 }
 
 func TestTTFIReportsAFailedResumeWithoutSendingInstructions(t *testing.T) {
 	// The window cannot be measured if the actor never gets a worker, and a
 	// TTFI row built from instructions that were never sent would be a lie.
-	srv := &fake.Server{}
+	srv := &pingServer{}
 	ctrl := &fakeControlClient{resumeErr: errResumeRefused}
 	dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit}
 	u, sr := newTTFITestUser(t, srv, dyn, ctrl)
 
-	u.measure(context.Background(), ttfiWarmMetric, dyn, false)
+	u.measure(context.Background(), ttfiWarmMetric, dyn, ttfiConfig{}, false)
 
 	if got := srv.RecordedPings(); got != 0 {
 		t.Errorf("ping requests after a failed resume: got %d, want 0", got)

@@ -19,13 +19,17 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
-# if [ -z "${PROJECT_ID:-}" ]; then
-#   echo "Error: PROJECT_ID environment variable must be set." >&2
-#   exit 1
-# fi
+# Source the environment variables if configured
+if [[ -f .env.sh ]]; then
+  source .env.sh
+fi
 
-# IMAGE="us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest"
-IMAGE="us-docker.pkg.dev/gcr.io/ate-images/locust-test:latest"
+if [ -z "${PROJECT_ID:-}" ]; then
+  echo "Error: PROJECT_ID environment variable must be set." >&2
+  exit 1
+fi
+
+IMAGE="us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest"
 
 # Target platform must match the cluster's nodes, not the build host.
 PLATFORM="${LOCUST_IMAGE_PLATFORM:-linux/amd64}"
@@ -36,6 +40,6 @@ echo "Building Docker image: $IMAGE (platform: $PLATFORM)"
 docker build --platform "$PLATFORM" -t "$IMAGE" -f benchmarking/locust/Dockerfile .
 
 echo "Pushing Docker image..."
-# docker push "$IMAGE"
+docker push "$IMAGE"
 
 echo "Done!"

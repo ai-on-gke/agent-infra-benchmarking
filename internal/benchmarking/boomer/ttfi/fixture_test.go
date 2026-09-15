@@ -23,7 +23,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	"github.com/agent-substrate/substrate/internal/benchmarking/glutton/fake"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
@@ -43,7 +42,6 @@ type fakeControlClient struct {
 	serverElapsedUs string
 	mu              sync.Mutex
 	calls           []string
-	resumeBoots     []bool
 }
 
 // setTrailer fills the caller's grpc.Trailer destination so a faked call can
@@ -77,7 +75,6 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "ResumeActor")
-	f.resumeBoots = append(f.resumeBoots, in.GetBoot())
 	f.setTrailer(opts)
 	if f.resumeErr != nil {
 		return nil, f.resumeErr
@@ -105,15 +102,9 @@ func (f *fakeControlClient) recordedCalls() []string {
 	return append([]string(nil), f.calls...)
 }
 
-func (f *fakeControlClient) recordedBoots() []bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]bool(nil), f.resumeBoots...)
-}
-
 // newTestConfig starts srv, sets HTTPClient and RouterURL, and ensures
 // APIStub, Tracer, and Dyn are populated if nil.
-func newTestConfig(t *testing.T, srv *fake.Server, cfg *userclass.Config) *userclass.Config {
+func newTestConfig(t *testing.T, srv *pingServer, cfg *userclass.Config) *userclass.Config {
 	t.Helper()
 	ts := srv.Start(t)
 	if cfg == nil {
@@ -133,7 +124,7 @@ func newTestConfig(t *testing.T, srv *fake.Server, cfg *userclass.Config) *userc
 	return cfg
 }
 
-func newTestTTFIUser(t *testing.T, srv *fake.Server, cfg *userclass.Config) *ttfiUser {
+func newTestTTFIUser(t *testing.T, srv *pingServer, cfg *userclass.Config) *ttfiUser {
 	t.Helper()
 	c := newTestConfig(t, srv, cfg)
 	return &ttfiUser{

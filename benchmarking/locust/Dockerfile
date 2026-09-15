@@ -27,11 +27,12 @@ RUN pip install --no-cache-dir --target=/app/deps -r requirements.txt
 FROM golang:1.26-bookworm AS goboomer
 ENV GOTOOLCHAIN=auto
 WORKDIR /src
+COPY dependency-repos/substrate ./dependency-repos/substrate
 COPY go.mod go.sum ./
 COPY vendor ./vendor
 COPY cmd ./cmd
 COPY internal ./internal
-COPY pkg ./pkg
+# COPY pkg ./pkg
 RUN CGO_ENABLED=0 GOFLAGS=-mod=vendor go build -o /out/boomer-worker ./cmd/benchmarking/boomer-worker
 
 # Stage 3: Distroless runner. Carries the locust install AND the boomer
