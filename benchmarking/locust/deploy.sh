@@ -20,8 +20,8 @@ ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
 # Source the environment variables if configured
-if [[ -f .ate-dev-env.sh ]]; then
-  source .ate-dev-env.sh
+if [[ -f .env.sh ]]; then
+  source .env.sh
 fi
 
 if [ -z "${PROJECT_ID:-}" ]; then
@@ -33,7 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST="${SCRIPT_DIR}/manifests/locust.yaml"
 
 # Substituted into the boomer container's --user-class argument and the master's -f.
-BENCHMARK_USER_CLASS=glutton
+BENCHMARK_USER_CLASS=ttfi
 
 usage() {
   echo "Usage: $0 [options]"

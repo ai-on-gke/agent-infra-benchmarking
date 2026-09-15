@@ -18,9 +18,20 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
+# The manifests below are ours, but the tooling they need is not: kubectl-ate
+# and the ko wrapper are substrate commands, and the ko:// references name
+# packages in substrate's module. Those steps therefore run inside the
+# submodule rather than against this repo.
+SUBSTRATE_DIR="${ROOT}/dependency-repos/substrate"
+if [[ ! -f "${SUBSTRATE_DIR}/go.mod" ]]; then
+  echo "Error: substrate submodule not initialized at ${SUBSTRATE_DIR}." >&2
+  echo "Run: git submodule update --init dependency-repos/substrate" >&2
+  exit 1
+fi
+
 # Source the environment variables if configured
-if [[ -f .ate-dev-env.sh ]]; then
-  source .ate-dev-env.sh
+if [[ -f .env.sh ]]; then
+  source .env.sh
 fi
 
 # Ensure BUCKET_NAME is set
@@ -65,7 +76,7 @@ usage() {
   echo "  --delete                    Substitute env vars and delete workloads from the cluster"
   echo "  --worker-count N            Number of WorkerPool replicas (default: 1)"
   echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
-  echo "                              microvm requires hack/install-microvm-deps.sh --install to have run."
+  echo "                              microvm requires dependency-repos/substrate/hack/install-microvm-deps.sh --install to have run."
   echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi,"
   echo "                              the smallest size microvm admits)"
   echo "  --otlp-endpoint URL         The address to which an instrumented actor container"
@@ -107,18 +118,30 @@ build_kubectl_ate() {
   dir="$(mktemp -d)"
   trap 'rm -rf '"${dir}" EXIT
   KUBECTL_ATE_BIN="${dir}/kubectl-ate"
-  go build -o "${KUBECTL_ATE_BIN}" ./cmd/kubectl-ate
+  # kubectl-ate belongs to substrate, so it builds in the submodule against
+  # that module's own go.mod and vendor tree. mktemp gives an absolute path,
+  # so the output still lands outside the submodule.
+  (cd "${SUBSTRATE_DIR}" && go build -o "${KUBECTL_ATE_BIN}" ./cmd/kubectl-ate)
 }
 
 run_kubectl_ate() {
   "${KUBECTL_ATE_BIN}" "$@"
 }
 
+# ko resolves the ko:// references in the manifests, which name substrate
+# commands (cmd/ateom-*, cmd/benchmarking/glutton). Both the tool wrapper
+# under hack/tools and those import paths resolve only inside the submodule,
+# so ko runs with that as its working directory. Piped stdin flows through the
+# subshell unchanged.
+run_ko() {
+  (cd "${SUBSTRATE_DIR}" && hack/run-tool.sh ko "$@")
+}
+
 substitute() {
   # SandboxConfig names are pinned per class in the ActorTemplates (rather
   # than defaulted) so a stale config from a dirty teardown fails loudly
   # instead of silently binding these workloads. gvisor-default is applied by
-  # hack/install-ate.sh; microvm is applied by hack/install-microvm-deps.sh.
+  # substrate's hack/install-ate.sh; microvm by its hack/install-microvm-deps.sh.
   # The protojson templates take the sandbox class as its proto enum spelling.
   local manifest="$1"
   local sandbox_config_name sandbox_class_enum
@@ -184,7 +207,7 @@ wait_templates_ready() {
 deploy() {
   resolve_otlp_endpoint
   echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, otlp_endpoint=${OTLP_ENDPOINT})..."
-  substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
+  substitute "${POOL_MANIFEST}" | run_ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
   kubectl wait --for=create deployment/benchmark-ateom \
     --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
@@ -207,7 +230,7 @@ deploy() {
     # ko resolve builds the ko:// image references and replaces them with
     # pushed digests before the manifest reaches kubectl-ate.
     substitute "${MANIFEST_DIR}/${template}-template.yaml.tmpl" \
-      | hack/run-tool.sh ko resolve -f - \
+      | run_ko resolve -f - \
       | run_kubectl_ate create actor-template -f -
   done
 
@@ -225,7 +248,7 @@ delete() {
     || echo "atespace benchmark-workloads not deleted (may not exist or is not empty)"
   # The pool manifest contains ko:// image references; route through
   # `ko delete` so they get resolved before kubectl sees them.
-  substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko delete --ignore-not-found -f -
+  substitute "${POOL_MANIFEST}" | run_ko delete --ignore-not-found -f -
 }
 
 if [[ "$#" -eq 0 ]]; then
