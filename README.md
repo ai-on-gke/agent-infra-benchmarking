@@ -48,5 +48,46 @@ ActorTemplates and the WorkerPool and waits for their golden snapshots,
 `boomer-worker` Go binary), and `locust/deploy.sh` deploys locust into the
 `benchmarking` namespace.
 
-Pass `--skip-build` to reuse the image already pushed, and `--delete` to tear
-the whole stack down in reverse order. `--help` lists the rest.
+
+### 2. Forward the locust web UI
+
+In a separate terminal, since this holds the terminal open for as long as the
+UI is needed:
+
+```bash
+kubectl port-forward -n benchmarking svc/locust 8089:8089
+```
+
+### 3. Open the locust UI
+
+With the port-forward running, open [http://localhost:8089](http://localhost:8089).
+
+This is where the run is started and the `TTFIUser` class is picked.
+
+## Cleanup
+
+The steps undo the deployment in reverse, and each one is independent — stop
+after the first if the cluster is being kept for another run.
+
+### 1. Delete the benchmarking stack
+
+```bash
+./benchmarking/deploy_locust.sh --delete
+```
+
+Deletes locust first, then the benchmark workloads. Stop the `kubectl
+port-forward` in the other terminal as well; it does not exit on its own.
+
+### 2. Uninstall substrate from the cluster
+
+```bash
+./scripts/substrate/upstream.sh hack/install-ate.sh --delete-ate-system
+```
+
+Use `--delete-all` instead to remove the registered demos along with the core
+system.
+
+### 3. Delete the cluster
+
+TBD, and only if the cluster is no longer wanted — it is created outside this
+repo, so it is deleted outside it too.
