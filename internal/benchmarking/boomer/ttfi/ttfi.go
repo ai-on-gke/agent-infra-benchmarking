@@ -158,8 +158,8 @@ func (r *ttfiRuntime) dynamicWait() time.Duration {
 }
 
 // iterate is the task function boomer calls in a loop on each VU goroutine.
-// The first call on a goroutine creates the actor and measures the cold
-// window; every later call suspends it and measures the warm one.
+// The first call on a goroutine creates the actor and measures its first
+// resume; every later call suspends it and measures the warm one.
 func (r *ttfiRuntime) iterate() {
 	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
