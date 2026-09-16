@@ -15,7 +15,7 @@
 # limitations under the License.
 
 # End-to-end deploy/uninstall of the locust benchmarking stack:
-#   --deploy:  workloads/deploy.sh --deploy -> locust/build_and_push.sh -> locust/deploy.sh --deploy
+#   --deploy:  locust/build_and_push.sh -> workloads/deploy.sh --deploy -> locust/deploy.sh --deploy
 #   --delete:  locust/deploy.sh --delete -> workloads/deploy.sh --delete (reverse order)
 #
 # Worker count and sandbox class are forwarded to workloads/deploy.sh.

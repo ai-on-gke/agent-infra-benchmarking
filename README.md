@@ -39,14 +39,41 @@ any upstream executable the same way:
 ### 1. Deploy the locust stack
 
 ```bash
-./benchmarking/deploy_locust.sh --deploy
+./benchmarking/deploy_locust.sh --deploy \
+  --user-class runworkload \
+  --workload-name glutton \
+  --workload-template glutton
 ```
 
-This runs three stages in order: `workloads/deploy.sh` applies the benchmark
-ActorTemplates and the WorkerPool and waits for their golden snapshots,
-`locust/build_and_push.sh` builds and pushes the locust image (which carries the
-`boomer-worker` Go binary), and `locust/deploy.sh` deploys locust into the
-`benchmarking` namespace.
+#### Options
+
+- **`--user-class NAME`** (default: `runworkload`) — the locust user class to
+  run. It has to name a `benchmarking/locust/tests/NAME.py`, and this repo ships
+  only `runworkload.py`, so `runworkload` is the sole value today. The worker
+  binary also registers upstream's `glutton` and `durdir` classes, but their
+  locust files live in substrate rather than here.
+
+- **`--workload-name NAME`** (default: `glutton`) — the workload a
+  `RunWorkloadUser` drives, meaning what counts as an instruction the sandbox
+  demonstrably ran:
+  - `glutton` — POSTs a protobuf ping to `/ping` and verifies the echoed nonce.
+  - `openclaw` — POSTs a fast-path prompt to `/invoke` and checks the reply.
+
+- **`--workload-template NAME`** (default: `glutton`) — the ActorTemplate the
+  workload runs on:
+  - `glutton`
+  - `openclaw`
+
+This runs three stages in order: `locust/build_and_push.sh` builds and pushes
+the locust image (which carries the `boomer-worker` Go binary) and the openclaw
+actor image, `workloads/deploy.sh` applies the benchmark ActorTemplates and the
+WorkerPool and waits for their golden snapshots, and `locust/deploy.sh` deploys
+locust into the `benchmarking` namespace.
+
+What gets measured is chosen here rather than in the web UI, because the three
+values below are baked into the deployed pod. The values above are the defaults
+spelled out, so `--deploy` on its own does the same thing; pass them to measure
+anything else.
 
 
 ### 2. Forward the locust web UI
