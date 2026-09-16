@@ -241,8 +241,12 @@ func TestTTFISpanCarriesTheBreakdown(t *testing.T) {
 	if got := mustAttr(t, parent, "ttfi.first_resume").AsBool(); !got {
 		t.Error("ttfi.first_resume: got false, want true")
 	}
-	if got := mustAttr(t, parent, "ttfi.template").AsString(); got != defaultTTFITemplate {
-		t.Errorf("ttfi.template: got %q, want %q", got, defaultTTFITemplate)
+	wantTemplate := gluttonWorkload{}.DefaultTemplate()
+	if got := mustAttr(t, parent, "ttfi.template").AsString(); got != wantTemplate {
+		t.Errorf("ttfi.template: got %q, want %q", got, wantTemplate)
+	}
+	if got := mustAttr(t, parent, "ttfi.workload").AsString(); got != gluttonWorkloadName {
+		t.Errorf("ttfi.workload: got %q, want %q", got, gluttonWorkloadName)
 	}
 	if got := mustAttr(t, parent, "ttfi.attempts").AsInt64(); got != 1 {
 		t.Errorf("ttfi.attempts: got %d, want 1", got)

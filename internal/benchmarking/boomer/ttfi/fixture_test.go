@@ -42,6 +42,8 @@ type fakeControlClient struct {
 	serverElapsedUs string
 	mu              sync.Mutex
 	calls           []string
+	// template is the ActorTemplate name from the last CreateActor.
+	template string
 }
 
 // setTrailer fills the caller's grpc.Trailer destination so a faked call can
@@ -68,7 +70,16 @@ func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.Create
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "CreateActor")
+	f.template = in.GetActor().GetActorTemplate().GetName()
 	return &ateapipb.Actor{}, nil
+}
+
+// recordedTemplate returns the ActorTemplate the most recent CreateActor
+// named, which is where a template choice stops being a local variable.
+func (f *fakeControlClient) recordedTemplate() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.template
 }
 
 func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
@@ -132,8 +143,9 @@ func newTestTTFIUser(t *testing.T, srv *pingServer, cfg *userclass.Config) *ttfi
 	c := newTestConfig(t, srv, cfg)
 	return &ttfiUser{
 		cfg:          c,
+		workload:     gluttonWorkload{},
 		actorName:    "ttfiactor",
-		templateName: defaultTTFITemplate,
+		templateName: gluttonWorkload{}.DefaultTemplate(),
 		userClass:    ttfiUserClass,
 	}
 }

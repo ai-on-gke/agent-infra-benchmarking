@@ -39,62 +39,54 @@
 // the parent carry the split (control-plane handler time vs. the instruction
 // round trip) so one sampled trace explains its own total.
 //
-// The benchmark drives a glutton actor, because glutton serves the /ping it
-// times, but it sits beside that workload's load generator rather than inside
-// it: what is under measurement is substrate's activation path, and the
-// workload is a parameter (--ttfi-template) rather than a fixture.
+// What is under measurement is substrate's activation path, not any
+// application, so the workload the actor runs is a parameter rather than a
+// fixture: ttfi_workload selects an implementation of the workload interface
+// (see workload.go) and ttfi_template overrides the ActorTemplate it names.
+// glutton is the implementation shipped today, because its /ping echo is a
+// cheap proof that the sandbox ran an instruction rather than merely accepting
+// a connection.
 package ttfi
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"math/rand/v2"
-	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 )
 
-// Workload-surface constants, mirrored from the glutton benchmark rather than
-// imported from it: the atespace workloads/deploy.sh creates, and glutton's
-// own HTTP surface. Neither belongs to either benchmark's load generator, so
-// neither should have to depend on the other to reach them. Actor addressing
-// is not here — the router takes it from atenet.TargetActorHeader.
-const (
-	templateAtespace = "benchmark-workloads"
-	pingPath         = "/ping"
-)
+// The atespace workloads/deploy.sh creates its ActorTemplates in. Mirrored
+// from that script rather than imported, and shared by every workload, so it
+// stays here rather than in any one of them.
+const templateAtespace = "benchmark-workloads"
 
 const (
 	// Locust class name from tests/ttfi.py; must match boomer.Task.Name.
 	ttfiUserClass = "TTFIUser"
 
-	// The template a TTFIUser measures unless ttfi_template overrides it.
-	// glutton serves /ping, which is the instruction this benchmark times.
-	defaultTTFITemplate = "glutton"
+	// The workload a TTFIUser drives unless ttfi_workload names another. The
+	// default template follows from the workload rather than being fixed
+	// here, so the two keys cannot drift into naming a template the workload
+	// has no way to address.
+	defaultTTFIWorkload = gluttonWorkloadName
 
 	// Bound on the instruction retry loop when ttfi_timeout is unset. An
 	// actor that has not taken an instruction by then is recorded as a TTFI
@@ -130,7 +122,9 @@ func init() {
 // function plus a shutdown hook the caller should run before exit.
 func initTTFI(cfg *userclass.Config) (taskFn func(), shutdown func(context.Context)) {
 	if cfg.Tracer == nil {
-		cfg.Tracer = otel.Tracer("substrate-boomer/glutton-ttfi")
+		// Scope names the benchmark, not the workload: the same spans are
+		// emitted whichever workload ttfi_workload selects.
+		cfg.Tracer = otel.Tracer("substrate-boomer/ttfi")
 	}
 	tcfg, err := loadTTFIConfig()
 	if err != nil {
@@ -138,14 +132,24 @@ func initTTFI(cfg *userclass.Config) (taskFn func(), shutdown func(context.Conte
 			slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	rt := &ttfiRuntime{cfg: cfg, tcfg: tcfg}
+	// Resolved once at startup rather than per iteration: an unselectable
+	// workload is a configuration mistake, and a run that reports it after
+	// producing rows has already wasted the run.
+	wl, err := resolveWorkload(tcfg.Workload)
+	if err != nil {
+		slog.Error("fatal: cannot select the TTFI workload",
+			slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	rt := &ttfiRuntime{cfg: cfg, tcfg: tcfg, workload: wl}
 	return rt.iterate, rt.shutdown
 }
 
 type ttfiRuntime struct {
-	cfg   *userclass.Config
-	tcfg  ttfiConfig
-	users sync.Map // goroutineID -> *ttfiUser
+	cfg      *userclass.Config
+	tcfg     ttfiConfig
+	workload workload
+	users    sync.Map // goroutineID -> *ttfiUser
 }
 
 func (r *ttfiRuntime) dynamicWait() time.Duration {
@@ -201,11 +205,12 @@ func (r *ttfiRuntime) iterate() {
 func (r *ttfiRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config, tcfg ttfiConfig) (*ttfiUser, error) {
 	tmpl := tcfg.Template
 	if tmpl == "" {
-		tmpl = defaultTTFITemplate
+		tmpl = r.workload.DefaultTemplate()
 	}
 
 	u := &ttfiUser{
 		cfg:          r.cfg,
+		workload:     r.workload,
 		actorName:    "sb-" + uuid.NewString(),
 		templateName: tmpl,
 		userClass:    ttfiUserClass,
@@ -238,6 +243,7 @@ func (r *ttfiRuntime) shutdown(ctx context.Context) {
 
 type ttfiUser struct {
 	cfg          *userclass.Config
+	workload     workload
 	actorName    string
 	templateName string
 	userClass    string
@@ -245,6 +251,17 @@ type ttfiUser struct {
 
 func (u *ttfiUser) ref() *ateapipb.ObjectRef {
 	return &ateapipb.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
+}
+
+// actor is the handle the workload addresses. Built per call rather than
+// stored so the workload can hold no benchmark state of its own.
+func (u *ttfiUser) actor() actorRef {
+	return actorRef{
+		HTTPClient: u.cfg.HTTPClient,
+		RouterURL:  u.cfg.RouterURL,
+		Atespace:   u.cfg.Atespace,
+		Name:       u.actorName,
+	}
 }
 
 // budget is the ceiling on the instruction retry loop.
@@ -271,6 +288,7 @@ func (u *ttfiUser) measure(ctx context.Context, metricName string, dynCfg dyncon
 	ctx, span := u.cfg.Tracer.Start(ctx, metricName)
 	defer span.End()
 	span.SetAttributes(
+		attribute.String("ttfi.workload", u.workload.Name()),
 		attribute.String("ttfi.template", u.templateName),
 		attribute.String("ttfi.resume_mode", mode),
 		attribute.Bool("ttfi.first_resume", firstResume),
@@ -316,13 +334,14 @@ func (u *ttfiUser) recordTTFI(span trace.Span, metricName string, total time.Dur
 	bmetrics.RecordSuccess(ttfiMethod, metricName, u.userClass, total, 0)
 }
 
-// firstInstruction sends instructions until one comes back correct or the
-// budget elapses, and reports the whole loop as one row. The retries are
-// inside the TTFI window on purpose: until an instruction lands, the client
-// cannot use the sandbox, so a request the router rejected while the actor
-// was still activating is part of the wait. Per-attempt visibility comes
-// from the router's own server-side spans, which the injected trace context
-// parents to this one.
+// firstInstruction drives the workload until one instruction comes back
+// correct or the budget elapses, and reports the whole loop as one row. The
+// retries are inside the TTFI window on purpose: until an instruction lands,
+// the client cannot use the sandbox, so a request the router rejected while
+// the actor was still activating is part of the wait. Whether a given failure
+// is worth retrying is the workload's call, since only it knows what its own
+// answers mean. Per-attempt visibility comes from the router's own server-side
+// spans, which the injected trace context parents to this one.
 func (u *ttfiUser) firstInstruction(ctx context.Context, budget time.Duration) (int, time.Duration, error) {
 	ctx, span := u.cfg.Tracer.Start(ctx, ttfiInstructionMetric)
 	defer span.End()
@@ -334,7 +353,7 @@ func (u *ttfiUser) firstInstruction(ctx context.Context, budget time.Duration) (
 	var lastErr error
 	for {
 		attempts++
-		retryable, err := u.sendInstruction(ctx)
+		retryable, err := u.workload.SendInstruction(ctx, u.actor())
 		if err == nil {
 			latency := time.Since(start)
 			span.SetAttributes(attribute.Int("ttfi.attempts", attempts))
@@ -359,55 +378,6 @@ func (u *ttfiUser) firstInstruction(ctx context.Context, budget time.Duration) (
 	boomerutil.LogSampledTrace(span, ttfiInstructionMetric, latency, boomerutil.SourceClient, lastErr)
 	bmetrics.RecordFailure("http", ttfiInstructionMetric, u.userClass, latency, lastErr.Error())
 	return attempts, latency, lastErr
-}
-
-// sendInstruction POSTs one Ping through the router and verifies the echo,
-// so the window only closes once the sandbox has actually run the
-// instruction rather than merely accepted the connection. retry reports
-// whether a real client would have tried again: a transport error or a 5xx
-// means the actor is still activating, while a 4xx or a wrong echo is a
-// fault that waiting will not fix.
-func (u *ttfiUser) sendInstruction(ctx context.Context) (retry bool, err error) {
-	message := uuid.NewString()
-	body, err := proto.Marshal(&gluttonpb.PingRequest{Message: message})
-	if err != nil {
-		return false, err
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.cfg.RouterURL+pingPath, bytes.NewReader(body))
-	if err != nil {
-		return false, err
-	}
-	// The router resolves the actor from this header alone — atenet's ingress
-	// handler parses it and 404s with "invalid actor reference" when it is
-	// absent, regardless of the request's Host.
-	httpReq.Header.Set(atenet.TargetActorHeader, u.cfg.Atespace+"/"+u.actorName)
-	httpReq.Header.Set("Content-Type", "application/x-protobuf")
-	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
-
-	resp, err := u.cfg.HTTPClient.Do(httpReq)
-	if err != nil {
-		return true, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return true, err
-	}
-	if resp.StatusCode >= 400 {
-		httpErr := fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-		return resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests, httpErr
-	}
-
-	pong := &gluttonpb.PingResponse{}
-	if err := proto.Unmarshal(respBody, pong); err != nil {
-		return false, err
-	}
-	if pong.GetMessage() != message {
-		return false, fmt.Errorf("ping echo mismatch: sent=%q recv=%q", message, pong.GetMessage())
-	}
-	return false, nil
 }
 
 // resume issues the explicit ResumeActor that opens an explicit-mode TTFI

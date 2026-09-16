@@ -15,6 +15,7 @@
 package ttfi
 
 import (
+	"flag"
 	"testing"
 	"time"
 
@@ -29,7 +30,8 @@ const configBlob = `{
 	"max_wait_time": 0.5,
 	"resume_mode": "explicit",
 	"ttfi_timeout": 30.0,
-	"ttfi_template": "glutton"
+	"ttfi_template": "glutton",
+	"ttfi_workload": "glutton"
 }`
 
 func TestParseTTFIConfig(t *testing.T) {
@@ -43,6 +45,9 @@ func TestParseTTFIConfig(t *testing.T) {
 	}
 	if cfg.Template != "glutton" {
 		t.Errorf("Template: got %q, want glutton", cfg.Template)
+	}
+	if cfg.Workload != "glutton" {
+		t.Errorf("Workload: got %q, want glutton", cfg.Workload)
 	}
 }
 
@@ -75,6 +80,84 @@ func TestParseTTFIConfigInvalidValues(t *testing.T) {
 				t.Errorf("expected parseTTFIConfig to fail for %s, got nil error", tt.name)
 			}
 		})
+	}
+}
+
+// The flag has to exist on the worker's command line for --ttfi-workload to be
+// accepted at all, and nothing but importing this package puts it there.
+func TestWorkloadFlagIsRegistered(t *testing.T) {
+	f := flag.Lookup("ttfi-workload")
+	if f == nil {
+		t.Fatal("--ttfi-workload is not registered; the worker would reject it as an unknown flag")
+	}
+	// Empty is what lets --config-json and then the built-in default still
+	// have a say; a non-empty default would silently outrank both.
+	if f.DefValue != "" {
+		t.Errorf("default: got %q, want empty", f.DefValue)
+	}
+}
+
+func TestResolveTTFIConfigWorkloadPrecedence(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+		flag string
+		want string
+	}{
+		{
+			name: "flag alone",
+			json: `{}`,
+			flag: "from-flag",
+			want: "from-flag",
+		},
+		{
+			name: "config json alone",
+			json: `{"ttfi_workload": "from-json"}`,
+			want: "from-json",
+		},
+		{
+			name: "flag overrides config json",
+			json: `{"ttfi_workload": "from-json"}`,
+			flag: "from-flag",
+			want: "from-flag",
+		},
+		{
+			// Neither said anything, so the choice is left to
+			// resolveWorkload's default rather than made here.
+			name: "neither",
+			json: `{}`,
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := resolveTTFIConfig([]byte(tt.json), tt.flag)
+			if err != nil {
+				t.Fatalf("resolveTTFIConfig failed: %v", err)
+			}
+			if cfg.Workload != tt.want {
+				t.Errorf("Workload: got %q, want %q", cfg.Workload, tt.want)
+			}
+		})
+	}
+}
+
+// Overriding the workload must not disturb the keys that share the blob with
+// it, or selecting a workload would quietly reset the run's other settings.
+func TestResolveTTFIConfigKeepsTheOtherKeys(t *testing.T) {
+	cfg, err := resolveTTFIConfig([]byte(configBlob), "from-flag")
+	if err != nil {
+		t.Fatalf("resolveTTFIConfig failed: %v", err)
+	}
+	if cfg.Workload != "from-flag" {
+		t.Errorf("Workload: got %q, want from-flag", cfg.Workload)
+	}
+	if cfg.Timeout != 30*time.Second {
+		t.Errorf("Timeout: got %v, want 30s", cfg.Timeout)
+	}
+	if cfg.Template != "glutton" {
+		t.Errorf("Template: got %q, want glutton", cfg.Template)
 	}
 }
 
