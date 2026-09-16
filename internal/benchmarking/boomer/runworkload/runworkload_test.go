@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ttfi
+package runworkload
 
 import (
 	"context"
@@ -31,13 +31,14 @@ import (
 )
 
 // newRecordingTracer returns a tracer whose ended spans land in the returned
-// recorder, so a test can assert on the span tree the TTFI window builds.
+// recorder, so a test can assert on the span tree the measurement window
+// builds.
 func newRecordingTracer(t *testing.T) (trace.Tracer, *tracetest.SpanRecorder) {
 	t.Helper()
 	sr := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
-	return tp.Tracer("ttfi-test"), sr
+	return tp.Tracer("run_workload-test"), sr
 }
 
 func spanByName(t *testing.T, sr *tracetest.SpanRecorder, name string) sdktrace.ReadOnlySpan {
@@ -78,8 +79,9 @@ func mustAttr(t *testing.T, s sdktrace.ReadOnlySpan, key string) attribute.Value
 	return v
 }
 
-// newTTFITestUser builds a user whose spans are recorded, returning both.
-func newTTFITestUser(t *testing.T, srv *pingServer, dyn dynconfig.Config, ctrl *fakeControlClient) (*ttfiUser, *tracetest.SpanRecorder) {
+// newRunWorkloadTestUser builds a user whose spans are recorded, returning
+// both.
+func newRunWorkloadTestUser(t *testing.T, srv *pingServer, dyn dynconfig.Config, ctrl *fakeControlClient) (*runWorkloadUser, *tracetest.SpanRecorder) {
 	t.Helper()
 	tracer, sr := newRecordingTracer(t)
 	cfg := &userclass.Config{
@@ -87,10 +89,10 @@ func newTTFITestUser(t *testing.T, srv *pingServer, dyn dynconfig.Config, ctrl *
 		Tracer:  tracer,
 		Dyn:     dynconfig.NewHolder(dyn),
 	}
-	return newTestTTFIUser(t, srv, cfg), sr
+	return newTestRunWorkloadUser(t, srv, cfg), sr
 }
 
-func TestTTFIResumeModeSelectsTheControlPlaneCall(t *testing.T) {
+func TestResumeModeSelectsTheControlPlaneCall(t *testing.T) {
 	tests := []struct {
 		name         string
 		resumeMode   string
@@ -122,9 +124,9 @@ func TestTTFIResumeModeSelectsTheControlPlaneCall(t *testing.T) {
 			srv := &pingServer{}
 			ctrl := &fakeControlClient{}
 			dyn := dynconfig.Config{ResumeMode: tc.resumeMode}
-			u, _ := newTTFITestUser(t, srv, dyn, ctrl)
+			u, _ := newRunWorkloadTestUser(t, srv, dyn, ctrl)
 
-			u.measure(context.Background(), ttfiWarmMetric, dyn, Options{}, false)
+			u.measure(context.Background(), warmStartMetric, dyn, Options{}, false)
 
 			if got := ctrl.recordedCalls(); !reflect.DeepEqual(got, tc.wantGRPCCall) {
 				t.Errorf("gRPC calls: got %v, want %v", got, tc.wantGRPCCall)
@@ -136,12 +138,12 @@ func TestTTFIResumeModeSelectsTheControlPlaneCall(t *testing.T) {
 	}
 }
 
-func TestTTFIRetriesWhileTheActorActivates(t *testing.T) {
+func TestRetriesWhileTheActorActivates(t *testing.T) {
 	// Three rejections then success: a client cannot use the sandbox until
 	// the fourth attempt, so all four are inside the window.
 	srv := &pingServer{PingFailures: 3}
 	dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeImplicit}
-	u, sr := newTTFITestUser(t, srv, dyn, &fakeControlClient{})
+	u, sr := newRunWorkloadTestUser(t, srv, dyn, &fakeControlClient{})
 
 	attempts, _, err := u.firstInstruction(context.Background(), 5*time.Second)
 	if err != nil {
@@ -154,13 +156,13 @@ func TestTTFIRetriesWhileTheActorActivates(t *testing.T) {
 		t.Errorf("ping requests: got %d, want 4", got)
 	}
 
-	span := spanByName(t, sr, ttfiInstructionMetric)
-	if got := mustAttr(t, span, "ttfi.attempts").AsInt64(); got != 4 {
-		t.Errorf("ttfi.attempts span attribute: got %d, want 4", got)
+	span := spanByName(t, sr, instructionMetric)
+	if got := mustAttr(t, span, "attempts").AsInt64(); got != 4 {
+		t.Errorf("attempts span attribute: got %d, want 4", got)
 	}
 }
 
-func TestTTFIDoesNotRetryUnrecoverableFailures(t *testing.T) {
+func TestDoesNotRetryUnrecoverableFailures(t *testing.T) {
 	tests := []struct {
 		name string
 		srv  *pingServer
@@ -181,7 +183,7 @@ func TestTTFIDoesNotRetryUnrecoverableFailures(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeImplicit}
-			u, _ := newTTFITestUser(t, tc.srv, dyn, &fakeControlClient{})
+			u, _ := newRunWorkloadTestUser(t, tc.srv, dyn, &fakeControlClient{})
 
 			attempts, _, err := u.firstInstruction(context.Background(), 5*time.Second)
 			if err == nil {
@@ -194,12 +196,12 @@ func TestTTFIDoesNotRetryUnrecoverableFailures(t *testing.T) {
 	}
 }
 
-func TestTTFIFailsWhenTheBudgetElapses(t *testing.T) {
+func TestFailsWhenTheBudgetElapses(t *testing.T) {
 	// Never becomes ready, so the loop must be stopped by the budget rather
 	// than run for the rest of the test.
 	srv := &pingServer{PingFailures: 1 << 30}
 	dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeImplicit}
-	u, _ := newTTFITestUser(t, srv, dyn, &fakeControlClient{})
+	u, _ := newRunWorkloadTestUser(t, srv, dyn, &fakeControlClient{})
 
 	start := time.Now()
 	_, _, err := u.firstInstruction(context.Background(), 100*time.Millisecond)
@@ -213,8 +215,8 @@ func TestTTFIFailsWhenTheBudgetElapses(t *testing.T) {
 	}
 }
 
-func TestTTFIBudget(t *testing.T) {
-	u := &ttfiUser{}
+func TestBudget(t *testing.T) {
+	u := &runWorkloadUser{}
 	if got := u.budget(Options{}); got != DefaultTimeout {
 		t.Errorf("unset budget: got %v, want %v", got, DefaultTimeout)
 	}
@@ -223,90 +225,90 @@ func TestTTFIBudget(t *testing.T) {
 	}
 }
 
-// The TTFI number is the parent span's duration and the phase split lives on
+// The measurement is the parent span's duration and the phase split lives on
 // its attributes, so one sampled trace has to explain its own total without
 // the reader joining it to anything else.
-func TestTTFISpanCarriesTheBreakdown(t *testing.T) {
+func TestSpanCarriesTheBreakdown(t *testing.T) {
 	srv := &pingServer{}
 	ctrl := &fakeControlClient{serverElapsedUs: "4000"} // 4ms of ateapi handler time
 	dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit}
-	u, sr := newTTFITestUser(t, srv, dyn, ctrl)
+	u, sr := newRunWorkloadTestUser(t, srv, dyn, ctrl)
 
-	u.measure(context.Background(), ttfiFirstResumeMetric, dyn, Options{}, true)
+	u.measure(context.Background(), firstResumeMetric, dyn, Options{}, true)
 
-	parent := spanByName(t, sr, ttfiFirstResumeMetric)
-	if got := mustAttr(t, parent, "ttfi.resume_mode").AsString(); got != dynconfig.ResumeModeExplicit {
-		t.Errorf("ttfi.resume_mode: got %q, want %q", got, dynconfig.ResumeModeExplicit)
+	parent := spanByName(t, sr, firstResumeMetric)
+	if got := mustAttr(t, parent, "resume_mode").AsString(); got != dynconfig.ResumeModeExplicit {
+		t.Errorf("resume_mode: got %q, want %q", got, dynconfig.ResumeModeExplicit)
 	}
-	if got := mustAttr(t, parent, "ttfi.first_resume").AsBool(); !got {
-		t.Error("ttfi.first_resume: got false, want true")
+	if got := mustAttr(t, parent, "first_resume").AsBool(); !got {
+		t.Error("first_resume: got false, want true")
 	}
 	wantTemplate := gluttonWorkload{}.DefaultTemplate()
-	if got := mustAttr(t, parent, "ttfi.template").AsString(); got != wantTemplate {
-		t.Errorf("ttfi.template: got %q, want %q", got, wantTemplate)
+	if got := mustAttr(t, parent, "template").AsString(); got != wantTemplate {
+		t.Errorf("template: got %q, want %q", got, wantTemplate)
 	}
-	if got := mustAttr(t, parent, "ttfi.workload").AsString(); got != gluttonWorkloadName {
-		t.Errorf("ttfi.workload: got %q, want %q", got, gluttonWorkloadName)
+	if got := mustAttr(t, parent, "workload").AsString(); got != gluttonWorkloadName {
+		t.Errorf("workload: got %q, want %q", got, gluttonWorkloadName)
 	}
-	if got := mustAttr(t, parent, "ttfi.attempts").AsInt64(); got != 1 {
-		t.Errorf("ttfi.attempts: got %d, want 1", got)
+	if got := mustAttr(t, parent, "attempts").AsInt64(); got != 1 {
+		t.Errorf("attempts: got %d, want 1", got)
 	}
-	if got := mustAttr(t, parent, "ttfi.total_ms").AsFloat64(); got <= 0 {
-		t.Errorf("ttfi.total_ms: got %v, want > 0", got)
+	if got := mustAttr(t, parent, "total_ms").AsFloat64(); got <= 0 {
+		t.Errorf("total_ms: got %v, want > 0", got)
 	}
-	if got := mustAttr(t, parent, "ttfi.instruction_ms").AsFloat64(); got <= 0 {
-		t.Errorf("ttfi.instruction_ms: got %v, want > 0", got)
+	if got := mustAttr(t, parent, "instruction_ms").AsFloat64(); got <= 0 {
+		t.Errorf("instruction_ms: got %v, want > 0", got)
 	}
 	// The resume trailer is the server's own handler duration, so the
 	// control-plane share is attributable rather than inferred.
-	if got := mustAttr(t, parent, "ttfi.control_plane_ms").AsFloat64(); got != 4 {
-		t.Errorf("ttfi.control_plane_ms: got %v, want 4", got)
+	if got := mustAttr(t, parent, "control_plane_ms").AsFloat64(); got != 4 {
+		t.Errorf("control_plane_ms: got %v, want 4", got)
 	}
 
-	// Both phases must hang off the TTFI parent; a detached child would put
+	// Both phases must hang off the window parent; a detached child would put
 	// the phase in a different trace from the total it belongs to.
-	for _, child := range []string{ttfiResumeMetric, ttfiInstructionMetric} {
+	for _, child := range []string{resumeMetric, instructionMetric} {
 		s := spanByName(t, sr, child)
 		if s.Parent().SpanID() != parent.SpanContext().SpanID() {
-			t.Errorf("span %q is not a child of %q", child, ttfiFirstResumeMetric)
+			t.Errorf("span %q is not a child of %q", child, firstResumeMetric)
 		}
 	}
 }
 
-func TestTTFIReportsAFailedResumeWithoutSendingInstructions(t *testing.T) {
+func TestReportsAFailedResumeWithoutSendingInstructions(t *testing.T) {
 	// The window cannot be measured if the actor never gets a worker, and a
-	// TTFI row built from instructions that were never sent would be a lie.
+	// row built from instructions that were never sent would be a lie.
 	srv := &pingServer{}
 	ctrl := &fakeControlClient{resumeErr: errResumeRefused}
 	dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit}
-	u, sr := newTTFITestUser(t, srv, dyn, ctrl)
+	u, sr := newRunWorkloadTestUser(t, srv, dyn, ctrl)
 
-	u.measure(context.Background(), ttfiWarmMetric, dyn, Options{}, false)
+	u.measure(context.Background(), warmStartMetric, dyn, Options{}, false)
 
 	if got := srv.RecordedPings(); got != 0 {
 		t.Errorf("ping requests after a failed resume: got %d, want 0", got)
 	}
-	parent := spanByName(t, sr, ttfiWarmMetric)
-	if got := mustAttr(t, parent, "ttfi.attempts").AsInt64(); got != 0 {
-		t.Errorf("ttfi.attempts: got %d, want 0", got)
+	parent := spanByName(t, sr, warmStartMetric)
+	if got := mustAttr(t, parent, "attempts").AsInt64(); got != 0 {
+		t.Errorf("attempts: got %d, want 0", got)
 	}
-	if _, ok := attrValue(t, parent, "ttfi.instruction_ms"); ok {
-		t.Error("ttfi.instruction_ms set after a failed resume, want absent")
+	if _, ok := attrValue(t, parent, "instruction_ms"); ok {
+		t.Error("instruction_ms set after a failed resume, want absent")
 	}
 }
 
-func TestTTFIUserClassIsRegistered(t *testing.T) {
-	entry, ok := userclass.Lookup("ttfi")
+func TestUserClassIsRegistered(t *testing.T) {
+	entry, ok := userclass.Lookup("run_workload")
 	if !ok {
-		t.Fatalf("ttfi user class not registered; have %v", userclass.Names())
+		t.Fatalf("run_workload user class not registered; have %v", userclass.Names())
 	}
 	// The master's spawn messages match on the Python class name, so a
 	// mismatch here starts no users at all.
-	if entry.UserClass != ttfiUserClass {
-		t.Errorf("UserClass: got %q, want %q", entry.UserClass, ttfiUserClass)
+	if entry.UserClass != runWorkloadUserClass {
+		t.Errorf("UserClass: got %q, want %q", entry.UserClass, runWorkloadUserClass)
 	}
-	if entry.LocustFile != "ttfi.py" {
-		t.Errorf("LocustFile: got %q, want %q", entry.LocustFile, "ttfi.py")
+	if entry.LocustFile != "run_workload.py" {
+		t.Errorf("LocustFile: got %q, want %q", entry.LocustFile, "run_workload.py")
 	}
 }
 
@@ -314,9 +316,9 @@ func TestTTFIUserClassIsRegistered(t *testing.T) {
 // absent or misformatted value is a 404 "invalid actor reference" no matter
 // what the request's Host says. Asserted through substrate's own parser rather
 // than by string compare, so this fails if the wire format moves again.
-func TestTTFIAddressesTheActorWithTheTargetActorHeader(t *testing.T) {
+func TestAddressesTheActorWithTheTargetActorHeader(t *testing.T) {
 	srv := &pingServer{}
-	u, _ := newTTFITestUser(t, srv, dynconfig.Config{}, &fakeControlClient{})
+	u, _ := newRunWorkloadTestUser(t, srv, dynconfig.Config{}, &fakeControlClient{})
 
 	if _, _, err := u.firstInstruction(context.Background(), 5*time.Second); err != nil {
 		t.Fatalf("firstInstruction failed: %v", err)

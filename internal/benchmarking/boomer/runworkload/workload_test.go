@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ttfi
+package runworkload
 
 import (
 	"context"
@@ -78,9 +78,9 @@ func (w *fakeWorkload) recordedCalls() []actorRef {
 
 // newWorkloadTestUser builds a user around wl with no HTTP surface behind it,
 // so anything the benchmark learns has to have come through the interface.
-func newWorkloadTestUser(t *testing.T, wl workload) *ttfiUser {
+func newWorkloadTestUser(t *testing.T, wl workload) *runWorkloadUser {
 	t.Helper()
-	return &ttfiUser{
+	return &runWorkloadUser{
 		cfg: &userclass.Config{
 			APIStub:  &fakeControlClient{},
 			Tracer:   otel.Tracer("workload-test"),
@@ -90,14 +90,14 @@ func newWorkloadTestUser(t *testing.T, wl workload) *ttfiUser {
 		workload:     wl,
 		actorName:    "fakeactor",
 		templateName: wl.DefaultTemplate(),
-		userClass:    ttfiUserClass,
+		userClass:    runWorkloadUserClass,
 	}
 }
 
 // The retry loop is the benchmark's, but the verdict on each answer is the
 // workload's. Driving a workload that is not glutton is what shows the loop
 // reads that verdict rather than re-deriving it from an HTTP status.
-func TestTTFIDrivesTheWorkloadInterface(t *testing.T) {
+func TestDrivesTheWorkloadInterface(t *testing.T) {
 	tests := []struct {
 		name         string
 		results      []instructionResult
@@ -203,7 +203,7 @@ func TestResolveWorkload(t *testing.T) {
 	})
 }
 
-// --ttfi-workload-template overrides the workload's own default; unset, the
+// --workload-template overrides the workload's own default; unset, the
 // workload decides. The benchmark must not hold a template default of its own,
 // or the two could name a template the selected workload cannot address.
 func TestTemplateDefaultsToTheWorkloads(t *testing.T) {
@@ -217,7 +217,7 @@ func TestTemplateDefaultsToTheWorkloads(t *testing.T) {
 			wantTemplate: "fake-template",
 		},
 		{
-			name:         "--ttfi-workload-template overrides it",
+			name:         "--workload-template overrides it",
 			opts:         Options{Template: "some-other-template"},
 			wantTemplate: "some-other-template",
 		},
@@ -226,7 +226,7 @@ func TestTemplateDefaultsToTheWorkloads(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := &fakeControlClient{}
-			rt := &ttfiRuntime{
+			rt := &runWorkloadRuntime{
 				cfg: &userclass.Config{
 					APIStub:  ctrl,
 					Tracer:   otel.Tracer("workload-test"),

@@ -35,10 +35,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/myzhan/boomer"
 
-	// Imported for the user class each registers via init(). ttfi is named
-	// rather than blank because its settings are declared here, as flags, and
-	// handed over with ttfi.SetOptions.
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/internal/benchmarking/boomer/ttfi"
+	// Imported for the user class each registers via init(). runworkload is
+	// named rather than blank because its settings are declared here, as
+	// flags, and handed over with runworkload.SetOptions.
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/internal/benchmarking/boomer/runworkload"
 	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
 )
 
@@ -53,17 +53,18 @@ func main() {
 		configPollInterval = flag.Duration("config-poll-interval", 10*time.Second, "With --master-web-port, also fetch dynconfig on this interval. A spawn message comes only when the number of users or the spawn rate changes, thus a load shape that changes the sample rate alone needs this. Zero stops the polling.")
 		userClass          = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
 
-		// TTFI settings. Declared here with every other flag, so --help is the
-		// whole command line rather than one list per user class, and read
-		// only when --user-class selects ttfi. The defaults are left empty so
-		// that the package resolves them: the template's follows from the
-		// workload, which is the only place that knows what it can address.
-		ttfiWorkload = flag.String("ttfi-workload-name", "",
-			fmt.Sprintf("TTFI only: the workload a TTFIUser drives. Unset selects %s.", ttfi.DefaultWorkload))
-		ttfiTemplate = flag.String("ttfi-workload-template", "",
-			"TTFI only: the ActorTemplate a TTFIUser measures. Unset selects the workload's own.")
-		ttfiTimeout = flag.Duration("ttfi-timeout", 0,
-			fmt.Sprintf("TTFI only: ceiling on the instruction retry loop. Unset selects %s.", ttfi.DefaultTimeout))
+		// run_workload settings. Declared here with every other flag, so
+		// --help is the whole command line rather than one list per user
+		// class, and read only when --user-class selects run_workload. The
+		// defaults are left empty so that the package resolves them: the
+		// template's follows from the workload, which is the only place that
+		// knows what it can address.
+		workloadName = flag.String("workload-name", "",
+			fmt.Sprintf("run_workload only: the workload a RunWorkloadUser drives. Unset selects %s.", runworkload.DefaultWorkload))
+		workloadTemplate = flag.String("workload-template", "",
+			"run_workload only: the ActorTemplate the workload is measured on. Unset selects the workload's own.")
+		workloadTimeout = flag.Duration("workload-timeout", 0,
+			fmt.Sprintf("run_workload only: ceiling on the instruction retry loop. Unset selects %s.", runworkload.DefaultTimeout))
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
@@ -138,18 +139,18 @@ func main() {
 		Dyn:        dyn,
 	}
 
-	if *ttfiTimeout < 0 {
-		slog.Error("fatal: --ttfi-timeout cannot be negative",
-			slog.Duration("ttfi_timeout", *ttfiTimeout))
+	if *workloadTimeout < 0 {
+		slog.Error("fatal: --workload-timeout cannot be negative",
+			slog.Duration("workload_timeout", *workloadTimeout))
 		os.Exit(1)
 	}
-	// Unconditional, and inert unless the lookup below selects ttfi: only that
-	// entry's Init reads these, so a run of another user class carries them
-	// without ever looking at them.
-	ttfi.SetOptions(ttfi.Options{
-		Workload: *ttfiWorkload,
-		Template: *ttfiTemplate,
-		Timeout:  *ttfiTimeout,
+	// Unconditional, and inert unless the lookup below selects run_workload:
+	// only that entry's Init reads these, so a run of another user class
+	// carries them without ever looking at them.
+	runworkload.SetOptions(runworkload.Options{
+		Workload: *workloadName,
+		Template: *workloadTemplate,
+		Timeout:  *workloadTimeout,
 	})
 
 	entry, ok := userclass.Lookup(class)

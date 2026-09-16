@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ttfi
+package runworkload
 
 import (
 	"bytes"
@@ -28,28 +28,28 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 )
 
-// workload is the actor-side application a TTFI window drives. It owns the two
-// things that differ per workload — which ActorTemplate deploys it, and what
-// counts as an instruction it has demonstrably run — and nothing else. The
-// windows, the retry loop, the spans and the rows belong to the benchmark and
-// are identical whichever workload is measured, which is what keeps a TTFI
-// number from one workload comparable to a TTFI number from another.
+// workload is the actor-side application a measurement window drives. It owns
+// the two things that differ per workload — which ActorTemplate deploys it,
+// and what counts as an instruction it has demonstrably run — and nothing
+// else. The windows, the retry loop, the spans and the rows belong to the
+// benchmark and are identical whichever workload is measured, which is what
+// keeps a measurement from one workload comparable to one from another.
 //
 // glutton and openclaw are the implementations today. Another one is a file
 // that implements this interface and calls registerWorkload in its init.
 type workload interface {
-	// Name is the --ttfi-workload-name value that selects this workload.
+	// Name is the --workload-name value that selects this workload.
 	Name() string
 
 	// DefaultTemplate is the ActorTemplate measured when
-	// --ttfi-workload-template says nothing. It has to deploy something this
+	// --workload-template says nothing. It has to deploy something this
 	// workload can address.
 	DefaultTemplate() string
 
 	// SendInstruction issues exactly one instruction to actor. A nil error
-	// closes the TTFI window, so an implementation must not return one until
-	// the sandbox has actually run the instruction — accepting the connection
-	// is not the same thing.
+	// closes the measurement window, so an implementation must not return one
+	// until the sandbox has actually run the instruction — accepting the
+	// connection is not the same thing.
 	//
 	// retry reports whether a real client would try again: true while the
 	// actor may still be activating, false for a fault that waiting cannot
@@ -74,12 +74,12 @@ func (a actorRef) target() string {
 
 var workloads = map[string]workload{}
 
-// registerWorkload adds w to the set --ttfi-workload-name can select. It
+// registerWorkload adds w to the set --workload-name can select. It
 // panics on a duplicate name, which can only be a build-time mistake,
 // mirroring how upstream's userclass registry treats the same error.
 func registerWorkload(w workload) {
 	if _, exists := workloads[w.Name()]; exists {
-		panic(fmt.Sprintf("ttfi: duplicate workload registration for %q", w.Name()))
+		panic(fmt.Sprintf("runworkload: duplicate workload registration for %q", w.Name()))
 	}
 	workloads[w.Name()] = w
 }
@@ -110,7 +110,7 @@ func resolveWorkload(name string) (workload, error) {
 	}
 	w, ok := lookupWorkload(name)
 	if !ok {
-		return nil, fmt.Errorf("unknown --ttfi-workload-name %q; known: %s", name, strings.Join(workloadNames(), ", "))
+		return nil, fmt.Errorf("unknown --workload-name %q; known: %s", name, strings.Join(workloadNames(), ", "))
 	}
 	return w, nil
 }
@@ -133,7 +133,7 @@ type httpInstruction struct {
 // addressing, the trace propagation and the retry classification live here
 // rather than in each workload because they describe substrate's ingress path,
 // not any one application: a workload that got them wrong would change what
-// TTFI measures instead of what it drives.
+// the benchmark measures instead of what it drives.
 func sendHTTPInstruction(ctx context.Context, actor actorRef, inst httpInstruction) (retry bool, err error) {
 	httpReq, err := http.NewRequestWithContext(ctx, inst.Method, actor.RouterURL+inst.Path, bytes.NewReader(inst.Body))
 	if err != nil {

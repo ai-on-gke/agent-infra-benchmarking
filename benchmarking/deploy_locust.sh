@@ -32,10 +32,10 @@ OTLP_ENDPOINT=""
 # Empty keeps the default in workloads/deploy.sh (256Mi, the microvm minimum).
 ACTOR_MEMORY=""
 WAIT_TIMEOUT_SECS=""
-# The locust user class, the workload a TTFIUser drives and the template it is
-# measured on, all forwarded to locust/deploy.sh, which holds the same
+# The locust user class, the workload a RunWorkloadUser drives and the template
+# it is measured on, all forwarded to locust/deploy.sh, which holds the same
 # defaults.
-USER_CLASS=ttfi
+USER_CLASS=run_workload
 WORKLOAD_NAME=glutton
 WORKLOAD_TEMPLATE=glutton
 
@@ -55,8 +55,8 @@ usage() {
   echo "  --wait-timeout SECONDS  Forwarded to workloads/deploy.sh. The timeout in seconds for"
   echo "                          waiting for the ateom workers to be ready (default: 300)"
   echo "  --user-class NAME       Forwarded to locust/deploy.sh. Locust user class, lowercase;"
-  echo "                          runs tests/NAME.py (default: ttfi)"
-  echo "  --workload-name NAME    Forwarded to locust/deploy.sh. The workload a TTFIUser drives:"
+  echo "                          runs tests/NAME.py (default: run_workload)"
+  echo "  --workload-name NAME    Forwarded to locust/deploy.sh. The workload a RunWorkloadUser drives:"
   echo "                          glutton | openclaw (default: glutton). openclaw is not in the"
   echo "                          default WORKLOAD_TEMPLATES set, so deploy it with"
   echo "                          WORKLOAD_TEMPLATES=\"... openclaw\"."

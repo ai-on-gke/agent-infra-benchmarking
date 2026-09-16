@@ -33,10 +33,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST="${SCRIPT_DIR}/manifests/locust.yaml"
 
 # Substituted into the boomer container's --user-class argument and the master's -f.
-BENCHMARK_USER_CLASS=ttfi
+BENCHMARK_USER_CLASS=run_workload
 
-# Substituted into the boomer container's --ttfi-workload-name argument. Read
-# only when the user class is ttfi; the other classes ignore the flag. Not
+# Substituted into the boomer container's --workload-name argument. Read only
+# when the user class is run_workload; the other classes ignore the flag. Not
 # validated here: the registry that defines the valid names is compiled into
 # the image being deployed, which is not necessarily built from this working
 # tree, so a check against the local sources could reject a name the image
@@ -44,7 +44,7 @@ BENCHMARK_USER_CLASS=ttfi
 # does know.
 BENCHMARK_WORKLOAD_NAME=glutton
 
-# Substituted into the boomer container's --ttfi-workload-template argument,
+# Substituted into the boomer container's --workload-template argument,
 # which overrides the ActorTemplate the workload would otherwise measure. It
 # has to name a template the workload above can actually address, so the two
 # move together: changing --workload-name without this one measures the new
@@ -59,8 +59,8 @@ usage() {
   echo "Options:"
   echo "  --deploy              Deploy the locust workers"
   echo "  --delete              Delete the locust workers"
-  echo "  --user-class NAME     Locust user class, lowercase; runs tests/NAME.py (default: ttfi)"
-  echo "  --workload-name NAME  Workload a TTFIUser drives: glutton | openclaw (default: glutton)."
+  echo "  --user-class NAME     Locust user class, lowercase; runs tests/NAME.py (default: run_workload)"
+  echo "  --workload-name NAME  Workload a RunWorkloadUser drives: glutton | openclaw (default: glutton)."
   echo "                        Its ActorTemplate has to be deployed already — openclaw is not in"
   echo "                        the default WORKLOAD_TEMPLATES set of workloads/deploy.sh."
   echo "  --workload-template NAME"
@@ -115,7 +115,7 @@ if [[ ! -f "${SCRIPT_DIR}/tests/${BENCHMARK_USER_CLASS}.py" ]]; then
   echo "Error: no tests/${BENCHMARK_USER_CLASS}.py; --user-class must name a test file" >&2
   exit 1
 fi
-# An empty value substitutes as "--ttfi-workload-name=", which the worker reads
+# An empty value substitutes as "--workload-name=", which the worker reads
 # as unset and answers with its own default. That is the silently-measured-the-
 # wrong-workload result the Go side refuses to produce for an unknown name, so
 # refuse it here too rather than letting a blank argument through. The template

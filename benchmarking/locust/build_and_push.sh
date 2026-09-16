@@ -53,7 +53,7 @@ build_and_push() {
 # boomer-worker Go binary alongside the Python install (see Dockerfile).
 build_and_push "${LOCUST_IMAGE}" benchmarking/locust/Dockerfile .
 
-# The actor the TTFI openclaw workload drives. Its context is its own
+# The actor the openclaw workload drives. Its context is its own
 # directory: the Dockerfile installs openclaw from npm and copies one script,
 # so it needs nothing from the rest of the repo.
 echo

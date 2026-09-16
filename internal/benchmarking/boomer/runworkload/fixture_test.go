@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ttfi
+package runworkload
 
 import (
 	"context"
@@ -138,14 +138,14 @@ func newTestConfig(t *testing.T, srv *pingServer, cfg *userclass.Config) *usercl
 	return cfg
 }
 
-func newTestTTFIUser(t *testing.T, srv *pingServer, cfg *userclass.Config) *ttfiUser {
+func newTestRunWorkloadUser(t *testing.T, srv *pingServer, cfg *userclass.Config) *runWorkloadUser {
 	t.Helper()
 	c := newTestConfig(t, srv, cfg)
-	return &ttfiUser{
+	return &runWorkloadUser{
 		cfg:          c,
 		workload:     gluttonWorkload{},
-		actorName:    "ttfiactor",
+		actorName:    "runworkloadactor",
 		templateName: gluttonWorkload{}.DefaultTemplate(),
-		userClass:    ttfiUserClass,
+		userClass:    runWorkloadUserClass,
 	}
 }

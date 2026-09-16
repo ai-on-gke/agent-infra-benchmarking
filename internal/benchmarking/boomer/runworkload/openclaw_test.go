@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ttfi
+package runworkload
 
 import (
 	"context"
@@ -79,7 +79,7 @@ func (s *openclawServer) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Anything outside the fast path runs the agent, which this fake does not
-	// model: a TTFI instruction that reached it would be a bug in the
+	// model: an instruction that reached it would be a bug in the
 	// workload, and the empty reply below fails the verification that follows.
 	if strings.TrimSpace(string(body)) != openclawFastPathPrompt {
 		w.WriteHeader(http.StatusOK)
@@ -154,7 +154,7 @@ func TestOpenclawRejectsAnUnexpectedReply(t *testing.T) {
 }
 
 // While the actor is activating the router answers 503, which is the one
-// failure a TTFI window is supposed to sit through.
+// failure a measurement window is supposed to sit through.
 func TestOpenclawRetriesWhileActivating(t *testing.T) {
 	srv := &openclawServer{Status: http.StatusServiceUnavailable}
 	actor := newOpenclawActor(t, srv)

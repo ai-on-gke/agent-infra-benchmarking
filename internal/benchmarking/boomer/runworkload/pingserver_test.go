@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ttfi
+package runworkload
 
 import (
 	"io"
@@ -27,10 +27,10 @@ import (
 )
 
 // pingServer is a stand-in for a glutton actor's /ping route — the one
-// instruction TTFI times. It is deliberately not the shared glutton fake:
-// that double exists for the disk and RAM routes, and TTFI touches none of
-// them, so depending on it would only couple this benchmark to a fixture it
-// does not use.
+// instruction the benchmark times. It is deliberately not the shared glutton
+// fake: that double exists for the disk and RAM routes, and this benchmark
+// touches none of them, so depending on it would only couple this benchmark
+// to a fixture it does not use.
 type pingServer struct {
 	// Status fails every request with this HTTP status code.
 	Status int
@@ -69,8 +69,8 @@ func (s *pingServer) Start(t *testing.T) *httptest.Server {
 }
 
 // RecordedPings returns how many requests the route has seen, including the
-// ones PingFailures rejected — a TTFI window counts every attempt a client
-// would really have made.
+// ones PingFailures rejected — a measurement window counts every attempt a
+// client would really have made.
 func (s *pingServer) RecordedPings() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

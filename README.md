@@ -62,7 +62,7 @@ kubectl port-forward -n benchmarking svc/locust 8089:8089
 
 With the port-forward running, open [http://localhost:8089](http://localhost:8089).
 
-This is where the run is started and the `TTFIUser` class is picked.
+This is where the run is started and the `RunWorkloadUser` class is picked.
 
 ## Cleanup
 

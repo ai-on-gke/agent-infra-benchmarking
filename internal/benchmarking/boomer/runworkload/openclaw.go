@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ttfi
+package runworkload
 
 import (
 	"context"
@@ -36,7 +36,7 @@ const (
 
 	// The actor answers this prompt from a fast path that returns immediately
 	// instead of booting the Node agent underneath. That is the right
-	// instruction for TTFI: the window closes on the sandbox taking work, and
+	// instruction to time: the window closes on the sandbox taking work, and
 	// an agent turn would bury substrate's activation latency under seconds of
 	// model and process startup that have nothing to do with it. Measuring the
 	// agent turn itself is a different benchmark.
@@ -55,7 +55,7 @@ func init() {
 }
 
 // openclawWorkload drives the openclaw actor from demos/openclaw. Its /invoke
-// route wraps a headless coding agent, but the TTFI instruction deliberately
+// route wraps a headless coding agent, but the instruction deliberately
 // takes the actor's fast path (see openclawFastPathPrompt).
 //
 // Unlike glutton's ping, the reply carries no per-request nonce, so it proves

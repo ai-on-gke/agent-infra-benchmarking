@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ttfi measures time to first instruction — the wall clock a client
-// waits before a sandbox accepts work.
+// Package runworkload drives a workload actor through substrate's activation
+// path and measures the wall clock a client waits before the sandbox accepts
+// work.
 //
 // It is deliberately not the sum of the other benchmarks' rows: ResumeActor
 // returning is not the same as the actor being reachable, and under implicit
@@ -24,29 +25,29 @@
 //
 // Two windows are measured, because they answer different questions:
 //
-//   - TTFIFirstResume: the actor has just been created and has no snapshot of
+//   - FirstResume: the actor has just been created and has no snapshot of
 //     its own, so substrate activates it from whatever source its template
 //     resolves to — the template's golden snapshot when it has one, the OCI
-//     image when it does not. Point --ttfi-workload-template at a template
+//     image when it does not. Point --workload-template at a template
 //     without snapshotsConfig to measure a true cold boot.
-//   - TTFIWarmStart: the actor exists and was suspended to object storage.
+//   - WarmStart: the actor exists and was suspended to object storage.
 //     This is resuming an existing session, and is the number substrate's
 //     100ms activation target is about.
 //
 // The timing comes off the span tree rather than off arithmetic on the stats
-// rows: the TTFI row's latency is its parent span's duration, and each phase
-// is a child span, so a trace shows where the time went. ttfi.* attributes on
+// rows: a window's row latency is its parent span's duration, and each phase
+// is a child span, so a trace shows where the time went. The attributes on
 // the parent carry the split (control-plane handler time vs. the instruction
 // round trip) so one sampled trace explains its own total.
 //
 // What is under measurement is substrate's activation path, not any
 // application, so the workload the actor runs is a parameter rather than a
-// fixture: --ttfi-workload-name selects an implementation of the workload
-// interface (see workload.go) and --ttfi-workload-template overrides the
+// fixture: --workload-name selects an implementation of the workload
+// interface (see workload.go) and --workload-template overrides the
 // ActorTemplate it names. The flags themselves are declared by
 // cmd/benchmarking/boomer-worker and arrive here through SetOptions, so the
 // binary's --help lists every argument it takes in one place.
-package ttfi
+package runworkload
 
 import (
 	"context"
@@ -79,41 +80,41 @@ import (
 const templateAtespace = "benchmark-workloads"
 
 const (
-	// Locust class name from tests/ttfi.py; must match boomer.Task.Name.
-	ttfiUserClass = "TTFIUser"
+	// Locust class name from tests/run_workload.py; must match boomer.Task.Name.
+	runWorkloadUserClass = "RunWorkloadUser"
 
-	// DefaultWorkload is the workload a TTFIUser drives unless Options names
-	// another. The default template follows from the workload rather than
-	// being fixed here, so the two settings cannot drift into naming a
-	// template the workload has no way to address. Exported because the
-	// worker's --ttfi-workload-name usage string states it.
+	// DefaultWorkload is the workload a RunWorkloadUser drives unless Options
+	// names another. The default template follows from the workload rather than
+	// being fixed here, so the two settings cannot drift into naming a template
+	// the workload has no way to address. Exported because the worker's
+	// --workload-name usage string states it.
 	DefaultWorkload = gluttonWorkloadName
 
 	// DefaultTimeout bounds the instruction retry loop when Options leaves it
 	// zero. An actor that has not taken an instruction by then is recorded as
-	// a TTFI failure instead of being waited on for the rest of the run.
+	// a failure instead of being waited on for the rest of the run.
 	DefaultTimeout = 60 * time.Second
 
 	// Delay between instruction attempts, short relative to a resume so the
 	// retry granularity does not show up in the measurement.
-	ttfiRetryDelay = 25 * time.Millisecond
+	retryDelay = 25 * time.Millisecond
 
-	ttfiFirstResumeMetric = "TTFIFirstResume"
-	ttfiWarmMetric        = "TTFIWarmStart"
-	ttfiResumeMetric      = "TTFIResume"
-	ttfiInstructionMetric = "TTFIInstruction"
-	ttfiSuspendMetric     = "TTFISuspend"
+	firstResumeMetric = "FirstResume"
+	warmStartMetric   = "WarmStart"
+	resumeMetric      = "Resume"
+	instructionMetric = "Instruction"
+	suspendMetric     = "Suspend"
 
-	// Transport label for the composite rows. A TTFI window spans a gRPC
+	// Transport label for the composite rows. A measurement window spans a gRPC
 	// resume and an HTTP instruction, so neither transport label the other
 	// rows use describes it.
-	ttfiMethod = "ttfi"
+	runWorkloadMethod = "run_workload"
 )
 
-// Options are the TTFI-only settings of a run. They are handed to this package
-// rather than parsed by it: every flag the worker accepts is declared in
-// cmd/benchmarking/boomer-worker, so one --help lists them all and a user
-// class has no command-line surface of its own to keep in sync.
+// Options are the run_workload-only settings of a run. They are handed to
+// this package rather than parsed by it: every flag the worker accepts is
+// declared in cmd/benchmarking/boomer-worker, so one --help lists them all and
+// a user class has no command-line surface of its own to keep in sync.
 //
 // The zero value asks for the defaults throughout.
 type Options struct {
@@ -133,55 +134,57 @@ type Options struct {
 }
 
 // configured is what SetOptions recorded. It is read exactly once, by
-// initTTFI, and passed by value from there on, so nothing on the measurement
-// path reads mutable package state.
+// initRunWorkload, and passed by value from there on, so nothing on the
+// measurement path reads mutable package state.
 var configured Options
 
-// SetOptions records the settings initTTFI will use. It must run before the
-// registered entry's Init, which main satisfies by calling it after
-// flag.Parse and before the userclass lookup. A setter rather than an Init
-// parameter because the registry hands every user class the same
-// userclass.Config, which is upstream's type and carries no TTFI fields.
+// SetOptions records the settings initRunWorkload will use. It must run
+// before the registered entry's Init, which main satisfies by calling it
+// after flag.Parse and before the userclass lookup. A setter rather than an
+// Init parameter because the registry hands every user class the same
+// userclass.Config, which is upstream's type and carries no run_workload
+// fields.
 func SetOptions(o Options) { configured = o }
 
 func init() {
 	userclass.Add(userclass.Entry{
-		Name:       "ttfi",
-		LocustFile: "ttfi.py",
-		UserClass:  ttfiUserClass,
-		Init:       initTTFI,
+		Name:       "run_workload",
+		LocustFile: "run_workload.py",
+		UserClass:  runWorkloadUserClass,
+		Init:       initRunWorkload,
 	})
 }
 
-// initTTFI creates a runtime tied to cfg and returns a boomer-compatible task
-// function plus a shutdown hook the caller should run before exit.
-func initTTFI(cfg *userclass.Config) (taskFn func(), shutdown func(context.Context)) {
+// initRunWorkload creates a runtime tied to cfg and returns a
+// boomer-compatible task function plus a shutdown hook the caller should run
+// before exit.
+func initRunWorkload(cfg *userclass.Config) (taskFn func(), shutdown func(context.Context)) {
 	if cfg.Tracer == nil {
 		// Scope names the benchmark, not the workload: the same spans are
-		// emitted whichever workload --ttfi-workload-name selects.
-		cfg.Tracer = otel.Tracer("substrate-boomer/ttfi")
+		// emitted whichever workload --workload-name selects.
+		cfg.Tracer = otel.Tracer("substrate-boomer/run_workload")
 	}
 	// Resolved once at startup rather than per iteration: an unselectable
 	// workload is a configuration mistake, and a run that reports it after
 	// producing rows has already wasted the run.
 	wl, err := resolveWorkload(configured.Workload)
 	if err != nil {
-		slog.Error("fatal: cannot select the TTFI workload",
+		slog.Error("fatal: cannot select the workload",
 			slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	rt := &ttfiRuntime{cfg: cfg, opts: configured, workload: wl}
+	rt := &runWorkloadRuntime{cfg: cfg, opts: configured, workload: wl}
 	return rt.iterate, rt.shutdown
 }
 
-type ttfiRuntime struct {
+type runWorkloadRuntime struct {
 	cfg      *userclass.Config
 	opts     Options
 	workload workload
-	users    sync.Map // goroutineID -> *ttfiUser
+	users    sync.Map // goroutineID -> *runWorkloadUser
 }
 
-func (r *ttfiRuntime) dynamicWait() time.Duration {
+func (r *runWorkloadRuntime) dynamicWait() time.Duration {
 	cfg := r.cfg.Dyn.Load()
 	if cfg.MaxWait <= cfg.MinWait {
 		return cfg.MinWait
@@ -193,13 +196,13 @@ func (r *ttfiRuntime) dynamicWait() time.Duration {
 // iterate is the task function boomer calls in a loop on each VU goroutine.
 // The first call on a goroutine creates the actor and measures its first
 // resume; every later call suspends it and measures the warm one.
-func (r *ttfiRuntime) iterate() {
+func (r *runWorkloadRuntime) iterate() {
 	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
 		u, err := r.startUser(context.Background(), r.cfg.Dyn.Load(), r.opts)
 		if err != nil {
-			slog.Warn("ttfi on_start failed; goroutine will retry next iter",
+			slog.Warn("run_workload on_start failed; goroutine will retry next iter",
 				slog.String("err", err.Error()))
 			time.Sleep(r.dynamicWait())
 			return
@@ -210,7 +213,7 @@ func (r *ttfiRuntime) iterate() {
 			// torn down. Drop it now instead of leaking it for the rest of
 			// the run.
 			u.suspendAndDelete(context.Background())
-			bmetrics.UpdateUsers(ttfiUserClass, -1)
+			bmetrics.UpdateUsers(runWorkloadUserClass, -1)
 		}
 		// The cold window was measured inside startUser. Returning here
 		// keeps one iteration to one measurement, so the two rows stay
@@ -219,58 +222,58 @@ func (r *ttfiRuntime) iterate() {
 		time.Sleep(r.dynamicWait())
 		return
 	}
-	user := val.(*ttfiUser)
+	user := val.(*runWorkloadUser)
 
 	dynCfg := r.cfg.Dyn.Load()
 	ctx := context.Background()
 	// Suspend is the precondition for a warm measurement, not part of it:
-	// it runs outside the TTFI span and reports its own row.
+	// it runs outside the measured span and reports its own row.
 	user.suspend(ctx)
-	user.measure(ctx, ttfiWarmMetric, dynCfg, r.opts, false)
+	user.measure(ctx, warmStartMetric, dynCfg, r.opts, false)
 
 	time.Sleep(r.dynamicWait())
 }
 
-func (r *ttfiRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config, opts Options) (*ttfiUser, error) {
+func (r *runWorkloadRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config, opts Options) (*runWorkloadUser, error) {
 	tmpl := opts.Template
 	if tmpl == "" {
 		tmpl = r.workload.DefaultTemplate()
 	}
 
-	u := &ttfiUser{
+	u := &runWorkloadUser{
 		cfg:          r.cfg,
 		workload:     r.workload,
 		actorName:    "sb-" + uuid.NewString(),
 		templateName: tmpl,
-		userClass:    ttfiUserClass,
+		userClass:    runWorkloadUserClass,
 	}
-	bmetrics.UpdateUsers(ttfiUserClass, 1)
+	bmetrics.UpdateUsers(runWorkloadUserClass, 1)
 	if err := u.ensureAtespace(ctx); err != nil {
-		bmetrics.UpdateUsers(ttfiUserClass, -1)
+		bmetrics.UpdateUsers(runWorkloadUserClass, -1)
 		return nil, err
 	}
 	if err := u.create(ctx); err != nil {
-		bmetrics.UpdateUsers(ttfiUserClass, -1)
+		bmetrics.UpdateUsers(runWorkloadUserClass, -1)
 		return nil, err
 	}
 
 	// A failed first-resume window is a result, not a reason to drop the
-	// actor: it is already recorded as a TTFIFirstResume failure, and the next
+	// actor: it is already recorded as a FirstResume failure, and the next
 	// iteration's suspend normalizes whatever state the actor was left in.
-	u.measure(ctx, ttfiFirstResumeMetric, dynCfg, opts, true)
+	u.measure(ctx, firstResumeMetric, dynCfg, opts, true)
 	return u, nil
 }
 
-func (r *ttfiRuntime) shutdown(ctx context.Context) {
+func (r *runWorkloadRuntime) shutdown(ctx context.Context) {
 	r.users.Range(func(_, val any) bool {
-		u := val.(*ttfiUser)
+		u := val.(*runWorkloadUser)
 		u.suspendAndDelete(ctx)
-		bmetrics.UpdateUsers(ttfiUserClass, -1)
+		bmetrics.UpdateUsers(runWorkloadUserClass, -1)
 		return true
 	})
 }
 
-type ttfiUser struct {
+type runWorkloadUser struct {
 	cfg          *userclass.Config
 	workload     workload
 	actorName    string
@@ -278,13 +281,13 @@ type ttfiUser struct {
 	userClass    string
 }
 
-func (u *ttfiUser) ref() *ateapipb.ObjectRef {
+func (u *runWorkloadUser) ref() *ateapipb.ObjectRef {
 	return &ateapipb.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
 }
 
 // actor is the handle the workload addresses. Built per call rather than
 // stored so the workload can hold no benchmark state of its own.
-func (u *ttfiUser) actor() actorRef {
+func (u *runWorkloadUser) actor() actorRef {
 	return actorRef{
 		HTTPClient: u.cfg.HTTPClient,
 		RouterURL:  u.cfg.RouterURL,
@@ -294,17 +297,17 @@ func (u *ttfiUser) actor() actorRef {
 }
 
 // budget is the ceiling on the instruction retry loop.
-func (u *ttfiUser) budget(opts Options) time.Duration {
+func (u *runWorkloadUser) budget(opts Options) time.Duration {
 	if opts.Timeout > 0 {
 		return opts.Timeout
 	}
 	return DefaultTimeout
 }
 
-// measure times one TTFI window and reports it as metricName. The parent
+// measure times one window and reports it as metricName. The parent
 // span's duration is the measurement, so every phase that a client would
 // wait through runs inside it and nothing else does.
-func (u *ttfiUser) measure(ctx context.Context, metricName string, dynCfg dynconfig.Config, opts Options, firstResume bool) {
+func (u *runWorkloadUser) measure(ctx context.Context, metricName string, dynCfg dynconfig.Config, opts Options, firstResume bool) {
 	mode := dynCfg.ResumeMode
 	if mode == "" {
 		// Matches common/resume_mode.py's default, so the mode is the same
@@ -317,10 +320,10 @@ func (u *ttfiUser) measure(ctx context.Context, metricName string, dynCfg dyncon
 	ctx, span := u.cfg.Tracer.Start(ctx, metricName)
 	defer span.End()
 	span.SetAttributes(
-		attribute.String("ttfi.workload", u.workload.Name()),
-		attribute.String("ttfi.template", u.templateName),
-		attribute.String("ttfi.resume_mode", mode),
-		attribute.Bool("ttfi.first_resume", firstResume),
+		attribute.String("workload", u.workload.Name()),
+		attribute.String("template", u.templateName),
+		attribute.String("resume_mode", mode),
+		attribute.Bool("first_resume", firstResume),
 	)
 
 	start := time.Now()
@@ -330,49 +333,49 @@ func (u *ttfiUser) measure(ctx context.Context, metricName string, dynCfg dyncon
 		elapsed, err := u.resume(ctx)
 		controlPlane = elapsed
 		if err != nil {
-			u.recordTTFI(span, metricName, time.Since(start), 0, controlPlane, 0, err)
+			u.recordWindow(span, metricName, time.Since(start), 0, controlPlane, 0, err)
 			return
 		}
 	}
 
 	attempts, instruction, err := u.firstInstruction(ctx, u.budget(opts))
-	u.recordTTFI(span, metricName, time.Since(start), attempts, controlPlane, instruction, err)
+	u.recordWindow(span, metricName, time.Since(start), attempts, controlPlane, instruction, err)
 }
 
-// recordTTFI closes out a TTFI window: the attributes make one sampled trace
-// self-explaining, and the row carries client wall clock. That is a
-// deliberate departure from the other benchmarks, which prefer the server's
-// elapsed trailer — the gaps between the phases are exactly what TTFI is
-// measuring, and a server-side number cannot see them.
-func (u *ttfiUser) recordTTFI(span trace.Span, metricName string, total time.Duration, attempts int, controlPlane, instruction time.Duration, err error) {
+// recordWindow closes out a measurement window: the attributes make one
+// sampled trace self-explaining, and the row carries client wall clock. That
+// is a deliberate departure from the other benchmarks, which prefer the
+// server's elapsed trailer — the gaps between the phases are exactly what the
+// benchmark is measuring, and a server-side number cannot see them.
+func (u *runWorkloadUser) recordWindow(span trace.Span, metricName string, total time.Duration, attempts int, controlPlane, instruction time.Duration, err error) {
 	span.SetAttributes(
-		attribute.Float64("ttfi.total_ms", boomerutil.MsFloat(total)),
-		attribute.Int("ttfi.attempts", attempts),
+		attribute.Float64("total_ms", boomerutil.MsFloat(total)),
+		attribute.Int("attempts", attempts),
 	)
 	if controlPlane > 0 {
-		span.SetAttributes(attribute.Float64("ttfi.control_plane_ms", boomerutil.MsFloat(controlPlane)))
+		span.SetAttributes(attribute.Float64("control_plane_ms", boomerutil.MsFloat(controlPlane)))
 	}
 	if instruction > 0 {
-		span.SetAttributes(attribute.Float64("ttfi.instruction_ms", boomerutil.MsFloat(instruction)))
+		span.SetAttributes(attribute.Float64("instruction_ms", boomerutil.MsFloat(instruction)))
 	}
 	boomerutil.LogSampledTrace(span, metricName, total, boomerutil.SourceClient, err)
 	if err != nil {
-		bmetrics.RecordFailure(ttfiMethod, metricName, u.userClass, total, err.Error())
+		bmetrics.RecordFailure(runWorkloadMethod, metricName, u.userClass, total, err.Error())
 		return
 	}
-	bmetrics.RecordSuccess(ttfiMethod, metricName, u.userClass, total, 0)
+	bmetrics.RecordSuccess(runWorkloadMethod, metricName, u.userClass, total, 0)
 }
 
 // firstInstruction drives the workload until one instruction comes back
 // correct or the budget elapses, and reports the whole loop as one row. The
-// retries are inside the TTFI window on purpose: until an instruction lands,
-// the client cannot use the sandbox, so a request the router rejected while
-// the actor was still activating is part of the wait. Whether a given failure
-// is worth retrying is the workload's call, since only it knows what its own
-// answers mean. Per-attempt visibility comes from the router's own server-side
-// spans, which the injected trace context parents to this one.
-func (u *ttfiUser) firstInstruction(ctx context.Context, budget time.Duration) (int, time.Duration, error) {
-	ctx, span := u.cfg.Tracer.Start(ctx, ttfiInstructionMetric)
+// retries are inside the measurement window on purpose: until an instruction
+// lands, the client cannot use the sandbox, so a request the router rejected
+// while the actor was still activating is part of the wait. Whether a given
+// failure is worth retrying is the workload's call, since only it knows what
+// its own answers mean. Per-attempt visibility comes from the router's own
+// server-side spans, which the injected trace context parents to this one.
+func (u *runWorkloadUser) firstInstruction(ctx context.Context, budget time.Duration) (int, time.Duration, error) {
+	ctx, span := u.cfg.Tracer.Start(ctx, instructionMetric)
 	defer span.End()
 
 	start := time.Now()
@@ -385,9 +388,9 @@ func (u *ttfiUser) firstInstruction(ctx context.Context, budget time.Duration) (
 		retryable, err := u.workload.SendInstruction(ctx, u.actor())
 		if err == nil {
 			latency := time.Since(start)
-			span.SetAttributes(attribute.Int("ttfi.attempts", attempts))
-			boomerutil.LogSampledTrace(span, ttfiInstructionMetric, latency, boomerutil.SourceClient, nil)
-			bmetrics.RecordSuccess("http", ttfiInstructionMetric, u.userClass, latency, 0)
+			span.SetAttributes(attribute.Int("attempts", attempts))
+			boomerutil.LogSampledTrace(span, instructionMetric, latency, boomerutil.SourceClient, nil)
+			bmetrics.RecordSuccess("http", instructionMetric, u.userClass, latency, 0)
 			return attempts, latency, nil
 		}
 		lastErr = err
@@ -399,22 +402,22 @@ func (u *ttfiUser) firstInstruction(ctx context.Context, budget time.Duration) (
 			lastErr = fmt.Errorf("no instruction accepted within %s (%d attempts), last error: %w", budget, attempts, err)
 			break
 		}
-		time.Sleep(min(ttfiRetryDelay, remaining))
+		time.Sleep(min(retryDelay, remaining))
 	}
 
 	latency := time.Since(start)
-	span.SetAttributes(attribute.Int("ttfi.attempts", attempts))
-	boomerutil.LogSampledTrace(span, ttfiInstructionMetric, latency, boomerutil.SourceClient, lastErr)
-	bmetrics.RecordFailure("http", ttfiInstructionMetric, u.userClass, latency, lastErr.Error())
+	span.SetAttributes(attribute.Int("attempts", attempts))
+	boomerutil.LogSampledTrace(span, instructionMetric, latency, boomerutil.SourceClient, lastErr)
+	bmetrics.RecordFailure("http", instructionMetric, u.userClass, latency, lastErr.Error())
 	return attempts, latency, lastErr
 }
 
-// resume issues the explicit ResumeActor that opens an explicit-mode TTFI
+// resume issues the explicit ResumeActor that opens an explicit-mode
 // window, and returns the server-side handler duration so the parent can
-// attribute how much of TTFI ateapi owns.
-func (u *ttfiUser) resume(ctx context.Context) (time.Duration, error) {
+// attribute how much of the window ateapi owns.
+func (u *runWorkloadUser) resume(ctx context.Context) (time.Duration, error) {
 	var serverElapsed time.Duration
-	err := u.tracedCall(ctx, ttfiResumeMetric, &serverElapsed, func(callCtx context.Context, tr *metadata.MD) error {
+	err := u.tracedCall(ctx, resumeMetric, &serverElapsed, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
@@ -423,7 +426,7 @@ func (u *ttfiUser) resume(ctx context.Context) (time.Duration, error) {
 	return serverElapsed, err
 }
 
-func (u *ttfiUser) ensureAtespace(ctx context.Context) error {
+func (u *runWorkloadUser) ensureAtespace(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateAtespace", nil, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapipb.CreateAtespaceRequest{
 			Atespace: &ateapipb.Atespace{
@@ -443,9 +446,9 @@ func (u *ttfiUser) ensureAtespace(ctx context.Context) error {
 }
 
 // create registers the actor. It runs before the cold window opens, so its
-// latency is reported but not counted as TTFI: a harness creates the record
-// once and may do it long before the first instruction.
-func (u *ttfiUser) create(ctx context.Context) error {
+// latency is reported but not counted in the window: a harness creates the
+// record once and may do it long before the first instruction.
+func (u *runWorkloadUser) create(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", nil, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
@@ -457,8 +460,8 @@ func (u *ttfiUser) create(ctx context.Context) error {
 	})
 }
 
-func (u *ttfiUser) suspend(ctx context.Context) {
-	_ = u.tracedCall(ctx, ttfiSuspendMetric, nil, func(callCtx context.Context, tr *metadata.MD) error {
+func (u *runWorkloadUser) suspend(ctx context.Context) {
+	_ = u.tracedCall(ctx, suspendMetric, nil, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
@@ -470,14 +473,14 @@ func (u *ttfiUser) suspend(ctx context.Context) {
 // requires SUSPENDED or CRASHED; deleting a running actor leaks it. The
 // suspend is unmetered (teardown precondition, not benchmark latency), while
 // the delete is metered so true leaks still surface in failures.csv.
-func (u *ttfiUser) suspendAndDelete(ctx context.Context) {
+func (u *runWorkloadUser) suspendAndDelete(ctx context.Context) {
 	_, _ = u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor: u.ref(),
 	})
 	u.delete(ctx)
 }
 
-func (u *ttfiUser) delete(ctx context.Context) {
+func (u *runWorkloadUser) delete(ctx context.Context) {
 	_ = u.tracedCall(ctx, "DeleteActor", nil, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
 			Actor: u.ref(),
@@ -489,9 +492,9 @@ func (u *ttfiUser) delete(ctx context.Context) {
 // tracedCall wraps a unary gRPC call with a span and Prometheus/locust
 // reporting, as the other user classes do. It additionally hands the
 // server-side elapsed time back through serverElapsed (when non-nil) so a
-// caller inside a TTFI window can report what share of the window ateapi's
-// handler accounted for.
-func (u *ttfiUser) tracedCall(ctx context.Context, name string, serverElapsed *time.Duration, do func(context.Context, *metadata.MD) error) error {
+// caller inside a measurement window can report what share of the window
+// ateapi's handler accounted for.
+func (u *runWorkloadUser) tracedCall(ctx context.Context, name string, serverElapsed *time.Duration, do func(context.Context, *metadata.MD) error) error {
 	ctx, span := u.cfg.Tracer.Start(ctx, name)
 	defer span.End()
 

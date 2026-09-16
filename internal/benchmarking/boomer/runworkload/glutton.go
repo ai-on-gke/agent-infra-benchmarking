@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ttfi
+package runworkload
 
 import (
 	"context"
@@ -45,7 +45,7 @@ func init() {
 // gluttonWorkload drives substrate's glutton actor. Its /ping route echoes the
 // message it was sent, and that echo is what makes glutton usable here: it
 // distinguishes a sandbox that ran the instruction from one that merely
-// accepted the connection, which is the line a TTFI window closes on.
+// accepted the connection, which is the line a measurement window closes on.
 type gluttonWorkload struct{}
 
 func (gluttonWorkload) Name() string { return gluttonWorkloadName }
