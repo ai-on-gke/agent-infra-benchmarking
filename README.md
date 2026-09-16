@@ -78,6 +78,18 @@ anything else.
 <details>
 <summary><strong>Re-deploying</strong></summary>
 
+**Locust only.** The faster path, for when the workloads are unchanged and only
+the benchmark code is:
+
+```bash
+./benchmarking/locust/deploy.sh --delete
+./benchmarking/locust/build_and_push.sh
+./benchmarking/locust/deploy.sh --deploy \
+  --user-class runworkload \
+  --workload-name glutton \
+  --workload-template glutton
+```
+
 **Everything, workloads included.** Tear the whole stack down and put it back:
 
 ```bash
@@ -93,18 +105,6 @@ ActorTemplate, a different sandbox class or actor memory, or a rebuilt actor
 image. An actor image in particular needs this path: the template pins it by
 digest, and only `workloads/deploy.sh` re-resolves that digest and retakes the
 golden snapshot.
-
-**Locust only.** Faster, for when the workloads are unchanged and only the
-benchmark code is:
-
-```bash
-./benchmarking/locust/deploy.sh --delete
-./benchmarking/locust/build_and_push.sh
-./benchmarking/locust/deploy.sh --deploy \
-  --user-class runworkload \
-  --workload-name glutton \
-  --workload-template glutton
-```
 
 </details>
 
