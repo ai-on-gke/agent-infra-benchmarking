@@ -29,12 +29,15 @@ if [ -z "${PROJECT_ID:-}" ]; then
   exit 1
 fi
 
+# OPENCLAW_IMAGE comes from .env.sh rather than from here, so this push and
+# whatever resolves that image name one string. An .env.sh predating that move
+# does not set it, and nounset would report only the bare variable name.
+if [ -z "${OPENCLAW_IMAGE:-}" ]; then
+  echo "Error: OPENCLAW_IMAGE must be set; copy its line from env.sh.example into .env.sh." >&2
+  exit 1
+fi
+
 LOCUST_IMAGE="us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest"
-# Must stay the same string as the image in
-# benchmarking/workloads/manifests/openclaw-template.yaml.tmpl: this push is
-# what that ActorTemplate resolves to, so the two drifting apart leaves the
-# template pulling an image nothing builds.
-OPENCLAW_IMAGE="us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/openclaw-workload:latest"
 
 # Target platform must match the cluster's nodes, not the build host.
 PLATFORM="${LOCUST_IMAGE_PLATFORM:-linux/amd64}"

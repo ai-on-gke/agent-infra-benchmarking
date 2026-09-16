@@ -140,6 +140,53 @@ run_ko() {
   (cd "${SUBSTRATE_DIR}" && hack/run-tool.sh ko "$@")
 }
 
+# resolve_image_digest prints the digest reference for the image tag it is
+# given. An ActorTemplate's image field takes a digest and rejects a tag, so
+# the registry is asked what the tag points at right now and the template names
+# whatever was last pushed. Called from the one loop iteration whose template
+# needs it, so a run without that template never reaches the registry. Progress
+# and errors go to stderr because the caller captures stdout.
+resolve_image_digest() {
+  local image="$1"
+  if [[ -z "${image}" ]]; then
+    echo "Error: no image reference to resolve; set the one this template needs" >&2
+    echo "in .env.sh (see env.sh.example)." >&2
+    return 1
+  fi
+  if ! command -v gcloud &>/dev/null; then
+    echo "Error: gcloud is required to resolve ${image} to a digest." >&2
+    return 1
+  fi
+
+  local digest
+  digest="$(gcloud artifacts docker images describe "${image}" \
+    --format="value(image_summary.digest)" 2>/dev/null || true)"
+  # An unpushed tag and a registry that refused the request look the same from
+  # here, and both leave this empty. Either way the template cannot be created,
+  # so name the image that could not be resolved rather than substituting an
+  # empty image field.
+  if [[ "${digest}" != sha256:* ]]; then
+    echo "Error: cannot resolve ${image} to a digest." >&2
+    echo "Push it first with benchmarking/locust/build_and_push.sh, and check that" >&2
+    echo "the active gcloud account can read that Artifact Registry repository." >&2
+    return 1
+  fi
+
+  # The template takes the configured image path with the digest in place of
+  # the tag, not the digest on its own. The path comes from the argument rather
+  # than from the registry's own spelling of it, so the deployed reference is
+  # the one .env.sh configured even where a repository answers to more than one
+  # name. Only the last path segment can carry a tag, which leaves a registry
+  # host with a port alone; ${image%@*} handles an argument that already names
+  # a digest.
+  local repo="${image%@*}"
+  if [[ "${repo##*/}" == *:* ]]; then
+    repo="${repo%:*}"
+  fi
+  echo "  image: ${repo}@${digest}" >&2
+  printf '%s@%s\n' "${repo}" "${digest}"
+}
+
 substitute() {
   # SandboxConfig names are pinned per class in the ActorTemplates (rather
   # than defaulted) so a stale config from a dirty teardown fails loudly
@@ -147,6 +194,10 @@ substitute() {
   # substrate's hack/install-ate.sh; microvm by its hack/install-microvm-deps.sh.
   # The protojson templates take the sandbox class as its proto enum spelling.
   local manifest="$1"
+  # Only a template whose image is neither a ko:// reference nor a literal
+  # carries a digest, and only its caller has one to give. Every other manifest
+  # passes nothing and the expression below finds no placeholder to replace.
+  local image_digest="${2:-}"
   local sandbox_config_name sandbox_class_enum
   case "${SANDBOX_CLASS}" in
     gvisor)  sandbox_config_name="gvisor-default" sandbox_class_enum="SANDBOX_CLASS_GVISOR" ;;
@@ -160,6 +211,7 @@ substitute() {
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
       -e "s|\${PROJECT_ID}|${PROJECT_ID}|g" \
+      -e "s|\${IMAGE_DIGEST}|${image_digest}|g" \
       "${manifest}"
 }
 
@@ -296,13 +348,21 @@ deploy() {
   # the old template first. This removal is safe, because the benchmark
   # automation deletes the actors between the tests; it also removes the old
   # golden actor and snapshot server-side.
-  local template
+  local template image_digest
   for template in "${TEMPLATES[@]}"; do
     run_kubectl_ate delete actor-template "${template}" -a benchmark-workloads \
       >/dev/null 2>&1 || true
+    # This one template's image is neither a ko:// reference nor a literal, so
+    # its digest is looked up on its own iteration. Assigned on a line of its
+    # own rather than on the declaration above: `local x="$(...)"` would return
+    # local's status and hide a failed lookup from errexit.
+    image_digest=""
+    if [[ "${template}" == "openclaw" ]]; then
+      image_digest="$(resolve_image_digest "${OPENCLAW_IMAGE:-}")"
+    fi
     # ko resolve builds the ko:// image references and replaces them with
     # pushed digests before the manifest reaches kubectl-ate.
-    substitute "${MANIFEST_DIR}/${template}-template.yaml.tmpl" \
+    substitute "${MANIFEST_DIR}/${template}-template.yaml.tmpl" "${image_digest}" \
       | run_ko resolve -f - \
       | run_kubectl_ate create actor-template -f -
   done
