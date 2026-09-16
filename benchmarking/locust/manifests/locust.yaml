@@ -135,6 +135,7 @@ spec:
         # names what is being measured, and so switching workloads is an edit
         # here rather than a change of defaults in the Go code.
         - "--ttfi-workload=glutton"
+        # - "--ttfi-workload=openclaw"
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317

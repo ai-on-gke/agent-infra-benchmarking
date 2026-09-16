@@ -29,17 +29,34 @@ if [ -z "${PROJECT_ID:-}" ]; then
   exit 1
 fi
 
-IMAGE="us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest"
+LOCUST_IMAGE="us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest"
+# Must stay the same string as the image in
+# benchmarking/workloads/manifests/openclaw-template.yaml.tmpl: this push is
+# what that ActorTemplate resolves to, so the two drifting apart leaves the
+# template pulling an image nothing builds.
+OPENCLAW_IMAGE="us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/openclaw-workload:latest"
 
 # Target platform must match the cluster's nodes, not the build host.
 PLATFORM="${LOCUST_IMAGE_PLATFORM:-linux/amd64}"
 
-echo "Building Docker image: $IMAGE (platform: $PLATFORM)"
+build_and_push() {
+  local image="$1" dockerfile="$2" context="$3"
+
+  echo "Building Docker image: ${image} (platform: ${PLATFORM})"
+  docker build --platform "${PLATFORM}" -t "${image}" -f "${dockerfile}" "${context}"
+
+  echo "Pushing ${image}..."
+  docker push "${image}"
+}
+
 # Build context is the monorepo root because the Dockerfile compiles the
 # boomer-worker Go binary alongside the Python install (see Dockerfile).
-docker build --platform "$PLATFORM" -t "$IMAGE" -f benchmarking/locust/Dockerfile .
+build_and_push "${LOCUST_IMAGE}" benchmarking/locust/Dockerfile .
 
-echo "Pushing Docker image..."
-docker push "$IMAGE"
+# The actor the TTFI openclaw workload drives. Its context is its own
+# directory: the Dockerfile installs openclaw from npm and copies one script,
+# so it needs nothing from the rest of the repo.
+echo
+build_and_push "${OPENCLAW_IMAGE}" demos/openclaw/Dockerfile demos/openclaw
 
 echo "Done!"
