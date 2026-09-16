@@ -46,7 +46,7 @@ POOL_MANIFEST="${MANIFEST_DIR}/workloads.yaml.tmpl"
 # through the ate API in the benchmark-workloads atespace. WORKLOAD_TEMPLATES
 # overrides the default set — the usermem and kernelmem templates (for the
 # matching locust tests) are not deployed by default.
-read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full}"
+read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full openclaw}"
 
 if [[ ! -f "${POOL_MANIFEST}" ]]; then
   echo "Error: ${POOL_MANIFEST} not found in $(pwd)" >&2
@@ -159,6 +159,7 @@ substitute() {
       -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
+      -e "s|\${PROJECT_ID}|${PROJECT_ID}|g" \
       "${manifest}"
 }
 

@@ -32,6 +32,10 @@ OTLP_ENDPOINT=""
 # Empty keeps the default in workloads/deploy.sh (256Mi, the microvm minimum).
 ACTOR_MEMORY=""
 WAIT_TIMEOUT_SECS=""
+# The locust user class and the workload a TTFIUser drives, both forwarded to
+# locust/deploy.sh, which holds the same defaults.
+USER_CLASS=ttfi
+WORKLOAD_NAME=glutton
 
 usage() {
   echo "Usage: $0 [options]"
@@ -48,6 +52,12 @@ usage() {
   echo "                          benchmark ActorTemplates (default: 256Mi, the microvm minimum)."
   echo "  --wait-timeout SECONDS  Forwarded to workloads/deploy.sh. The timeout in seconds for"
   echo "                          waiting for the ateom workers to be ready (default: 300)"
+  echo "  --user-class NAME       Forwarded to locust/deploy.sh. Locust user class, lowercase;"
+  echo "                          runs tests/NAME.py (default: ttfi)"
+  echo "  --workload-name NAME    Forwarded to locust/deploy.sh. The workload a TTFIUser drives:"
+  echo "                          glutton | openclaw (default: glutton). openclaw is not in the"
+  echo "                          default WORKLOAD_TEMPLATES set, so deploy it with"
+  echo "                          WORKLOAD_TEMPLATES=\"... openclaw\"."
   echo "  --skip-build            Skip locust image build/push (use the existing :latest image)"
   echo "  -h|--help               Show this help message"
   echo ""
@@ -76,6 +86,10 @@ while [[ "$#" -gt 0 ]]; do
     --actor-memory=*) ACTOR_MEMORY="${1#*=}" ;;
     --wait-timeout) shift; WAIT_TIMEOUT_SECS="$1" ;;
     --wait-timeout=*) WAIT_TIMEOUT_SECS="${1#*=}" ;;
+    --user-class) shift; USER_CLASS="$1" ;;
+    --user-class=*) USER_CLASS="${1#*=}" ;;
+    --workload-name) shift; WORKLOAD_NAME="$1" ;;
+    --workload-name=*) WORKLOAD_NAME="${1#*=}" ;;
     --skip-build) SKIP_BUILD=1 ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -101,6 +115,15 @@ if [[ -n "${WAIT_TIMEOUT_SECS}" ]] && ! [[ "${WAIT_TIMEOUT_SECS}" =~ ^[0-9]+$ ]]
 fi
 
 if [[ "${action}" == "deploy" ]]; then
+  if [[ "${SKIP_BUILD}" -eq 0 ]]; then
+    echo
+    echo "=== Building and pushing locust image ==="
+    "${BENCHMARKING_DIR}/locust/build_and_push.sh"
+  else
+    echo
+    echo "=== Skipping locust image build/push (--skip-build) ==="
+  fi
+
   echo "=== Deploying benchmark workloads (worker_count=${WORKER_COUNT}, sandbox_class=${SANDBOX_CLASS}) ==="
   # An empty OTLP_ENDPOINT must not become an empty --otlp-endpoint argument,
   # which would overwrite the default in workloads/deploy.sh with an empty
@@ -117,18 +140,10 @@ if [[ "${action}" == "deploy" ]]; then
   fi
   "${BENCHMARKING_DIR}/workloads/deploy.sh" "${workload_args[@]}"
 
-  if [[ "${SKIP_BUILD}" -eq 0 ]]; then
-    echo
-    echo "=== Building and pushing locust image ==="
-    "${BENCHMARKING_DIR}/locust/build_and_push.sh"
-  else
-    echo
-    echo "=== Skipping locust image build/push (--skip-build) ==="
-  fi
 
   echo
   echo "=== Deploying locust ==="
-  "${BENCHMARKING_DIR}/locust/deploy.sh" --deploy
+  "${BENCHMARKING_DIR}/locust/deploy.sh" --deploy --user-class "${USER_CLASS}" --workload-name "${WORKLOAD_NAME}"
 elif [[ "${action}" == "delete" ]]; then
   echo "=== Deleting locust ==="
   "${BENCHMARKING_DIR}/locust/deploy.sh" --delete

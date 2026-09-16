@@ -6,7 +6,7 @@ workerSelector:
     workload: benchmark-ateom
 containers:
 - name: openclaw
-  image: us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/openclaw-workload:latest
+  image: us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/openclaw-workload@sha256:ee4a8e35f90a15dae4b7a168a48179f80d13bd99bf0e2fd4582e8579ab884f5e
   command: ["python3", "-u", "/app/openclaw_actor.py"]
   env:
   # OpenClaw likely requires an LLM API key to function. 

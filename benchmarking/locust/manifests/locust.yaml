@@ -132,10 +132,8 @@ spec:
         # The workload a TTFIUser drives, read only when the user class is
         # ttfi — the other classes parse this flag and ignore it. Stated
         # rather than left to the built-in default so the deployed manifest
-        # names what is being measured, and so switching workloads is an edit
-        # here rather than a change of defaults in the Go code.
-        - "--ttfi-workload=glutton"
-        # - "--ttfi-workload=openclaw"
+        # names what is being measured; deploy.sh --workload-name sets it.
+        - "--ttfi-workload=${BENCHMARK_WORKLOAD_NAME}"
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
