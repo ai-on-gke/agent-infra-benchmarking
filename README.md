@@ -75,6 +75,38 @@ values below are baked into the deployed pod. The values above are the defaults
 spelled out, so `--deploy` on its own does the same thing; pass them to measure
 anything else.
 
+<details>
+<summary><strong>Re-deploying</strong></summary>
+
+**Everything, workloads included.** Tear the whole stack down and put it back:
+
+```bash
+./benchmarking/deploy_locust.sh --delete
+./benchmarking/deploy_locust.sh --deploy \
+  --user-class runworkload \
+  --workload-name glutton \
+  --workload-template glutton
+```
+
+Use this whenever the workloads themselves change — a new or edited
+ActorTemplate, a different sandbox class or actor memory, or a rebuilt actor
+image. An actor image in particular needs this path: the template pins it by
+digest, and only `workloads/deploy.sh` re-resolves that digest and retakes the
+golden snapshot.
+
+**Locust only.** Faster, for when the workloads are unchanged and only the
+benchmark code is:
+
+```bash
+./benchmarking/locust/deploy.sh --delete
+./benchmarking/locust/build_and_push.sh
+./benchmarking/locust/deploy.sh --deploy \
+  --user-class runworkload \
+  --workload-name glutton \
+  --workload-template glutton
+```
+
+</details>
 
 ### 2. Forward the locust web UI
 
