@@ -38,7 +38,7 @@ func newRecordingTracer(t *testing.T) (trace.Tracer, *tracetest.SpanRecorder) {
 	sr := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
-	return tp.Tracer("run_workload-test"), sr
+	return tp.Tracer("runworkload-test"), sr
 }
 
 func spanByName(t *testing.T, sr *tracetest.SpanRecorder, name string) sdktrace.ReadOnlySpan {
@@ -298,17 +298,17 @@ func TestReportsAFailedResumeWithoutSendingInstructions(t *testing.T) {
 }
 
 func TestUserClassIsRegistered(t *testing.T) {
-	entry, ok := userclass.Lookup("run_workload")
+	entry, ok := userclass.Lookup("runworkload")
 	if !ok {
-		t.Fatalf("run_workload user class not registered; have %v", userclass.Names())
+		t.Fatalf("runworkload user class not registered; have %v", userclass.Names())
 	}
 	// The master's spawn messages match on the Python class name, so a
 	// mismatch here starts no users at all.
 	if entry.UserClass != runWorkloadUserClass {
 		t.Errorf("UserClass: got %q, want %q", entry.UserClass, runWorkloadUserClass)
 	}
-	if entry.LocustFile != "run_workload.py" {
-		t.Errorf("LocustFile: got %q, want %q", entry.LocustFile, "run_workload.py")
+	if entry.LocustFile != "runworkload.py" {
+		t.Errorf("LocustFile: got %q, want %q", entry.LocustFile, "runworkload.py")
 	}
 }
 

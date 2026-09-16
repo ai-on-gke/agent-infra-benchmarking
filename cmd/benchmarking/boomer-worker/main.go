@@ -53,18 +53,18 @@ func main() {
 		configPollInterval = flag.Duration("config-poll-interval", 10*time.Second, "With --master-web-port, also fetch dynconfig on this interval. A spawn message comes only when the number of users or the spawn rate changes, thus a load shape that changes the sample rate alone needs this. Zero stops the polling.")
 		userClass          = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
 
-		// run_workload settings. Declared here with every other flag, so
+		// runworkload settings. Declared here with every other flag, so
 		// --help is the whole command line rather than one list per user
-		// class, and read only when --user-class selects run_workload. The
+		// class, and read only when --user-class selects runworkload. The
 		// defaults are left empty so that the package resolves them: the
 		// template's follows from the workload, which is the only place that
 		// knows what it can address.
 		workloadName = flag.String("workload-name", "",
-			fmt.Sprintf("run_workload only: the workload a RunWorkloadUser drives. Unset selects %s.", runworkload.DefaultWorkload))
+			fmt.Sprintf("runworkload only: the workload a RunWorkloadUser drives. Unset selects %s.", runworkload.DefaultWorkload))
 		workloadTemplate = flag.String("workload-template", "",
-			"run_workload only: the ActorTemplate the workload is measured on. Unset selects the workload's own.")
+			"runworkload only: the ActorTemplate the workload is measured on. Unset selects the workload's own.")
 		workloadTimeout = flag.Duration("workload-timeout", 0,
-			fmt.Sprintf("run_workload only: ceiling on the instruction retry loop. Unset selects %s.", runworkload.DefaultTimeout))
+			fmt.Sprintf("runworkload only: ceiling on the instruction retry loop. Unset selects %s.", runworkload.DefaultTimeout))
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
@@ -144,7 +144,7 @@ func main() {
 			slog.Duration("workload_timeout", *workloadTimeout))
 		os.Exit(1)
 	}
-	// Unconditional, and inert unless the lookup below selects run_workload:
+	// Unconditional, and inert unless the lookup below selects runworkload:
 	// only that entry's Init reads these, so a run of another user class
 	// carries them without ever looking at them.
 	runworkload.SetOptions(runworkload.Options{

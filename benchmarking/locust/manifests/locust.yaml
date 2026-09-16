@@ -130,7 +130,7 @@ spec:
         - "--master-web-port=8089"
         - "--user-class=${BENCHMARK_USER_CLASS}"
         # The workload a RunWorkloadUser drives and the ActorTemplate it is
-        # measured on, read only when the user class is run_workload — the
+        # measured on, read only when the user class is runworkload — the
         # other classes parse these flags and ignore them. Stated rather than
         # left to the built-in defaults so the deployed manifest names what is
         # being measured; deploy.sh --workload-name and --workload-template set

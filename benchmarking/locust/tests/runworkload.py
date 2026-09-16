@@ -12,25 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Stub TTFIUser declaration.
+"""Stub RunWorkloadUser declaration.
 
 The real load implementation lives in the boomer-Go worker at
-internal/benchmarking/boomer/ttfi/; this Python class is declared only so the
-master's --class-picker enumerates the name. A Python worker container would
-set LOCUST_NO_TTFI_USER=1 to skip loading this file, leaving boomer as the
-sole owner of TTFIUser load.
+internal/benchmarking/boomer/runworkload/; this Python class is declared only
+so the master's --class-picker enumerates the name. A Python worker container
+would set LOCUST_NO_RUNWORKLOAD_USER=1 to skip loading this file, leaving
+boomer as the sole owner of RunWorkloadUser load.
 
 This file is the only locust asset this repo owns — the rest of the image's
-Python comes from substrate. It exists because TTFI has no upstream
+Python comes from substrate. It exists because runworkload has no upstream
 counterpart, and its name is load-bearing twice over: the master loads
 /app/tests/${BENCHMARK_USER_CLASS}.py, and the boomer container is passed
---user-class=${BENCHMARK_USER_CLASS}, which selects the "ttfi" entry the Go
-package registers with userclass.Add.
+--user-class=${BENCHMARK_USER_CLASS}, which selects the "runworkload" entry
+the Go package registers with userclass.Add.
 """
 
 import os
 
-if os.environ.get("LOCUST_NO_TTFI_USER") != "1":
+if os.environ.get("LOCUST_NO_RUNWORKLOAD_USER") != "1":
     from locust import User, task
     from common.boomer_config import init_boomer_config
 
@@ -41,13 +41,13 @@ if os.environ.get("LOCUST_NO_TTFI_USER") != "1":
     # and a failed fetch is fatal to that worker.
     init_boomer_config()
 
-    class TTFIUser(User):
+    class RunWorkloadUser(User):
         host = "api.ate-system.svc.cluster.local:443"
 
         @task
         def noop(self) -> None:
             # Unreached under normal operation: the Python worker container
-            # does not load this file (LOCUST_NO_TTFI_USER=1). Body is
+            # does not load this file (LOCUST_NO_RUNWORKLOAD_USER=1). Body is
             # required because locust validates that every User has at least
             # one @task method.
             pass

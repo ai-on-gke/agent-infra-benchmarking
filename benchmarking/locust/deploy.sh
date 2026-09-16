@@ -33,10 +33,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST="${SCRIPT_DIR}/manifests/locust.yaml"
 
 # Substituted into the boomer container's --user-class argument and the master's -f.
-BENCHMARK_USER_CLASS=run_workload
+BENCHMARK_USER_CLASS=runworkload
 
 # Substituted into the boomer container's --workload-name argument. Read only
-# when the user class is run_workload; the other classes ignore the flag. Not
+# when the user class is runworkload; the other classes ignore the flag. Not
 # validated here: the registry that defines the valid names is compiled into
 # the image being deployed, which is not necessarily built from this working
 # tree, so a check against the local sources could reject a name the image
@@ -59,7 +59,7 @@ usage() {
   echo "Options:"
   echo "  --deploy              Deploy the locust workers"
   echo "  --delete              Delete the locust workers"
-  echo "  --user-class NAME     Locust user class, lowercase; runs tests/NAME.py (default: run_workload)"
+  echo "  --user-class NAME     Locust user class, lowercase; runs tests/NAME.py (default: runworkload)"
   echo "  --workload-name NAME  Workload a RunWorkloadUser drives: glutton | openclaw (default: glutton)."
   echo "                        Its ActorTemplate has to be deployed already — openclaw is not in"
   echo "                        the default WORKLOAD_TEMPLATES set of workloads/deploy.sh."

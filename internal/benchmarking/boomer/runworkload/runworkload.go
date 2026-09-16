@@ -80,7 +80,7 @@ import (
 const templateAtespace = "benchmark-workloads"
 
 const (
-	// Locust class name from tests/run_workload.py; must match boomer.Task.Name.
+	// Locust class name from tests/runworkload.py; must match boomer.Task.Name.
 	runWorkloadUserClass = "RunWorkloadUser"
 
 	// DefaultWorkload is the workload a RunWorkloadUser drives unless Options
@@ -108,10 +108,10 @@ const (
 	// Transport label for the composite rows. A measurement window spans a gRPC
 	// resume and an HTTP instruction, so neither transport label the other
 	// rows use describes it.
-	runWorkloadMethod = "run_workload"
+	runWorkloadMethod = "runworkload"
 )
 
-// Options are the run_workload-only settings of a run. They are handed to
+// Options are the runworkload-only settings of a run. They are handed to
 // this package rather than parsed by it: every flag the worker accepts is
 // declared in cmd/benchmarking/boomer-worker, so one --help lists them all and
 // a user class has no command-line surface of its own to keep in sync.
@@ -142,14 +142,14 @@ var configured Options
 // before the registered entry's Init, which main satisfies by calling it
 // after flag.Parse and before the userclass lookup. A setter rather than an
 // Init parameter because the registry hands every user class the same
-// userclass.Config, which is upstream's type and carries no run_workload
+// userclass.Config, which is upstream's type and carries no runworkload
 // fields.
 func SetOptions(o Options) { configured = o }
 
 func init() {
 	userclass.Add(userclass.Entry{
-		Name:       "run_workload",
-		LocustFile: "run_workload.py",
+		Name:       "runworkload",
+		LocustFile: "runworkload.py",
 		UserClass:  runWorkloadUserClass,
 		Init:       initRunWorkload,
 	})
@@ -162,7 +162,7 @@ func initRunWorkload(cfg *userclass.Config) (taskFn func(), shutdown func(contex
 	if cfg.Tracer == nil {
 		// Scope names the benchmark, not the workload: the same spans are
 		// emitted whichever workload --workload-name selects.
-		cfg.Tracer = otel.Tracer("substrate-boomer/run_workload")
+		cfg.Tracer = otel.Tracer("substrate-boomer/runworkload")
 	}
 	// Resolved once at startup rather than per iteration: an unselectable
 	// workload is a configuration mistake, and a run that reports it after
@@ -202,7 +202,7 @@ func (r *runWorkloadRuntime) iterate() {
 	if !loaded {
 		u, err := r.startUser(context.Background(), r.cfg.Dyn.Load(), r.opts)
 		if err != nil {
-			slog.Warn("run_workload on_start failed; goroutine will retry next iter",
+			slog.Warn("runworkload on_start failed; goroutine will retry next iter",
 				slog.String("err", err.Error()))
 			time.Sleep(r.dynamicWait())
 			return
