@@ -29,11 +29,11 @@ ENV GOTOOLCHAIN=auto
 WORKDIR /src
 COPY dependency-repos/substrate ./dependency-repos/substrate
 COPY go.mod go.sum ./
-COPY vendor ./vendor
+RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 # COPY pkg ./pkg
-RUN CGO_ENABLED=0 GOFLAGS=-mod=vendor go build -o /out/boomer-worker ./cmd/benchmarking/boomer-worker
+RUN CGO_ENABLED=0 go build -o /out/boomer-worker ./cmd/benchmarking/boomer-worker
 
 # Stage 3: Distroless runner. Carries the locust install AND the boomer
 # binary; the manifest decides which to launch via the `args` field.
