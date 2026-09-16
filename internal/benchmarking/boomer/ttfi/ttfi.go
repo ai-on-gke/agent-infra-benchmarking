@@ -27,8 +27,8 @@
 //   - TTFIFirstResume: the actor has just been created and has no snapshot of
 //     its own, so substrate activates it from whatever source its template
 //     resolves to — the template's golden snapshot when it has one, the OCI
-//     image when it does not. Point ttfi_template at a template without
-//     snapshotsConfig to measure a true cold boot.
+//     image when it does not. Point --ttfi-workload-template at a template
+//     without snapshotsConfig to measure a true cold boot.
 //   - TTFIWarmStart: the actor exists and was suspended to object storage.
 //     This is resuming an existing session, and is the number substrate's
 //     100ms activation target is about.
@@ -41,11 +41,11 @@
 //
 // What is under measurement is substrate's activation path, not any
 // application, so the workload the actor runs is a parameter rather than a
-// fixture: ttfi_workload selects an implementation of the workload interface
-// (see workload.go) and ttfi_template overrides the ActorTemplate it names.
-// glutton is the implementation shipped today, because its /ping echo is a
-// cheap proof that the sandbox ran an instruction rather than merely accepting
-// a connection.
+// fixture: --ttfi-workload-name selects an implementation of the workload
+// interface (see workload.go) and --ttfi-workload-template overrides the
+// ActorTemplate it names. The flags themselves are declared by
+// cmd/benchmarking/boomer-worker and arrive here through SetOptions, so the
+// binary's --help lists every argument it takes in one place.
 package ttfi
 
 import (
@@ -82,16 +82,17 @@ const (
 	// Locust class name from tests/ttfi.py; must match boomer.Task.Name.
 	ttfiUserClass = "TTFIUser"
 
-	// The workload a TTFIUser drives unless ttfi_workload names another. The
-	// default template follows from the workload rather than being fixed
-	// here, so the two keys cannot drift into naming a template the workload
-	// has no way to address.
-	defaultTTFIWorkload = gluttonWorkloadName
+	// DefaultWorkload is the workload a TTFIUser drives unless Options names
+	// another. The default template follows from the workload rather than
+	// being fixed here, so the two settings cannot drift into naming a
+	// template the workload has no way to address. Exported because the
+	// worker's --ttfi-workload-name usage string states it.
+	DefaultWorkload = gluttonWorkloadName
 
-	// Bound on the instruction retry loop when ttfi_timeout is unset. An
-	// actor that has not taken an instruction by then is recorded as a TTFI
-	// failure instead of being waited on for the rest of the run.
-	defaultTTFITimeout = 60 * time.Second
+	// DefaultTimeout bounds the instruction retry loop when Options leaves it
+	// zero. An actor that has not taken an instruction by then is recorded as
+	// a TTFI failure instead of being waited on for the rest of the run.
+	DefaultTimeout = 60 * time.Second
 
 	// Delay between instruction attempts, short relative to a resume so the
 	// retry granularity does not show up in the measurement.
@@ -109,6 +110,40 @@ const (
 	ttfiMethod = "ttfi"
 )
 
+// Options are the TTFI-only settings of a run. They are handed to this package
+// rather than parsed by it: every flag the worker accepts is declared in
+// cmd/benchmarking/boomer-worker, so one --help lists them all and a user
+// class has no command-line surface of its own to keep in sync.
+//
+// The zero value asks for the defaults throughout.
+type Options struct {
+	// Workload names a registered workload (see workload.go). Empty selects
+	// DefaultWorkload.
+	Workload string
+
+	// Template overrides the ActorTemplate the workload would measure. Empty
+	// leaves that choice to the workload, which is the only place that knows
+	// what it can address.
+	Template string
+
+	// Timeout is the ceiling on the instruction retry loop. Zero selects
+	// DefaultTimeout. Negative is a caller error, rejected where the flag is
+	// declared rather than silently treated as unset.
+	Timeout time.Duration
+}
+
+// configured is what SetOptions recorded. It is read exactly once, by
+// initTTFI, and passed by value from there on, so nothing on the measurement
+// path reads mutable package state.
+var configured Options
+
+// SetOptions records the settings initTTFI will use. It must run before the
+// registered entry's Init, which main satisfies by calling it after
+// flag.Parse and before the userclass lookup. A setter rather than an Init
+// parameter because the registry hands every user class the same
+// userclass.Config, which is upstream's type and carries no TTFI fields.
+func SetOptions(o Options) { configured = o }
+
 func init() {
 	userclass.Add(userclass.Entry{
 		Name:       "ttfi",
@@ -123,31 +158,25 @@ func init() {
 func initTTFI(cfg *userclass.Config) (taskFn func(), shutdown func(context.Context)) {
 	if cfg.Tracer == nil {
 		// Scope names the benchmark, not the workload: the same spans are
-		// emitted whichever workload ttfi_workload selects.
+		// emitted whichever workload --ttfi-workload-name selects.
 		cfg.Tracer = otel.Tracer("substrate-boomer/ttfi")
-	}
-	tcfg, err := loadTTFIConfig()
-	if err != nil {
-		slog.Error("fatal: invalid TTFI keys in --config-json",
-			slog.String("err", err.Error()))
-		os.Exit(1)
 	}
 	// Resolved once at startup rather than per iteration: an unselectable
 	// workload is a configuration mistake, and a run that reports it after
 	// producing rows has already wasted the run.
-	wl, err := resolveWorkload(tcfg.Workload)
+	wl, err := resolveWorkload(configured.Workload)
 	if err != nil {
 		slog.Error("fatal: cannot select the TTFI workload",
 			slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	rt := &ttfiRuntime{cfg: cfg, tcfg: tcfg, workload: wl}
+	rt := &ttfiRuntime{cfg: cfg, opts: configured, workload: wl}
 	return rt.iterate, rt.shutdown
 }
 
 type ttfiRuntime struct {
 	cfg      *userclass.Config
-	tcfg     ttfiConfig
+	opts     Options
 	workload workload
 	users    sync.Map // goroutineID -> *ttfiUser
 }
@@ -168,7 +197,7 @@ func (r *ttfiRuntime) iterate() {
 	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
-		u, err := r.startUser(context.Background(), r.cfg.Dyn.Load(), r.tcfg)
+		u, err := r.startUser(context.Background(), r.cfg.Dyn.Load(), r.opts)
 		if err != nil {
 			slog.Warn("ttfi on_start failed; goroutine will retry next iter",
 				slog.String("err", err.Error()))
@@ -197,13 +226,13 @@ func (r *ttfiRuntime) iterate() {
 	// Suspend is the precondition for a warm measurement, not part of it:
 	// it runs outside the TTFI span and reports its own row.
 	user.suspend(ctx)
-	user.measure(ctx, ttfiWarmMetric, dynCfg, r.tcfg, false)
+	user.measure(ctx, ttfiWarmMetric, dynCfg, r.opts, false)
 
 	time.Sleep(r.dynamicWait())
 }
 
-func (r *ttfiRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config, tcfg ttfiConfig) (*ttfiUser, error) {
-	tmpl := tcfg.Template
+func (r *ttfiRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config, opts Options) (*ttfiUser, error) {
+	tmpl := opts.Template
 	if tmpl == "" {
 		tmpl = r.workload.DefaultTemplate()
 	}
@@ -228,7 +257,7 @@ func (r *ttfiRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config, tc
 	// A failed first-resume window is a result, not a reason to drop the
 	// actor: it is already recorded as a TTFIFirstResume failure, and the next
 	// iteration's suspend normalizes whatever state the actor was left in.
-	u.measure(ctx, ttfiFirstResumeMetric, dynCfg, tcfg, true)
+	u.measure(ctx, ttfiFirstResumeMetric, dynCfg, opts, true)
 	return u, nil
 }
 
@@ -265,17 +294,17 @@ func (u *ttfiUser) actor() actorRef {
 }
 
 // budget is the ceiling on the instruction retry loop.
-func (u *ttfiUser) budget(tcfg ttfiConfig) time.Duration {
-	if tcfg.Timeout > 0 {
-		return tcfg.Timeout
+func (u *ttfiUser) budget(opts Options) time.Duration {
+	if opts.Timeout > 0 {
+		return opts.Timeout
 	}
-	return defaultTTFITimeout
+	return DefaultTimeout
 }
 
 // measure times one TTFI window and reports it as metricName. The parent
 // span's duration is the measurement, so every phase that a client would
 // wait through runs inside it and nothing else does.
-func (u *ttfiUser) measure(ctx context.Context, metricName string, dynCfg dynconfig.Config, tcfg ttfiConfig, firstResume bool) {
+func (u *ttfiUser) measure(ctx context.Context, metricName string, dynCfg dynconfig.Config, opts Options, firstResume bool) {
 	mode := dynCfg.ResumeMode
 	if mode == "" {
 		// Matches common/resume_mode.py's default, so the mode is the same
@@ -306,7 +335,7 @@ func (u *ttfiUser) measure(ctx context.Context, metricName string, dynCfg dyncon
 		}
 	}
 
-	attempts, instruction, err := u.firstInstruction(ctx, u.budget(tcfg))
+	attempts, instruction, err := u.firstInstruction(ctx, u.budget(opts))
 	u.recordTTFI(span, metricName, time.Since(start), attempts, controlPlane, instruction, err)
 }
 

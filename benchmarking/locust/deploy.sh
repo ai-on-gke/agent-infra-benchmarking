@@ -35,13 +35,23 @@ MANIFEST="${SCRIPT_DIR}/manifests/locust.yaml"
 # Substituted into the boomer container's --user-class argument and the master's -f.
 BENCHMARK_USER_CLASS=ttfi
 
-# Substituted into the boomer container's --ttfi-workload argument. Read only
-# when the user class is ttfi; the other classes ignore the flag. Not validated
-# here: the registry that defines the valid names is compiled into the image
-# being deployed, which is not necessarily built from this working tree, so a
-# check against the local sources could reject a name the image accepts. An
-# unknown name is fatal in the worker, which logs the names it does know.
+# Substituted into the boomer container's --ttfi-workload-name argument. Read
+# only when the user class is ttfi; the other classes ignore the flag. Not
+# validated here: the registry that defines the valid names is compiled into
+# the image being deployed, which is not necessarily built from this working
+# tree, so a check against the local sources could reject a name the image
+# accepts. An unknown name is fatal in the worker, which logs the names it
+# does know.
 BENCHMARK_WORKLOAD_NAME=glutton
+
+# Substituted into the boomer container's --ttfi-workload-template argument,
+# which overrides the ActorTemplate the workload would otherwise measure. It
+# has to name a template the workload above can actually address, so the two
+# move together: changing --workload-name without this one measures the new
+# workload against the old workload's template. An empty value is valid and
+# hands the choice back to the workload, which is the only place that knows
+# what it can address.
+BENCHMARK_WORKLOAD_TEMPLATE="glutton"
 
 usage() {
   echo "Usage: $0 [options]"
@@ -53,6 +63,10 @@ usage() {
   echo "  --workload-name NAME  Workload a TTFIUser drives: glutton | openclaw (default: glutton)."
   echo "                        Its ActorTemplate has to be deployed already — openclaw is not in"
   echo "                        the default WORKLOAD_TEMPLATES set of workloads/deploy.sh."
+  echo "  --workload-template NAME"
+  echo "                        ActorTemplate the workload is measured on (default: glutton)."
+  echo "                        Has to be one --workload-name can address, so set it whenever"
+  echo "                        that changes; an empty value leaves the choice to the workload."
   echo "  -h|--help             Show this help message"
 }
 
@@ -62,7 +76,7 @@ deploy() {
   # benchmarking/monitoring.yaml is otherwise optional.
   echo "Ensuring benchmarking namespace exists..."
   kubectl create namespace benchmarking --dry-run=client -o yaml | kubectl apply -f -
-  echo "Deploying Locust load (PROJECT_ID=${PROJECT_ID}, user_class=${BENCHMARK_USER_CLASS}, workload=${BENCHMARK_WORKLOAD_NAME})..."
+  echo "Deploying Locust load (PROJECT_ID=${PROJECT_ID}, user_class=${BENCHMARK_USER_CLASS}, workload=${BENCHMARK_WORKLOAD_NAME}, template=${BENCHMARK_WORKLOAD_TEMPLATE:-<the workload default>})..."
   envsubst < "${MANIFEST}" | kubectl apply -f -
 }
 
@@ -85,6 +99,8 @@ while [[ "$#" -gt 0 ]]; do
     --user-class=*) BENCHMARK_USER_CLASS="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
     --workload-name) shift; BENCHMARK_WORKLOAD_NAME="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
     --workload-name=*) BENCHMARK_WORKLOAD_NAME="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
+    --workload-template) shift; BENCHMARK_WORKLOAD_TEMPLATE="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
+    --workload-template=*) BENCHMARK_WORKLOAD_TEMPLATE="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "Error: Unknown option: $1" >&2
@@ -99,15 +115,16 @@ if [[ ! -f "${SCRIPT_DIR}/tests/${BENCHMARK_USER_CLASS}.py" ]]; then
   echo "Error: no tests/${BENCHMARK_USER_CLASS}.py; --user-class must name a test file" >&2
   exit 1
 fi
-# An empty value substitutes as "--ttfi-workload=", which the worker reads as
-# unset and answers with its own default. That is the silently-measured-the-
+# An empty value substitutes as "--ttfi-workload-name=", which the worker reads
+# as unset and answers with its own default. That is the silently-measured-the-
 # wrong-workload result the Go side refuses to produce for an unknown name, so
-# refuse it here too rather than letting a blank argument through.
+# refuse it here too rather than letting a blank argument through. The template
+# gets no such check: empty is how it asks the workload to choose.
 if [[ -z "${BENCHMARK_WORKLOAD_NAME}" ]]; then
   echo "Error: --workload-name cannot be empty" >&2
   exit 1
 fi
-export BENCHMARK_USER_CLASS BENCHMARK_WORKLOAD_NAME
+export BENCHMARK_USER_CLASS BENCHMARK_WORKLOAD_NAME BENCHMARK_WORKLOAD_TEMPLATE
 
 if [[ "${action}" == "deploy" ]]; then
   deploy

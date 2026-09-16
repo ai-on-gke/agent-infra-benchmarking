@@ -124,7 +124,7 @@ func TestTTFIResumeModeSelectsTheControlPlaneCall(t *testing.T) {
 			dyn := dynconfig.Config{ResumeMode: tc.resumeMode}
 			u, _ := newTTFITestUser(t, srv, dyn, ctrl)
 
-			u.measure(context.Background(), ttfiWarmMetric, dyn, ttfiConfig{}, false)
+			u.measure(context.Background(), ttfiWarmMetric, dyn, Options{}, false)
 
 			if got := ctrl.recordedCalls(); !reflect.DeepEqual(got, tc.wantGRPCCall) {
 				t.Errorf("gRPC calls: got %v, want %v", got, tc.wantGRPCCall)
@@ -215,10 +215,10 @@ func TestTTFIFailsWhenTheBudgetElapses(t *testing.T) {
 
 func TestTTFIBudget(t *testing.T) {
 	u := &ttfiUser{}
-	if got := u.budget(ttfiConfig{}); got != defaultTTFITimeout {
-		t.Errorf("unset budget: got %v, want %v", got, defaultTTFITimeout)
+	if got := u.budget(Options{}); got != DefaultTimeout {
+		t.Errorf("unset budget: got %v, want %v", got, DefaultTimeout)
 	}
-	if got := u.budget(ttfiConfig{Timeout: 5 * time.Second}); got != 5*time.Second {
+	if got := u.budget(Options{Timeout: 5 * time.Second}); got != 5*time.Second {
 		t.Errorf("configured budget: got %v, want 5s", got)
 	}
 }
@@ -232,7 +232,7 @@ func TestTTFISpanCarriesTheBreakdown(t *testing.T) {
 	dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit}
 	u, sr := newTTFITestUser(t, srv, dyn, ctrl)
 
-	u.measure(context.Background(), ttfiFirstResumeMetric, dyn, ttfiConfig{}, true)
+	u.measure(context.Background(), ttfiFirstResumeMetric, dyn, Options{}, true)
 
 	parent := spanByName(t, sr, ttfiFirstResumeMetric)
 	if got := mustAttr(t, parent, "ttfi.resume_mode").AsString(); got != dynconfig.ResumeModeExplicit {
@@ -281,7 +281,7 @@ func TestTTFIReportsAFailedResumeWithoutSendingInstructions(t *testing.T) {
 	dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit}
 	u, sr := newTTFITestUser(t, srv, dyn, ctrl)
 
-	u.measure(context.Background(), ttfiWarmMetric, dyn, ttfiConfig{}, false)
+	u.measure(context.Background(), ttfiWarmMetric, dyn, Options{}, false)
 
 	if got := srv.RecordedPings(); got != 0 {
 		t.Errorf("ping requests after a failed resume: got %d, want 0", got)

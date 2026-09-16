@@ -174,8 +174,8 @@ func TestResolveWorkload(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveWorkload(\"\") failed: %v", err)
 		}
-		if w.Name() != defaultTTFIWorkload {
-			t.Errorf("workload: got %q, want %q", w.Name(), defaultTTFIWorkload)
+		if w.Name() != DefaultWorkload {
+			t.Errorf("workload: got %q, want %q", w.Name(), DefaultWorkload)
 		}
 	})
 
@@ -203,13 +203,13 @@ func TestResolveWorkload(t *testing.T) {
 	})
 }
 
-// ttfi_template overrides the workload's own default; unset, the workload
-// decides. The benchmark must not hold a template default of its own, or the
-// two could name a template the selected workload cannot address.
+// --ttfi-workload-template overrides the workload's own default; unset, the
+// workload decides. The benchmark must not hold a template default of its own,
+// or the two could name a template the selected workload cannot address.
 func TestTemplateDefaultsToTheWorkloads(t *testing.T) {
 	tests := []struct {
 		name         string
-		tcfg         ttfiConfig
+		opts         Options
 		wantTemplate string
 	}{
 		{
@@ -217,8 +217,8 @@ func TestTemplateDefaultsToTheWorkloads(t *testing.T) {
 			wantTemplate: "fake-template",
 		},
 		{
-			name:         "ttfi_template overrides it",
-			tcfg:         ttfiConfig{Template: "some-other-template"},
+			name:         "--ttfi-workload-template overrides it",
+			opts:         Options{Template: "some-other-template"},
 			wantTemplate: "some-other-template",
 		},
 	}
@@ -239,7 +239,7 @@ func TestTemplateDefaultsToTheWorkloads(t *testing.T) {
 			// Implicit resume keeps the control plane out of the window, so
 			// the user is built without needing a resume to succeed.
 			dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeImplicit}
-			u, err := rt.startUser(context.Background(), dyn, tc.tcfg)
+			u, err := rt.startUser(context.Background(), dyn, tc.opts)
 			if err != nil {
 				t.Fatalf("startUser failed: %v", err)
 			}

@@ -32,10 +32,12 @@ OTLP_ENDPOINT=""
 # Empty keeps the default in workloads/deploy.sh (256Mi, the microvm minimum).
 ACTOR_MEMORY=""
 WAIT_TIMEOUT_SECS=""
-# The locust user class and the workload a TTFIUser drives, both forwarded to
-# locust/deploy.sh, which holds the same defaults.
+# The locust user class, the workload a TTFIUser drives and the template it is
+# measured on, all forwarded to locust/deploy.sh, which holds the same
+# defaults.
 USER_CLASS=ttfi
 WORKLOAD_NAME=glutton
+WORKLOAD_TEMPLATE=glutton
 
 usage() {
   echo "Usage: $0 [options]"
@@ -58,6 +60,10 @@ usage() {
   echo "                          glutton | openclaw (default: glutton). openclaw is not in the"
   echo "                          default WORKLOAD_TEMPLATES set, so deploy it with"
   echo "                          WORKLOAD_TEMPLATES=\"... openclaw\"."
+  echo "  --workload-template NAME"
+  echo "                          Forwarded to locust/deploy.sh. The ActorTemplate the workload"
+  echo "                          is measured on (default: glutton). Has to be one the workload"
+  echo "                          above can address, so set it whenever --workload-name changes."
   echo "  --skip-build            Skip locust image build/push (use the existing :latest image)"
   echo "  -h|--help               Show this help message"
   echo ""
@@ -90,6 +96,8 @@ while [[ "$#" -gt 0 ]]; do
     --user-class=*) USER_CLASS="${1#*=}" ;;
     --workload-name) shift; WORKLOAD_NAME="$1" ;;
     --workload-name=*) WORKLOAD_NAME="${1#*=}" ;;
+    --workload-template) shift; WORKLOAD_TEMPLATE="$1" ;;
+    --workload-template=*) WORKLOAD_TEMPLATE="${1#*=}" ;;
     --skip-build) SKIP_BUILD=1 ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -143,7 +151,7 @@ if [[ "${action}" == "deploy" ]]; then
 
   echo
   echo "=== Deploying locust ==="
-  "${BENCHMARKING_DIR}/locust/deploy.sh" --deploy --user-class "${USER_CLASS}" --workload-name "${WORKLOAD_NAME}"
+  "${BENCHMARKING_DIR}/locust/deploy.sh" --deploy --user-class "${USER_CLASS}" --workload-name "${WORKLOAD_NAME}" --workload-template "${WORKLOAD_TEMPLATE}"
 elif [[ "${action}" == "delete" ]]; then
   echo "=== Deleting locust ==="
   "${BENCHMARKING_DIR}/locust/deploy.sh" --delete

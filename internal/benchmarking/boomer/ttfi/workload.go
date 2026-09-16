@@ -35,14 +35,15 @@ import (
 // are identical whichever workload is measured, which is what keeps a TTFI
 // number from one workload comparable to a TTFI number from another.
 //
-// glutton is the only implementation today. A second one is a file that
-// implements this interface and calls registerWorkload in its init.
+// glutton and openclaw are the implementations today. Another one is a file
+// that implements this interface and calls registerWorkload in its init.
 type workload interface {
-	// Name is the ttfi_workload value that selects this workload.
+	// Name is the --ttfi-workload-name value that selects this workload.
 	Name() string
 
-	// DefaultTemplate is the ActorTemplate measured when ttfi_template says
-	// nothing. It has to deploy something this workload can address.
+	// DefaultTemplate is the ActorTemplate measured when
+	// --ttfi-workload-template says nothing. It has to deploy something this
+	// workload can address.
 	DefaultTemplate() string
 
 	// SendInstruction issues exactly one instruction to actor. A nil error
@@ -73,9 +74,9 @@ func (a actorRef) target() string {
 
 var workloads = map[string]workload{}
 
-// registerWorkload adds w to the set ttfi_workload can select. It panics on a
-// duplicate name, which can only be a build-time mistake, mirroring how
-// upstream's userclass registry treats the same error.
+// registerWorkload adds w to the set --ttfi-workload-name can select. It
+// panics on a duplicate name, which can only be a build-time mistake,
+// mirroring how upstream's userclass registry treats the same error.
 func registerWorkload(w workload) {
 	if _, exists := workloads[w.Name()]; exists {
 		panic(fmt.Sprintf("ttfi: duplicate workload registration for %q", w.Name()))
@@ -100,16 +101,16 @@ func workloadNames() []string {
 }
 
 // resolveWorkload picks the workload a run drives. An unknown name is an error
-// rather than a fallback to the default: the operator asked for a particular
-// workload, and silently measuring a different one produces a row that reads
-// as valid while answering the wrong question.
+// rather than a fallback to DefaultWorkload: the operator asked for a
+// particular workload, and silently measuring a different one produces a row
+// that reads as valid while answering the wrong question.
 func resolveWorkload(name string) (workload, error) {
 	if name == "" {
-		name = defaultTTFIWorkload
+		name = DefaultWorkload
 	}
 	w, ok := lookupWorkload(name)
 	if !ok {
-		return nil, fmt.Errorf("unknown ttfi_workload %q; known: %s", name, strings.Join(workloadNames(), ", "))
+		return nil, fmt.Errorf("unknown --ttfi-workload-name %q; known: %s", name, strings.Join(workloadNames(), ", "))
 	}
 	return w, nil
 }
