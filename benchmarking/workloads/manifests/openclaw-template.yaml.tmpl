@@ -6,11 +6,7 @@ workerSelector:
     workload: benchmark-ateom
 containers:
 - name: openclaw
-  # An ActorTemplate takes a digest, not a tag. deploy.sh asks the registry
-  # what OPENCLAW_IMAGE currently points at and substitutes the answer here, so
-  # this names whatever build_and_push.sh last pushed rather than a digest
-  # copied in by hand that nothing keeps current.
-  image: ${IMAGE_DIGEST}
+  image: ${IMAGE_WITH_DIGEST}
   command: ["python3", "-u", "/app/openclaw_actor.py"]
   env:
   # OpenClaw likely requires an LLM API key to function. 

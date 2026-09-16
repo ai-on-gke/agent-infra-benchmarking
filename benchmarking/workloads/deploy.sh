@@ -197,7 +197,7 @@ substitute() {
   # Only a template whose image is neither a ko:// reference nor a literal
   # carries a digest, and only its caller has one to give. Every other manifest
   # passes nothing and the expression below finds no placeholder to replace.
-  local image_digest="${2:-}"
+  local image_with_digest="${2:-}"
   local sandbox_config_name sandbox_class_enum
   case "${SANDBOX_CLASS}" in
     gvisor)  sandbox_config_name="gvisor-default" sandbox_class_enum="SANDBOX_CLASS_GVISOR" ;;
@@ -211,7 +211,7 @@ substitute() {
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
       -e "s|\${PROJECT_ID}|${PROJECT_ID}|g" \
-      -e "s|\${IMAGE_DIGEST}|${image_digest}|g" \
+      -e "s|\${IMAGE_WITH_DIGEST}|${image_with_digest}|g" \
       "${manifest}"
 }
 
@@ -348,7 +348,7 @@ deploy() {
   # the old template first. This removal is safe, because the benchmark
   # automation deletes the actors between the tests; it also removes the old
   # golden actor and snapshot server-side.
-  local template image_digest
+  local template image_with_digest
   for template in "${TEMPLATES[@]}"; do
     run_kubectl_ate delete actor-template "${template}" -a benchmark-workloads \
       >/dev/null 2>&1 || true
@@ -356,13 +356,13 @@ deploy() {
     # its digest is looked up on its own iteration. Assigned on a line of its
     # own rather than on the declaration above: `local x="$(...)"` would return
     # local's status and hide a failed lookup from errexit.
-    image_digest=""
+    image_with_digest=""
     if [[ "${template}" == "openclaw" ]]; then
-      image_digest="$(resolve_image_digest "${OPENCLAW_IMAGE:-}")"
+      image_with_digest="$(resolve_image_digest "${OPENCLAW_IMAGE:-}")"
     fi
     # ko resolve builds the ko:// image references and replaces them with
     # pushed digests before the manifest reaches kubectl-ate.
-    substitute "${MANIFEST_DIR}/${template}-template.yaml.tmpl" "${image_digest}" \
+    substitute "${MANIFEST_DIR}/${template}-template.yaml.tmpl" "${image_with_digest}" \
       | run_ko resolve -f - \
       | run_kubectl_ate create actor-template -f -
   done
