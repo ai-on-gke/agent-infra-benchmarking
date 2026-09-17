@@ -1,6 +1,11 @@
 project_id = "my-gcp-project"
 region     = "us-central1"
 
+# The name the bucket and the Artifact Registry repository take. Change it per
+# deployment when two deployments share one GCP project; the cluster names come
+# from the keys of the clusters map below instead.
+default_resource_name = "agent-infra-benchmarking"
+
 clusters = {
   # Autopilot cluster, all defaults.
   primary = {
@@ -48,10 +53,13 @@ clusters = {
 }
 
 # Artifact Registry repo and bucket below are shared across all clusters above.
+# Both take default_resource_name unless named here.
 
-artifact_repository_id     = "app-repo"
 artifact_repository_format = "DOCKER"
 
+# Bucket names are unique across all of GCP rather than per project, so
+# default_resource_name is unlikely to be free. This also has to match
+# BUCKET_NAME in .env.sh, which is where the benchmark stack reads it from.
 bucket_name = "my-gcp-project-bucket"
 
 # Grants atelet and its nodes the IAM bindings they need to read/write
@@ -63,4 +71,8 @@ enable_atelet_iam = false
 # (roles/container.admin) and Kubernetes-level (a cluster-admin
 # ClusterRoleBinding applied via kubectl), e.g. to orchestrate workload
 # clusters from an orchestrator cluster. Independent of enable_atelet_iam.
-enable_atelet_cluster_admin = false
+#
+# Commented out with the variable itself: there is no orchestrator cluster
+# here, and setting a variable that variables.tf no longer declares is an
+# error rather than a no-op.
+# enable_atelet_cluster_admin = false

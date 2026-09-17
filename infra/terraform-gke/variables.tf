@@ -9,6 +9,20 @@ variable "region" {
   default     = "us-central1"
 }
 
+# The name every resource this config creates takes unless something more
+# specific is set for it. Change it per deployment to keep two deployments in
+# one project from naming the same resources.
+#
+# It does not reach the GKE clusters (var.clusters keys name those - there can
+# be several) or the project-level IAM bindings below (keyed by role and
+# principal, not by name, and the Workload Identity principal is identical in
+# every deployment of the project - so keep enable_atelet_iam true in at most
+# one deployment per project).
+variable "default_resource_name" {
+  description = "Name applied to the resources this config creates (the GCS bucket and the Artifact Registry repository). Per-resource variables override it."
+  type        = string
+}
+
 # Keyed map so clusters can be added/removed independently without shifting
 # other clusters (as a list would on index changes). The key is used as the
 # cluster name.
@@ -75,9 +89,9 @@ variable "clusters" {
 # ---------------------------------------------------------------------------
 
 variable "artifact_repository_id" {
-  description = "ID of the Artifact Registry repository."
+  description = "ID of the Artifact Registry repository. Defaults to var.default_resource_name when empty. Set it only when that name is already taken in this project."
   type        = string
-  default     = "app-repo"
+  default     = ""
 }
 
 variable "artifact_repository_format" {
@@ -93,7 +107,7 @@ variable "artifact_repository_format" {
 # ---------------------------------------------------------------------------
 
 variable "bucket_name" {
-  description = "Name of the GCS bucket. Must be globally unique. Defaults to '<project_id>-bucket' if not set."
+  description = "Name of the GCS bucket. Defaults to var.default_resource_name when empty. Bucket names are globally unique across GCP, so expect to set this one."
   type        = string
   default     = ""
 }
@@ -157,39 +171,40 @@ variable "ate_api_server_ksa_name" {
 }
 
 # ---------------------------------------------------------------------------
-# Cluster orchestrator IAM
+# Cluster orchestrator IAM - DISABLED
 #
 # A separate identity from atelet/ate-api-server above - typically a
 # benchmark/workload orchestrator running in its own namespace, needing
 # full control over every cluster in the project rather than snapshot
-# storage access. Don't reuse atelet_namespace/atelet_ksa_name for this;
-# collapsing the two breaks atelet's own bindings if the orchestrator KSA
-# is ever renamed.
+# storage access. There is no orchestrator cluster in this setup, so these
+# variables are commented out together with the resources they feed in
+# main.tf. Uncommenting them here is not enough on its own - the resources
+# and local.orchestrator_wi_principal in main.tf have to come back too.
 # ---------------------------------------------------------------------------
 
-# Grants the orchestrator full control over every cluster in the project:
-# GCP-level (roles/container.admin: create/delete/update clusters and node
-# pools, fetch kubeconfig) AND Kubernetes-level (a cluster-admin
-# ClusterRoleBinding applied to each cluster via kubectl). Also grants
-# roles/artifactregistry.writer, since the orchestrator builds and pushes
-# test images at runtime.
-variable "enable_atelet_cluster_admin" {
-  description = "Grants the orchestrator WI principal roles/container.admin and roles/artifactregistry.writer project-wide, plus a cluster-admin RBAC binding on every cluster in var.clusters."
-  type        = bool
-  default     = false
-}
+# # Grants the orchestrator full control over every cluster in the project:
+# # GCP-level (roles/container.admin: create/delete/update clusters and node
+# # pools, fetch kubeconfig) AND Kubernetes-level (a cluster-admin
+# # ClusterRoleBinding applied to each cluster via kubectl). Also grants
+# # roles/artifactregistry.writer, since the orchestrator builds and pushes
+# # test images at runtime.
+# variable "enable_atelet_cluster_admin" {
+#   description = "Grants the orchestrator WI principal roles/container.admin and roles/artifactregistry.writer project-wide, plus a cluster-admin RBAC binding on every cluster in var.clusters."
+#   type        = bool
+#   default     = false
+# }
 
-variable "orchestrator_namespace" {
-  description = "Kubernetes namespace the cluster-orchestrator's ServiceAccount runs in."
-  type        = string
-  default     = "ate-system"
-}
+# variable "orchestrator_namespace" {
+#   description = "Kubernetes namespace the cluster-orchestrator's ServiceAccount runs in."
+#   type        = string
+#   default     = "ate-system"
+# }
 
-variable "orchestrator_ksa_name" {
-  description = "Name of the cluster-orchestrator's Kubernetes ServiceAccount."
-  type        = string
-  default     = "atelet"
-}
+# variable "orchestrator_ksa_name" {
+#   description = "Name of the cluster-orchestrator's Kubernetes ServiceAccount."
+#   type        = string
+#   default     = "atelet"
+# }
 
 # ---------------------------------------------------------------------------
 # benchmark-runner IAM
