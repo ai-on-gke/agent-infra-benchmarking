@@ -1,0 +1,66 @@
+project_id = "my-gcp-project"
+region     = "us-central1"
+
+clusters = {
+  # Autopilot cluster, all defaults.
+  primary = {
+    autopilot = true
+  }
+
+  # Standard cluster with two node pools.
+  standard-cluster = {
+    autopilot = false
+
+    node_pools = {
+      default = {
+        machine_type = "e2-medium"
+        node_count   = 1
+        # Pin this pool to a single zone instead of spreading across the region.
+        node_locations = ["us-central1-a"]
+      }
+      spot-workers = {
+        machine_type   = "e2-standard-4"
+        spot           = true
+        min_node_count = 0
+        max_node_count = 5
+        # Left unset: defaults to all zones in the cluster's region.
+
+        # Keeps regular pods off these nodes unless they explicitly
+        # tolerate spot interruption. effect is one of NO_SCHEDULE,
+        # PREFER_NO_SCHEDULE, NO_EXECUTE.
+        taints = [
+          {
+            key    = "cloud.google.com/gke-spot"
+            value  = "true"
+            effect = "NO_SCHEDULE"
+          }
+        ]
+      }
+      # Runs pods that request runtimeClassName: gvisor. Keep at least one
+      # non-sandboxed pool (above) for GKE-managed system workloads.
+      sandboxed = {
+        machine_type   = "e2-standard-4"
+        node_count     = 1
+        sandbox_gvisor = true
+      }
+    }
+  }
+}
+
+# Artifact Registry repo and bucket below are shared across all clusters above.
+
+artifact_repository_id     = "app-repo"
+artifact_repository_format = "DOCKER"
+
+bucket_name = "my-gcp-project-bucket"
+
+# Grants atelet and its nodes the IAM bindings they need to read/write
+# snapshots and pull images. See variables.tf for the namespace/KSA name
+# atelet is expected to run as if you're not using the defaults.
+enable_atelet_iam = false
+
+# Gives atelet full control over every cluster in the project: GCP-level
+# (roles/container.admin) and Kubernetes-level (a cluster-admin
+# ClusterRoleBinding applied via kubectl), e.g. to orchestrate workload
+# clusters from an orchestrator cluster. Independent of enable_atelet_iam.
+enable_atelet_cluster_admin = false

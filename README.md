@@ -8,6 +8,8 @@ Backend for benchmarks and corresponding recipes for agent infra offerings.
 TBD. The cluster has to exist before any of the steps below; this repo does not
 create one.
 
+You can create one using terraform in the folder infra. Example tfvars should cover everything *EXPERIMENTAL STILL*
+
 ### 2. Configure the environment
 
 Copy the example and fill in the values for your project:
