@@ -30,9 +30,11 @@
 //     resolves to — the template's golden snapshot when it has one, the OCI
 //     image when it does not. Point --workload-template at a template
 //     without snapshotsConfig to measure a true cold boot.
-//   - WarmStart: the actor exists and was suspended to object storage.
-//     This is resuming an existing session, and is the number substrate's
-//     100ms activation target is about.
+//   - TTFI: the actor exists and was suspended to object storage. This is
+//     resuming an existing session, and is the number substrate's 100ms
+//     activation target is about. Both windows measure time to first
+//     instruction; this one carries the name because it is the number the
+//     benchmark reports.
 //
 // The timing comes off the span tree rather than off arithmetic on the stats
 // rows: a window's row latency is its parent span's duration, and each phase
@@ -101,7 +103,7 @@ const (
 	retryDelay = 25 * time.Millisecond
 
 	firstResumeMetric = "FirstResume"
-	warmStartMetric   = "WarmStart"
+	ttfiMetric        = "TTFI"
 	resumeMetric      = "Resume"
 	instructionMetric = "Instruction"
 	suspendMetric     = "Suspend"
@@ -214,7 +216,7 @@ func (r *runWorkloadRuntime) dynamicWait() time.Duration {
 
 // iterate is the task function boomer calls in a loop on each VU goroutine.
 // The first call on a goroutine creates the actor and measures its first
-// resume; every later call suspends it and measures the warm one.
+// resume; every later call suspends it and measures TTFI.
 func (r *runWorkloadRuntime) iterate() {
 	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
@@ -248,7 +250,7 @@ func (r *runWorkloadRuntime) iterate() {
 	// Suspend is the precondition for a warm measurement, not part of it:
 	// it runs outside the measured span and reports its own row.
 	user.suspend(ctx)
-	user.measure(ctx, warmStartMetric, dynCfg, r.opts, false)
+	user.measure(ctx, ttfiMetric, dynCfg, r.opts, false)
 
 	time.Sleep(r.dynamicWait())
 }

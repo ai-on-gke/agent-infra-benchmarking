@@ -126,7 +126,7 @@ func TestResumeModeSelectsTheControlPlaneCall(t *testing.T) {
 			dyn := dynconfig.Config{ResumeMode: tc.resumeMode}
 			u, _ := newRunWorkloadTestUser(t, srv, dyn, ctrl)
 
-			u.measure(context.Background(), warmStartMetric, dyn, Options{}, false)
+			u.measure(context.Background(), ttfiMetric, dyn, Options{}, false)
 
 			if got := ctrl.recordedCalls(); !reflect.DeepEqual(got, tc.wantGRPCCall) {
 				t.Errorf("gRPC calls: got %v, want %v", got, tc.wantGRPCCall)
@@ -283,12 +283,12 @@ func TestReportsAFailedResumeWithoutSendingInstructions(t *testing.T) {
 	dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit}
 	u, sr := newRunWorkloadTestUser(t, srv, dyn, ctrl)
 
-	u.measure(context.Background(), warmStartMetric, dyn, Options{}, false)
+	u.measure(context.Background(), ttfiMetric, dyn, Options{}, false)
 
 	if got := srv.RecordedPings(); got != 0 {
 		t.Errorf("ping requests after a failed resume: got %d, want 0", got)
 	}
-	parent := spanByName(t, sr, warmStartMetric)
+	parent := spanByName(t, sr, ttfiMetric)
 	if got := mustAttr(t, parent, "attempts").AsInt64(); got != 0 {
 		t.Errorf("attempts: got %d, want 0", got)
 	}
