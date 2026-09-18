@@ -29,15 +29,8 @@ if [ -z "${PROJECT_ID:-}" ]; then
   exit 1
 fi
 
-# OPENCLAW_IMAGE comes from .env.sh rather than from here, so this push and
-# whatever resolves that image name one string. An .env.sh predating that move
-# does not set it, and nounset would report only the bare variable name.
-if [ -z "${OPENCLAW_IMAGE:-}" ]; then
-  echo "Error: OPENCLAW_IMAGE must be set; copy its line from env.sh.example into .env.sh." >&2
-  exit 1
-fi
-
-LOCUST_IMAGE="us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest"
+LOCUST_IMAGE="${LOCUST_IMAGE:-us-docker.pkg.dev/${PROJECT_ID}/agent-infra-benchmarking/locust-runworkload:latest}"
+PROBE_IMAGE="${PROBE_IMAGE:-us-docker.pkg.dev/${PROJECT_ID}/agent-infra-benchmarking/ping-probe:latest}"
 
 # Target platform must match the cluster's nodes, not the build host.
 PLATFORM="${LOCUST_IMAGE_PLATFORM:-linux/amd64}"
@@ -52,14 +45,16 @@ build_and_push() {
   docker push "${image}"
 }
 
-# Build context is the monorepo root because the Dockerfile compiles the
+# Build context is the module root because the Dockerfile compiles the
 # boomer-worker Go binary alongside the Python install (see Dockerfile).
 build_and_push "${LOCUST_IMAGE}" benchmarking/locust/Dockerfile .
 
-# The actor the openclaw workload drives. Its context is its own
-# directory: the Dockerfile installs openclaw from npm and copies one script,
-# so it needs nothing from the rest of the repo.
+# The ping workload's target. Its context is its own directory: the
+# Dockerfile installs nothing beyond the stdlib, so it needs nothing from the
+# rest of the repo.
 echo
-build_and_push "${OPENCLAW_IMAGE}" demos/openclaw/Dockerfile demos/openclaw
+build_and_push "${PROBE_IMAGE}" benchmarking/workloads/probe/Dockerfile benchmarking/workloads/probe
 
 echo "Done!"
+echo "  LOCUST_IMAGE=${LOCUST_IMAGE}"
+echo "  PROBE_IMAGE=${PROBE_IMAGE}"

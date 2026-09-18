@@ -12,26 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Worker pool for the benchmark workloads. The ActorTemplates are not CRDs:
-# they live in the *-template.yaml.tmpl files next to this one and are
-# created through the ate API by workloads/deploy.sh with
-# `kubectl ate create actor-template`.
-
-apiVersion: v1
-kind: Namespace
+# Pool of pre-warmed ping sandboxes. This is the agent-sandbox analog of
+# substrate's WorkerPool: unlike a WorkerPool (which hosts many bin-packed
+# actor sandboxes per worker pod), each replica here is its own Sandbox and
+# Pod — see the benchmarking README for why that density difference means
+# ColdCreate/PoolClaim numbers from this benchmark are not directly
+# comparable to substrate's FirstResume/WarmStart numbers.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
 metadata:
-  name: benchmark-workloads
-
----
-
-apiVersion: ate.dev/v1alpha1
-kind: WorkerPool
-metadata:
-  name: benchmark-ateom
-  namespace: benchmark-workloads
-  labels:
-    workload: benchmark-ateom
+  name: ping-warmpool
+  namespace: ${BENCHMARK_NAMESPACE}
 spec:
   replicas: ${WORKER_COUNT}
-  sandboxClass: ${SANDBOX_CLASS}
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-${SANDBOX_CLASS}
+  sandboxTemplateRef:
+    name: ping

@@ -32,6 +32,11 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST="${SCRIPT_DIR}/manifests/locust.yaml"
 
+# Derived the same way locust/build_and_push.sh derives it (see
+# workloads/deploy.sh's PROBE_IMAGE for why); override by exporting
+# LOCUST_IMAGE before calling this script.
+LOCUST_IMAGE="${LOCUST_IMAGE:-us-docker.pkg.dev/${PROJECT_ID}/agent-infra-benchmarking/locust-runworkload:latest}"
+
 # Substituted into the boomer container's --user-class argument and the master's -f.
 BENCHMARK_USER_CLASS=runworkload
 
@@ -42,16 +47,19 @@ BENCHMARK_USER_CLASS=runworkload
 # tree, so a check against the local sources could reject a name the image
 # accepts. An unknown name is fatal in the worker, which logs the names it
 # does know.
-BENCHMARK_WORKLOAD_NAME=glutton
+BENCHMARK_WORKLOAD_NAME=ping
 
 # Substituted into the boomer container's --workload-template argument,
-# which overrides the ActorTemplate the workload would otherwise measure. It
-# has to name a template the workload above can actually address, so the two
-# move together: changing --workload-name without this one measures the new
-# workload against the old workload's template. An empty value is valid and
-# hands the choice back to the workload, which is the only place that knows
-# what it can address.
-BENCHMARK_WORKLOAD_TEMPLATE="glutton"
+# which overrides the SandboxTemplate the workload would otherwise measure.
+# It has to name a template the workload above can actually address, so the
+# two move together. An empty value is valid and hands the choice back to
+# the workload, which is the only place that knows what it can address.
+BENCHMARK_WORKLOAD_TEMPLATE="ping"
+
+# Optional: an OTLP gRPC endpoint reachable from the cluster. Left blank by
+# default — the boomer worker still reports every window through Prometheus
+# and the locust stats CSV without it.
+OTEL_COLLECTOR_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT:-}"
 
 usage() {
   echo "Usage: $0 [options]"
@@ -60,29 +68,36 @@ usage() {
   echo "  --deploy              Deploy the locust workers"
   echo "  --delete              Delete the locust workers"
   echo "  --user-class NAME     Locust user class, lowercase; runs tests/NAME.py (default: runworkload)"
-  echo "  --workload-name NAME  Workload a RunWorkloadUser drives: glutton | openclaw (default: glutton)."
-  echo "                        Its ActorTemplate has to be deployed already — openclaw is not in"
-  echo "                        the default WORKLOAD_TEMPLATES set of workloads/deploy.sh."
+  echo "  --workload-name NAME  Workload a RunWorkloadUser drives (default: ping)."
+  echo "                        Its SandboxTemplate has to be deployed already"
+  echo "                        (benchmarking/workloads/deploy.sh)."
   echo "  --workload-template NAME"
-  echo "                        ActorTemplate the workload is measured on (default: glutton)."
+  echo "                        SandboxTemplate the workload is measured on (default: ping)."
   echo "                        Has to be one --workload-name can address, so set it whenever"
   echo "                        that changes; an empty value leaves the choice to the workload."
   echo "  -h|--help             Show this help message"
 }
 
 deploy() {
-  # The locust manifest targets the `benchmarking` namespace (so prometheus
-  # can scrape it when that stack is installed). Ensure it exists either way —
-  # benchmarking/monitoring.yaml is otherwise optional.
   echo "Ensuring benchmarking namespace exists..."
   kubectl create namespace benchmarking --dry-run=client -o yaml | kubectl apply -f -
   echo "Deploying Locust load (PROJECT_ID=${PROJECT_ID}, user_class=${BENCHMARK_USER_CLASS}, workload=${BENCHMARK_WORKLOAD_NAME}, template=${BENCHMARK_WORKLOAD_TEMPLATE:-<the workload default>})..."
-  envsubst < "${MANIFEST}" | kubectl apply -f -
+  LOCUST_IMAGE="${LOCUST_IMAGE}" \
+    BENCHMARK_USER_CLASS="${BENCHMARK_USER_CLASS}" \
+    BENCHMARK_WORKLOAD_NAME="${BENCHMARK_WORKLOAD_NAME}" \
+    BENCHMARK_WORKLOAD_TEMPLATE="${BENCHMARK_WORKLOAD_TEMPLATE}" \
+    OTEL_COLLECTOR_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT}" \
+    envsubst < "${MANIFEST}" | kubectl apply -f -
 }
 
 delete() {
   echo "Deleting Locust load..."
-  envsubst < "${MANIFEST}" | kubectl delete --ignore-not-found -f -
+  LOCUST_IMAGE="${LOCUST_IMAGE}" \
+    BENCHMARK_USER_CLASS="${BENCHMARK_USER_CLASS}" \
+    BENCHMARK_WORKLOAD_NAME="${BENCHMARK_WORKLOAD_NAME}" \
+    BENCHMARK_WORKLOAD_TEMPLATE="${BENCHMARK_WORKLOAD_TEMPLATE}" \
+    OTEL_COLLECTOR_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT}" \
+    envsubst < "${MANIFEST}" | kubectl delete --ignore-not-found -f -
 }
 
 if [[ "$#" -eq 0 ]]; then
@@ -116,15 +131,15 @@ if [[ ! -f "${SCRIPT_DIR}/tests/${BENCHMARK_USER_CLASS}.py" ]]; then
   exit 1
 fi
 # An empty value substitutes as "--workload-name=", which the worker reads
-# as unset and answers with its own default. That is the silently-measured-the-
-# wrong-workload result the Go side refuses to produce for an unknown name, so
-# refuse it here too rather than letting a blank argument through. The template
-# gets no such check: empty is how it asks the workload to choose.
+# as unset and answers with its own default. That is the silently-measured-
+# the-wrong-workload result the Go side refuses to produce for an unknown
+# name, so refuse it here too rather than letting a blank argument through.
+# The template gets no such check: empty is how it asks the workload to
+# choose.
 if [[ -z "${BENCHMARK_WORKLOAD_NAME}" ]]; then
   echo "Error: --workload-name cannot be empty" >&2
   exit 1
 fi
-export BENCHMARK_USER_CLASS BENCHMARK_WORKLOAD_NAME BENCHMARK_WORKLOAD_TEMPLATE
 
 if [[ "${action}" == "deploy" ]]; then
   deploy

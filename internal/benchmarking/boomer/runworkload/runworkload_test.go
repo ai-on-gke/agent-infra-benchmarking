@@ -16,23 +16,145 @@ package runworkload
 
 import (
 	"context"
-	"net/http"
-	"reflect"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clienttesting "k8s.io/client-go/testing"
+	sandboxv1beta1 "sigs.k8s.io/agent-sandbox/api/v1beta1"
+	sandboxfake "sigs.k8s.io/agent-sandbox/clients/k8s/clientset/versioned/fake"
+	extensionsfake "sigs.k8s.io/agent-sandbox/clients/k8s/extensions/clientset/versioned/fake"
+	extensionsv1beta1 "sigs.k8s.io/agent-sandbox/extensions/api/v1beta1"
+
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/ai-on-gke/agent-infra-benchmarking/internal/benchmarking/boomer/dynconfig"
+	"github.com/ai-on-gke/agent-infra-benchmarking/internal/benchmarking/boomer/userclass"
 )
 
-// newRecordingTracer returns a tracer whose ended spans land in the returned
-// recorder, so a test can assert on the span tree the measurement window
-// builds.
+const testNamespace = "benchmarking"
+
+// newReadySandboxes returns a fake core clientset where every Sandbox
+// Create() is captured, and every subsequent Get() on that name reports it
+// Ready with fqdn regardless of what a real controller would do — there is
+// no controller here to flip status, so the test stands in for one.
+func newReadySandboxes(fqdn string) *sandboxfake.Clientset {
+	cs := sandboxfake.NewSimpleClientset()
+	var mu sync.Mutex
+	specs := map[string]sandboxv1beta1.SandboxSpec{}
+
+	cs.PrependReactor("create", "sandboxes", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		sb := action.(clienttesting.CreateAction).GetObject().(*sandboxv1beta1.Sandbox)
+		mu.Lock()
+		specs[sb.Name] = sb.Spec
+		mu.Unlock()
+		return false, nil, nil // let the default tracker-backed reactor also store it.
+	})
+	cs.PrependReactor("get", "sandboxes", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		ga := action.(clienttesting.GetAction)
+		mu.Lock()
+		spec, ok := specs[ga.GetName()]
+		mu.Unlock()
+		if !ok {
+			return false, nil, nil
+		}
+		return true, &sandboxv1beta1.Sandbox{
+			ObjectMeta: metav1.ObjectMeta{Name: ga.GetName(), Namespace: ga.GetNamespace()},
+			Spec:       spec,
+			Status: sandboxv1beta1.SandboxStatus{
+				Conditions:  []metav1.Condition{readyCondition()},
+				ServiceFQDN: fqdn,
+			},
+		}, nil
+	})
+	cs.PrependReactor("delete", "sandboxes", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		da := action.(clienttesting.DeleteAction)
+		mu.Lock()
+		delete(specs, da.GetName())
+		mu.Unlock()
+		return false, nil, nil // let the default tracker-backed reactor also delete it.
+	})
+	return cs
+}
+
+// newReadyExtensions returns a fake extensions clientset seeded with
+// templates, where every SandboxClaim Create() is captured and every
+// subsequent Get() reports it Ready with fqdn — the same stand-in as
+// newReadySandboxes, for the pool-claim path.
+func newReadyExtensions(fqdn string, templates ...*extensionsv1beta1.SandboxTemplate) *extensionsfake.Clientset {
+	objs := make([]runtime.Object, len(templates))
+	for i, tpl := range templates {
+		objs[i] = tpl
+	}
+	cs := extensionsfake.NewSimpleClientset(objs...)
+	var mu sync.Mutex
+	warmPoolRefs := map[string]string{}
+
+	cs.PrependReactor("create", "sandboxclaims", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		claim := action.(clienttesting.CreateAction).GetObject().(*extensionsv1beta1.SandboxClaim)
+		mu.Lock()
+		warmPoolRefs[claim.Name] = claim.Spec.WarmPoolRef.Name
+		mu.Unlock()
+		return false, nil, nil
+	})
+	cs.PrependReactor("get", "sandboxclaims", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		ga := action.(clienttesting.GetAction)
+		mu.Lock()
+		ref, ok := warmPoolRefs[ga.GetName()]
+		mu.Unlock()
+		if !ok {
+			return false, nil, nil
+		}
+		return true, &extensionsv1beta1.SandboxClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: ga.GetName(), Namespace: ga.GetNamespace()},
+			Spec:       extensionsv1beta1.SandboxClaimSpec{WarmPoolRef: extensionsv1beta1.SandboxWarmPoolRef{Name: ref}},
+			Status: extensionsv1beta1.SandboxClaimStatus{
+				Conditions:    []metav1.Condition{readyCondition()},
+				SandboxStatus: extensionsv1beta1.SandboxStatus{ServiceFQDN: fqdn},
+			},
+		}, nil
+	})
+	cs.PrependReactor("delete", "sandboxclaims", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		da := action.(clienttesting.DeleteAction)
+		mu.Lock()
+		delete(warmPoolRefs, da.GetName())
+		mu.Unlock()
+		return false, nil, nil // let the default tracker-backed reactor also delete it.
+	})
+	return cs
+}
+
+func readyCondition() metav1.Condition {
+	return metav1.Condition{
+		Type:               string(sandboxv1beta1.SandboxConditionReady),
+		Status:             metav1.ConditionTrue,
+		Reason:             "Ready",
+		LastTransitionTime: metav1.Now(),
+	}
+}
+
+func templateWithImage(name, image string) *extensionsv1beta1.SandboxTemplate {
+	return &extensionsv1beta1.SandboxTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
+		Spec: extensionsv1beta1.SandboxTemplateSpec{
+			SandboxBlueprint: sandboxv1beta1.SandboxBlueprint{
+				PodTemplate: sandboxv1beta1.PodTemplate{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "probe", Image: image}},
+					},
+				},
+			},
+		},
+	}
+}
+
 func newRecordingTracer(t *testing.T) (trace.Tracer, *tracetest.SpanRecorder) {
 	t.Helper()
 	sr := tracetest.NewSpanRecorder()
@@ -60,195 +182,151 @@ func spanNames(sr *tracetest.SpanRecorder) []string {
 	return names
 }
 
-func attrValue(t *testing.T, s sdktrace.ReadOnlySpan, key string) (attribute.Value, bool) {
+func mustAttr(t *testing.T, s sdktrace.ReadOnlySpan, key string) attribute.Value {
 	t.Helper()
 	for _, kv := range s.Attributes() {
 		if string(kv.Key) == key {
-			return kv.Value, true
+			return kv.Value
 		}
 	}
-	return attribute.Value{}, false
+	t.Fatalf("span %q missing attribute %q", s.Name(), key)
+	return attribute.Value{}
 }
 
-func mustAttr(t *testing.T, s sdktrace.ReadOnlySpan, key string) attribute.Value {
-	t.Helper()
-	v, ok := attrValue(t, s, key)
-	if !ok {
-		t.Fatalf("span %q missing attribute %q", s.Name(), key)
-	}
-	return v
-}
+func TestCreateColdBuildsSandboxFromTemplateBlueprint(t *testing.T) {
+	tracer, _ := newRecordingTracer(t)
+	extensions := newReadyExtensions("", templateWithImage("ping", "ping-probe:v1"))
+	sandboxes := newReadySandboxes("sb-cold-x.benchmarking.svc.cluster.local")
 
-// newRunWorkloadTestUser builds a user whose spans are recorded, returning
-// both.
-func newRunWorkloadTestUser(t *testing.T, srv *pingServer, dyn dynconfig.Config, ctrl *fakeControlClient) (*runWorkloadUser, *tracetest.SpanRecorder) {
-	t.Helper()
-	tracer, sr := newRecordingTracer(t)
-	cfg := &userclass.Config{
-		APIStub: ctrl,
-		Tracer:  tracer,
-		Dyn:     dynconfig.NewHolder(dyn),
-	}
-	return newTestRunWorkloadUser(t, srv, cfg), sr
-}
-
-func TestResumeModeSelectsTheControlPlaneCall(t *testing.T) {
-	tests := []struct {
-		name         string
-		resumeMode   string
-		wantGRPCCall []string
-	}{
-		{
-			name:         "explicit resume mode",
-			resumeMode:   dynconfig.ResumeModeExplicit,
-			wantGRPCCall: []string{"ResumeActor"},
+	u := &runWorkloadUser{
+		cfg: &userclass.Config{
+			Sandboxes:  sandboxes,
+			Extensions: extensions,
+			Namespace:  testNamespace,
+			Tracer:     tracer,
+			Dyn:        dynconfig.NewHolder(dynconfig.Config{}),
 		},
-		{
-			// The window is one instruction: the router owns the wake, so a
-			// ResumeActor RPC here would measure a path no client takes.
-			name:         "implicit resume mode",
-			resumeMode:   dynconfig.ResumeModeImplicit,
-			wantGRPCCall: nil,
-		},
-		{
-			// Same default as common/resume_mode.py, so an unset value
-			// behaves identically to the one locust always sends.
-			name:         "unset defaults to explicit",
-			resumeMode:   "",
-			wantGRPCCall: []string{"ResumeActor"},
-		},
+		workload:         &fakeWorkload{name: "fake", template: "ping"},
+		templateName:     "ping",
+		warmPoolName:     "ping-warmpool",
+		userClass:        runWorkloadUserClass,
+		timeout:          time.Second,
+		provisionTimeout: 5 * time.Second,
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := &pingServer{}
-			ctrl := &fakeControlClient{}
-			dyn := dynconfig.Config{ResumeMode: tc.resumeMode}
-			u, _ := newRunWorkloadTestUser(t, srv, dyn, ctrl)
-
-			u.measure(context.Background(), warmStartMetric, dyn, Options{}, false)
-
-			if got := ctrl.recordedCalls(); !reflect.DeepEqual(got, tc.wantGRPCCall) {
-				t.Errorf("gRPC calls: got %v, want %v", got, tc.wantGRPCCall)
-			}
-			if got := srv.RecordedPings(); got != 1 {
-				t.Errorf("ping attempts: got %d, want 1", got)
-			}
-		})
-	}
-}
-
-func TestRetriesWhileTheActorActivates(t *testing.T) {
-	// Three rejections then success: a client cannot use the sandbox until
-	// the fourth attempt, so all four are inside the window.
-	srv := &pingServer{PingFailures: 3}
-	dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeImplicit}
-	u, sr := newRunWorkloadTestUser(t, srv, dyn, &fakeControlClient{})
-
-	attempts, _, err := u.firstInstruction(context.Background(), 5*time.Second)
+	target, err := u.doCreateCold(context.Background())
 	if err != nil {
-		t.Fatalf("firstInstruction failed: %v", err)
+		t.Fatalf("doCreateCold failed: %v", err)
 	}
-	if attempts != 4 {
-		t.Errorf("attempts: got %d, want 4", attempts)
+	if target.ServiceFQDN != "sb-cold-x.benchmarking.svc.cluster.local" {
+		t.Errorf("ServiceFQDN: got %q", target.ServiceFQDN)
 	}
-	if got := srv.RecordedPings(); got != 4 {
-		t.Errorf("ping requests: got %d, want 4", got)
+	if target.Port != probePort {
+		t.Errorf("Port: got %d, want %d", target.Port, probePort)
 	}
-
-	span := spanByName(t, sr, instructionMetric)
-	if got := mustAttr(t, span, "attempts").AsInt64(); got != 4 {
-		t.Errorf("attempts span attribute: got %d, want 4", got)
-	}
-}
-
-func TestDoesNotRetryUnrecoverableFailures(t *testing.T) {
-	tests := []struct {
-		name string
-		srv  *pingServer
-	}{
-		{
-			// A 4xx is a misrouted or misconfigured request; waiting will
-			// not turn it into a running sandbox.
-			name: "client error",
-			srv:  &pingServer{Status: http.StatusNotFound},
-		},
-		{
-			// The actor answered, but did not run the instruction.
-			name: "echo mismatch",
-			srv:  &pingServer{PingEcho: "not-what-was-sent"},
-		},
+	if u.usingPool || u.name == "" {
+		t.Fatalf("user state after doCreateCold: name=%q usingPool=%v", u.name, u.usingPool)
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeImplicit}
-			u, _ := newRunWorkloadTestUser(t, tc.srv, dyn, &fakeControlClient{})
-
-			attempts, _, err := u.firstInstruction(context.Background(), 5*time.Second)
-			if err == nil {
-				t.Fatal("firstInstruction succeeded, want failure")
-			}
-			if attempts != 1 {
-				t.Errorf("attempts: got %d, want 1", attempts)
-			}
-		})
+	got, err := sandboxes.AgentsV1beta1().Sandboxes(testNamespace).Get(context.Background(), u.name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get created Sandbox: %v", err)
+	}
+	if len(got.Spec.PodTemplate.Spec.Containers) != 1 || got.Spec.PodTemplate.Spec.Containers[0].Image != "ping-probe:v1" {
+		t.Errorf("created Sandbox did not carry the template's blueprint: %+v", got.Spec.PodTemplate.Spec)
 	}
 }
 
-func TestFailsWhenTheBudgetElapses(t *testing.T) {
-	// Never becomes ready, so the loop must be stopped by the budget rather
-	// than run for the rest of the test.
-	srv := &pingServer{PingFailures: 1 << 30}
-	dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeImplicit}
-	u, _ := newRunWorkloadTestUser(t, srv, dyn, &fakeControlClient{})
+func TestCreateColdFailsWhenTemplateIsMissing(t *testing.T) {
+	tracer, _ := newRecordingTracer(t)
+	u := &runWorkloadUser{
+		cfg: &userclass.Config{
+			Sandboxes:  newReadySandboxes(""),
+			Extensions: newReadyExtensions(""), // no templates seeded
+			Namespace:  testNamespace,
+			Tracer:     tracer,
+			Dyn:        dynconfig.NewHolder(dynconfig.Config{}),
+		},
+		templateName:     "does-not-exist",
+		userClass:        runWorkloadUserClass,
+		provisionTimeout: time.Second,
+	}
 
-	start := time.Now()
-	_, _, err := u.firstInstruction(context.Background(), 100*time.Millisecond)
-	elapsed := time.Since(start)
-
+	_, err := u.doCreateCold(context.Background())
 	if err == nil {
-		t.Fatal("firstInstruction succeeded, want budget failure")
+		t.Fatal("doCreateCold succeeded for a missing template, want error")
 	}
-	if elapsed > 5*time.Second {
-		t.Errorf("budget not enforced: loop ran for %v", elapsed)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("expected a NotFound error, got: %v", err)
 	}
 }
 
-func TestBudget(t *testing.T) {
-	u := &runWorkloadUser{}
-	if got := u.budget(Options{}); got != DefaultTimeout {
-		t.Errorf("unset budget: got %v, want %v", got, DefaultTimeout)
+func TestClaimFromPoolReferencesTheWarmPool(t *testing.T) {
+	tracer, _ := newRecordingTracer(t)
+	extensions := newReadyExtensions("sb-pool-x.benchmarking.svc.cluster.local")
+
+	u := &runWorkloadUser{
+		cfg: &userclass.Config{
+			Extensions: extensions,
+			Namespace:  testNamespace,
+			Tracer:     tracer,
+			Dyn:        dynconfig.NewHolder(dynconfig.Config{}),
+		},
+		templateName:     "ping",
+		warmPoolName:     "ping-warmpool",
+		userClass:        runWorkloadUserClass,
+		provisionTimeout: 5 * time.Second,
 	}
-	if got := u.budget(Options{Timeout: 5 * time.Second}); got != 5*time.Second {
-		t.Errorf("configured budget: got %v, want 5s", got)
+
+	target, err := u.doClaimFromPool(context.Background())
+	if err != nil {
+		t.Fatalf("doClaimFromPool failed: %v", err)
+	}
+	if target.ServiceFQDN != "sb-pool-x.benchmarking.svc.cluster.local" {
+		t.Errorf("ServiceFQDN: got %q", target.ServiceFQDN)
+	}
+	if !u.usingPool || u.name == "" {
+		t.Fatalf("user state after doClaimFromPool: name=%q usingPool=%v", u.name, u.usingPool)
+	}
+
+	got, err := extensions.ExtensionsV1beta1().SandboxClaims(testNamespace).Get(context.Background(), u.name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get created SandboxClaim: %v", err)
+	}
+	if got.Spec.WarmPoolRef.Name != "ping-warmpool" {
+		t.Errorf("WarmPoolRef: got %q, want %q", got.Spec.WarmPoolRef.Name, "ping-warmpool")
 	}
 }
 
 // The measurement is the parent span's duration and the phase split lives on
 // its attributes, so one sampled trace has to explain its own total without
 // the reader joining it to anything else.
-func TestSpanCarriesTheBreakdown(t *testing.T) {
-	srv := &pingServer{}
-	ctrl := &fakeControlClient{serverElapsedUs: "4000"} // 4ms of ateapi handler time
-	dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit}
-	u, sr := newRunWorkloadTestUser(t, srv, dyn, ctrl)
+func TestMeasureSpanCarriesTheBreakdown(t *testing.T) {
+	tracer, sr := newRecordingTracer(t)
+	sandboxes := newReadySandboxes("sb-cold-x.benchmarking.svc.cluster.local")
+	extensions := newReadyExtensions("", templateWithImage("ping", "ping-probe:v1"))
+	wl := &fakeWorkload{name: "ping", template: "ping"}
 
-	u.measure(context.Background(), firstResumeMetric, dyn, Options{}, true)
+	u := &runWorkloadUser{
+		cfg: &userclass.Config{
+			Sandboxes:  sandboxes,
+			Extensions: extensions,
+			Namespace:  testNamespace,
+			Tracer:     tracer,
+			Dyn:        dynconfig.NewHolder(dynconfig.Config{}),
+		},
+		workload:         wl,
+		templateName:     "ping",
+		userClass:        runWorkloadUserClass,
+		timeout:          5 * time.Second,
+		provisionTimeout: 5 * time.Second,
+	}
 
-	parent := spanByName(t, sr, firstResumeMetric)
-	if got := mustAttr(t, parent, "resume_mode").AsString(); got != dynconfig.ResumeModeExplicit {
-		t.Errorf("resume_mode: got %q, want %q", got, dynconfig.ResumeModeExplicit)
-	}
-	if got := mustAttr(t, parent, "first_resume").AsBool(); !got {
-		t.Error("first_resume: got false, want true")
-	}
-	wantTemplate := gluttonWorkload{}.DefaultTemplate()
-	if got := mustAttr(t, parent, "template").AsString(); got != wantTemplate {
-		t.Errorf("template: got %q, want %q", got, wantTemplate)
-	}
-	if got := mustAttr(t, parent, "workload").AsString(); got != gluttonWorkloadName {
-		t.Errorf("workload: got %q, want %q", got, gluttonWorkloadName)
+	u.measure(context.Background(), coldCreateMetric, u.createCold)
+
+	parent := spanByName(t, sr, coldCreateMetric)
+	if got := mustAttr(t, parent, "template").AsString(); got != "ping" {
+		t.Errorf("template: got %q, want %q", got, "ping")
 	}
 	if got := mustAttr(t, parent, "attempts").AsInt64(); got != 1 {
 		t.Errorf("attempts: got %d, want 1", got)
@@ -256,45 +334,119 @@ func TestSpanCarriesTheBreakdown(t *testing.T) {
 	if got := mustAttr(t, parent, "total_ms").AsFloat64(); got <= 0 {
 		t.Errorf("total_ms: got %v, want > 0", got)
 	}
-	if got := mustAttr(t, parent, "instruction_ms").AsFloat64(); got <= 0 {
-		t.Errorf("instruction_ms: got %v, want > 0", got)
+	if got := mustAttr(t, parent, "provision_ms").AsFloat64(); got <= 0 {
+		t.Errorf("provision_ms: got %v, want > 0", got)
 	}
-	// The resume trailer is the server's own handler duration, so the
-	// control-plane share is attributable rather than inferred.
-	if got := mustAttr(t, parent, "control_plane_ms").AsFloat64(); got != 4 {
-		t.Errorf("control_plane_ms: got %v, want 4", got)
+	if got := mustAttr(t, parent, "instruction_ms").AsFloat64(); got < 0 {
+		t.Errorf("instruction_ms: got %v, want >= 0", got)
 	}
 
 	// Both phases must hang off the window parent; a detached child would put
 	// the phase in a different trace from the total it belongs to.
-	for _, child := range []string{resumeMetric, instructionMetric} {
+	for _, child := range []string{provisionMetric, instructionMetric} {
 		s := spanByName(t, sr, child)
 		if s.Parent().SpanID() != parent.SpanContext().SpanID() {
-			t.Errorf("span %q is not a child of %q", child, firstResumeMetric)
+			t.Errorf("span %q is not a child of %q", child, coldCreateMetric)
 		}
+	}
+
+	if calls := wl.recordedCalls(); len(calls) != 1 {
+		t.Fatalf("instructions sent: got %d, want 1", len(calls))
+	} else if calls[0].ServiceFQDN != "sb-cold-x.benchmarking.svc.cluster.local" {
+		t.Errorf("instruction addressed %q, want the created sandbox's FQDN", calls[0].ServiceFQDN)
 	}
 }
 
-func TestReportsAFailedResumeWithoutSendingInstructions(t *testing.T) {
-	// The window cannot be measured if the actor never gets a worker, and a
+func TestMeasureRecordsFailureWithoutSendingInstructions(t *testing.T) {
+	// Provisioning that never succeeds must not reach the workload at all: a
 	// row built from instructions that were never sent would be a lie.
-	srv := &pingServer{}
-	ctrl := &fakeControlClient{resumeErr: errResumeRefused}
-	dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit}
-	u, sr := newRunWorkloadTestUser(t, srv, dyn, ctrl)
-
-	u.measure(context.Background(), warmStartMetric, dyn, Options{}, false)
-
-	if got := srv.RecordedPings(); got != 0 {
-		t.Errorf("ping requests after a failed resume: got %d, want 0", got)
+	tracer, sr := newRecordingTracer(t)
+	wl := &fakeWorkload{name: "ping", template: "missing"}
+	u := &runWorkloadUser{
+		cfg: &userclass.Config{
+			Sandboxes:  newReadySandboxes(""),
+			Extensions: newReadyExtensions(""), // no "missing" template seeded
+			Namespace:  testNamespace,
+			Tracer:     tracer,
+			Dyn:        dynconfig.NewHolder(dynconfig.Config{}),
+		},
+		workload:         wl,
+		templateName:     "missing",
+		userClass:        runWorkloadUserClass,
+		timeout:          time.Second,
+		provisionTimeout: time.Second,
 	}
-	parent := spanByName(t, sr, warmStartMetric)
+
+	u.measure(context.Background(), coldCreateMetric, u.createCold)
+
+	if got := len(wl.recordedCalls()); got != 0 {
+		t.Errorf("instructions sent after a failed provision: got %d, want 0", got)
+	}
+	parent := spanByName(t, sr, coldCreateMetric)
 	if got := mustAttr(t, parent, "attempts").AsInt64(); got != 0 {
 		t.Errorf("attempts: got %d, want 0", got)
 	}
-	if _, ok := attrValue(t, parent, "instruction_ms"); ok {
-		t.Error("instruction_ms set after a failed resume, want absent")
-	}
+}
+
+func TestTeardownDeletesTheRightObjectType(t *testing.T) {
+	t.Run("cold Sandbox", func(t *testing.T) {
+		tracer, _ := newRecordingTracer(t)
+		sandboxes := newReadySandboxes("fqdn")
+		u := &runWorkloadUser{
+			cfg: &userclass.Config{
+				Sandboxes:  sandboxes,
+				Extensions: newReadyExtensions("", templateWithImage("ping", "img")),
+				Namespace:  testNamespace,
+				Tracer:     tracer,
+				Dyn:        dynconfig.NewHolder(dynconfig.Config{}),
+			},
+			templateName:     "ping",
+			userClass:        runWorkloadUserClass,
+			provisionTimeout: 5 * time.Second,
+		}
+		if _, err := u.doCreateCold(context.Background()); err != nil {
+			t.Fatalf("doCreateCold failed: %v", err)
+		}
+		name := u.name
+
+		u.teardown(context.Background())
+
+		if u.name != "" {
+			t.Errorf("user.name after teardown: got %q, want empty", u.name)
+		}
+		if _, err := sandboxes.AgentsV1beta1().Sandboxes(testNamespace).Get(context.Background(), name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+			t.Errorf("Sandbox %s still exists after teardown (err=%v)", name, err)
+		}
+	})
+
+	t.Run("pool SandboxClaim", func(t *testing.T) {
+		tracer, _ := newRecordingTracer(t)
+		extensions := newReadyExtensions("fqdn")
+		u := &runWorkloadUser{
+			cfg: &userclass.Config{
+				Extensions: extensions,
+				Namespace:  testNamespace,
+				Tracer:     tracer,
+				Dyn:        dynconfig.NewHolder(dynconfig.Config{}),
+			},
+			warmPoolName:     "ping-warmpool",
+			userClass:        runWorkloadUserClass,
+			provisionTimeout: 5 * time.Second,
+		}
+		if _, err := u.doClaimFromPool(context.Background()); err != nil {
+			t.Fatalf("doClaimFromPool failed: %v", err)
+		}
+		name := u.name
+
+		u.teardown(context.Background())
+
+		if u.name != "" {
+			t.Errorf("user.name after teardown: got %q, want empty", u.name)
+		}
+		if _, err := extensions.ExtensionsV1beta1().SandboxClaims(testNamespace).Get(context.Background(), name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+			t.Errorf("SandboxClaim %s still exists after teardown (err=%v)", name, err)
+		}
+	})
 }
 
 func TestUserClassIsRegistered(t *testing.T) {
@@ -312,28 +464,11 @@ func TestUserClassIsRegistered(t *testing.T) {
 	}
 }
 
-// The router resolves the actor from ate-target-actor and nothing else: an
-// absent or misformatted value is a 404 "invalid actor reference" no matter
-// what the request's Host says. Asserted through substrate's own parser rather
-// than by string compare, so this fails if the wire format moves again.
-func TestAddressesTheActorWithTheTargetActorHeader(t *testing.T) {
-	srv := &pingServer{}
-	u, _ := newRunWorkloadTestUser(t, srv, dynconfig.Config{}, &fakeControlClient{})
-
-	if _, _, err := u.firstInstruction(context.Background(), 5*time.Second); err != nil {
-		t.Fatalf("firstInstruction failed: %v", err)
+func TestResolveTimeout(t *testing.T) {
+	if got := resolveTimeout(0, DefaultTimeout); got != DefaultTimeout {
+		t.Errorf("unset: got %v, want %v", got, DefaultTimeout)
 	}
-
-	got := srv.RecordedTargetActor()
-	if got == "" {
-		t.Fatal("no ate-target-actor header sent; the router would 404 this request")
-	}
-	ref, err := atenet.ParseTargetActor(got)
-	if err != nil {
-		t.Fatalf("router would reject %q: %v", got, err)
-	}
-	if ref.Atespace != u.cfg.Atespace || ref.Name != u.actorName {
-		t.Errorf("target actor: got %s/%s, want %s/%s",
-			ref.Atespace, ref.Name, u.cfg.Atespace, u.actorName)
+	if got := resolveTimeout(5*time.Second, DefaultTimeout); got != 5*time.Second {
+		t.Errorf("configured: got %v, want 5s", got)
 	}
 }
