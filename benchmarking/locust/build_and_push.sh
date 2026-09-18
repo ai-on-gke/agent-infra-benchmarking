@@ -29,11 +29,13 @@ if [ -z "${PROJECT_ID:-}" ]; then
   exit 1
 fi
 
-# OPENCLAW_IMAGE comes from .env.sh rather than from here, so this push and
-# whatever resolves that image name one string. An .env.sh predating that move
-# does not set it, and nounset would report only the bare variable name.
+# OPENCLAW_IMAGE comes from the environment rather than from here, so this push
+# and whatever resolves that image name one string. An environment predating
+# that move does not set it, and nounset would report only the bare variable
+# name.
 if [ -z "${OPENCLAW_IMAGE:-}" ]; then
-  echo "Error: OPENCLAW_IMAGE must be set; copy its line from env.sh.example into .env.sh." >&2
+  echo "Error: OPENCLAW_IMAGE must be set; .terraform-env.sh exports it, and .env.sh" >&2
+  echo "sources that. An .env.sh not built from env.sh.example has to set it itself." >&2
   exit 1
 fi
 

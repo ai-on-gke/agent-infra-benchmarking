@@ -10,24 +10,25 @@ variable "region" {
 }
 
 # The name every resource this config creates takes unless something more
-# specific is set for it. Change it per deployment to keep two deployments in
-# one project from naming the same resources.
+# specific is set for it. The bucket and the Artifact Registry repository take
+# it as-is; the clusters prefix it onto their var.clusters key, since there can
+# be several of those. Change it per deployment to keep two deployments in one
+# project from naming the same resources.
 #
-# It does not reach the GKE clusters (var.clusters keys name those - there can
-# be several) or the project-level IAM bindings below (keyed by role and
-# principal, not by name, and the Workload Identity principal is identical in
-# every deployment of the project - so keep enable_atelet_iam true in at most
-# one deployment per project).
+# It does not reach the project-level IAM bindings below: those are keyed by
+# role and principal rather than by name, and the Workload Identity principal
+# is identical in every deployment of the project - so keep enable_atelet_iam
+# true in at most one deployment per project.
 variable "default_resource_name" {
-  description = "Name applied to the resources this config creates (the GCS bucket and the Artifact Registry repository). Per-resource variables override it."
+  description = "Name applied to the resources this config creates: the GCS bucket, the Artifact Registry repository, and the prefix of every cluster name. Per-resource variables override it."
   type        = string
 }
 
 # Keyed map so clusters can be added/removed independently without shifting
-# other clusters (as a list would on index changes). The key is used as the
-# cluster name.
+# other clusters (as a list would on index changes). The key is the cluster
+# name, prefixed with var.default_resource_name.
 variable "clusters" {
-  description = "Map of GKE clusters to deploy. Key is used as the cluster name."
+  description = "Map of GKE clusters to deploy. Each cluster is named \"<default_resource_name>-<key>\"."
   type = map(object({
     region              = optional(string)
     autopilot           = optional(bool, true)

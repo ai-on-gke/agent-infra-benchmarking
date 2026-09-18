@@ -1,14 +1,56 @@
 # agent-infra-benchmarking
 Backend for benchmarks and corresponding recipes for agent infra offerings.
 
+## Setting up the infrastructure
+
+The clusters, the snapshot bucket and the Artifact Registry repository come from
+the Terraform config in `infra/terraform-gke`. Run from the repo root, with
+gcloud application-default credentials already in place.
+
+1. Copy the example — the real file is gitignored and per-developer:
+
+   ```bash
+   cp infra/terraform-gke/terraform.tfvars.example infra/terraform-gke/terraform.tfvars
+   ```
+
+   Then set in it:
+
+   - `project_id` — required, no default.
+   - `default_resource_name` — required, no default. Names the bucket and the
+     repository, and prefixes every cluster: `<default_resource_name>-<key>`.
+   - `clusters` — a Standard cluster with a `sandbox_gvisor = true` pool, plus an
+     ordinary pool for GKE's own system workloads.
+   - `bucket_name` — has to match `BUCKET_NAME` in `.env.sh`. Bucket names are
+     unique across all of GCP, so `default_resource_name` is often taken.
+   - `enable_atelet_iam` — `true`, unless another deployment in the same project
+     already owns these bindings.
+
+2. Download the providers:
+
+   ```bash
+   terraform -chdir=infra/terraform-gke init
+   ```
+
+3. Create everything, answering `yes` at the plan. A GKE cluster takes several
+   minutes, and this is billable:
+
+   ```bash
+   terraform -chdir=infra/terraform-gke apply
+   ```
+
+The outputs carry the bucket, the repository and a `get-credentials` command per
+cluster:
+
+```bash
+terraform -chdir=infra/terraform-gke output get_credentials_commands
+```
+
 ## Preparation
 
 ### 1. Create a cluster
 
-TBD. The cluster has to exist before any of the steps below; this repo does not
-create one.
-
-You can create one using terraform in the folder infra. Example tfvars should cover everything *EXPERIMENTAL STILL*
+Covered by [Setting up the infrastructure](#setting-up-the-infrastructure)
+above. The cluster has to exist before any of the steps below.
 
 ### 2. Configure the environment
 

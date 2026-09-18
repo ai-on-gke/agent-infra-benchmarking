@@ -1,3 +1,17 @@
+# Echoes of the inputs, so that a consumer of these outputs - env.sh.terraform.example
+# reads them to build .env.sh - needs nothing but `terraform output` to learn
+# which project and region the deployment landed in.
+
+output "project_id" {
+  description = "GCP project the resources were created in."
+  value       = var.project_id
+}
+
+output "region" {
+  description = "Default region of the deployment: the Artifact Registry repo, the bucket, and any cluster that did not override it."
+  value       = var.region
+}
+
 output "cluster_names" {
   description = "Names of the deployed GKE clusters, keyed by cluster key."
   value       = { for k, m in module.clusters : k => m.cluster_name }
@@ -12,6 +26,15 @@ output "cluster_endpoints" {
 output "artifact_registry_repository" {
   description = "Full resource name of the Artifact Registry repository."
   value       = google_artifact_registry_repository.this.name
+}
+
+# The same repository spelled as an image path prefix, which is the form a
+# docker push, a ko build or an ActorTemplate image field takes. Composed from
+# the inputs rather than from the resource so the spelling is the one that was
+# asked for, independent of how the registry echoes it back.
+output "artifact_registry_docker_repo" {
+  description = "Image path prefix for the Artifact Registry repository, e.g. us-central1-docker.pkg.dev/my-project/my-repo."
+  value       = "${var.region}-docker.pkg.dev/${var.project_id}/${local.artifact_repository_id}"
 }
 
 output "bucket_name" {

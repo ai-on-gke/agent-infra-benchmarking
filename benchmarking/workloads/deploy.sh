@@ -149,8 +149,8 @@ run_ko() {
 resolve_image_digest() {
   local image="$1"
   if [[ -z "${image}" ]]; then
-    echo "Error: no image reference to resolve; set the one this template needs" >&2
-    echo "in .env.sh (see env.sh.example)." >&2
+    echo "Error: no image reference to resolve; the one this template needs comes" >&2
+    echo "from .terraform-env.sh, which .env.sh sources." >&2
     return 1
   fi
   if ! command -v gcloud &>/dev/null; then

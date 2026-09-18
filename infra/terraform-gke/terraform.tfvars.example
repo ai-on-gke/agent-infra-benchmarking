@@ -1,9 +1,10 @@
 project_id = "my-gcp-project"
 region     = "us-central1"
 
-# The name the bucket and the Artifact Registry repository take. Change it per
-# deployment when two deployments share one GCP project; the cluster names come
-# from the keys of the clusters map below instead.
+# The name this deployment goes by: the bucket and the Artifact Registry
+# repository take it as-is, and every cluster below is named
+# "<default_resource_name>-<key>". Change it per deployment when two
+# deployments share one GCP project.
 default_resource_name = "agent-infra-benchmarking"
 
 clusters = {
