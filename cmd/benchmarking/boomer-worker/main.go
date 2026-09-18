@@ -175,6 +175,19 @@ func main() {
 		}
 	}()
 
+	boomer.Events.Subscribe("boomer:stop", func() {
+		slog.Info("boomer:stop event received; suspending+deleting actors")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		shutdownFn(shutdownCtx)
+
+		// Immediately exit the process so Kubernetes restarts the container.
+		// This guarantees all boomer Task instances, memory maps, and 
+		// goroutine states are entirely wiped clean before the next Start.
+		slog.Info("forcing container restart to ensure clean state")
+		os.Exit(0)
+	})
+
 	// Blocks until SIGINT/SIGTERM or master quit. Boomer registers its own
 	// signal handlers; we do cleanup after it returns.
 	boomer.Run(&boomer.Task{
