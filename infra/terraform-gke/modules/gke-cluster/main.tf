@@ -19,6 +19,15 @@ resource "google_container_cluster" "autopilot" {
 
   enable_autopilot = true
 
+  min_master_version = var.kubernetes_version != "" ? var.kubernetes_version : null
+
+  dynamic "release_channel" {
+    for_each = var.release_channel != "" ? [var.release_channel] : []
+    content {
+      channel = release_channel.value
+    }
+  }
+
   ip_allocation_policy {}
 
   workload_identity_config {
@@ -69,6 +78,15 @@ resource "google_container_cluster" "standard" {
 
   datapath_provider = var.enable_dataplane_v2 ? "ADVANCED_DATAPATH" : null
 
+  min_master_version = var.kubernetes_version != "" ? var.kubernetes_version : null
+
+  dynamic "release_channel" {
+    for_each = var.release_channel != "" ? [var.release_channel] : []
+    content {
+      channel = release_channel.value
+    }
+  }
+
   ip_allocation_policy {}
 
   workload_identity_config {
@@ -112,6 +130,7 @@ resource "google_container_node_pool" "this" {
   location = var.region
   project  = var.project_id
   cluster  = local.cluster_name
+  version  = each.value.version
 
   node_locations = length(each.value.node_locations) > 0 ? each.value.node_locations : null
 
@@ -154,7 +173,7 @@ resource "google_container_node_pool" "this" {
   }
 
   management {
-    auto_repair  = true
-    auto_upgrade = true
+    auto_repair  = each.value.auto_repair
+    auto_upgrade = each.value.auto_upgrade
   }
 }

@@ -29,20 +29,48 @@ if [ -z "${PROJECT_ID:-}" ]; then
   exit 1
 fi
 
-# OPENCLAW_IMAGE comes from the environment rather than from here, so this push
-# and whatever resolves that image name one string. An environment predating
-# that move does not set it, and nounset would report only the bare variable
+# Both image names come from the environment rather than from here, so this
+# push and whatever resolves them name one string. An environment predating
+# that move does not set them, and nounset would report only the bare variable
 # name.
-if [ -z "${OPENCLAW_IMAGE:-}" ]; then
-  echo "Error: OPENCLAW_IMAGE must be set; .terraform-env.sh exports it, and .env.sh" >&2
-  echo "sources that. An .env.sh not built from env.sh.example has to set it itself." >&2
-  exit 1
-fi
-
-LOCUST_IMAGE="us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest"
+for var in LOCUST_IMAGE OPENCLAW_IMAGE; do
+  if [ -z "${!var:-}" ]; then
+    echo "Error: ${var} must be set; .terraform-env.sh exports it, and .env.sh" >&2
+    echo "sources that. An .env.sh not built from env.sh.example has to set it itself." >&2
+    exit 1
+  fi
+done
 
 # Target platform must match the cluster's nodes, not the build host.
 PLATFORM="${LOCUST_IMAGE_PLATFORM:-linux/amd64}"
+
+# Authenticate to each registry host the images name, rather than assuming
+# `gcloud auth configure-docker <host>` has been run for it. Docker consults
+# ~/.docker/config.json by host, so a repository in a project or a location
+# this machine has never pushed to fails as "Unauthenticated request" even
+# though the account has artifactregistry.writer. Set SKIP_DOCKER_LOGIN=1 when
+# the environment supplies its own credentials.
+docker_login() {
+  local host token
+  # One login per host, so two images in one repository do not log in twice.
+  for host in $(printf '%s\n' "${LOCUST_IMAGE%%/*}" "${OPENCLAW_IMAGE%%/*}" | sort -u); do
+    # Captured rather than piped straight into docker login: under pipefail a
+    # failing gcloud would otherwise surface as docker's complaint about an
+    # empty password.
+    if ! token="$(gcloud auth print-access-token 2>/dev/null)" || [[ -z "${token}" ]]; then
+      echo "Error: cannot get an access token from gcloud for ${host}." >&2
+      echo "Run: gcloud auth login" >&2
+      exit 1
+    fi
+    echo "Authenticating to ${host} as $(gcloud config get-value account 2>/dev/null)..."
+    printf '%s' "${token}" |
+      docker login -u oauth2accesstoken --password-stdin "https://${host}"
+  done
+}
+
+if [[ "${SKIP_DOCKER_LOGIN:-0}" != "1" ]]; then
+  docker_login
+fi
 
 build_and_push() {
   local image="$1" dockerfile="$2" context="$3"

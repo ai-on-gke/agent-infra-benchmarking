@@ -33,8 +33,8 @@ output "artifact_registry_repository" {
 # the inputs rather than from the resource so the spelling is the one that was
 # asked for, independent of how the registry echoes it back.
 output "artifact_registry_docker_repo" {
-  description = "Image path prefix for the Artifact Registry repository, e.g. us-central1-docker.pkg.dev/my-project/my-repo."
-  value       = "${var.region}-docker.pkg.dev/${var.project_id}/${local.artifact_repository_id}"
+  description = "Image path prefix for the Artifact Registry repository, e.g. us-docker.pkg.dev/my-project/my-repo."
+  value       = "${var.artifact_repository_location}-docker.pkg.dev/${var.project_id}/${local.artifact_repository_id}"
 }
 
 output "bucket_name" {

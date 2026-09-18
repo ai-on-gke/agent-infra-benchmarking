@@ -37,6 +37,27 @@ variable "enable_dataplane_v2" {
   default     = false
 }
 
+# A floor, not a pin: GKE upgrades past it, never below. Raising it on an
+# existing cluster upgrades the control plane in place.
+variable "kubernetes_version" {
+  description = "Minimum Kubernetes version for the control plane (GKE's min_master_version). Empty takes the release channel's default."
+  type        = string
+  default     = ""
+}
+
+# UNSPECIFIED means no channel, which is what holds kubernetes_version exactly.
+# Autopilot clusters reject it - they must be in a channel.
+variable "release_channel" {
+  description = "GKE release channel: UNSPECIFIED, RAPID, REGULAR, STABLE or EXTENDED. Empty leaves GKE's default."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "UNSPECIFIED", "RAPID", "REGULAR", "STABLE", "EXTENDED"], var.release_channel)
+    error_message = "release_channel must be empty or one of UNSPECIFIED, RAPID, REGULAR, STABLE, EXTENDED."
+  }
+}
+
 # Opt-in Kubernetes beta API groups (e.g. "certificates.k8s.io/v1beta1/clustertrustbundles").
 # GKE only serves beta API groups that are both present in the cluster's
 # Kubernetes minor version and explicitly listed here, so the cluster must
@@ -90,6 +111,12 @@ variable "node_pools" {
     max_node_count = optional(number, 3)
     spot           = optional(bool, false)
     labels         = optional(map(string), {})
+    # Node version. Unset follows the control plane.
+    version = optional(string)
+    # auto_upgrade has to stay true on a cluster in a release channel, and
+    # moves nodes off `version` when one is set.
+    auto_upgrade = optional(bool, true)
+    auto_repair  = optional(bool, true)
     # Zones the pool's nodes are created in, e.g. ["us-central1-a"] to pin a
     # pool to a single zone. Defaults to all zones in var.region when empty.
     node_locations = optional(list(string), [])

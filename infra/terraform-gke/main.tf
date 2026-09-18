@@ -26,6 +26,8 @@ module "clusters" {
   subnetwork           = each.value.subnetwork
   enable_dataplane_v2  = each.value.enable_dataplane_v2
   node_pools           = each.value.node_pools
+  kubernetes_version   = each.value.kubernetes_version
+  release_channel      = each.value.release_channel
   k8s_beta_apis        = each.value.k8s_beta_apis
   enable_pod_snapshots = each.value.enable_pod_snapshots
   enable_agent_sandbox = each.value.enable_agent_sandbox
@@ -40,7 +42,7 @@ module "clusters" {
 
 resource "google_artifact_registry_repository" "this" {
   project       = var.project_id
-  location      = var.region
+  location      = var.artifact_repository_location
   repository_id = local.artifact_repository_id
   format        = var.artifact_repository_format
 }
@@ -59,7 +61,7 @@ resource "google_storage_bucket" "this" {
 
 
   storage_class               = var.bucket_storage_class
-  force_destroy               = var.bucket_force_destroy
+  force_destroy               = true
   uniform_bucket_level_access = true
 }
 
@@ -111,14 +113,14 @@ resource "google_project_iam_member" "atelet_artifact_registry_writer" {
 }
 
 resource "google_storage_bucket_iam_member" "atelet_bucket_object_admin" {
-  count  = var.enable_atelet_iam ? 1 : 0
+  count  = var.enable_atelet_bucket_iam ? 1 : 0
   bucket = google_storage_bucket.this.name
   role   = "roles/storage.objectAdmin"
   member = local.atelet_wi_principal
 }
 
 resource "google_storage_bucket_iam_member" "atelet_bucket_viewer" {
-  count  = var.enable_atelet_iam ? 1 : 0
+  count  = var.enable_atelet_bucket_iam ? 1 : 0
   bucket = google_storage_bucket.this.name
   role   = "roles/storage.bucketViewer"
   member = local.atelet_wi_principal
@@ -128,14 +130,14 @@ resource "google_storage_bucket_iam_member" "atelet_bucket_viewer" {
 # namespace) - it also needs bucket access for actor SuspendActor/ResumeActor
 # calls, but no project-level grants.
 resource "google_storage_bucket_iam_member" "ate_api_server_bucket_object_admin" {
-  count  = var.enable_atelet_iam ? 1 : 0
+  count  = var.enable_atelet_bucket_iam ? 1 : 0
   bucket = google_storage_bucket.this.name
   role   = "roles/storage.objectAdmin"
   member = local.ate_api_server_wi_principal
 }
 
 resource "google_storage_bucket_iam_member" "ate_api_server_bucket_viewer" {
-  count  = var.enable_atelet_iam ? 1 : 0
+  count  = var.enable_atelet_bucket_iam ? 1 : 0
   bucket = google_storage_bucket.this.name
   role   = "roles/storage.bucketViewer"
   member = local.ate_api_server_wi_principal

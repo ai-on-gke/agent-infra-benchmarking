@@ -107,10 +107,10 @@ DOCKER_REPO="$(_tf_value '.artifact_registry_docker_repo.value' 'artifact_regist
 export DOCKER_REPO
 export KO_DOCKER_REPO="${DOCKER_REPO}"
 
-# The actor image the openclaw workload drives. Defined here rather than in
-# benchmarking/locust/build_and_push.sh so that the one script pushing it and
-# anything resolving it name the same string: a build and a deployment that
-# disagree leave the ActorTemplate pulling an image nothing builds.
+# The two images this repo builds, named here rather than in the scripts that
+# push them so that a build and a deployment cannot disagree about where the
+# image lives.
+export LOCUST_IMAGE="${DOCKER_REPO}/locust-test:latest"
 export OPENCLAW_IMAGE="${DOCKER_REPO}/openclaw-workload:latest"
 
 unset -f _tf_value

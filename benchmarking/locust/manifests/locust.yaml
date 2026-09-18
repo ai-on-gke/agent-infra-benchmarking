@@ -46,7 +46,7 @@ spec:
     spec:
       containers:
       - name: locust-master
-        image: us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest
+        image: ${LOCUST_IMAGE}
         imagePullPolicy: Always
         args:
         - "-m"
@@ -81,7 +81,7 @@ spec:
             memory: "512Mi"
       # Python and boomer workers do not play nicely together, leaving this in for reference.
       # - name: locust-python-worker
-      #   image: us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest
+      #   image: ${LOCUST_IMAGE}
       #   imagePullPolicy: Always
       #   args:
       #   - "-m"
@@ -117,7 +117,7 @@ spec:
       - name: boomer-worker
         # Same image as the master/worker — the boomer-worker Go binary is
         # baked in at /app/boomer-worker by benchmarking/locust/Dockerfile.
-        image: us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest
+        image: ${LOCUST_IMAGE}
         imagePullPolicy: Always
         command: ["/app/boomer-worker"]
         args:

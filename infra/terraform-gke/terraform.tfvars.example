@@ -17,9 +17,22 @@ clusters = {
   standard-cluster = {
     autopilot = false
 
+    # Substrate's podcertificate-controller watches these two beta APIs, and
+    # GKE serves them only when they are listed here. Leave them out and
+    # hack/install-ate.sh waits forever for ClusterTrustBundles that are never
+    # created. Verified on 1.35.7-gke.1222000, so no kubernetes_version pin is
+    # needed for them.
+    k8s_beta_apis = [
+      "certificates.k8s.io/v1beta1/clustertrustbundles",
+      "certificates.k8s.io/v1beta1/podcertificaterequests",
+    ]
+
     node_pools = {
       default = {
-        machine_type = "e2-medium"
+        # Substrate's bundled postgres requests 2 CPU in one container, so a
+        # node needs more than 2 allocatable: e2-medium has 940m and
+        # e2-standard-2 has 1930m, and on both the pod stays Pending forever.
+        machine_type = "e2-standard-4"
         node_count   = 1
         # Pin this pool to a single zone instead of spreading across the region.
         node_locations = ["us-central1-a"]
@@ -58,14 +71,24 @@ clusters = {
 
 artifact_repository_format = "DOCKER"
 
+# A multi-region ("us") or a region ("us-central1"); it becomes the image host,
+# so a region needs `gcloud auth configure-docker <region>-docker.pkg.dev`.
+artifact_repository_location = "us"
+
 # Bucket names are unique across all of GCP rather than per project, so
 # default_resource_name is unlikely to be free. This also has to match
 # BUCKET_NAME in .env.sh, which is where the benchmark stack reads it from.
 bucket_name = "my-gcp-project-bucket"
 
-# Grants atelet and its nodes the IAM bindings they need to read/write
-# snapshots and pull images. See variables.tf for the namespace/KSA name
-# atelet is expected to run as if you're not using the defaults.
+# Grants atelet and ate-api-server access to the snapshot bucket above.
+# SuspendActor fails without it. Defaults to true; set it false only if
+# something outside this config already grants them.
+#enable_atelet_bucket_iam = true
+
+# The project-level grants (Artifact Registry, project-wide storage) for atelet
+# and its nodes. The principal is the same in every deployment of a project, so
+# keep this true in at most one of them. See variables.tf for the namespace/KSA
+# names atelet is expected to run as.
 enable_atelet_iam = false
 
 # Gives atelet full control over every cluster in the project: GCP-level

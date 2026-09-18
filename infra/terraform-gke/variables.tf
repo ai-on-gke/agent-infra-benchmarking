@@ -36,6 +36,16 @@ variable "clusters" {
     subnetwork          = optional(string, "default")
     enable_dataplane_v2 = optional(bool, false)
 
+    # Minimum control-plane version (GKE's min_master_version), e.g.
+    # "1.36.3-gke.1767000". Empty takes the release channel's default, which
+    # is how a cluster ends up below what k8s_beta_apis below needs.
+    kubernetes_version = optional(string, "")
+
+    # UNSPECIFIED, RAPID, REGULAR, STABLE or EXTENDED. UNSPECIFIED means no
+    # channel, which is what holds kubernetes_version exactly; Autopilot
+    # clusters reject it. Empty leaves GKE's default.
+    release_channel = optional(string, "")
+
     # Kubernetes beta APIs to enable, e.g.
     # ["certificates.k8s.io/v1beta1/clustertrustbundles", "certificates.k8s.io/v1beta1/podcertificaterequests"].
     # Requires the cluster to be running a Kubernetes minor version that
@@ -65,6 +75,12 @@ variable "clusters" {
       max_node_count = optional(number, 3)
       spot           = optional(bool, false)
       labels         = optional(map(string), {})
+      # Node version. Unset follows the control plane.
+      version = optional(string)
+      # auto_upgrade has to stay true on a cluster in a release channel, and
+      # moves nodes off `version` when one is set.
+      auto_upgrade = optional(bool, true)
+      auto_repair  = optional(bool, true)
       # Zones the pool's nodes are created in, e.g. ["us-central1-a"] to pin
       # a pool to a single zone. Defaults to all zones in the cluster's
       # region when empty.
@@ -93,6 +109,17 @@ variable "artifact_repository_id" {
   description = "ID of the Artifact Registry repository. Defaults to var.default_resource_name when empty. Set it only when that name is already taken in this project."
   type        = string
   default     = ""
+}
+
+# The location is the image host: "us" gives us-docker.pkg.dev, "us-central1"
+# gives us-central1-docker.pkg.dev. The multi-region default keeps the host the
+# one `gcloud auth configure-docker` is usually already set up for; a region
+# here needs that command run again for the new host. Changing it replaces the
+# repository, dropping every image in it.
+variable "artifact_repository_location" {
+  description = "Location of the Artifact Registry repository: a multi-region (\"us\", \"europe\", \"asia\") or a region (\"us-central1\")."
+  type        = string
+  default     = "us"
 }
 
 variable "artifact_repository_format" {
@@ -144,8 +171,22 @@ variable "bucket_force_destroy" {
 # load tests).
 # ---------------------------------------------------------------------------
 
+# Split from the project-level flag below because the two carry different
+# risks. These name this deployment's own bucket, so two deployments in one
+# project cannot collide over them, and without them SuspendActor fails with
+# "storage.objects.list denied" on the snapshot bucket. Hence: on by default.
+variable "enable_atelet_bucket_iam" {
+  description = "Grants atelet and ate-api-server objectAdmin + bucketViewer on this deployment's snapshot bucket."
+  type        = bool
+  default     = true
+}
+
+# Project-level, and the Workload Identity principal is identical in every
+# deployment of a project, so two deployments managing these fight over one
+# binding - a destroy of either revokes it for both. Off by default: turn it on
+# in at most one deployment per project.
 variable "enable_atelet_iam" {
-  description = "Grants the IAM bindings atelet, ate-api-server, and their nodes need (project + bucket level). See cmd/iam.go and tools/setup-gcp/README.md for the authoritative list."
+  description = "Grants the project-level IAM bindings atelet and its nodes need (storage + Artifact Registry). See cmd/iam.go and tools/setup-gcp/README.md for the authoritative list."
   type        = bool
   default     = false
 }

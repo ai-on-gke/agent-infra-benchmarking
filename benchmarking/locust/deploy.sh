@@ -24,8 +24,11 @@ if [[ -f .env.sh ]]; then
   source .env.sh
 fi
 
-if [ -z "${PROJECT_ID:-}" ]; then
-  echo "Error: PROJECT_ID environment variable must be set." >&2
+# The manifest's only substituted image. Unset would envsubst to an empty
+# image field, which kubectl rejects without naming the cause.
+if [ -z "${LOCUST_IMAGE:-}" ]; then
+  echo "Error: LOCUST_IMAGE must be set; .terraform-env.sh exports it, and .env.sh" >&2
+  echo "sources that." >&2
   exit 1
 fi
 
@@ -76,7 +79,7 @@ deploy() {
   # benchmarking/monitoring.yaml is otherwise optional.
   echo "Ensuring benchmarking namespace exists..."
   kubectl create namespace benchmarking --dry-run=client -o yaml | kubectl apply -f -
-  echo "Deploying Locust load (PROJECT_ID=${PROJECT_ID}, user_class=${BENCHMARK_USER_CLASS}, workload=${BENCHMARK_WORKLOAD_NAME}, template=${BENCHMARK_WORKLOAD_TEMPLATE:-<the workload default>})..."
+  echo "Deploying Locust load (image=${LOCUST_IMAGE}, user_class=${BENCHMARK_USER_CLASS}, workload=${BENCHMARK_WORKLOAD_NAME}, template=${BENCHMARK_WORKLOAD_TEMPLATE:-<the workload default>})..."
   envsubst < "${MANIFEST}" | kubectl apply -f -
 }
 
