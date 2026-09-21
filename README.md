@@ -167,6 +167,76 @@ With the port-forward running, open [http://localhost:8089](http://localhost:808
 
 This is where the run is started and the `RunWorkloadUser` class is picked.
 
+## Running a benchmark as a Job
+
+Everything above deploys locust as a Deployment: it is held open, and a run
+starts and stops from the web UI. `run_locust_job.sh` is the other way to run
+the same benchmark — as a Job that runs for a stated duration and then
+finishes, so that its completion is something a script can wait for.
+
+```bash
+./benchmarking/run_locust_job.sh --duration 5m --users 10
+```
+
+It submits the Job, waits for the pod, streams the run's logs as they are
+produced, and exits with the Job's result — so a failed run is a non-zero exit
+without having to go and ask. `--no-wait` stops after submitting instead, and
+leaves the run going in the cluster.
+
+The Job assumes the workloads are already deployed, because a series of runs
+has to measure one unchanging deployment — redeploying retakes the golden
+snapshots, and runs either side of that are not comparable. Setting up is
+therefore its own command, which runs nothing and exits when it is done:
+
+```bash
+./benchmarking/run_locust_job.sh --build --deploy-workloads
+```
+
+Every run after it measures that same deployment, and each one blocks until it
+is over, so a series can be a script:
+
+```bash
+./benchmarking/run_locust_job.sh --users 50
+./benchmarking/run_locust_job.sh --users 100
+```
+
+Passing a run's options to the setup command is an error rather than something
+quietly dropped, since nothing there would have run them.
+
+`--user-class`, `--workload-name` and `--workload-template` mean what they do
+in `deploy_locust.sh`, and `--deploy-workloads` takes that script's
+`--worker-count`, `--sandbox-class`, `--actor-memory` and `--otlp-endpoint`
+alongside it. `--help` lists them all.
+
+There is no web UI and no port-forward. The duration and the user count are
+arguments here, where the UI's form carries them for the Deployment, and the
+results are the pod's logs: locust prints its aggregated table when the run
+ends, and the per-span lines from the worker are in the same stream. That is
+what gets streamed above, and a finished Job keeps it for a day:
+
+```bash
+kubectl logs job/locust-job -n benchmarking
+```
+
+<details>
+<summary><strong>How it ends itself</strong></summary>
+
+The Job runs one container, `/app/runner.py`, which owns both processes: a
+`kind: Job` pod is finished only once every container has exited, and two peer
+containers would each have to decide to stop on their own.
+
+locust runs headless with `-t`, so the time limit stops the test and sends a
+`quit` to the worker. The worker returns from its run loop on that, then
+suspends and deletes every actor it created — which is why the pod can take a
+little longer than `--duration` to finish. `runner.py` waits for both, and
+exits with locust's status, or the worker's if locust was content.
+
+A run where some requests failed is a failed Job, because that is locust's
+default. Pass `--exit-code-on-error 0` through to locust when failures are an
+expected part of what is being measured.
+
+</details>
+
 ## Cleanup
 
 The steps undo the deployment in reverse, and each one is independent — stop
@@ -180,6 +250,10 @@ after the first if the cluster is being kept for another run.
 
 Deletes locust first, then the benchmark workloads. Stop the `kubectl
 port-forward` in the other terminal as well; it does not exit on its own.
+
+This deletes the Deployment, not the Job — a finished Job is kept for a day so
+its logs outlive it. `./benchmarking/run_locust_job.sh --delete` removes it
+sooner, and leaves the workloads alone.
 
 ### 2. Uninstall substrate from the cluster
 

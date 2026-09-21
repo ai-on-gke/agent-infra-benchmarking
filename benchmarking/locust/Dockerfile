@@ -43,6 +43,7 @@ COPY --from=pydeps /app/deps /app/deps
 COPY --from=goboomer /out/boomer-worker /app/boomer-worker
 COPY benchmarking/locust/common/ /app/common/
 COPY benchmarking/locust/tests/ /app/tests/
+COPY benchmarking/locust/runner.py /app/runner.py
 
 ENV PYTHONPATH=/app:/app/deps
 ENV PYTHONUNBUFFERED=1

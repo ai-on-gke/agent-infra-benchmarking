@@ -33,7 +33,16 @@ if [ -z "${LOCUST_IMAGE:-}" ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MANIFEST="${SCRIPT_DIR}/manifests/locust.yaml"
+# The two ways to run the same benchmark. They share the image, the settings
+# below and what they measure, and differ in what ends them: the Deployment is
+# held open for the web UI, while the Job runs for a stated duration and
+# finishes. See manifests/job.yaml for how the latter ends itself.
+DEPLOYMENT_MANIFEST="${SCRIPT_DIR}/manifests/deployment.yaml"
+JOB_MANIFEST="${SCRIPT_DIR}/manifests/job.yaml"
+
+# Has to match metadata.name in the Job manifest. Fixed rather than generated,
+# so a run can be followed, waited on and deleted by name.
+JOB_NAME=locust-job
 
 # Substituted into the boomer container's --user-class argument and the master's -f.
 BENCHMARK_USER_CLASS=runworkload
@@ -56,12 +65,23 @@ BENCHMARK_WORKLOAD_NAME=glutton
 # what it can address.
 BENCHMARK_WORKLOAD_TEMPLATE="glutton"
 
+# The Job's run length and user count, which the web UI's form carries for the
+# Deployment. Substituted into locust's -t and -u, so the duration takes
+# locust's own spelling of one ("30s", "5m", "1h30m").
+BENCHMARK_DURATION=5m
+BENCHMARK_USERS=10
+
 usage() {
   echo "Usage: $0 [options]"
   echo ""
   echo "Options:"
-  echo "  --deploy              Deploy the locust workers"
-  echo "  --delete              Delete the locust workers"
+  echo "  --deploy              Deploy the locust workers as a Deployment, held open for the web UI"
+  echo "  --delete              Delete the locust Deployment"
+  echo "  --deploy-job          Create a Job that runs the benchmark once and ends when the"
+  echo "                        run does. Returns as soon as it is submitted."
+  echo "  --delete-job          Delete the locust Job"
+  echo "  --duration TIME       --deploy-job only: how long to run, in locust's spelling (default: 5m)"
+  echo "  --users N             --deploy-job only: number of users (default: 10)"
   echo "  --user-class NAME     Locust user class, lowercase; runs tests/NAME.py (default: runworkload)"
   echo "  --workload-name NAME  Workload a RunWorkloadUser drives: glutton | openclaw (default: glutton)."
   echo "                        Its ActorTemplate has to be deployed already — openclaw is not in"
@@ -73,19 +93,62 @@ usage() {
   echo "  -h|--help             Show this help message"
 }
 
-deploy() {
-  # The locust manifest targets the `benchmarking` namespace (so prometheus
-  # can scrape it when that stack is installed). Ensure it exists either way —
-  # benchmarking/monitoring.yaml is otherwise optional.
+# Both manifests target the `benchmarking` namespace (so prometheus can scrape
+# them when that stack is installed). Ensure it exists either way —
+# benchmarking/monitoring.yaml is otherwise optional.
+ensure_namespace() {
   echo "Ensuring benchmarking namespace exists..."
   kubectl create namespace benchmarking --dry-run=client -o yaml | kubectl apply -f -
-  echo "Deploying Locust load (image=${LOCUST_IMAGE}, user_class=${BENCHMARK_USER_CLASS}, workload=${BENCHMARK_WORKLOAD_NAME}, template=${BENCHMARK_WORKLOAD_TEMPLATE:-<the workload default>})..."
-  envsubst < "${MANIFEST}" | kubectl apply -f -
+}
+
+# What a run measures, echoed by both deploy paths because it is baked into
+# what they apply rather than chosen later.
+describe_run() {
+  echo "  image:     ${LOCUST_IMAGE}"
+  echo "  class:     ${BENCHMARK_USER_CLASS}"
+  echo "  workload:  ${BENCHMARK_WORKLOAD_NAME}"
+  echo "  template:  ${BENCHMARK_WORKLOAD_TEMPLATE:-<the workload default>}"
+}
+
+deploy() {
+  ensure_namespace
+  echo "Deploying Locust load:"
+  describe_run
+  envsubst < "${DEPLOYMENT_MANIFEST}" | kubectl apply -f -
 }
 
 delete() {
   echo "Deleting Locust load..."
-  envsubst < "${MANIFEST}" | kubectl delete --ignore-not-found -f -
+  envsubst < "${DEPLOYMENT_MANIFEST}" | kubectl delete --ignore-not-found -f -
+}
+
+# deploy_job submits the run and returns; it does not wait for it. What to do
+# with a run in flight is the caller's to decide — follow it, poll it, or
+# leave it — and a script that blocked would take that choice away.
+deploy_job() {
+  ensure_namespace
+  # A Job's pod template is immutable, so a second run cannot be an apply over
+  # the first. Deleting first also keeps the fixed name unambiguous: the logs
+  # and the status under it are the run just submitted, not the previous one.
+  # --wait=true so the old pods are gone before the new Job creates its own.
+  echo "Deleting any previous ${JOB_NAME}..."
+  kubectl delete job "${JOB_NAME}" --namespace=benchmarking \
+    --ignore-not-found --wait=true
+  echo "Running Locust benchmark as a Job:"
+  describe_run
+  echo "  duration:  ${BENCHMARK_DURATION}"
+  echo "  users:     ${BENCHMARK_USERS}"
+  envsubst < "${JOB_MANIFEST}" | kubectl apply -f -
+  echo
+  echo "Submitted. Follow it with:"
+  echo "  kubectl logs -f job/${JOB_NAME} -n benchmarking"
+  echo "Wait for it with:"
+  echo "  kubectl wait --for=condition=complete job/${JOB_NAME} -n benchmarking --timeout=30m"
+}
+
+delete_job() {
+  echo "Deleting Locust Job..."
+  envsubst < "${JOB_MANIFEST}" | kubectl delete --ignore-not-found -f -
 }
 
 if [[ "$#" -eq 0 ]]; then
@@ -98,6 +161,12 @@ while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --deploy) action="deploy" ;;
     --delete) action="delete" ;;
+    --deploy-job) action="deploy-job" ;;
+    --delete-job) action="delete-job" ;;
+    --duration) shift; BENCHMARK_DURATION="$1" ;;
+    --duration=*) BENCHMARK_DURATION="${1#*=}" ;;
+    --users) shift; BENCHMARK_USERS="$1" ;;
+    --users=*) BENCHMARK_USERS="${1#*=}" ;;
     --user-class) shift; BENCHMARK_USER_CLASS="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
     --user-class=*) BENCHMARK_USER_CLASS="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
     --workload-name) shift; BENCHMARK_WORKLOAD_NAME="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
@@ -127,10 +196,23 @@ if [[ -z "${BENCHMARK_WORKLOAD_NAME}" ]]; then
   echo "Error: --workload-name cannot be empty" >&2
   exit 1
 fi
+
+# Checked for every action, so that a --users typo is caught before it reaches
+# the cluster as a locust argument. The duration is left to locust, which
+# knows its own spelling of one and rejects anything else at startup.
+if ! [[ "${BENCHMARK_USERS}" =~ ^[0-9]+$ ]] || [[ "${BENCHMARK_USERS}" -lt 1 ]]; then
+  echo "Error: --users must be a whole number of at least 1, got '${BENCHMARK_USERS}'" >&2
+  exit 1
+fi
 export BENCHMARK_USER_CLASS BENCHMARK_WORKLOAD_NAME BENCHMARK_WORKLOAD_TEMPLATE
+export BENCHMARK_DURATION BENCHMARK_USERS
 
 if [[ "${action}" == "deploy" ]]; then
   deploy
 elif [[ "${action}" == "delete" ]]; then
   delete
+elif [[ "${action}" == "deploy-job" ]]; then
+  deploy_job
+elif [[ "${action}" == "delete-job" ]]; then
+  delete_job
 fi
