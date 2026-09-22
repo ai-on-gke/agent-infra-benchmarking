@@ -451,6 +451,48 @@ report_metrics() {
     done
   fi
 
+  # The scale gauges, read as the high-water mark rather than as the last
+  # sample. The counters above are cumulative, so their final value is the
+  # run's total; a gauge ends the run at zero, because teardown suspends and
+  # deletes every actor before the worker exits. The peak is what a run says
+  # about scale, and the average beside it tells a brief spike from a level
+  # the run held — over the whole window, so the ramp up is in it.
+  #
+  # Collapsed with max() instead of broken out per workload: a Job bakes one
+  # workload into its pod, so there is only one series, and the scrape renames
+  # the gauge's own `workload` label to `exported_workload` in any case — the
+  # pod carries a target label of that name, and the target wins.
+  local scale scale_query="" spec agg
+  for spec in active:boomer_active_actors suspended:boomer_suspended_actors; do
+    for agg in peak:max_over_time avg:avg_over_time; do
+      [[ -n "${scale_query}" ]] && scale_query+=" or "
+      scale_query+="label_replace(label_replace("
+      scale_query+="max(${agg##*:}(${spec##*:}{run_id=\"${run_id}\"}[${METRICS_WINDOW}]))"
+      scale_query+=", \"gauge\", \"${spec%%:*}\", \"\", \"\")"
+      scale_query+=", \"stat\", \"${agg%%:*}\", \"\", \"\")"
+    done
+  done
+  scale="$(promql "${scale_query}" \
+    '.data.result[] | [.metric.gauge, .metric.stat, .value[1]] | @tsv' \
+    || true)"
+
+  if [[ -n "${scale}" ]]; then
+    echo
+    printf '  %-18s %-6s %s\n' "SCALE" "" "ACTORS"
+    sort <<<"${scale}" | while IFS=$'\t' read -r gauge stat value; do
+      if [[ "${value}" =~ ^-?[0-9]+(\.[0-9]+)?$ ]]; then
+        LC_ALL=C printf '  %-18s %-6s %.1f\n' "${gauge}" "${stat}" "${value}"
+      else
+        printf '  %-18s %-6s %s\n' "${gauge}" "${stat}" "-"
+      fi
+    done
+  else
+    echo
+    echo "  No scale gauges for this run. They are registered by the runworkload"
+    echo "  user class alone, and by a worker image built since they were added,"
+    echo "  so either explains a run whose requests above came through intact."
+  fi
+
   echo
   echo "  Prometheus holds this until its pod restarts. Query it with:"
   echo "    kubectl port-forward -n ${NAMESPACE} svc/prometheus 9090:9090"

@@ -37,6 +37,11 @@ type fakeControlClient struct {
 	ateapipb.ControlClient
 	// resumeErr, when set, fails every ResumeActor call with it.
 	resumeErr error
+	// suspendErr and deleteErr, when set, fail every call of their name.
+	// Teardown against an actor still in a transitional state fails both,
+	// which is the case that leaves an actor behind.
+	suspendErr error
+	deleteErr  error
 	// serverElapsedUs, when set, is returned as the x-server-elapsed-us
 	// trailer the real ServerUnaryInterceptor emits.
 	serverElapsedUs string
@@ -97,6 +102,9 @@ func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.Suspe
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "SuspendActor")
+	if f.suspendErr != nil {
+		return nil, f.suspendErr
+	}
 	return &ateapipb.SuspendActorResponse{}, nil
 }
 
@@ -104,6 +112,9 @@ func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.Delete
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "DeleteActor")
+	if f.deleteErr != nil {
+		return nil, f.deleteErr
+	}
 	return &ateapipb.Actor{}, nil
 }
 

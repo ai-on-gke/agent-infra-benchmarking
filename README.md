@@ -254,7 +254,20 @@ and prints it:
   TTFI               p50    91.4
   TTFI               p95    183.8
   TTFI               p99    412.0
+
+  SCALE                     ACTORS
+  active             avg    31.7
+  active             peak   50.0
+  suspended          avg    14.2
+  suspended          peak   23.0
 ```
+
+The scale rows are the high-water mark and the average over the run, not the
+value at the end of it: `boomer_active_actors` and `boomer_suspended_actors`
+are gauges, and teardown returns both to zero before the worker exits. The
+average covers the whole window, so the ramp up pulls it below the level the
+run settled at. Both are missing for a run of another user class, and for one
+made by a worker image older than the gauges.
 
 It port-forwards to Prometheus on a port `kubectl` picks, so it cannot collide
 with a forward already open, and closes it again afterwards. The whole summary

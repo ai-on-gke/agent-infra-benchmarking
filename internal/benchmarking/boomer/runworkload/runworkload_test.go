@@ -15,9 +15,13 @@
 package runworkload
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -335,5 +339,58 @@ func TestAddressesTheActorWithTheTargetActorHeader(t *testing.T) {
 	if ref.Atespace != u.cfg.Atespace || ref.Name != u.actorName {
 		t.Errorf("target actor: got %s/%s, want %s/%s",
 			ref.Atespace, ref.Name, u.cfg.Atespace, u.actorName)
+	}
+}
+
+// errActorBusy stands in for the control plane refusing an actor that is still
+// in a transitional state. Suspend and delete fail together then, which is the
+// pair that leaves an actor holding a worker after the run.
+var errActorBusy = errors.New("actor is not SUSPENDED")
+
+// An actor that outlives the run is invisible until someone goes looking for
+// it, so teardown has to say which ones it could not remove and why.
+func TestShutdownReportsWhatItLeftBehind(t *testing.T) {
+	tests := []struct {
+		name      string
+		ctrl      *fakeControlClient
+		wantInLog []string
+	}{
+		{
+			name:      "a clean teardown",
+			ctrl:      &fakeControlClient{},
+			wantInLog: []string{"teardown removed an actor", `"left":0`, `"removed":1`},
+		},
+		{
+			name: "an actor still in a transitional state",
+			ctrl: &fakeControlClient{suspendErr: errActorBusy, deleteErr: errActorBusy},
+			// The suspend failure rides along, because the delete failing on
+			// its own means something else entirely.
+			wantInLog: []string{"teardown left an actor behind", "after suspend", `"left":1`},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			u, _ := newRunWorkloadTestUser(t, &pingServer{}, dynconfig.Config{}, tc.ctrl)
+			rt := &runWorkloadRuntime{cfg: u.cfg, workload: u.workload}
+			rt.users.Store(int64(1), u)
+
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			rt.shutdown(context.Background())
+
+			got := buf.String()
+			if !strings.Contains(got, u.actorName) {
+				t.Errorf("teardown log does not name the actor %q; got:\n%s", u.actorName, got)
+			}
+			for _, want := range tc.wantInLog {
+				if !strings.Contains(got, want) {
+					t.Errorf("teardown log missing %q; got:\n%s", want, got)
+				}
+			}
+		})
 	}
 }

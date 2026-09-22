@@ -253,6 +253,7 @@ func (r *runWorkloadRuntime) iterate() {
 	user.measure(ctx, ttfiMetric, dynCfg, r.opts, false)
 
 	time.Sleep(r.dynamicWait())
+	slog.Error("COMPLETED")
 }
 
 func (r *runWorkloadRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config, opts Options) (*runWorkloadUser, error) {
@@ -285,13 +286,32 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, dynCfg dynconfig.Con
 	return u, nil
 }
 
+// shutdown removes every actor the run created, and says per actor whether it
+// went. An actor that outlives the run holds a worker until someone deletes it
+// by hand, so the one place that knows it was left behind reports it by name
+// rather than leaving the next run to find it.
 func (r *runWorkloadRuntime) shutdown(ctx context.Context) {
+	var removed, left int
 	r.users.Range(func(_, val any) bool {
 		u := val.(*runWorkloadUser)
-		u.suspendAndDelete(ctx)
+		err := u.suspendAndDelete(ctx)
 		bmetrics.UpdateUsers(runWorkloadUserClass, -1)
+		if err != nil {
+			left++
+			slog.Warn("teardown left an actor behind",
+				slog.String("actor", u.actorName),
+				slog.String("template", u.templateName),
+				slog.String("err", err.Error()))
+		} else {
+			removed++
+			slog.Info("teardown removed an actor",
+				slog.String("actor", u.actorName))
+		}
 		return true
 	})
+	slog.Info("teardown finished",
+		slog.Int("removed", removed),
+		slog.Int("left", left))
 }
 
 type runWorkloadUser struct {
@@ -515,20 +535,32 @@ func (u *runWorkloadUser) suspend(ctx context.Context) {
 // requires SUSPENDED or CRASHED; deleting a running actor leaks it. The
 // suspend is unmetered (teardown precondition, not benchmark latency), while
 // the delete is metered so true leaks still surface in failures.csv.
-func (u *runWorkloadUser) suspendAndDelete(ctx context.Context) {
-	_, err := u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+//
+// A nil return means the actor is gone, so the delete decides it and a failed
+// suspend rides along as context: the two fail together when the actor is
+// still in a transitional state, and the pair is what names that cause.
+func (u *runWorkloadUser) suspendAndDelete(ctx context.Context) error {
+	_, suspendErr := u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor: u.ref(),
 	})
-	if err == nil && u.isActive {
+	if suspendErr == nil && u.isActive {
 		activeActors.WithLabelValues(u.workload.Name()).Dec()
 		suspendedActors.WithLabelValues(u.workload.Name()).Inc()
 		u.isActive = false
 	}
-	u.delete(ctx)
+
+	deleteErr := u.delete(ctx)
+	if deleteErr == nil {
+		return nil
+	}
+	if suspendErr != nil {
+		return fmt.Errorf("delete: %w (after suspend: %v)", deleteErr, suspendErr)
+	}
+	return fmt.Errorf("delete: %w", deleteErr)
 }
 
-func (u *runWorkloadUser) delete(ctx context.Context) {
-	_ = u.tracedCall(ctx, "DeleteActor", nil, func(callCtx context.Context, tr *metadata.MD) error {
+func (u *runWorkloadUser) delete(ctx context.Context) error {
+	err := u.tracedCall(ctx, "DeleteActor", nil, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
@@ -547,6 +579,7 @@ func (u *runWorkloadUser) delete(ctx context.Context) {
 		u.isCreated = false
 		u.isActive = false
 	}
+	return err
 }
 
 // tracedCall wraps a unary gRPC call with a span and Prometheus/locust
