@@ -219,13 +219,19 @@ substitute() {
 # golden snapshot exists (the substrate counterpart of `kubectl wait
 # --for=condition=Ready actortemplate/...`). Fails fast when the template
 # reconciler reports an error.
+#
+# Readiness is the published golden tag, which is what upstream's own wait
+# tests (internal/e2e/template.go). The controller warms a temporary golden
+# actor, copies its snapshot into a tag owned by the template, and only then
+# records the reference here — so a tag is the point at which an actor of this
+# template can be restored from the golden, while the snapshot existing is not.
 wait_actortemplate_ready() {
   local atespace="$1"
   local template="$2"
   local timeout_secs="${3:-300}"
   local started=${SECONDS}
   local deadline=$((SECONDS + timeout_secs))
-  local json snapshot error_message elapsed
+  local json golden_tag error_message elapsed
   local last_json="" last_get_err="" next_report=$((SECONDS + PROGRESS_EVERY_SECS))
   # The poll's stderr is kept rather than discarded: a get that fails on every
   # attempt otherwise looks exactly like a snapshot that is merely slow, and
@@ -237,11 +243,18 @@ wait_actortemplate_ready() {
     if json=$(run_kubectl_ate get actor-template "${template}" -a "${atespace}" -o json 2>"${err_file}"); then
       last_get_err=""
       last_json="${json}"
-      snapshot=$(jq -r '.status.goldenSnapshotStatus.goldenSnapshot.snapshotUri // empty' <<<"${json}")
-      if [[ -n "${snapshot}" ]]; then
+      # The tag's name is its required field, so its presence is what marks
+      # the status populated; the atespace is reserved (ate-golden) and is
+      # printed only to locate the tag.
+      golden_tag=$(jq -r '
+        .status.goldenSnapshotStatus.goldenTag
+        | select(.name != null and .name != "")
+        | ((.atespace // "") + "/" + .name) // empty
+      ' <<<"${json}")
+      if [[ -n "${golden_tag}" ]]; then
         rm -f "${err_file}"
         echo "  ${template}: golden snapshot ready after $((SECONDS - started))s"
-        echo "  ${template}: ${snapshot}"
+        echo "  ${template}: tag ${golden_tag}"
         return 0
       fi
       error_message=$(jq -r '.status.goldenSnapshotStatus.errorMessage // empty' <<<"${json}")
@@ -278,8 +291,9 @@ wait_actortemplate_ready() {
     echo "  last observed .status:" >&2
     jq '.status // {}' <<<"${last_json}" 2>/dev/null | sed 's/^/    /' >&2
   fi
-  echo "  snapshots are written to gs://${BUCKET_NAME}/${atespace}/${template}/ — check that the" >&2
-  echo "  bucket exists and the ateom workers can write to it, then check the workers:" >&2
+  echo "  the golden snapshot is warmed on a temporary actor and published as a tag in the" >&2
+  echo "  reserved ate-golden atespace, under gs://${BUCKET_NAME}/ — check that the bucket" >&2
+  echo "  exists and the ateom workers can write to it, then check the workers:" >&2
   echo "    kubectl get pods -n ${atespace}" >&2
   echo "    kubectl logs -n ${atespace} deployment/benchmark-ateom --tail=50" >&2
   return 1
@@ -288,17 +302,20 @@ wait_actortemplate_ready() {
 # describe_template_state turns whatever the template reports into a short
 # suffix for the progress line, so a pending snapshot still says something
 # about why. Prints nothing when the status carries no recognizable field.
+#
+# takeGoldenSnapshotAt is the only progress the status carries before the tag
+# appears: it is when the golden actor's warmup ends and the snapshot may be
+# taken, so a time already past means the wait is on the snapshot itself
+# rather than on the warmup, and an absent one means the golden actor has not
+# started warming.
 describe_template_state() {
   local json="$1"
   [[ -n "${json}" ]] || return 0
-  local phase
-  phase=$(jq -r '
-    [ .status.goldenSnapshotStatus.phase?,
-      .status.goldenSnapshotStatus.state?,
-      .status.phase?,
-      .status.state? ] | map(select(. != null and . != "")) | first // empty
-  ' <<<"${json}" 2>/dev/null) || return 0
-  [[ -n "${phase}" ]] && printf ' (%s)' "${phase}"
+  local take_at
+  take_at=$(jq -r '.status.goldenSnapshotStatus.takeGoldenSnapshotAt // empty' \
+    <<<"${json}" 2>/dev/null) || return 0
+  [[ -n "${take_at}" ]] && printf ' (snapshot due at %s)' "${take_at}"
+  return 0
 }
 
 # wait_templates_ready blocks until every benchmark template's golden

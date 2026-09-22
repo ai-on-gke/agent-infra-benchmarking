@@ -107,8 +107,17 @@ func main() {
 	if *masterWebPort > 0 {
 		masterHost := flag.Lookup("master-host").Value.String()
 		configURL := fmt.Sprintf("http://%s:%d/boomer-config", masterHost, *masterWebPort)
-		if err := dynconfig.SubscribeSpawn(configURL, dyn, sampler, 5*time.Second, func(err error) {
-			slog.Error("fatal: dynconfig fetch failed; exiting so the pod restarts",
+		// The first fetch must succeed: without it the worker runs on its
+		// command-line defaults, not the operator's values. Later spawn
+		// fetches can fail without ending the run, because the worker already
+		// holds the last value the master served.
+		if err := dynconfig.SubscribeSpawn(configURL, dyn, sampler, 5*time.Second, func(err error, fetched bool) {
+			if fetched {
+				slog.Warn("dynconfig spawn fetch failed; keeping the current values",
+					slog.String("url", configURL), slog.String("err", err.Error()))
+				return
+			}
+			slog.Error("fatal: first dynconfig fetch failed; exiting so the pod restarts",
 				slog.String("url", configURL), slog.String("err", err.Error()))
 			os.Exit(1)
 		}); err != nil {
