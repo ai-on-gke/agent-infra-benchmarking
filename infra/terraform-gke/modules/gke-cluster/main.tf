@@ -167,6 +167,13 @@ resource "google_container_node_pool" "this" {
       }
     }
 
+    service_account = var.node_service_account
+
+    # cloud-platform is the scope Google pairs with a dedicated service
+    # account: the scope is the coarse filter and IAM is the fine one, so the
+    # roles held by the account above are what a node can actually do.
+    # Narrowing the scope is what you do instead when the nodes are stuck on
+    # the default account and its project-wide roles.
     oauth_scopes = [
       "https://www.googleapis.com/auth/cloud-platform",
     ]

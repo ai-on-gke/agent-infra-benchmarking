@@ -52,6 +52,11 @@ output "atelet_wi_principal" {
   value       = local.atelet_wi_principal
 }
 
+output "node_service_account" {
+  description = "Service account the node pools run as. Holds the GKE minimum at project level, and read on this deployment's repository and bucket. An image this deployment's pods have to pull belongs in that repository, or this account needs naming on whatever holds it instead."
+  value       = google_service_account.node.email
+}
+
 output "get_credentials_commands" {
   description = "gcloud commands to fetch kubeconfig credentials for each cluster, keyed by cluster key."
   value       = { for k, m in module.clusters : k => m.get_credentials_command }

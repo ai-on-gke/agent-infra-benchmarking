@@ -71,6 +71,12 @@ BENCHMARK_WORKLOAD_TEMPLATE="glutton"
 BENCHMARK_DURATION=5m
 BENCHMARK_USERS=10
 
+# Names one run in Prometheus, as the run_id label on every series it
+# produces. Empty takes a UTC timestamp below, so that runs are distinct
+# without having to be named: a reused id merges two runs into one series and
+# is the one mistake here that reads as valid data.
+BENCHMARK_RUN_ID=""
+
 usage() {
   echo "Usage: $0 [options]"
   echo ""
@@ -82,6 +88,9 @@ usage() {
   echo "  --delete-job          Delete the locust Job"
   echo "  --duration TIME       --deploy-job only: how long to run, in locust's spelling (default: 5m)"
   echo "  --users N             --deploy-job only: number of users (default: 10)"
+  echo "  --run-id NAME         --deploy-job only: names this run in Prometheus, as the"
+  echo "                        run_id label (default: a UTC timestamp). Up to 63"
+  echo "                        alphanumerics, dashes, underscores and dots."
   echo "  --user-class NAME     Locust user class, lowercase; runs tests/NAME.py (default: runworkload)"
   echo "  --workload-name NAME  Workload a RunWorkloadUser drives: glutton | openclaw (default: glutton)."
   echo "                        Its ActorTemplate has to be deployed already — openclaw is not in"
@@ -138,12 +147,15 @@ deploy_job() {
   describe_run
   echo "  duration:  ${BENCHMARK_DURATION}"
   echo "  users:     ${BENCHMARK_USERS}"
+  echo "  run_id:    ${BENCHMARK_RUN_ID}"
   envsubst < "${JOB_MANIFEST}" | kubectl apply -f -
   echo
   echo "Submitted. Follow it with:"
   echo "  kubectl logs -f job/${JOB_NAME} -n benchmarking"
   echo "Wait for it with:"
   echo "  kubectl wait --for=condition=complete job/${JOB_NAME} -n benchmarking --timeout=30m"
+  echo "Its metrics, where Prometheus is deployed:"
+  echo "  locust_request_duration_milliseconds_bucket{run_id=\"${BENCHMARK_RUN_ID}\"}"
 }
 
 delete_job() {
@@ -167,6 +179,8 @@ while [[ "$#" -gt 0 ]]; do
     --duration=*) BENCHMARK_DURATION="${1#*=}" ;;
     --users) shift; BENCHMARK_USERS="$1" ;;
     --users=*) BENCHMARK_USERS="${1#*=}" ;;
+    --run-id) shift; BENCHMARK_RUN_ID="$1" ;;
+    --run-id=*) BENCHMARK_RUN_ID="${1#*=}" ;;
     --user-class) shift; BENCHMARK_USER_CLASS="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
     --user-class=*) BENCHMARK_USER_CLASS="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
     --workload-name) shift; BENCHMARK_WORKLOAD_NAME="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
@@ -204,8 +218,23 @@ if ! [[ "${BENCHMARK_USERS}" =~ ^[0-9]+$ ]] || [[ "${BENCHMARK_USERS}" -lt 1 ]];
   echo "Error: --users must be a whole number of at least 1, got '${BENCHMARK_USERS}'" >&2
   exit 1
 fi
+
+# A timestamp rather than a random string, so that the ids of a series of runs
+# sort into the order the runs happened in. Seconds are enough: the Job it
+# names can only exist one at a time.
+if [[ -z "${BENCHMARK_RUN_ID}" ]]; then
+  BENCHMARK_RUN_ID="$(date -u +%Y%m%dt%H%M%Sz)"
+fi
+# Checked here rather than left to the API server, which would reject the whole
+# manifest for it and say so in terms of label syntax rather than of the flag
+# that produced it.
+if ! [[ "${BENCHMARK_RUN_ID}" =~ ^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$ ]]; then
+  echo "Error: --run-id must be 1-63 alphanumerics, dashes, underscores or dots," >&2
+  echo "starting and ending with an alphanumeric. Got '${BENCHMARK_RUN_ID}'" >&2
+  exit 1
+fi
 export BENCHMARK_USER_CLASS BENCHMARK_WORKLOAD_NAME BENCHMARK_WORKLOAD_TEMPLATE
-export BENCHMARK_DURATION BENCHMARK_USERS
+export BENCHMARK_DURATION BENCHMARK_USERS BENCHMARK_RUN_ID
 
 if [[ "${action}" == "deploy" ]]; then
   deploy

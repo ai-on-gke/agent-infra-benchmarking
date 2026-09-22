@@ -186,7 +186,7 @@ variable "enable_atelet_bucket_iam" {
 # binding - a destroy of either revokes it for both. Off by default: turn it on
 # in at most one deployment per project.
 variable "enable_atelet_iam" {
-  description = "Grants the project-level IAM bindings atelet and its nodes need (storage + Artifact Registry). See cmd/iam.go and tools/setup-gcp/README.md for the authoritative list."
+  description = "Grants atelet project-level storage and Artifact Registry roles, reaching every bucket and repository in the project. Off by default and rarely wanted: the repository-scoped grants in main.tf are unconditional and cover atelet for this deployment's own repository, and the nodes have their own service account rather than the project's default one. Turn this on only for a deployment that genuinely has to read or write outside what this config created. See cmd/iam.go and tools/setup-gcp/README.md for the authoritative list."
   type        = bool
   default     = false
 }

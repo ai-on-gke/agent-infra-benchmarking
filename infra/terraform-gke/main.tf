@@ -32,6 +32,8 @@ module "clusters" {
   enable_pod_snapshots = each.value.enable_pod_snapshots
   enable_agent_sandbox = each.value.enable_agent_sandbox
   managed_otel_scope   = each.value.managed_otel_scope
+
+  node_service_account = google_service_account.node.email
 }
 
 # ---------------------------------------------------------------------------
@@ -88,7 +90,6 @@ locals {
   # Disabled along with the orchestrator-cluster resources below.
   # orchestrator_wi_principal     = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${var.orchestrator_namespace}/sa/${var.orchestrator_ksa_name}"
   benchmark_runner_wi_principal = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${var.benchmark_runner_namespace}/sa/${var.benchmark_runner_ksa_name}"
-  compute_default_sa            = "serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com"
 }
 
 resource "google_project_iam_member" "atelet_storage_object_admin" {
@@ -143,18 +144,59 @@ resource "google_storage_bucket_iam_member" "ate_api_server_bucket_viewer" {
   member = local.ate_api_server_wi_principal
 }
 
-resource "google_project_iam_member" "atelet_node_storage_object_viewer" {
-  count   = var.enable_atelet_iam ? 1 : 0
-  project = var.project_id
-  role    = "roles/storage.objectViewer"
-  member  = local.compute_default_sa
+resource "google_service_account" "node" {
+  project      = var.project_id
+  account_id   = substr("${var.default_resource_name}-node", 0, 30)
+  display_name = "GKE nodes for ${var.default_resource_name}"
+  description  = "Runs the node pools of every cluster in the ${var.default_resource_name} deployment. Holds the minimum GKE requires, plus read on this deployment's Artifact Registry repository and snapshot bucket."
 }
 
-resource "google_project_iam_member" "atelet_node_artifact_registry_reader" {
-  count   = var.enable_atelet_iam ? 1 : 0
+resource "google_project_iam_member" "node_minimal" {
+  for_each = toset([
+    "roles/logging.logWriter",
+    "roles/monitoring.metricWriter",
+    "roles/monitoring.viewer",
+    "roles/stackdriver.resourceMetadata.writer",
+  ])
+
   project = var.project_id
-  role    = "roles/artifactregistry.reader"
-  member  = local.compute_default_sa
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.node.email}"
+}
+
+# Image pulls for every pod the nodes run.
+resource "google_artifact_registry_repository_iam_member" "node_reader" {
+  project    = var.project_id
+  location   = google_artifact_registry_repository.this.location
+  repository = google_artifact_registry_repository.this.name
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.node.email}"
+}
+
+resource "google_storage_bucket_iam_member" "node_bucket_viewer" {
+  bucket = google_storage_bucket.this.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.node.email}"
+}
+
+# atelet pulls the image an ActorTemplate names and pushes what it builds.
+# Unconditional and repository-scoped, unlike the project-level pair under
+# enable_atelet_iam above, which is the broad form kept for a deployment that
+# has to grant across every repository in its project.
+resource "google_artifact_registry_repository_iam_member" "atelet_reader" {
+  project    = var.project_id
+  location   = google_artifact_registry_repository.this.location
+  repository = google_artifact_registry_repository.this.name
+  role       = "roles/artifactregistry.reader"
+  member     = local.atelet_wi_principal
+}
+
+resource "google_artifact_registry_repository_iam_member" "atelet_writer" {
+  project    = var.project_id
+  location   = google_artifact_registry_repository.this.location
+  repository = google_artifact_registry_repository.this.name
+  role       = "roles/artifactregistry.writer"
+  member     = local.atelet_wi_principal
 }
 
 # ---------------------------------------------------------------------------

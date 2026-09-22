@@ -43,10 +43,29 @@ spec:
         # Deliberately not `app: locust`. The Service in deployment.yaml
         # selects that label, and would otherwise publish the web UI's port at
         # a pod that is running headless and has no web UI behind it.
+        #
+        # Prometheus is told about both spellings, so this pod is scraped by
+        # the same job as the Deployment's. There are no prometheus.io
+        # annotations here for that reason: they would add a second scrape of
+        # the one endpoint this pod serves, under a second job name.
         app: locust-job
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "8001"
+        # What the run was, carried as labels so Prometheus can relabel them
+        # onto every series the run produces. The worker's own metric labels
+        # are fixed upstream at method/name/status/user_class and say nothing
+        # about which run they came from, so without these one run is told
+        # from another only by the generated pod name.
+        #
+        # The values are constrained by what a label may hold — 63 characters
+        # of alphanumerics, dashes, underscores and dots — which the run id is
+        # checked against in deploy.sh. The others are safe by construction:
+        # a duration, a count, and two names that have to match a resource.
+        benchmark-run-id: "${BENCHMARK_RUN_ID}"
+        benchmark-users: "${BENCHMARK_USERS}"
+        benchmark-duration: "${BENCHMARK_DURATION}"
+        benchmark-workload: "${BENCHMARK_WORKLOAD_NAME}"
+        # Empty when the workload was left to choose, which is a valid label
+        # value and one Prometheus drops rather than stores as empty.
+        benchmark-template: "${BENCHMARK_WORKLOAD_TEMPLATE}"
     spec:
       restartPolicy: Never
       containers:

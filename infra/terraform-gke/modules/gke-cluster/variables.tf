@@ -136,3 +136,8 @@ variable "node_pools" {
     default = {}
   }
 }
+
+variable "node_service_account" {
+  description = "Email of the service account the node pools run as. Required: the alternative is the Compute Engine default account, which every workload in the project shares, so nothing can be granted to a node without granting it to all of them. Changing this replaces every node pool."
+  type        = string
+}

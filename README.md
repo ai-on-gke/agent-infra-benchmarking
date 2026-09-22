@@ -189,7 +189,17 @@ snapshots, and runs either side of that are not comparable. Setting up is
 therefore its own command, which runs nothing and exits when it is done:
 
 ```bash
-./benchmarking/run_locust_job.sh --build --deploy-workloads
+./benchmarking/run_locust_job.sh --build --deploy-workloads --deploy-monitoring
+```
+
+`--deploy-monitoring` brings up Prometheus in the `benchmarking` namespace, and
+every run started after it is scraped — which is the reason it belongs in the
+setup step rather than alongside a run. Prometheus pulls, so a run that has
+already finished cannot be collected retroactively. Grafana is not deployed;
+it sits in `benchmarking/monitoring/grafana.yaml` for when it is wanted.
+
+```bash
+kubectl port-forward -n benchmarking svc/prometheus 9090:9090
 ```
 
 Every run after it measures that same deployment, and each one blocks until it
@@ -208,15 +218,88 @@ in `deploy_locust.sh`, and `--deploy-workloads` takes that script's
 `--worker-count`, `--sandbox-class`, `--actor-memory` and `--otlp-endpoint`
 alongside it. `--help` lists them all.
 
-There is no web UI and no port-forward. The duration and the user count are
-arguments here, where the UI's form carries them for the Deployment, and the
-results are the pod's logs: locust prints its aggregated table when the run
-ends, and the per-span lines from the worker are in the same stream. That is
-what gets streamed above, and a finished Job keeps it for a day:
+There is no web UI and no port-forward for the run itself. The duration and the
+user count are arguments here, where the UI's form carries them for the
+Deployment, and the results are the pod's logs: locust prints its aggregated
+table when the run ends, and the per-span lines from the worker are in the same
+stream. That is what gets streamed above, and a finished Job keeps it for a day:
 
 ```bash
 kubectl logs job/locust-job -n benchmarking
 ```
+
+That table is the result of a run. Prometheus, when deployed, holds the same
+measurements as a time series instead — the worker's `/metrics` on port 8001,
+scraped every 10s under the `boomer-worker` job, and kept after the pod is
+gone. It is the only live endpoint either pod has: the port 8000 the locust
+container declares belongs to `common/metrics.py`, which this repo does not
+ship.
+
+### Telling one run from another
+
+When the run ends, `run_locust_job.sh` queries Prometheus for what it recorded
+and prints it:
+
+```
+=== Metrics for run_id=baseline-50u ===
+  REQUEST            STATUS    COUNT
+  FirstResume        success   40
+  Instruction        success   2450
+  TTFI               failure   3
+  TTFI               success   2410
+
+  REQUEST                   LATENCY (ms)
+  FirstResume        p50    1620.5
+  FirstResume        p95    2300.0
+  TTFI               p50    91.4
+  TTFI               p95    183.8
+  TTFI               p99    412.0
+```
+
+It port-forwards to Prometheus on a port `kubectl` picks, so it cannot collide
+with a forward already open, and closes it again afterwards. The whole summary
+is best-effort and runs after the result of the run is settled: no failure in
+it changes the exit status, and Prometheus not being deployed, or `jq` or
+`curl` not being installed, skips it with a line saying so. `--no-metrics`
+turns it off. A latency shown as `-` is a request that never succeeded, so
+there is no distribution to take a quantile of.
+
+Every run carries a `run_id`, defaulting to a UTC timestamp and settable with
+`--run-id`. The Job puts it on its pod as a label, and Prometheus relabels it
+onto every series the run produces, along with what the run was:
+
+```promql
+histogram_quantile(0.95,
+  sum by (le, name) (
+    rate(locust_request_duration_milliseconds_bucket{run_id="baseline-50u"}[1m])
+  ))
+```
+
+`users`, `duration`, `workload` and `template` come across the same way, so a
+series of runs can be compared without having to know which is which:
+
+```promql
+sum by (users) (rate(locust_requests_total{status="failure"}[1m]))
+```
+
+The worker's own labels — `method`, `name`, `status`, `user_class` — are fixed
+upstream and say nothing about the run, which is why this comes from the pod
+rather than from the metric. A run under the Deployment carries none of these
+labels, since a session steered from the web UI has no fixed shape to record.
+
+Reusing a `run_id` merges two runs into one series, so leave it to the
+timestamp unless a run is worth naming.
+
+**Prometheus keeps nothing across a restart.** Its TSDB is written to the
+container's own filesystem — `monitoring/prometheus.yaml` mounts the config
+and nothing else — so every stored session is lost whenever that pod goes
+away: an eviction, a node drain, a change to the manifest. Sessions accumulate
+for as long as one pod happens to live, which is enough for comparing a
+morning's runs and is not a record to keep. The log of each Job is the durable
+artifact; a run worth keeping should be saved from there while the Job is
+still around. Mounting a PersistentVolumeClaim at `/prometheus/` is what
+changes this, and needs `strategy: Recreate` on that Deployment to avoid an
+RWO volume deadlocking the rollout.
 
 <details>
 <summary><strong>How it ends itself</strong></summary>
