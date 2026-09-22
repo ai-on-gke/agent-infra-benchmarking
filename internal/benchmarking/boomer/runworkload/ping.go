@@ -26,15 +26,18 @@ import (
 // ping's own wire contract, mirrored from
 // benchmarking/workloads/probe/server.py: neither the route nor its encoding
 // belongs to the load generator, so it is written down here rather than
-// imported from anywhere.
+// imported from anywhere. Named pingProbe* (not ping*) to avoid colliding
+// with glutton's own unrelated "/ping" route (pingPath in glutton.go) —
+// coincidentally the same word, two different applications on two different
+// backends.
 const (
 	pingWorkloadName = "ping"
 
 	// The SandboxTemplate benchmarking/workloads/deploy.sh creates for ping.
 	pingTemplate = "ping"
 
-	pingPath        = "/ping"
-	pingContentType = "application/json"
+	pingProbePath        = "/ping"
+	pingProbeContentType = "application/json"
 )
 
 func init() {
@@ -54,30 +57,33 @@ type pingResponse struct {
 }
 
 // pingWorkload drives the tiny HTTP probe built from
-// benchmarking/workloads/probe/. This is the substrate glutton analog: a
-// minimal, purpose-built target whose only job is to prove a sandbox is
-// reachable and running, so activation latency isn't buried under
-// application startup time.
+// benchmarking/workloads/probe/, addressed directly at its Sandbox's own
+// Service (agent-sandbox backend only — see actorRef). This is the
+// substrate glutton analog: a minimal, purpose-built target whose only job
+// is to prove a sandbox is reachable and running, so activation latency
+// isn't buried under application startup time.
 type pingWorkload struct{}
 
 func (pingWorkload) Name() string { return pingWorkloadName }
+
+func (pingWorkload) Backend() Backend { return BackendAgentSandbox }
 
 func (pingWorkload) DefaultTemplate() string { return pingTemplate }
 
 // SendInstruction POSTs one ping and verifies the echo. A wrong echo is a
 // fault rather than a symptom of activation, so it is reported as
 // unretryable even though the sandbox answered.
-func (pingWorkload) SendInstruction(ctx context.Context, target sandboxTarget) (bool, error) {
+func (pingWorkload) SendInstruction(ctx context.Context, actor actorRef) (bool, error) {
 	nonce := uuid.NewString()
 	body, err := json.Marshal(pingRequest{Nonce: nonce})
 	if err != nil {
 		return false, err
 	}
 
-	return sendHTTPInstruction(ctx, target, httpInstruction{
+	return sendHTTPInstruction(ctx, actor, httpInstruction{
 		Method:      http.MethodPost,
-		Path:        pingPath,
-		ContentType: pingContentType,
+		Path:        pingProbePath,
+		ContentType: pingProbeContentType,
 		Body:        body,
 		Verify: func(respBody []byte) error {
 			var pong pingResponse

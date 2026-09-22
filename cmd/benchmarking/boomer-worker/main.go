@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// boomer-worker is the Go re-implementation of the RunWorkloadUser locust
-// test. It speaks the locust worker protocol via myzhan/boomer, so it
+// boomer-worker is the Go re-implementation of the GluttonUser/RunWorkloadUser
+// locust tests. It speaks the locust worker protocol via myzhan/boomer, so it
 // appears as a regular worker to the Python locust master while sidestepping
 // gevent's scheduling tax.
 package main
@@ -28,49 +28,76 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
+	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
+	btrace "github.com/agent-substrate/substrate/internal/benchmarking/boomer/trace"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/myzhan/boomer"
 
-	"github.com/ai-on-gke/agent-infra-benchmarking/internal/benchmarking/boomer/boomerutil"
-	"github.com/ai-on-gke/agent-infra-benchmarking/internal/benchmarking/boomer/dynconfig"
-	bmetrics "github.com/ai-on-gke/agent-infra-benchmarking/internal/benchmarking/boomer/metrics"
-	btrace "github.com/ai-on-gke/agent-infra-benchmarking/internal/benchmarking/boomer/trace"
-	"github.com/ai-on-gke/agent-infra-benchmarking/internal/benchmarking/boomer/userclass"
-
-	// Imported for the user class it registers via init(). Named rather than
-	// blank because its settings are declared here, as flags, and handed
-	// over with runworkload.SetOptions.
-	"github.com/ai-on-gke/agent-infra-benchmarking/internal/benchmarking/boomer/runworkload"
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/internal/benchmarking/boomer/agentsandboxutil"
+	// Imported for the user class each registers via init(). runworkload is
+	// named rather than blank because its settings are declared here, as
+	// flags, and handed over with runworkload.SetOptions/SetAgentSandboxDeps.
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/internal/benchmarking/boomer/runworkload"
+	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
 )
 
 func main() {
 	var (
+		backend = flag.String("backend", string(runworkload.DefaultBackend),
+			fmt.Sprintf("runworkload only: which sandbox control plane to drive, %q or %q.", runworkload.BackendSubstrate, runworkload.BackendAgentSandbox))
+
+		// substrate backend settings.
+		apiEndpoint = flag.String("api-endpoint", "k8s:///api.ate-system.svc.cluster.local:443",
+			"substrate backend only: ateapi gRPC dial target.")
+		routerURL = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local",
+			"substrate backend only: atenet HTTP router base URL (no trailing slash).")
+		atespace = flag.String("atespace", "benchmark",
+			"substrate backend only: atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
+
+		// agent-sandbox backend settings.
 		namespace = flag.String("namespace", "benchmarking",
-			"Namespace every Sandbox/SandboxClaim this worker creates lives in.")
+			"agent-sandbox backend only: namespace every Sandbox/SandboxClaim this worker creates lives in.")
+
 		promAddr           = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
-		configJSON         = flag.String("config-json", "", "Initial dynconfig as a JSON object (keys: trace_probability, min_wait_time, max_wait_time in seconds). Unset fields keep their built-in defaults.")
+		configJSON         = flag.String("config-json", "", "Initial dynconfig as a JSON object (keys: trace_probability, min_wait_time, max_wait_time in seconds, durdir_file_size_bytes, resume_mode, lifecycle_mode, durdir_read_mode, durdir_template, mem_target, mem_churn, mem_read). Unset fields keep their built-in defaults.")
 		masterWebPort      = flag.Int("master-web-port", 0, "If non-zero, fetch dynconfig from http://{master-host}:{master-web-port}/boomer-config on each spawn message and fail fatally on error. {master-host} comes from boomer's existing --master-host flag.")
 		configPollInterval = flag.Duration("config-poll-interval", 10*time.Second, "With --master-web-port, also fetch dynconfig on this interval. A spawn message comes only when the number of users or the spawn rate changes, thus a load shape that changes the sample rate alone needs this. Zero stops the polling.")
-		userClass          = flag.String("user-class", "runworkload", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
+		userClass          = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
 
 		// runworkload settings. Declared here with every other flag, so
 		// --help is the whole command line rather than one list per user
-		// class.
+		// class, and read only when --user-class selects runworkload. The
+		// defaults are left empty so that the package resolves them: the
+		// template's follows from the workload, which is the only place that
+		// knows what it can address.
 		workloadName = flag.String("workload-name", "",
-			fmt.Sprintf("runworkload only: the workload a RunWorkloadUser drives. Unset selects %s.", runworkload.DefaultWorkload))
+			"runworkload only: the workload a RunWorkloadUser drives. Unset selects the chosen --backend's own default (glutton for substrate, ping for agent-sandbox).")
 		workloadTemplate = flag.String("workload-template", "",
-			"runworkload only: the SandboxTemplate the workload is measured on. Unset selects the workload's own.")
+			"runworkload only: the ActorTemplate (substrate) or SandboxTemplate (agent-sandbox) the workload is measured on. Unset selects the workload's own.")
 		workloadWarmPool = flag.String("workload-warmpool", "",
-			"runworkload only: the SandboxWarmPool the pool-claim window adopts from. Unset selects \"<template>-warmpool\".")
+			"runworkload, --backend agent-sandbox only: the SandboxWarmPool the pool-claim window adopts from. Unset selects \"<template>-warmpool\".")
 		workloadTimeout = flag.Duration("workload-timeout", 0,
 			fmt.Sprintf("runworkload only: ceiling on the instruction retry loop. Unset selects %s.", runworkload.DefaultTimeout))
 		workloadProvisionTimeout = flag.Duration("workload-provision-timeout", 0,
-			fmt.Sprintf("runworkload only: ceiling on waiting for a Sandbox/SandboxClaim's Ready condition. Unset selects %s.", runworkload.DefaultProvisionTimeout))
+			fmt.Sprintf("runworkload, --backend agent-sandbox only: ceiling on waiting for a Sandbox/SandboxClaim's Ready condition. Unset selects %s.", runworkload.DefaultProvisionTimeout))
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
 	flag.Parse()
 
 	class := strings.ToLower(*userClass)
+	sandboxBackend := runworkload.Backend(*backend)
+	switch sandboxBackend {
+	case runworkload.BackendSubstrate, runworkload.BackendAgentSandbox:
+	default:
+		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+		slog.Error("fatal: unknown --backend value",
+			slog.String("backend", *backend),
+			slog.String("known", fmt.Sprintf("%s,%s", runworkload.BackendSubstrate, runworkload.BackendAgentSandbox)))
+		os.Exit(1)
+	}
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
@@ -82,7 +109,7 @@ func main() {
 
 	ctx := context.Background()
 	sampler := btrace.NewUpdatableSampler(initialCfg.TraceProbability)
-	tp, err := btrace.Init(ctx, "agent-sandbox-boomer", sampler)
+	tp, err := btrace.Init(ctx, "substrate-boomer", sampler)
 	if err != nil {
 		slog.Error("failed to initialize tracing", slog.String("err", err.Error()))
 		os.Exit(1)
@@ -93,15 +120,43 @@ func main() {
 		_ = tp.Shutdown(shutdownCtx)
 	}()
 
-	sandboxes, extensions, err := boomerutil.DialAgentSandbox()
-	if err != nil {
-		slog.Error("failed to build agent-sandbox clients", slog.String("err", err.Error()))
-		os.Exit(1)
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	dyn := dynconfig.NewHolder(initialCfg)
+
+	// cfg is substrate's own userclass.Config type (this module cannot add
+	// fields to it), populated with the substrate backend's dependencies
+	// when selected. It is still built and passed to every user class
+	// (including runworkload under --backend agent-sandbox) because other
+	// registered classes — glutton, durdir — are substrate-only and always
+	// need it; runworkload's own agent-sandbox dependencies travel
+	// separately via runworkload.SetAgentSandboxDeps below.
+	cfg := &userclass.Config{
+		HTTPClient: httpClient,
+		Dyn:        dyn,
 	}
 
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-
-	dyn := dynconfig.NewHolder(initialCfg)
+	if sandboxBackend == runworkload.BackendSubstrate {
+		conn, apiStub, err := boomerutil.DialControl(*apiEndpoint)
+		if err != nil {
+			slog.Error("failed to dial ateapi", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+		defer conn.Close()
+		cfg.APIStub = apiStub
+		cfg.RouterURL = *routerURL
+		cfg.Atespace = *atespace
+	} else {
+		sandboxes, extensions, err := agentsandboxutil.Dial()
+		if err != nil {
+			slog.Error("failed to build agent-sandbox clients", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+		runworkload.SetAgentSandboxDeps(runworkload.AgentSandboxDeps{
+			Sandboxes:  sandboxes,
+			Extensions: extensions,
+			Namespace:  *namespace,
+		})
+	}
 
 	if *masterWebPort > 0 {
 		masterHost := flag.Lookup("master-host").Value.String()
@@ -116,10 +171,10 @@ func main() {
 			os.Exit(1)
 		}
 		// A spawn message is not sufficient by itself: locust sends one only
-		// when the number of users or the spawn rate changes, thus a step of
-		// a load shape that changes the sample rate alone needs this. A
-		// failed poll is not fatal, because the worker holds the last good
-		// value.
+		// when the number of users or the spawn rate changes. Poll also, thus
+		// a step of a load shape that changes only the sample rate reaches
+		// this worker. A failed poll is not fatal, because the worker holds
+		// the last good value.
 		dynconfig.StartPoll(ctx, configURL, dyn, sampler,
 			*configPollInterval, 5*time.Second, func(err error) {
 				slog.Warn("dynconfig poll failed; keeping the current values",
@@ -128,14 +183,6 @@ func main() {
 		slog.Info("dynconfig fetch enabled",
 			slog.String("url", configURL),
 			slog.Duration("poll_interval", *configPollInterval))
-	}
-
-	cfg := &userclass.Config{
-		Sandboxes:  sandboxes,
-		Extensions: extensions,
-		HTTPClient: httpClient,
-		Namespace:  *namespace,
-		Dyn:        dyn,
 	}
 
 	if *workloadTimeout < 0 {
@@ -152,6 +199,7 @@ func main() {
 	// only that entry's Init reads these, so a run of another user class
 	// carries them without ever looking at them.
 	runworkload.SetOptions(runworkload.Options{
+		Backend:          sandboxBackend,
 		Workload:         *workloadName,
 		Template:         *workloadTemplate,
 		WarmPool:         *workloadWarmPool,
@@ -171,6 +219,7 @@ func main() {
 	slog.Info("registered boomer task",
 		slog.String("user_class", entry.UserClass),
 		slog.String("user_class_flag", class),
+		slog.String("backend", string(sandboxBackend)),
 	)
 
 	metricsCtx, metricsCancel := context.WithCancel(context.Background())

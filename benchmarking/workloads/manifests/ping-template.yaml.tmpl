@@ -21,12 +21,31 @@
 # service: true gives every Sandbox this template produces its own per-pod
 # Service and status.serviceFQDN, which is how runworkload addresses it —
 # agent-sandbox needs no atenet-style shared router for this benchmark.
+#
+# The controller's default Managed NetworkPolicy allows ingress only from
+# the sandbox-router (see examples/openclaw-gvisor-sandbox and the
+# NetworkPolicySpec docs in extensions/api/v1beta1/sandboxtemplate_types.go),
+# which is exactly the router this template's direct-addressing design
+# doesn't use — the boomer-worker pod's requests would be silently dropped
+# without the override below. It replaces the default policy rather than
+# extending it (see NetworkPolicyManagement's own doc comment), so egress is
+# deliberately left empty (deny-all): the probe makes no outbound calls of
+# its own.
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxTemplate
 metadata:
   name: ping
   namespace: ${BENCHMARK_NAMESPACE}
 spec:
+  networkPolicy:
+    ingress:
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: ${BENCHMARK_NAMESPACE}
+      ports:
+      - protocol: TCP
+        port: 8888
   podTemplate:
     metadata:
       labels:

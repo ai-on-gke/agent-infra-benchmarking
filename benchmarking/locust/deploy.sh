@@ -30,12 +30,8 @@ if [ -z "${PROJECT_ID:-}" ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MANIFEST="${SCRIPT_DIR}/manifests/locust.yaml"
 
-# Derived the same way locust/build_and_push.sh derives it (see
-# workloads/deploy.sh's PROBE_IMAGE for why); override by exporting
-# LOCUST_IMAGE before calling this script.
-LOCUST_IMAGE="${LOCUST_IMAGE:-us-docker.pkg.dev/${PROJECT_ID}/agent-infra-benchmarking/locust-runworkload:latest}"
+BACKEND="substrate"
 
 # Substituted into the boomer container's --user-class argument and the master's -f.
 BENCHMARK_USER_CLASS=runworkload
@@ -46,19 +42,24 @@ BENCHMARK_USER_CLASS=runworkload
 # the image being deployed, which is not necessarily built from this working
 # tree, so a check against the local sources could reject a name the image
 # accepts. An unknown name is fatal in the worker, which logs the names it
-# does know.
-BENCHMARK_WORKLOAD_NAME=ping
+# does know. Left unset here and defaulted per --backend below, so a caller
+# who only sets --backend gets that backend's own default workload.
+BENCHMARK_WORKLOAD_NAME=""
 
 # Substituted into the boomer container's --workload-template argument,
-# which overrides the SandboxTemplate the workload would otherwise measure.
-# It has to name a template the workload above can actually address, so the
-# two move together. An empty value is valid and hands the choice back to
-# the workload, which is the only place that knows what it can address.
-BENCHMARK_WORKLOAD_TEMPLATE="ping"
+# which overrides the ActorTemplate/SandboxTemplate the workload would
+# otherwise measure. It has to name a template the workload above can
+# actually address, so the two move together: changing --workload-name
+# without this one measures the new workload against the old workload's
+# template. An empty value is valid and hands the choice back to the
+# workload, which is the only place that knows what it can address.
+BENCHMARK_WORKLOAD_TEMPLATE=""
 
-# Optional: an OTLP gRPC endpoint reachable from the cluster. Left blank by
-# default — the boomer worker still reports every window through Prometheus
-# and the locust stats CSV without it.
+# Optional: an OTLP gRPC endpoint reachable from the cluster. Only used by
+# the --backend agent-sandbox manifest (substrate's own points at the
+# GKE-managed collector directly). Left blank by default — the boomer worker
+# still reports every window through Prometheus and the locust stats CSV
+# without it.
 OTEL_COLLECTOR_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT:-}"
 
 usage() {
@@ -67,37 +68,34 @@ usage() {
   echo "Options:"
   echo "  --deploy              Deploy the locust workers"
   echo "  --delete              Delete the locust workers"
+  echo "  --backend NAME        substrate (default) | agent-sandbox"
   echo "  --user-class NAME     Locust user class, lowercase; runs tests/NAME.py (default: runworkload)"
-  echo "  --workload-name NAME  Workload a RunWorkloadUser drives (default: ping)."
-  echo "                        Its SandboxTemplate has to be deployed already"
-  echo "                        (benchmarking/workloads/deploy.sh)."
+  echo "  --workload-name NAME  Workload a RunWorkloadUser drives. substrate: glutton (default) | openclaw."
+  echo "                        agent-sandbox: ping (default, the only one shipped)."
+  echo "                        Its ActorTemplate/SandboxTemplate has to be deployed already."
   echo "  --workload-template NAME"
-  echo "                        SandboxTemplate the workload is measured on (default: ping)."
-  echo "                        Has to be one --workload-name can address, so set it whenever"
-  echo "                        that changes; an empty value leaves the choice to the workload."
+  echo "                        ActorTemplate/SandboxTemplate the workload is measured on"
+  echo "                        (default: the workload's own name). Has to be one --workload-name"
+  echo "                        can address, so set it whenever that changes; an empty value"
+  echo "                        leaves the choice to the workload."
   echo "  -h|--help             Show this help message"
 }
 
 deploy() {
+  local manifest="$1"
+  # The locust manifest targets the `benchmarking` namespace (so prometheus
+  # can scrape it when that stack is installed). Ensure it exists either way —
+  # benchmarking/monitoring.yaml is otherwise optional.
   echo "Ensuring benchmarking namespace exists..."
   kubectl create namespace benchmarking --dry-run=client -o yaml | kubectl apply -f -
-  echo "Deploying Locust load (PROJECT_ID=${PROJECT_ID}, user_class=${BENCHMARK_USER_CLASS}, workload=${BENCHMARK_WORKLOAD_NAME}, template=${BENCHMARK_WORKLOAD_TEMPLATE:-<the workload default>})..."
-  LOCUST_IMAGE="${LOCUST_IMAGE}" \
-    BENCHMARK_USER_CLASS="${BENCHMARK_USER_CLASS}" \
-    BENCHMARK_WORKLOAD_NAME="${BENCHMARK_WORKLOAD_NAME}" \
-    BENCHMARK_WORKLOAD_TEMPLATE="${BENCHMARK_WORKLOAD_TEMPLATE}" \
-    OTEL_COLLECTOR_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT}" \
-    envsubst < "${MANIFEST}" | kubectl apply -f -
+  echo "Deploying Locust load (backend=${BACKEND}, PROJECT_ID=${PROJECT_ID}, user_class=${BENCHMARK_USER_CLASS}, workload=${BENCHMARK_WORKLOAD_NAME}, template=${BENCHMARK_WORKLOAD_TEMPLATE:-<the workload default>})..."
+  envsubst < "${manifest}" | kubectl apply -f -
 }
 
 delete() {
-  echo "Deleting Locust load..."
-  LOCUST_IMAGE="${LOCUST_IMAGE}" \
-    BENCHMARK_USER_CLASS="${BENCHMARK_USER_CLASS}" \
-    BENCHMARK_WORKLOAD_NAME="${BENCHMARK_WORKLOAD_NAME}" \
-    BENCHMARK_WORKLOAD_TEMPLATE="${BENCHMARK_WORKLOAD_TEMPLATE}" \
-    OTEL_COLLECTOR_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT}" \
-    envsubst < "${MANIFEST}" | kubectl delete --ignore-not-found -f -
+  local manifest="$1"
+  echo "Deleting Locust load (backend=${BACKEND})..."
+  envsubst < "${manifest}" | kubectl delete --ignore-not-found -f -
 }
 
 if [[ "$#" -eq 0 ]]; then
@@ -110,6 +108,8 @@ while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --deploy) action="deploy" ;;
     --delete) action="delete" ;;
+    --backend) shift; BACKEND="$1" ;;
+    --backend=*) BACKEND="${1#*=}" ;;
     --user-class) shift; BENCHMARK_USER_CLASS="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
     --user-class=*) BENCHMARK_USER_CLASS="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
     --workload-name) shift; BENCHMARK_WORKLOAD_NAME="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
@@ -126,23 +126,46 @@ while [[ "$#" -gt 0 ]]; do
   shift
 done
 
+case "${BACKEND}" in
+  substrate|agent-sandbox) ;;
+  *)
+    echo "Error: --backend must be substrate or agent-sandbox, got '${BACKEND}'" >&2
+    exit 1
+    ;;
+esac
+
 if [[ ! -f "${SCRIPT_DIR}/tests/${BENCHMARK_USER_CLASS}.py" ]]; then
   echo "Error: no tests/${BENCHMARK_USER_CLASS}.py; --user-class must name a test file" >&2
   exit 1
 fi
+
+MANIFEST="${SCRIPT_DIR}/manifests/locust.yaml"
+if [[ "${BACKEND}" == "agent-sandbox" ]]; then
+  MANIFEST="${SCRIPT_DIR}/manifests/locust-agent-sandbox.yaml"
+  LOCUST_IMAGE="${LOCUST_IMAGE:-us-docker.pkg.dev/${PROJECT_ID}/agent-infra-benchmarking/locust-runworkload:latest}"
+  : "${BENCHMARK_WORKLOAD_NAME:=ping}"
+  : "${BENCHMARK_WORKLOAD_TEMPLATE:=ping}"
+else
+  : "${BENCHMARK_WORKLOAD_NAME:=glutton}"
+  : "${BENCHMARK_WORKLOAD_TEMPLATE:=glutton}"
+fi
+
 # An empty value substitutes as "--workload-name=", which the worker reads
 # as unset and answers with its own default. That is the silently-measured-
 # the-wrong-workload result the Go side refuses to produce for an unknown
 # name, so refuse it here too rather than letting a blank argument through.
 # The template gets no such check: empty is how it asks the workload to
-# choose.
+# choose. (Both defaulted just above, so this only fires if a caller
+# explicitly passes --workload-name "".)
 if [[ -z "${BENCHMARK_WORKLOAD_NAME}" ]]; then
   echo "Error: --workload-name cannot be empty" >&2
   exit 1
 fi
+export BENCHMARK_USER_CLASS BENCHMARK_WORKLOAD_NAME BENCHMARK_WORKLOAD_TEMPLATE
+export LOCUST_IMAGE OTEL_COLLECTOR_ENDPOINT
 
 if [[ "${action}" == "deploy" ]]; then
-  deploy
+  deploy "${MANIFEST}"
 elif [[ "${action}" == "delete" ]]; then
-  delete
+  delete "${MANIFEST}"
 fi

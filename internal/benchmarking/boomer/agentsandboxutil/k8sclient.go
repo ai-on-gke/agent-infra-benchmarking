@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package boomerutil
+// Package agentsandboxutil builds the Kubernetes clients the --backend
+// agent-sandbox path needs. It lives here, separate from substrate's own
+// internal/benchmarking/boomer/boomerutil (which owns ateapi's mTLS dial
+// logic), because this module cannot add to a package it does not own —
+// substrate's internal/ packages are only reachable, not editable, through
+// the module-path trick this repo's go.mod relies on.
+package agentsandboxutil
 
 import (
 	"fmt"
@@ -23,11 +29,11 @@ import (
 	extensionsclientset "sigs.k8s.io/agent-sandbox/clients/k8s/extensions/clientset/versioned"
 )
 
-// LoadKubeConfig resolves a *rest.Config the same way kubectl does: in-cluster
+// loadKubeConfig resolves a *rest.Config the same way kubectl does: in-cluster
 // config first (the normal case — this worker runs as a Pod in the cluster it
 // benchmarks), falling back to the local kubeconfig for a benchmark driven
 // from outside the cluster (e.g. against a kind cluster during development).
-func LoadKubeConfig() (*rest.Config, error) {
+func loadKubeConfig() (*rest.Config, error) {
 	if cfg, err := rest.InClusterConfig(); err == nil {
 		return cfg, nil
 	}
@@ -40,12 +46,13 @@ func LoadKubeConfig() (*rest.Config, error) {
 	return cfg, nil
 }
 
-// DialAgentSandbox builds the two typed clients runworkload needs: the core
-// agents.x-k8s.io client for direct (cold) Sandbox creation, and the
-// extensions.agents.x-k8s.io client for SandboxClaim/SandboxWarmPool
-// (warm-pool) creation. Both share one *rest.Config and its connection pool.
-func DialAgentSandbox() (sandboxclientset.Interface, extensionsclientset.Interface, error) {
-	cfg, err := LoadKubeConfig()
+// Dial builds the two typed clients runworkload's agent-sandbox backend
+// needs: the core agents.x-k8s.io client for direct (cold) Sandbox creation,
+// and the extensions.agents.x-k8s.io client for SandboxClaim/SandboxWarmPool/
+// SandboxTemplate (warm-pool) access. Both share one *rest.Config and its
+// connection pool.
+func Dial() (sandboxclientset.Interface, extensionsclientset.Interface, error) {
+	cfg, err := loadKubeConfig()
 	if err != nil {
 		return nil, nil, err
 	}

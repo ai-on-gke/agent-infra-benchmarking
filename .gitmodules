@@ -1,0 +1,3 @@
+[submodule "dependency-repos/substrate"]
+	path = dependency-repos/substrate
+	url = https://github.com/agent-substrate/substrate
