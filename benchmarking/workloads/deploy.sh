@@ -203,6 +203,13 @@ substitute() {
     gvisor)  sandbox_config_name="gvisor-default" sandbox_class_enum="SANDBOX_CLASS_GVISOR" ;;
     microvm) sandbox_config_name="microvm"        sandbox_class_enum="SANDBOX_CLASS_MICROVM" ;;
   esac
+  
+  # Fetch the GCP JSON key in base64 from the default namespace if it exists, so we can mount it in openclaw
+  local gcp_sa_key_b64=""
+  if kubectl get secret openclaw-gcp-sa-key -n default >/dev/null 2>&1; then
+    gcp_sa_key_b64=$(kubectl get secret openclaw-gcp-sa-key -n default -o jsonpath='{.data.credentials\.json}' 2>/dev/null || true)
+  fi
+
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
       -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
       -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
@@ -211,6 +218,8 @@ substitute() {
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
       -e "s|\${PROJECT_ID}|${PROJECT_ID}|g" \
+      -e "s|\${GCE_REGION}|${GCE_REGION}|g" \
+      -e "s|\${GCP_SA_KEY_B64}|${gcp_sa_key_b64}|g" \
       -e "s|\${IMAGE_WITH_DIGEST}|${image_with_digest}|g" \
       "${manifest}"
 }

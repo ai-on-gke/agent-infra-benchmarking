@@ -30,26 +30,29 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                # Use `openclaw agent exec` to run an isolated headless agent turn
-                # Since we don't want to spend money on OpenAI API calls right now,
-                # we pass an intentionally invalid mock API key.
-                # OpenClaw will boot up, attempt the API call, and immediately fail.
-                # This is perfect for load-testing Substrate's infrastructure overhead!
                 import os
-                os.environ["OPENAI_API_KEY"] = "sk-mock-key-do-not-charge"
+                import base64
 
+                # Substrate's ActorTemplate doesn't directly support Kubernetes Secret volume mounts,
+                # so the deploy script injects the base64-encoded secret into the environment.
+                # If present, we decode it and write it to disk so Vertex AI can authenticate!
+                if "GCP_SA_KEY_B64" in os.environ and os.environ["GCP_SA_KEY_B64"]:
+                    key_path = "/tmp/gcp_key.json"
+                    with open(key_path, "wb") as f:
+                        f.write(base64.b64decode(os.environ["GCP_SA_KEY_B64"]))
+                    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
+
+                # Use `openclaw agent exec` to run an isolated headless agent turn.
                 result = subprocess.run(
-                    ["openclaw", "agent", "exec", "--isolated", "--auth-env-only", "--model", "openai/gpt-5.6-sol", post_data],
+                    ["openclaw", "agent", "exec", "--isolated", "--model", "google-vertex/gemini-2.5-flash-lite", post_data],
                     capture_output=True,
                     text=True,
                     timeout=120 # AI agents can be slow, giving it 2 minutes
                 )
 
-                # Because we passed a fake key, openclaw will exit with a non-zero status.
-                # For benchmarking purposes, we'll intercept the auth failure and return 200 OK
-                # to Locust so that it records the latency of the "attempt" as a success!
+                # Return the actual result.
                 output = result.stdout + result.stderr
-                status_code = 200 if "authentication failed" in output.lower() or "incorrect api key" in output.lower() else (200 if result.returncode == 0 else 500)
+                status_code = 200 if result.returncode == 0 else 500
 
                 self.send_response(status_code)
                 self.send_header("Content-type", "text/plain")
