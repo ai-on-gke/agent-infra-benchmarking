@@ -65,6 +65,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -138,6 +139,23 @@ type Options struct {
 // measurement path reads mutable package state.
 var configured Options
 
+var (
+	activeActors = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "boomer_active_actors",
+			Help: "Number of currently active actors.",
+		},
+		[]string{"workload"},
+	)
+	suspendedActors = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "boomer_suspended_actors",
+			Help: "Number of currently suspended actors.",
+		},
+		[]string{"workload"},
+	)
+)
+
 // SetOptions records the settings initRunWorkload will use. It must run
 // before the registered entry's Init, which main satisfies by calling it
 // after flag.Parse and before the userclass lookup. A setter rather than an
@@ -147,6 +165,7 @@ var configured Options
 func SetOptions(o Options) { configured = o }
 
 func init() {
+	prometheus.MustRegister(activeActors, suspendedActors)
 	userclass.Add(userclass.Entry{
 		Name:       "runworkload",
 		LocustFile: "runworkload.py",
@@ -279,6 +298,11 @@ type runWorkloadUser struct {
 	actorName    string
 	templateName string
 	userClass    string
+
+	// Track the state of the actor so we don't double-count metrics if
+	// the benchmark calls Resume/Suspend idempotently or repeatedly.
+	isActive  bool
+	isCreated bool
 }
 
 func (u *runWorkloadUser) ref() *ateapipb.ObjectRef {
@@ -423,6 +447,11 @@ func (u *runWorkloadUser) resume(ctx context.Context) (time.Duration, error) {
 		}, grpc.Trailer(tr))
 		return err
 	})
+	if err == nil && !u.isActive {
+		suspendedActors.WithLabelValues(u.workload.Name()).Dec()
+		activeActors.WithLabelValues(u.workload.Name()).Inc()
+		u.isActive = true
+	}
 	return serverElapsed, err
 }
 
@@ -449,7 +478,7 @@ func (u *runWorkloadUser) ensureAtespace(ctx context.Context) error {
 // latency is reported but not counted in the window: a harness creates the
 // record once and may do it long before the first instruction.
 func (u *runWorkloadUser) create(ctx context.Context) error {
-	return u.tracedCall(ctx, "CreateActor", nil, func(callCtx context.Context, tr *metadata.MD) error {
+	err := u.tracedCall(ctx, "CreateActor", nil, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
@@ -458,15 +487,26 @@ func (u *runWorkloadUser) create(ctx context.Context) error {
 		}, grpc.Trailer(tr))
 		return err
 	})
+	if err == nil && !u.isActive {
+		activeActors.WithLabelValues(u.workload.Name()).Inc()
+		u.isActive = true
+		u.isCreated = true
+	}
+	return err
 }
 
 func (u *runWorkloadUser) suspend(ctx context.Context) {
-	_ = u.tracedCall(ctx, suspendMetric, nil, func(callCtx context.Context, tr *metadata.MD) error {
+	err := u.tracedCall(ctx, suspendMetric, nil, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})
+	if err == nil && u.isActive {
+		activeActors.WithLabelValues(u.workload.Name()).Dec()
+		suspendedActors.WithLabelValues(u.workload.Name()).Inc()
+		u.isActive = false
+	}
 }
 
 // suspendAndDelete suspends the actor before deleting it. DeleteActor
@@ -474,9 +514,14 @@ func (u *runWorkloadUser) suspend(ctx context.Context) {
 // suspend is unmetered (teardown precondition, not benchmark latency), while
 // the delete is metered so true leaks still surface in failures.csv.
 func (u *runWorkloadUser) suspendAndDelete(ctx context.Context) {
-	_, _ = u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+	_, err := u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor: u.ref(),
 	})
+	if err == nil && u.isActive {
+		activeActors.WithLabelValues(u.workload.Name()).Dec()
+		suspendedActors.WithLabelValues(u.workload.Name()).Inc()
+		u.isActive = false
+	}
 	u.delete(ctx)
 }
 
@@ -487,6 +532,19 @@ func (u *runWorkloadUser) delete(ctx context.Context) {
 		}, grpc.Trailer(tr))
 		return err
 	})
+
+	// Regardless of whether DeleteActor succeeds (it might fail if the actor is
+	// stuck suspending, but we're throwing away the benchmark tracking struct anyway),
+	// we must decrement our local gauge so it doesn't leak in Prometheus.
+	if u.isCreated {
+		if u.isActive {
+			activeActors.WithLabelValues(u.workload.Name()).Dec()
+		} else {
+			suspendedActors.WithLabelValues(u.workload.Name()).Dec()
+		}
+		u.isCreated = false
+		u.isActive = false
+	}
 }
 
 // tracedCall wraps a unary gRPC call with a span and Prometheus/locust
