@@ -57,6 +57,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,6 +114,11 @@ const (
 	resumeMetric      = "Resume"
 	instructionMetric = "Instruction"
 	suspendMetric     = "Suspend"
+	crashCountMetric  = "CrashCount"
+
+	// ateapi returns Aborted both for a crashed actor and for the transient
+	// concurrent-update conflict, so the message is what tells them apart.
+	crashedMsg = "crashed"
 
 	// Transport label for the composite rows. A measurement window spans a gRPC
 	// resume and an HTTP instruction, so neither transport label the other
@@ -265,6 +271,10 @@ func (r *runWorkloadRuntime) iterate() {
 		return
 	}
 	user := val.(*runWorkloadUser)
+	if user.crashed {
+		time.Sleep(r.dynamicWait())
+		return
+	}
 
 	dynCfg := r.cfg.Dyn.Load()
 	ctx := context.Background()
@@ -365,6 +375,10 @@ type runWorkloadUser struct {
 	// the benchmark calls Resume/Suspend idempotently or repeatedly.
 	isActive  bool
 	isCreated bool
+
+	// Set once ResumeActor reports ACTOR_STATE_CRASHED. ateapi never
+	// rehabilitates a crashed actor, so iterate stops measuring this VU.
+	crashed bool
 }
 
 func (u *runWorkloadUser) ref() *ateapipb.ObjectRef {
@@ -509,12 +523,35 @@ func (u *runWorkloadUser) resume(ctx context.Context) (time.Duration, error) {
 		}, grpc.Trailer(tr))
 		return err
 	})
-	if err == nil && !u.isActive {
+	if err != nil {
+		u.markIfCrashed(err)
+		return serverElapsed, err
+	}
+	if !u.isActive {
 		suspendedActors.WithLabelValues(u.workload.Name()).Dec()
 		activeActors.WithLabelValues(u.workload.Name()).Inc()
 		u.isActive = true
 	}
-	return serverElapsed, err
+	return serverElapsed, nil
+}
+
+// markIfCrashed records the actor as crashed when err is ateapi's report of
+// one, and ignores every other error. Only the explicit path reaches it:
+// under implicit resume the benchmark issues no ResumeActor.
+func (u *runWorkloadUser) markIfCrashed(err error) {
+	if u.crashed {
+		return
+	}
+	s, ok := status.FromError(err)
+	if !ok || s.Code() != codes.Aborted || !strings.Contains(s.Message(), crashedMsg) {
+		return
+	}
+	u.crashed = true
+	bmetrics.RecordFailure("actor", crashCountMetric, u.userClass, 0, "actor entered ACTOR_STATE_CRASHED")
+	slog.Warn("runworkload actor crashed; will stop measuring it",
+		slog.String("actor", u.actorName),
+		slog.String("template", u.templateName),
+		slog.String("err", err.Error()))
 }
 
 func (u *runWorkloadUser) ensureAtespace(ctx context.Context) error {

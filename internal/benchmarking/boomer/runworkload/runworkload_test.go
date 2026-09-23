@@ -26,12 +26,15 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/atenet"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // newRecordingTracer returns a tracer whose ended spans land in the returned
@@ -392,5 +395,59 @@ func TestShutdownReportsWhatItLeftBehind(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestResumeMarksCrashedOnlyForACrashedActor(t *testing.T) {
+	tests := []struct {
+		name        string
+		resumeErr   error
+		wantCrashed bool
+	}{
+		{
+			name:        "a crashed actor",
+			resumeErr:   status.Error(codes.Aborted, "actor benchmark/a crashed"),
+			wantCrashed: true,
+		},
+		{
+			// Same code, opposite meaning: retrying is the correct response.
+			name:      "a concurrent update conflict",
+			resumeErr: status.Error(codes.Aborted, "concurrent update conflict, please retry"),
+		},
+		{
+			name:      "an unplaceable actor",
+			resumeErr: errResumeRefused,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			u, _ := newRunWorkloadTestUser(t, &pingServer{}, dynconfig.Config{},
+				&fakeControlClient{resumeErr: tc.resumeErr})
+
+			if _, err := u.resume(context.Background()); err == nil {
+				t.Fatal("resume() succeeded, want the fake's error")
+			}
+			if u.crashed != tc.wantCrashed {
+				t.Errorf("crashed = %v, want %v", u.crashed, tc.wantCrashed)
+			}
+		})
+	}
+}
+
+// A crashed VU stops issuing control-plane calls: ateapi never rehabilitates
+// the actor, so every later resume would fail the same way.
+func TestIterateSkipsACrashedUser(t *testing.T) {
+	ctrl := &fakeControlClient{}
+	u, _ := newRunWorkloadTestUser(t, &pingServer{}, dynconfig.Config{}, ctrl)
+	u.crashed = true
+
+	rt := &runWorkloadRuntime{cfg: u.cfg, workload: u.workload}
+	rt.users.Store(boomerutil.GoroutineID(), u)
+
+	rt.iterate()
+
+	if got := ctrl.recordedCalls(); len(got) != 0 {
+		t.Errorf("a crashed user still called the control plane: %v", got)
 	}
 }
