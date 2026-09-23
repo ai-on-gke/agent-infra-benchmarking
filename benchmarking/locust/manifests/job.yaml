@@ -93,6 +93,12 @@ spec:
         - "--workload-name=${BENCHMARK_WORKLOAD_NAME}"
         - "--workload-template=${BENCHMARK_WORKLOAD_TEMPLATE}"
         env:
+        # locust's own --only-summary, which it reads from this name. An env
+        # var rather than an argument because an unset argument would reach
+        # locust as an empty one; "false" is spelled out for the same reason,
+        # as locust rejects an empty value instead of reading it as unset.
+        - name: LOCUST_ONLY_SUMMARY
+          value: "${BENCHMARK_ONLY_SUMMARY}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
         ports:

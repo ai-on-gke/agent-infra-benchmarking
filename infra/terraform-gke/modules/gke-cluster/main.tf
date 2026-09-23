@@ -44,8 +44,16 @@ resource "google_container_cluster" "autopilot" {
     }
   }
 
-  managed_opentelemetry_config {
-    scope = var.managed_otel_scope
+  # SCOPE_UNSPECIFIED is the proto zero value, so the provider serializes it to
+  # nothing and the block reaches GKE empty. That is fine in the create request
+  # and fatal in an update, which comes back "Must specify a field to update"
+  # and fails every apply that touches this cluster. Emitting no block at all is
+  # what "leave managed OTel alone" has to look like.
+  dynamic "managed_opentelemetry_config" {
+    for_each = var.managed_otel_scope == "SCOPE_UNSPECIFIED" ? [] : [1]
+    content {
+      scope = var.managed_otel_scope
+    }
   }
 
   dynamic "enable_k8s_beta_apis" {
@@ -103,8 +111,16 @@ resource "google_container_cluster" "standard" {
     }
   }
 
-  managed_opentelemetry_config {
-    scope = var.managed_otel_scope
+  # SCOPE_UNSPECIFIED is the proto zero value, so the provider serializes it to
+  # nothing and the block reaches GKE empty. That is fine in the create request
+  # and fatal in an update, which comes back "Must specify a field to update"
+  # and fails every apply that touches this cluster. Emitting no block at all is
+  # what "leave managed OTel alone" has to look like.
+  dynamic "managed_opentelemetry_config" {
+    for_each = var.managed_otel_scope == "SCOPE_UNSPECIFIED" ? [] : [1]
+    content {
+      scope = var.managed_otel_scope
+    }
   }
 
   dynamic "enable_k8s_beta_apis" {

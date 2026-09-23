@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Runs the benchmark as a Job, streams its logs, and exits with its result.
+# Runs the benchmark as a Job, waits for it, and exits with its result.
 # The counterpart of deploy_locust.sh, which deploys the same benchmark as a
 # Deployment and leaves the web UI holding it open.
 #
@@ -57,8 +57,8 @@ BENCHMARKING_DIR="${ROOT}/benchmarking"
 JOB_NAME=locust-job
 NAMESPACE=benchmarking
 
-# How often to report that the pod has not started yet. Once it has, the logs
-# are the progress report.
+# How often to report that the pod has not started yet, and — without
+# --follow-logs, where nothing else reports — that the run is still going.
 PROGRESS_EVERY_SECS=30
 
 # Every setting that belongs to a run rather than to a setup action. Empty
@@ -77,6 +77,10 @@ WORKLOAD_TEMPLATE=""
 WAIT_TIMEOUT_SECS=""
 POD_START_TIMEOUT_SECS=""
 NO_WAIT=0
+# Off by default: a run's log is kept on the finished Job for a day, so
+# streaming it is for watching a run rather than for collecting it.
+FOLLOW_LOGS=0
+ONLY_SUMMARY=0
 NO_METRICS=0
 
 # The lookback for the queries at the end. It has only to reach back to the
@@ -118,7 +122,7 @@ WORKLOAD_WAIT_TIMEOUT=""
 usage() {
   echo "Usage: $0 [options]"
   echo ""
-  echo "Runs the benchmark as a Job, streams its logs, and exits with its result."
+  echo "Runs the benchmark as a Job, waits for it, and exits with its result."
   echo "The workloads it measures are assumed to be deployed already."
   echo ""
   echo "The run:"
@@ -141,6 +145,12 @@ usage() {
   echo "Waiting:"
   echo "  --no-wait               Submit the Job and return, instead of following it."
   echo "                          The run continues in the cluster either way."
+  echo "  --follow-logs           Stream the run's logs while it runs. Without it the run"
+  echo "                          is still waited on, and its log read afterwards from the"
+  echo "                          finished Job: kubectl logs job/${JOB_NAME} -n ${NAMESPACE}"
+  echo "  --only-summary          Pass locust --only-summary, dropping the stats table it"
+  echo "                          reprints while the run goes. The aggregate it prints when"
+  echo "                          the run ends is kept, so the result is unaffected."
   echo "  --wait-timeout SECONDS  Ceiling on the wait for the run (default: 3600). Reaching"
   echo "                          it stops the waiting, not the Job."
   echo "  --pod-start-timeout SECONDS"
@@ -203,6 +213,8 @@ while [[ "$#" -gt 0 ]]; do
     --workload-template) shift; WORKLOAD_TEMPLATE="$1" ;;
     --workload-template=*) WORKLOAD_TEMPLATE="${1#*=}" ;;
     --no-wait) NO_WAIT=1 ;;
+    --follow-logs) FOLLOW_LOGS=1 ;;
+    --only-summary) ONLY_SUMMARY=1 ;;
     --no-metrics) NO_METRICS=1 ;;
     --wait-timeout) shift; WAIT_TIMEOUT_SECS="$1" ;;
     --wait-timeout=*) WAIT_TIMEOUT_SECS="${1#*=}" ;;
@@ -272,37 +284,56 @@ wait_for_pod() {
   return 1
 }
 
-# follow_run streams the run's logs and returns what the Job did.
+# follow_run waits for the run to end and returns what the Job did.
 #
-# The stream is the wait: kubectl logs -f returns when the container exits, so
-# nothing polls while the benchmark is running and the output arrives as it is
-# produced. The status is then read from the Job, because the stream ending
-# says the run is over and not how it went — and a stream that broke early
-# says nothing at all, which is why the result is polled for rather than
-# assumed to be there the moment the logs stop.
+# With --follow-logs the stream is the wait: kubectl logs -f returns when the
+# container exits, so the output arrives as it is produced. Without it the
+# status poll below is the wait on its own. Either way the result is read from
+# the Job rather than inferred from the wait ending, which says that the run is
+# over and not how it went — and a stream that broke early says nothing at all.
 follow_run() {
   local deadline=$((SECONDS + WAIT_TIMEOUT_SECS))
+  local started=${SECONDS}
+  local next_report=$((SECONDS + PROGRESS_EVERY_SECS))
   local succeeded failed
 
   wait_for_pod || return 1
 
-  echo
-  echo "=== Run log ==="
-  # Not fatal on its own: a dropped stream is a lost log, not a failed run,
-  # and the status below is what decides.
-  kubectl logs -f "job/${JOB_NAME}" --namespace="${NAMESPACE}" || true
-  echo "=== End of run log ==="
-  echo
+  if [[ "${FOLLOW_LOGS}" -eq 1 ]]; then
+    echo
+    echo "=== Run log ==="
+    # Not fatal on its own: a dropped stream is a lost log, not a failed run,
+    # and the status below is what decides.
+    kubectl logs -f "job/${JOB_NAME}" --namespace="${NAMESPACE}" || true
+    echo "=== End of run log ==="
+    echo
+  else
+    echo "Waiting for the run to finish (--follow-logs streams it as it goes)..."
+  fi
 
   while ((SECONDS < deadline)); do
     IFS='|' read -r succeeded failed < <(job_status)
     if [[ "${succeeded:-0}" -ge 1 ]]; then
       echo "${JOB_NAME} completed."
+      if [[ "${FOLLOW_LOGS}" -eq 0 ]]; then
+        echo "  kubectl logs job/${JOB_NAME} -n ${NAMESPACE}"
+      fi
       return 0
     fi
     if [[ "${failed:-0}" -ge 1 ]]; then
-      echo "Error: ${JOB_NAME} failed. The log above is the run." >&2
+      if [[ "${FOLLOW_LOGS}" -eq 1 ]]; then
+        echo "Error: ${JOB_NAME} failed. The log above is the run." >&2
+      else
+        echo "Error: ${JOB_NAME} failed. Its log is the run:" >&2
+        echo "  kubectl logs job/${JOB_NAME} -n ${NAMESPACE}" >&2
+      fi
       return 1
+    fi
+    # Nothing else reports without the stream, so a long run would otherwise
+    # be silent from here to its deadline.
+    if [[ "${FOLLOW_LOGS}" -eq 0 ]] && ((SECONDS >= next_report)); then
+      echo "  $((SECONDS - started))s/${WAIT_TIMEOUT_SECS}s — still running"
+      next_report=$((SECONDS + PROGRESS_EVERY_SECS))
     fi
     sleep 5
   done
@@ -563,7 +594,8 @@ if [[ "${BUILD}" -eq 1 || "${DEPLOY_WORKLOADS}" -eq 1 || "${DEPLOY_MONITORING}" 
       exit 1
     fi
   done
-  for flag in "--no-wait:${NO_WAIT}" "--no-metrics:${NO_METRICS}"; do
+  for flag in "--no-wait:${NO_WAIT}" "--no-metrics:${NO_METRICS}" \
+              "--follow-logs:${FOLLOW_LOGS}" "--only-summary:${ONLY_SUMMARY}"; do
     if [[ "${flag#*:}" -eq 1 ]]; then
       echo "Error: ${flag%%:*} describes a run, and the setup actions start none." >&2
       exit 1
@@ -641,6 +673,7 @@ job_args=(--deploy-job)
 [[ -n "${USER_CLASS}" ]] && job_args+=(--user-class "${USER_CLASS}")
 [[ -n "${WORKLOAD_NAME}" ]] && job_args+=(--workload-name "${WORKLOAD_NAME}")
 [[ -n "${WORKLOAD_TEMPLATE}" ]] && job_args+=(--workload-template "${WORKLOAD_TEMPLATE}")
+[[ "${ONLY_SUMMARY}" -eq 1 ]] && job_args+=(--only-summary)
 "${BENCHMARKING_DIR}/locust/deploy.sh" "${job_args[@]}"
 
 if [[ "${NO_WAIT}" -eq 1 ]]; then

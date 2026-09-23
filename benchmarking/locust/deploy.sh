@@ -84,6 +84,12 @@ BENCHMARK_SPAWN_RATE=""
 # is the one mistake here that reads as valid data.
 BENCHMARK_RUN_ID=""
 
+# Locust's --only-summary, passed as its LOCUST_ONLY_SUMMARY env var. "true"
+# drops the stats table locust reprints while the run goes, leaving the
+# aggregate it prints at the end. Never empty: locust rejects an empty value
+# rather than reading it as false.
+BENCHMARK_ONLY_SUMMARY=false
+
 usage() {
   echo "Usage: $0 [options]"
   echo ""
@@ -100,6 +106,9 @@ usage() {
   echo "  --run-id NAME         --deploy-job only: names this run in Prometheus, as the"
   echo "                        run_id label (default: a UTC timestamp). Up to 63"
   echo "                        alphanumerics, dashes, underscores and dots."
+  echo "  --only-summary        --deploy-job only: drop the stats table locust reprints"
+  echo "                        while the run goes. The aggregate it prints at the end,"
+  echo "                        which is the result of the run, is kept either way."
   echo "  --user-class NAME     Locust user class, lowercase; runs tests/NAME.py (default: runworkload)"
   echo "  --workload-name NAME  Workload a RunWorkloadUser drives: glutton | openclaw (default: glutton)."
   echo "                        Its ActorTemplate has to be deployed already — openclaw is not in"
@@ -193,6 +202,7 @@ while [[ "$#" -gt 0 ]]; do
     --spawn-rate=*) BENCHMARK_SPAWN_RATE="${1#*=}" ;;
     --run-id) shift; BENCHMARK_RUN_ID="$1" ;;
     --run-id=*) BENCHMARK_RUN_ID="${1#*=}" ;;
+    --only-summary) BENCHMARK_ONLY_SUMMARY=true ;;
     --user-class) shift; BENCHMARK_USER_CLASS="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
     --user-class=*) BENCHMARK_USER_CLASS="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
     --workload-name) shift; BENCHMARK_WORKLOAD_NAME="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
@@ -262,6 +272,7 @@ if ! [[ "${BENCHMARK_RUN_ID}" =~ ^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$
 fi
 export BENCHMARK_USER_CLASS BENCHMARK_WORKLOAD_NAME BENCHMARK_WORKLOAD_TEMPLATE
 export BENCHMARK_DURATION BENCHMARK_USERS BENCHMARK_SPAWN_RATE BENCHMARK_RUN_ID
+export BENCHMARK_ONLY_SUMMARY
 
 if [[ "${action}" == "deploy" ]]; then
   deploy
