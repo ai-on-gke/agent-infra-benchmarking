@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"reflect"
@@ -449,5 +450,44 @@ func TestIterateSkipsACrashedUser(t *testing.T) {
 
 	if got := ctrl.recordedCalls(); len(got) != 0 {
 		t.Errorf("a crashed user still called the control plane: %v", got)
+	}
+}
+
+func TestShutdownRemovesActorsConcurrently(t *testing.T) {
+	const users = 50
+
+	ctrl := &fakeControlClient{delay: 10 * time.Millisecond}
+	cfg := newTestConfig(t, &pingServer{}, &userclass.Config{APIStub: ctrl})
+	rt := &runWorkloadRuntime{cfg: cfg, workload: gluttonWorkload{}}
+	for i := range users {
+		rt.users.Store(int64(i), &runWorkloadUser{
+			cfg:          cfg,
+			workload:     gluttonWorkload{},
+			actorName:    fmt.Sprintf("sb-%d", i),
+			templateName: gluttonWorkload{}.DefaultTemplate(),
+			userClass:    runWorkloadUserClass,
+		})
+	}
+
+	rt.shutdown(context.Background())
+
+	var deletes int
+	for _, c := range ctrl.recordedCalls() {
+		if c == "DeleteActor" {
+			deletes++
+		}
+	}
+	if deletes != users {
+		t.Errorf("DeleteActor calls: got %d, want %d", deletes, users)
+	}
+
+	// An actor left behind holds a worker until someone removes it by hand,
+	// so the teardown has to reach every one of them however it is scheduled.
+	peak := ctrl.peakInFlight()
+	if peak < 2 {
+		t.Errorf("teardown ran sequentially: peak in-flight = %d", peak)
+	}
+	if peak > teardownConcurrency {
+		t.Errorf("peak in-flight = %d, over the %d bound", peak, teardownConcurrency)
 	}
 }

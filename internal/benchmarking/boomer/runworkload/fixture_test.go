@@ -19,6 +19,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
@@ -45,8 +46,13 @@ type fakeControlClient struct {
 	// serverElapsedUs, when set, is returned as the x-server-elapsed-us
 	// trailer the real ServerUnaryInterceptor emits.
 	serverElapsedUs string
-	mu              sync.Mutex
-	calls           []string
+	// delay, when set, holds each DeleteActor open so a teardown test can see
+	// how many run at once.
+	delay    time.Duration
+	mu       sync.Mutex
+	inFlight int
+	peak     int
+	calls    []string
 	// template is the ActorTemplate name from the last CreateActor.
 	template string
 }
@@ -110,12 +116,28 @@ func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.Suspe
 
 func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, "DeleteActor")
+	f.inFlight++
+	f.peak = max(f.peak, f.inFlight)
+	f.mu.Unlock()
+
+	// Outside the lock, so concurrent callers actually overlap here.
+	time.Sleep(f.delay)
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inFlight--
 	if f.deleteErr != nil {
 		return nil, f.deleteErr
 	}
 	return &ateapipb.Actor{}, nil
+}
+
+// peakInFlight is the most DeleteActor calls that overlapped.
+func (f *fakeControlClient) peakInFlight() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.peak
 }
 
 func (f *fakeControlClient) recordedCalls() []string {

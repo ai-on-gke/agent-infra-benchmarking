@@ -59,6 +59,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
@@ -108,6 +109,11 @@ const (
 	// teardown, so that the actors already created are still removed when an
 	// iteration is wedged rather than merely slow.
 	drainTimeout = 15 * time.Second
+
+	// Caps the teardown's concurrent control-plane calls. Every VU's actor is
+	// removed at once, so an unbounded run would open one suspend and one
+	// delete per actor against an ateapi still draining the run's own traffic.
+	teardownConcurrency = 16
 
 	firstResumeMetric = "FirstResume"
 	ttfiMetric        = "TTFI"
@@ -341,27 +347,44 @@ func (r *runWorkloadRuntime) shutdown(ctx context.Context) {
 			slog.Duration("drain_timeout", drainTimeout))
 	}
 
-	var removed, left int
+	// Snapshotted before the teardown so nothing is walked while goroutines
+	// are being launched against it.
+	var users []*runWorkloadUser
 	r.users.Range(func(_, val any) bool {
-		u := val.(*runWorkloadUser)
-		err := u.suspendAndDelete(ctx)
-		bmetrics.UpdateUsers(runWorkloadUserClass, -1)
-		if err != nil {
-			left++
-			slog.Warn("teardown left an actor behind",
-				slog.String("actor", u.actorName),
-				slog.String("template", u.templateName),
-				slog.String("err", err.Error()))
-		} else {
-			removed++
-			slog.Info("teardown removed an actor",
-				slog.String("actor", u.actorName))
-		}
+		users = append(users, val.(*runWorkloadUser))
 		return true
 	})
+
+	var removed, left atomic.Int64
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, teardownConcurrency)
+	for _, u := range users {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			err := u.suspendAndDelete(ctx)
+			bmetrics.UpdateUsers(runWorkloadUserClass, -1)
+			if err != nil {
+				left.Add(1)
+				slog.Warn("teardown left an actor behind",
+					slog.String("actor", u.actorName),
+					slog.String("template", u.templateName),
+					slog.String("err", err.Error()))
+				return
+			}
+			removed.Add(1)
+			slog.Info("teardown removed an actor",
+				slog.String("actor", u.actorName))
+		}()
+	}
+	wg.Wait()
+
 	slog.Info("teardown finished",
-		slog.Int("removed", removed),
-		slog.Int("left", left))
+		slog.Int64("removed", removed.Load()),
+		slog.Int64("left", left.Load()))
 }
 
 type runWorkloadUser struct {
