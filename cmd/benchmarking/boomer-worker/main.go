@@ -107,9 +107,9 @@ func main() {
 	if *masterWebPort > 0 {
 		masterHost := flag.Lookup("master-host").Value.String()
 		configURL := fmt.Sprintf("http://%s:%d/boomer-config", masterHost, *masterWebPort)
-		if err := dynconfig.SubscribeSpawn(configURL, dyn, sampler, 5*time.Second, func(err error) {
+		if err := dynconfig.SubscribeSpawn(configURL, dyn, sampler, 5*time.Second, func(err error, fetched bool) {
 			slog.Error("fatal: dynconfig fetch failed; exiting so the pod restarts",
-				slog.String("url", configURL), slog.String("err", err.Error()))
+				slog.String("url", configURL), slog.String("err", err.Error()), slog.Bool("fetched", fetched))
 			os.Exit(1)
 		}); err != nil {
 			slog.Error("fatal: failed to subscribe to boomer:spawn",

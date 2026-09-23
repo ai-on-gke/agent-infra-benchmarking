@@ -246,7 +246,7 @@ wait_actortemplate_ready() {
     if json=$(run_kubectl_ate get actor-template "${template}" -a "${atespace}" -o json 2>"${err_file}"); then
       last_get_err=""
       last_json="${json}"
-      snapshot=$(jq -r '.status.goldenSnapshotStatus.goldenSnapshot.snapshotUri // empty' <<<"${json}")
+      snapshot=$(jq -r '.status.goldenSnapshotStatus.goldenTag.name // empty' <<<"${json}")
       if [[ -n "${snapshot}" ]]; then
         rm -f "${err_file}"
         echo "  ${template}: golden snapshot ready after $((SECONDS - started))s"
