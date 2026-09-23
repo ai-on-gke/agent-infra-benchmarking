@@ -69,6 +69,7 @@ PROGRESS_EVERY_SECS=30
 # down the chain holds one.
 DURATION=""
 USERS=""
+SPAWN_RATE=""
 RUN_ID=""
 USER_CLASS=""
 WORKLOAD_NAME=""
@@ -124,6 +125,8 @@ usage() {
   echo "  --duration TIME         How long to run, in locust's spelling of a duration"
   echo "                          like 30s, 5m or 1h30m (default: 5m)"
   echo "  --users N               Number of users (default: 10)"
+  echo "  --spawn-rate N          Users per second (default: --users, so the whole load"
+  echo "                          starts at once). Lower it to ramp in instead."
   echo "  --run-id NAME           Names this run in Prometheus, as the run_id label on"
   echo "                          every series it produces (default: a UTC timestamp)"
   echo "  --user-class NAME       Locust user class, lowercase; runs tests/NAME.py"
@@ -189,6 +192,8 @@ while [[ "$#" -gt 0 ]]; do
     --duration=*) DURATION="${1#*=}" ;;
     --users) shift; USERS="$1" ;;
     --users=*) USERS="${1#*=}" ;;
+    --spawn-rate) shift; SPAWN_RATE="$1" ;;
+    --spawn-rate=*) SPAWN_RATE="${1#*=}" ;;
     --run-id) shift; RUN_ID="$1" ;;
     --run-id=*) RUN_ID="${1#*=}" ;;
     --user-class) shift; USER_CLASS="$1" ;;
@@ -544,6 +549,7 @@ fi
 if [[ "${BUILD}" -eq 1 || "${DEPLOY_WORKLOADS}" -eq 1 || "${DEPLOY_MONITORING}" -eq 1 ]]; then
   for pair in "--duration:${DURATION}" \
               "--users:${USERS}" \
+              "--spawn-rate:${SPAWN_RATE}" \
               "--run-id:${RUN_ID}" \
               "--user-class:${USER_CLASS}" \
               "--workload-name:${WORKLOAD_NAME}" \
@@ -630,6 +636,7 @@ echo "=== Running the benchmark Job ==="
 job_args=(--deploy-job)
 [[ -n "${DURATION}" ]] && job_args+=(--duration "${DURATION}")
 [[ -n "${USERS}" ]] && job_args+=(--users "${USERS}")
+[[ -n "${SPAWN_RATE}" ]] && job_args+=(--spawn-rate "${SPAWN_RATE}")
 [[ -n "${RUN_ID}" ]] && job_args+=(--run-id "${RUN_ID}")
 [[ -n "${USER_CLASS}" ]] && job_args+=(--user-class "${USER_CLASS}")
 [[ -n "${WORKLOAD_NAME}" ]] && job_args+=(--workload-name "${WORKLOAD_NAME}")

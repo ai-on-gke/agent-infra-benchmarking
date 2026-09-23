@@ -102,6 +102,12 @@ const (
 	// retry granularity does not show up in the measurement.
 	retryDelay = 25 * time.Millisecond
 
+	// drainTimeout bounds the wait for in-flight iterations at the start of
+	// the teardown. Well under the budget the caller allows for the whole
+	// teardown, so that the actors already created are still removed when an
+	// iteration is wedged rather than merely slow.
+	drainTimeout = 15 * time.Second
+
 	firstResumeMetric = "FirstResume"
 	ttfiMetric        = "TTFI"
 	resumeMetric      = "Resume"
@@ -203,6 +209,10 @@ type runWorkloadRuntime struct {
 	opts     Options
 	workload workload
 	users    sync.Map // goroutineID -> *runWorkloadUser
+
+	// Gates the task function so the teardown can wait for the iterations
+	// boomer leaves running when it returns. See inflight.go.
+	inflight inflight
 }
 
 func (r *runWorkloadRuntime) dynamicWait() time.Duration {
@@ -217,7 +227,18 @@ func (r *runWorkloadRuntime) dynamicWait() time.Duration {
 // iterate is the task function boomer calls in a loop on each VU goroutine.
 // The first call on a goroutine creates the actor and measures its first
 // resume; every later call suspends it and measures TTFI.
+//
+// The gate is taken for the whole iteration, so the teardown can tell an
+// iteration that is still creating an actor from one that has finished. A
+// refused entry means the run is being torn down, and the only correct thing
+// left to do is return: an actor created past this point would not be in the
+// map the teardown has already walked.
 func (r *runWorkloadRuntime) iterate() {
+	if !r.inflight.enter() {
+		return
+	}
+	defer r.inflight.leave()
+
 	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
@@ -253,7 +274,6 @@ func (r *runWorkloadRuntime) iterate() {
 	user.measure(ctx, ttfiMetric, dynCfg, r.opts, false)
 
 	time.Sleep(r.dynamicWait())
-	slog.Error("COMPLETED")
 }
 
 func (r *runWorkloadRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config, opts Options) (*runWorkloadUser, error) {
@@ -290,7 +310,27 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, dynCfg dynconfig.Con
 // went. An actor that outlives the run holds a worker until someone deletes it
 // by hand, so the one place that knows it was left behind reports it by name
 // rather than leaving the next run to find it.
+//
+// It begins by draining the task function, because boomer.Run returns while
+// iterations are still in flight (see inflight.go) and the walk below has to
+// happen after the last actor has been recorded, not during it.
 func (r *runWorkloadRuntime) shutdown(ctx context.Context) {
+	// The drain takes a slice of the caller's budget rather than all of it.
+	// An iteration can sit in the instruction retry loop for opts.Timeout,
+	// which is the same order as the whole teardown budget, so waiting on
+	// ctx alone would let one stuck iteration spend every second that the
+	// suspend and delete calls need — turning a drain that was meant to
+	// prevent leaked actors into the cause of them.
+	drainCtx, cancel := context.WithTimeout(ctx, drainTimeout)
+	defer cancel()
+	if !r.inflight.drain(drainCtx) {
+		// Not fatal, and deliberately still followed by the walk: the actors
+		// already recorded are worth removing even though the map may still
+		// grow behind us. What it costs is the guarantee, so name it.
+		slog.Warn("teardown drain timed out; tearing down with iterations still in flight",
+			slog.Duration("drain_timeout", drainTimeout))
+	}
+
 	var removed, left int
 	r.users.Range(func(_, val any) bool {
 		u := val.(*runWorkloadUser)

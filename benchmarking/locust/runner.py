@@ -67,6 +67,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "-u", required=True, type=int, dest="users", help="Number of users (-u)"
     )
+    # Locust fills in 1 user/sec when -r is absent, which makes the ramp of a
+    # large run longer than the run: -u 100 would spend 100s climbing, and
+    # every sample taken during the climb is at a concurrency the run never
+    # reports. Defaulting to the user count puts the whole load on at the
+    # first dispatch instead, so the measurement covers one load level.
+    p.add_argument(
+        "-r",
+        "--spawn-rate",
+        type=float,
+        default=None,
+        dest="spawn_rate",
+        help="Users per second (-r). Unset starts every user at once, which "
+        "is what a fixed-load measurement wants; give a smaller number to "
+        "ramp in.",
+    )
     # The two runworkload settings, which have no locust counterpart: they are
     # the worker's flags and are forwarded to it rather than to locust. Empty
     # is meaningful for both and is the default, so that what a value is left
@@ -84,6 +99,10 @@ def parse_args() -> argparse.Namespace:
         "Unset selects the workload's own.",
     )
     args, extra = p.parse_known_args()
+    # Resolved here rather than at the flag, because the default is another
+    # argument's value and argparse cannot express that.
+    if args.spawn_rate is None:
+        args.spawn_rate = float(args.users)
     # Everything unrecognized goes to locust verbatim, which is how a run
     # reaches flags this wrapper has no opinion about (--exit-code-on-error,
     # --stop-timeout, and so on).
@@ -116,6 +135,8 @@ def log_run_config(args: argparse.Namespace) -> None:
         f"  user_class:   {user_class(args.file)}",
         f"  duration:     {args.duration}",
         f"  users:        {args.users}",
+        f"  spawn_rate:   {args.spawn_rate:g}/s"
+        + (" (all at once)" if args.spawn_rate >= args.users else ""),
         f"  workload:     {args.workload_name or '(the worker default)'}",
         f"  template:     {args.workload_template or '(the workload default)'}",
         f"  extra flags:  {' '.join(args.locust_extra) or '(none)'}",
@@ -131,6 +152,8 @@ def build_locust_cmd(args: argparse.Namespace) -> list[str]:
         "-f", args.file,
         "-t", args.duration,
         "-u", str(args.users),
+        # Without this locust defaults to 1 user/sec; see parse_args.
+        "-r", f"{args.spawn_rate:g}",
         # Master mode so boomer can connect as a worker on localhost:5557,
         # and --expect-workers so the clock does not start until it has. The
         # seconds before a worker attaches would otherwise be counted as part

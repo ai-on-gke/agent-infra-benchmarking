@@ -71,6 +71,13 @@ BENCHMARK_WORKLOAD_TEMPLATE="glutton"
 BENCHMARK_DURATION=5m
 BENCHMARK_USERS=10
 
+# Users per second, substituted into locust's -r. Empty resolves to the user
+# count below, which puts the whole load on at the first dispatch: locust
+# would otherwise default to 1/s, and a run of 100 users would spend its first
+# 100s climbing while reporting the samples taken on the way up alongside the
+# ones taken at full load. Set it lower to ramp in on purpose.
+BENCHMARK_SPAWN_RATE=""
+
 # Names one run in Prometheus, as the run_id label on every series it
 # produces. Empty takes a UTC timestamp below, so that runs are distinct
 # without having to be named: a reused id merges two runs into one series and
@@ -88,6 +95,8 @@ usage() {
   echo "  --delete-job          Delete the locust Job"
   echo "  --duration TIME       --deploy-job only: how long to run, in locust's spelling (default: 5m)"
   echo "  --users N             --deploy-job only: number of users (default: 10)"
+  echo "  --spawn-rate N        --deploy-job only: users per second (default: --users, so"
+  echo "                        the whole load starts at once). Lower to ramp in."
   echo "  --run-id NAME         --deploy-job only: names this run in Prometheus, as the"
   echo "                        run_id label (default: a UTC timestamp). Up to 63"
   echo "                        alphanumerics, dashes, underscores and dots."
@@ -147,6 +156,7 @@ deploy_job() {
   describe_run
   echo "  duration:  ${BENCHMARK_DURATION}"
   echo "  users:     ${BENCHMARK_USERS}"
+  echo "  spawn:     ${BENCHMARK_SPAWN_RATE}/s$([[ "${BENCHMARK_SPAWN_RATE}" == "${BENCHMARK_USERS}" ]] && echo ' (all at once)')"
   echo "  run_id:    ${BENCHMARK_RUN_ID}"
   envsubst < "${JOB_MANIFEST}" | kubectl apply -f -
   echo
@@ -179,6 +189,8 @@ while [[ "$#" -gt 0 ]]; do
     --duration=*) BENCHMARK_DURATION="${1#*=}" ;;
     --users) shift; BENCHMARK_USERS="$1" ;;
     --users=*) BENCHMARK_USERS="${1#*=}" ;;
+    --spawn-rate) shift; BENCHMARK_SPAWN_RATE="$1" ;;
+    --spawn-rate=*) BENCHMARK_SPAWN_RATE="${1#*=}" ;;
     --run-id) shift; BENCHMARK_RUN_ID="$1" ;;
     --run-id=*) BENCHMARK_RUN_ID="${1#*=}" ;;
     --user-class) shift; BENCHMARK_USER_CLASS="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
@@ -219,6 +231,21 @@ if ! [[ "${BENCHMARK_USERS}" =~ ^[0-9]+$ ]] || [[ "${BENCHMARK_USERS}" -lt 1 ]];
   exit 1
 fi
 
+# Resolved to a number here rather than in the manifest, which has no way to
+# express "the other field's value", and rather than in runner.py, so that the
+# applied Job states the rate it ran at instead of an empty argument that has
+# to be interpreted to be read back.
+if [[ -z "${BENCHMARK_SPAWN_RATE}" ]]; then
+  BENCHMARK_SPAWN_RATE="${BENCHMARK_USERS}"
+fi
+# Locust takes a float here, so a fractional rate is valid and is the only way
+# to ramp slower than one user a second.
+if ! [[ "${BENCHMARK_SPAWN_RATE}" =~ ^[0-9]+(\.[0-9]+)?$ ]] ||
+   [[ "${BENCHMARK_SPAWN_RATE}" == "0" ]]; then
+  echo "Error: --spawn-rate must be a positive number, got '${BENCHMARK_SPAWN_RATE}'" >&2
+  exit 1
+fi
+
 # A timestamp rather than a random string, so that the ids of a series of runs
 # sort into the order the runs happened in. Seconds are enough: the Job it
 # names can only exist one at a time.
@@ -234,7 +261,7 @@ if ! [[ "${BENCHMARK_RUN_ID}" =~ ^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$
   exit 1
 fi
 export BENCHMARK_USER_CLASS BENCHMARK_WORKLOAD_NAME BENCHMARK_WORKLOAD_TEMPLATE
-export BENCHMARK_DURATION BENCHMARK_USERS BENCHMARK_RUN_ID
+export BENCHMARK_DURATION BENCHMARK_USERS BENCHMARK_SPAWN_RATE BENCHMARK_RUN_ID
 
 if [[ "${action}" == "deploy" ]]; then
   deploy

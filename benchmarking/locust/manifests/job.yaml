@@ -80,6 +80,12 @@ spec:
         - "${BENCHMARK_DURATION}"
         - "-u"
         - "${BENCHMARK_USERS}"
+        # Resolved to a concrete number by deploy.sh, defaulting to the user
+        # count so every user starts at the first dispatch. Stated rather than
+        # left to locust, whose own default of 1/s would ramp a large run for
+        # longer than the run spends measuring.
+        - "-r"
+        - "${BENCHMARK_SPAWN_RATE}"
         # Read only when the user class is runworkload; the other classes
         # parse these and ignore them. Stated rather than defaulted so the
         # applied manifest names what was measured. An empty template asks the

@@ -183,6 +183,22 @@ produced, and exits with the Job's result — so a failed run is a non-zero exit
 without having to go and ask. `--no-wait` stops after submitting instead, and
 leaves the run going in the cluster.
 
+Every user starts at once. `--spawn-rate` is what changes that, and it defaults
+to `--users`: locust's own default is one user a second, which on a 100-user
+run would spend the first 100s climbing and report the samples taken on the way
+up in the same table as the ones taken at full load. A run that is meant to
+measure the ramp rather than a fixed load sets the rate deliberately:
+
+```bash
+./benchmarking/run_locust_job.sh --duration 10m --users 100 --spawn-rate 5
+```
+
+Starting everything at once means the actors are created at once too, so a pool
+that cannot take `--users` activations concurrently reports the queueing as
+latency. That is a real measurement of a cold pool, and it is not the same
+number as the steady-state one — which is the reason to hold the rate fixed
+across a series of runs being compared.
+
 The Job assumes the workloads are already deployed, because a series of runs
 has to measure one unchanging deployment — redeploying retakes the golden
 snapshots, and runs either side of that are not comparable. Setting up is
