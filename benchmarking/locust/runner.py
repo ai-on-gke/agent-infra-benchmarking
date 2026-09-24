@@ -57,7 +57,7 @@ BOOMER_CONFIG_PORT = 5560
 # How long boomer gets to suspend and delete its actors after the run. Longer
 # than the worker's own 60s shutdown budget, so the timeout here is reached
 # only by a worker that is not going to finish at all.
-BOOMER_STOP_TIMEOUT_SECS = 90
+BOOMER_STOP_TIMEOUT_SECS = 300
 
 
 def parse_args() -> argparse.Namespace:
