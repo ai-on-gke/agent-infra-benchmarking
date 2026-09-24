@@ -44,6 +44,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -113,12 +114,30 @@ type Options struct {
 // passed by value from there on.
 var configured Options
 
+var (
+	activeActors = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "boomer_active_actors",
+			Help: "Number of currently active actors.",
+		},
+		[]string{"workload"},
+	)
+	suspendedActors = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "boomer_suspended_actors",
+			Help: "Number of currently suspended actors.",
+		},
+		[]string{"workload"},
+	)
+)
+
 // SetOptions records the settings initRunWorkload will use. It must run
 // before the registered entry's Init, which main satisfies by calling it
 // after flag.Parse and before the userclass lookup.
 func SetOptions(o Options) { configured = o }
 
 func init() {
+	prometheus.MustRegister(activeActors, suspendedActors)
 	userclass.Add(userclass.Entry{
 		Name:       "runworkload",
 		LocustFile: "runworkload.py",
@@ -339,6 +358,11 @@ type runWorkloadUser struct {
 	actorName    string
 	templateName string
 	userClass    string
+
+	// Track the state of the actor so we don't double-count metrics if
+	// the benchmark calls Resume/Suspend idempotently or repeatedly.
+	isActive  bool
+	isCreated bool
 }
 
 func (u *runWorkloadUser) ref() *ateapipb.ObjectRef {
@@ -374,7 +398,7 @@ func (u *runWorkloadUser) ensureAtespace(ctx context.Context) error {
 }
 
 func (u *runWorkloadUser) create(ctx context.Context) error {
-	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
+	err := u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
@@ -383,6 +407,12 @@ func (u *runWorkloadUser) create(ctx context.Context) error {
 		}, grpc.Trailer(tr))
 		return err
 	})
+	if err == nil && !u.isActive {
+		activeActors.WithLabelValues(u.workload.Name()).Inc()
+		u.isActive = true
+		u.isCreated = true
+	}
+	return err
 }
 
 // measureTTFI brings the actor back up, sends it one instruction, and reports
@@ -483,12 +513,21 @@ func (u *runWorkloadUser) executeInstruction(ctx context.Context) error {
 }
 
 func (u *runWorkloadUser) resume(ctx context.Context) error {
-	return u.tracedCall(ctx, resumeMetric, func(callCtx context.Context, tr *metadata.MD) error {
+	err := u.tracedCall(ctx, resumeMetric, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})
+	if err != nil {
+		return err
+	}
+	if !u.isActive {
+		suspendedActors.WithLabelValues(u.workload.Name()).Dec()
+		activeActors.WithLabelValues(u.workload.Name()).Inc()
+		u.isActive = true
+	}
+	return nil
 }
 
 // suspend takes the actor down and reports whether it went. A failed suspend
@@ -507,8 +546,14 @@ func (u *runWorkloadUser) suspend(ctx context.Context) error {
 		slog.Warn("suspend failed; the actor may be left mid transition",
 			slog.String("actor", u.actorName),
 			slog.String("err", err.Error()))
+		return err
 	}
-	return err
+	if u.isActive {
+		activeActors.WithLabelValues(u.workload.Name()).Dec()
+		suspendedActors.WithLabelValues(u.workload.Name()).Inc()
+		u.isActive = false
+	}
+	return nil
 }
 
 // suspendAndDelete suspends the actor before deleting it. DeleteActor
@@ -523,6 +568,11 @@ func (u *runWorkloadUser) suspendAndDelete(ctx context.Context) error {
 	_, suspendErr := u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor: u.ref(),
 	})
+	if suspendErr == nil && u.isActive {
+		activeActors.WithLabelValues(u.workload.Name()).Dec()
+		suspendedActors.WithLabelValues(u.workload.Name()).Inc()
+		u.isActive = false
+	}
 
 	// A failed suspend leaves the actor in a state the delete precondition
 	// refuses, and it is the case where leaving it behind costs a worker for
@@ -542,13 +592,27 @@ func (u *runWorkloadUser) suspendAndDelete(ctx context.Context) error {
 // (atelet termination, volume detach, worker release) runs either way, so it
 // frees the worker rather than only dropping the record.
 func (u *runWorkloadUser) delete(ctx context.Context, anyState bool) error {
-	return u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
+	err := u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
 			Actor:    u.ref(),
 			AnyState: anyState,
 		}, grpc.Trailer(tr))
 		return err
 	})
+
+	// Regardless of whether DeleteActor succeeds (it might fail if the actor is
+	// stuck suspending, but we're throwing away the benchmark tracking struct anyway),
+	// we must decrement our local gauge so it doesn't leak in Prometheus.
+	if u.isCreated {
+		if u.isActive {
+			activeActors.WithLabelValues(u.workload.Name()).Dec()
+		} else {
+			suspendedActors.WithLabelValues(u.workload.Name()).Dec()
+		}
+		u.isCreated = false
+		u.isActive = false
+	}
+	return err
 }
 
 // tracedCall wraps a unary gRPC call with a span and Prometheus/locust
