@@ -40,10 +40,12 @@ import subprocess
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import IO
 
 from common.boomer_config import build_config_json
+from reports.prometheus import DEFAULT_URL as DEFAULT_PROMETHEUS_URL
 
 # Path inside the locust image to the boomer-worker binary baked in by
 # benchmarking/locust/Dockerfile.
@@ -58,6 +60,22 @@ BOOMER_CONFIG_PORT = 5560
 # than the worker's own 60s shutdown budget, so the timeout here is reached
 # only by a worker that is not going to finish at all.
 BOOMER_STOP_TIMEOUT_SECS = 300
+
+# Prometheus scrapes every 10s, so the run's last samples land after the run
+# does. Reports wait this long before querying rather than missing the tail.
+REPORT_SETTLE_SECS = 15
+
+
+def report_names() -> list[str]:
+    """Registered report names, or empty when the reports package cannot
+    load. Imported lazily so a missing matplotlib costs the reports and not
+    the run."""
+    try:
+        import reports
+
+        return reports.names()
+    except Exception:
+        return []
 
 
 def parse_args() -> argparse.Namespace:
@@ -98,11 +116,38 @@ def parse_args() -> argparse.Namespace:
         help="runworkload only: the ActorTemplate the workload is measured on. "
         "Unset selects the workload's own.",
     )
+    p.add_argument(
+        "--run-id",
+        default="",
+        help="Names this run in Prometheus. Reports query on it, so without "
+        "it they are skipped.",
+    )
+    p.add_argument(
+        "--report",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help=f"Report to write when the run ends; repeatable. Known: "
+        f"{', '.join(report_names())}, or 'all'.",
+    )
+    p.add_argument(
+        "--report-dir",
+        default="/app/reports",
+        help="Where --report writes. Pod-local unless a volume is mounted here.",
+    )
+    p.add_argument(
+        "--prometheus-url",
+        default=DEFAULT_PROMETHEUS_URL,
+        help="Prometheus the reports read the run back from.",
+    )
     args, extra = p.parse_known_args()
     # Resolved here rather than at the flag, because the default is another
     # argument's value and argparse cannot express that.
     if args.spawn_rate is None:
         args.spawn_rate = float(args.users)
+    # The manifest passes --report unconditionally, so an unset one arrives as
+    # an empty string rather than not at all.
+    args.report = [r for r in args.report if r]
     # Everything unrecognized goes to locust verbatim, which is how a run
     # reaches flags this wrapper has no opinion about (--exit-code-on-error,
     # --stop-timeout, and so on).
@@ -256,10 +301,52 @@ def run(args: argparse.Namespace) -> int:
     return boomer_exit
 
 
+def write_reports(args: argparse.Namespace, started: float, ended: float) -> None:
+    """Write the selected reports. Never raises: a report is a by-product of
+    the run, so a broken one must not change what the run concluded."""
+    if not args.report:
+        return
+    if not args.run_id:
+        print("reports: --run-id is unset, so there is nothing to query on; skipping", flush=True)
+        return
+
+    print(f"Waiting {REPORT_SETTLE_SECS}s for the run's last scrape...", flush=True)
+    time.sleep(REPORT_SETTLE_SECS)
+
+    try:
+        import reports
+
+        ctx = reports.RunContext(
+            run_id=args.run_id,
+            users=args.users,
+            spawn_rate=args.spawn_rate,
+            duration=args.duration,
+            workload=args.workload_name,
+            template=args.workload_template,
+            user_class=user_class(args.file),
+            started=started,
+            ended=time.time(),
+            prometheus_url=args.prometheus_url,
+        )
+        results = reports.generate(args.report, ctx, Path(args.report_dir))
+    except Exception as exc:
+        print(f"reports: skipped ({type(exc).__name__}: {exc})", flush=True)
+        return
+
+    for name, path, error in results:
+        if error:
+            print(f"reports: {name} failed: {error}", flush=True)
+        else:
+            print(f"reports: wrote {path} ({path.stat().st_size} bytes)", flush=True)
+
+
 def main() -> None:
     args = parse_args()
     log_run_config(args)
-    sys.exit(run(args))
+    started = time.time()
+    status = run(args)
+    write_reports(args, started, time.time())
+    sys.exit(status)
 
 
 if __name__ == "__main__":

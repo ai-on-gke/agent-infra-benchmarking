@@ -90,6 +90,11 @@ BENCHMARK_RUN_ID=""
 # rather than reading it as false.
 BENCHMARK_ONLY_SUMMARY=false
 
+# Reports runner.py writes when the run ends; "all" selects every registered
+# one, empty writes none. They land on the pod's own filesystem, so a report
+# worth keeping needs a volume mounted at the runner's --report-dir.
+BENCHMARK_REPORTS=""
+
 usage() {
   echo "Usage: $0 [options]"
   echo ""
@@ -272,7 +277,7 @@ if ! [[ "${BENCHMARK_RUN_ID}" =~ ^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$
 fi
 export BENCHMARK_USER_CLASS BENCHMARK_WORKLOAD_NAME BENCHMARK_WORKLOAD_TEMPLATE
 export BENCHMARK_DURATION BENCHMARK_USERS BENCHMARK_SPAWN_RATE BENCHMARK_RUN_ID
-export BENCHMARK_ONLY_SUMMARY
+export BENCHMARK_ONLY_SUMMARY BENCHMARK_REPORTS
 
 if [[ "${action}" == "deploy" ]]; then
   deploy

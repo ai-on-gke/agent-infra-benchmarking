@@ -191,6 +191,7 @@ func main() {
 		shutdownFn(shutdownCtx)
 
 		slog.Info("forcing container restart to ensure clean state")
+
 		os.Exit(0)
 	})
 

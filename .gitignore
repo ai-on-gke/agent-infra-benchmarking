@@ -1,2 +1,4 @@
 # Per-developer environment settings, copied from env.sh.example.
 .env.sh
+
+**/__pycache__/

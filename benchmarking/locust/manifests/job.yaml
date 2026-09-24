@@ -92,6 +92,11 @@ spec:
         # workload for its own.
         - "--workload-name=${BENCHMARK_WORKLOAD_NAME}"
         - "--workload-template=${BENCHMARK_WORKLOAD_TEMPLATE}"
+        # The run_id is a pod label for Prometheus's benefit, and the reports
+        # query on it, so the container needs it too. An empty --report is
+        # dropped by runner.py rather than read as a report named "".
+        - "--run-id=${BENCHMARK_RUN_ID}"
+        - "--report=${BENCHMARK_REPORTS}"
         env:
         # locust's own --only-summary, which it reads from this name. An env
         # var rather than an argument because an unset argument would reach
