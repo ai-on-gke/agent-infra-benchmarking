@@ -1,102 +1,36 @@
-project_id = "my-gcp-project"
+project_id = <YOUR_PROJECT_ID>
 region     = "us-central1"
 
-# The name this deployment goes by: the bucket and the Artifact Registry
-# repository take it as-is, and every cluster below is named
-# "<default_resource_name>-<key>". Change it per deployment when two
-# deployments share one GCP project.
-default_resource_name = "agent-infra-benchmarking"
+# The deafult name for all resources. The cluster takes it too, unless
+# cluster.name below overrides it.
+default_resource_name = <PICK_YOUR_NAME>
 
-clusters = {
-  # Autopilot cluster, all defaults.
-  primary = {
-    autopilot = true
-  }
+cluster = {
+  autopilot = false
 
-  # Standard cluster with two node pools.
-  standard-cluster = {
-    autopilot = false
+  # Without these, substrate's podcertificate-controller never creates the
+  # ClusterTrustBundles and hack/install-ate.sh waits for them forever.
+  k8s_beta_apis = [
+    "certificates.k8s.io/v1beta1/clustertrustbundles",
+    "certificates.k8s.io/v1beta1/podcertificaterequests",
+  ]
 
-    # Substrate's podcertificate-controller watches these two beta APIs, and
-    # GKE serves them only when they are listed here. Leave them out and
-    # hack/install-ate.sh waits forever for ClusterTrustBundles that are never
-    # created. Verified on 1.35.7-gke.1222000, so no kubernetes_version pin is
-    # needed for them.
-    k8s_beta_apis = [
-      "certificates.k8s.io/v1beta1/clustertrustbundles",
-      "certificates.k8s.io/v1beta1/podcertificaterequests",
-    ]
-
-    node_pools = {
-      default = {
-        # Substrate's bundled postgres requests 2 CPU in one container, so a
-        # node needs more than 2 allocatable: e2-medium has 940m and
-        # e2-standard-2 has 1930m, and on both the pod stays Pending forever.
-        machine_type = "e2-standard-4"
-        node_count   = 1
-        # Pin this pool to a single zone instead of spreading across the region.
-        node_locations = ["us-central1-a"]
-      }
-      spot-workers = {
-        machine_type   = "e2-standard-4"
-        spot           = true
-        min_node_count = 0
-        max_node_count = 5
-        # Left unset: defaults to all zones in the cluster's region.
-
-        # Keeps regular pods off these nodes unless they explicitly
-        # tolerate spot interruption. effect is one of NO_SCHEDULE,
-        # PREFER_NO_SCHEDULE, NO_EXECUTE.
-        taints = [
-          {
-            key    = "cloud.google.com/gke-spot"
-            value  = "true"
-            effect = "NO_SCHEDULE"
-          }
-        ]
-      }
-      # Runs pods that request runtimeClassName: gvisor. Keep at least one
-      # non-sandboxed pool (above) for GKE-managed system workloads.
-      sandboxed = {
-        machine_type   = "e2-standard-4"
-        node_count     = 1
-        sandbox_gvisor = true
+  node_pools = {
+    default = {
+      machine_type = "e2-standard-4"
+      node_count   = 1
+      node_locations = ["us-central1-a"]
+    }
+    sandboxed = {
+      machine_type = "c2-standard-16"
+      # node_count     = 1
+      node_locations = ["us-central1-a"]
+      min_node_count = 1
+      max_node_count = 1
+      labels = {
+        "benchmarking-worker" = "true",
+        # "ate.dev/substrate-version" = "6ec93a45",
       }
     }
   }
 }
-
-# Artifact Registry repo and bucket below are shared across all clusters above.
-# Both take default_resource_name unless named here.
-
-artifact_repository_format = "DOCKER"
-
-# A multi-region ("us") or a region ("us-central1"); it becomes the image host,
-# so a region needs `gcloud auth configure-docker <region>-docker.pkg.dev`.
-artifact_repository_location = "us"
-
-# Bucket names are unique across all of GCP rather than per project, so
-# default_resource_name is unlikely to be free. This also has to match
-# BUCKET_NAME in .env.sh, which is where the benchmark stack reads it from.
-bucket_name = "my-gcp-project-bucket"
-
-# Grants atelet and ate-api-server access to the snapshot bucket above.
-# SuspendActor fails without it. Defaults to true; set it false only if
-# something outside this config already grants them.
-#enable_atelet_bucket_iam = true
-
-# The project-level grants (Artifact Registry, project-wide storage) for atelet
-# and its nodes. The principal is the same in every deployment of a project, so
-# keep this true in at most one of them. See variables.tf for the namespace/KSA
-# names atelet is expected to run as.
-enable_atelet_iam = false
-
-# Gives atelet full control over every cluster in the project: GCP-level
-# (roles/container.admin) and Kubernetes-level (a cluster-admin
-# ClusterRoleBinding applied via kubectl), e.g. to orchestrate workload
-# clusters from an orchestrator cluster. Independent of enable_atelet_iam.
-#
-# Commented out with the variable itself: there is no orchestrator cluster
-# here, and setting a variable that variables.tf no longer declares is an
-# error rather than a no-op.
-# enable_atelet_cluster_admin = false

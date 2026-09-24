@@ -8,18 +8,18 @@ output "project_id" {
 }
 
 output "region" {
-  description = "Default region of the deployment: the Artifact Registry repo, the bucket, and any cluster that did not override it."
+  description = "Default region of the deployment: the Artifact Registry repo, the bucket, and the cluster unless it overrode it."
   value       = var.region
 }
 
-output "cluster_names" {
-  description = "Names of the deployed GKE clusters, keyed by cluster key."
-  value       = { for k, m in module.clusters : k => m.cluster_name }
+output "cluster_name" {
+  description = "Name of the deployed GKE cluster."
+  value       = module.cluster.cluster_name
 }
 
-output "cluster_endpoints" {
-  description = "Endpoints of the deployed GKE clusters, keyed by cluster key."
-  value       = { for k, m in module.clusters : k => m.cluster_endpoint }
+output "cluster_endpoint" {
+  description = "Endpoint of the deployed GKE cluster."
+  value       = module.cluster.cluster_endpoint
   sensitive   = true
 }
 
@@ -57,7 +57,7 @@ output "node_service_account" {
   value       = google_service_account.node.email
 }
 
-output "get_credentials_commands" {
-  description = "gcloud commands to fetch kubeconfig credentials for each cluster, keyed by cluster key."
-  value       = { for k, m in module.clusters : k => m.get_credentials_command }
+output "get_credentials_command" {
+  description = "gcloud command to fetch kubeconfig credentials for the cluster."
+  value       = module.cluster.get_credentials_command
 }

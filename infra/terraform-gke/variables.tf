@@ -4,32 +4,32 @@ variable "project_id" {
 }
 
 variable "region" {
-  description = "Default region for clusters, the Artifact Registry repo and the bucket. Can be overridden per cluster."
+  description = "Default region for the cluster, the Artifact Registry repo and the bucket. The cluster can override it."
   type        = string
   default     = "us-central1"
 }
 
 # The name every resource this config creates takes unless something more
-# specific is set for it. The bucket and the Artifact Registry repository take
-# it as-is; the clusters prefix it onto their var.clusters key, since there can
-# be several of those. Change it per deployment to keep two deployments in one
-# project from naming the same resources.
+# specific is set for it. The bucket, the Artifact Registry repository and the
+# cluster all take it as-is. Change it per deployment to keep two deployments
+# in one project from naming the same resources.
 #
 # It does not reach the project-level IAM bindings below: those are keyed by
 # role and principal rather than by name, and the Workload Identity principal
 # is identical in every deployment of the project - so keep enable_atelet_iam
 # true in at most one deployment per project.
 variable "default_resource_name" {
-  description = "Name applied to the resources this config creates: the GCS bucket, the Artifact Registry repository, and the prefix of every cluster name. Per-resource variables override it."
+  description = "Name applied to the resources this config creates: the GCS bucket, the Artifact Registry repository, and the cluster. Per-resource variables override it."
   type        = string
 }
 
-# Keyed map so clusters can be added/removed independently without shifting
-# other clusters (as a list would on index changes). The key is the cluster
-# name, prefixed with var.default_resource_name.
-variable "clusters" {
-  description = "Map of GKE clusters to deploy. Each cluster is named \"<default_resource_name>-<key>\"."
-  type = map(object({
+variable "cluster" {
+  description = "The GKE cluster to deploy. Named var.default_resource_name unless `name` says otherwise."
+  type = object({
+    # Cluster name. Empty takes var.default_resource_name, the same way the
+    # bucket and the Artifact Registry repository do.
+    name = optional(string, "")
+
     region              = optional(string)
     autopilot           = optional(bool, true)
     network             = optional(string, "default")
@@ -95,27 +95,15 @@ variable "clusters" {
       # pool for GKE-managed system workloads.
       sandbox_gvisor = optional(bool, false)
     })), { default = {} })
-  }))
+  })
   default = {}
 }
-
-# ---------------------------------------------------------------------------
-# Artifact Registry
-#
-# One repository shared across all clusters.
-# ---------------------------------------------------------------------------
 
 variable "artifact_repository_id" {
   description = "ID of the Artifact Registry repository. Defaults to var.default_resource_name when empty. Set it only when that name is already taken in this project."
   type        = string
   default     = ""
 }
-
-# The location is the image host: "us" gives us-docker.pkg.dev, "us-central1"
-# gives us-central1-docker.pkg.dev. The multi-region default keeps the host the
-# one `gcloud auth configure-docker` is usually already set up for; a region
-# here needs that command run again for the new host. Changing it replaces the
-# repository, dropping every image in it.
 variable "artifact_repository_location" {
   description = "Location of the Artifact Registry repository: a multi-region (\"us\", \"europe\", \"asia\") or a region (\"us-central1\")."
   type        = string
@@ -128,11 +116,6 @@ variable "artifact_repository_format" {
   default     = "DOCKER"
 }
 
-# ---------------------------------------------------------------------------
-# Storage bucket
-#
-# One bucket shared across all clusters.
-# ---------------------------------------------------------------------------
 
 variable "bucket_name" {
   description = "Name of the GCS bucket. Defaults to var.default_resource_name when empty. Bucket names are globally unique across GCP, so expect to set this one."
@@ -158,33 +141,12 @@ variable "bucket_force_destroy" {
   default     = false
 }
 
-# ---------------------------------------------------------------------------
-# atelet + ate-api-server IAM
-#
-# atelet and ate-api-server authenticate via GKE Workload Identity
-# Federation: each Kubernetes ServiceAccount is addressed directly as an IAM
-# principal, no Google service account involved. Requires Workload Identity
-# enabled on the cluster they run on (always enabled by this module's
-# clusters). Without these bindings, atelet gets 403s from GCS on
-# suspend/resume, nodes can't pull images, and ate-api-server can't touch
-# actor snapshots (breaking SuspendActor/ResumeActor for glutton-based
-# load tests).
-# ---------------------------------------------------------------------------
-
-# Split from the project-level flag below because the two carry different
-# risks. These name this deployment's own bucket, so two deployments in one
-# project cannot collide over them, and without them SuspendActor fails with
-# "storage.objects.list denied" on the snapshot bucket. Hence: on by default.
 variable "enable_atelet_bucket_iam" {
   description = "Grants atelet and ate-api-server objectAdmin + bucketViewer on this deployment's snapshot bucket."
   type        = bool
   default     = true
 }
 
-# Project-level, and the Workload Identity principal is identical in every
-# deployment of a project, so two deployments managing these fight over one
-# binding - a destroy of either revokes it for both. Off by default: turn it on
-# in at most one deployment per project.
 variable "enable_atelet_iam" {
   description = "Grants atelet project-level storage and Artifact Registry roles, reaching every bucket and repository in the project. Off by default and rarely wanted: the repository-scoped grants in main.tf are unconditional and cover atelet for this deployment's own repository, and the nodes have their own service account rather than the project's default one. Turn this on only for a deployment that genuinely has to read or write outside what this config created. See cmd/iam.go and tools/setup-gcp/README.md for the authoritative list."
   type        = bool
@@ -212,48 +174,6 @@ variable "ate_api_server_ksa_name" {
   default     = "ate-api-server"
 }
 
-# ---------------------------------------------------------------------------
-# Cluster orchestrator IAM - DISABLED
-#
-# A separate identity from atelet/ate-api-server above - typically a
-# benchmark/workload orchestrator running in its own namespace, needing
-# full control over every cluster in the project rather than snapshot
-# storage access. There is no orchestrator cluster in this setup, so these
-# variables are commented out together with the resources they feed in
-# main.tf. Uncommenting them here is not enough on its own - the resources
-# and local.orchestrator_wi_principal in main.tf have to come back too.
-# ---------------------------------------------------------------------------
-
-# # Grants the orchestrator full control over every cluster in the project:
-# # GCP-level (roles/container.admin: create/delete/update clusters and node
-# # pools, fetch kubeconfig) AND Kubernetes-level (a cluster-admin
-# # ClusterRoleBinding applied to each cluster via kubectl). Also grants
-# # roles/artifactregistry.writer, since the orchestrator builds and pushes
-# # test images at runtime.
-# variable "enable_atelet_cluster_admin" {
-#   description = "Grants the orchestrator WI principal roles/container.admin and roles/artifactregistry.writer project-wide, plus a cluster-admin RBAC binding on every cluster in var.clusters."
-#   type        = bool
-#   default     = false
-# }
-
-# variable "orchestrator_namespace" {
-#   description = "Kubernetes namespace the cluster-orchestrator's ServiceAccount runs in."
-#   type        = string
-#   default     = "ate-system"
-# }
-
-# variable "orchestrator_ksa_name" {
-#   description = "Name of the cluster-orchestrator's Kubernetes ServiceAccount."
-#   type        = string
-#   default     = "atelet"
-# }
-
-# ---------------------------------------------------------------------------
-# benchmark-runner IAM
-#
-# The automation runner Job's identity (benchmarking/automation) - only
-# needs to write results to the bucket, not read/list/manage them.
-# ---------------------------------------------------------------------------
 
 variable "benchmark_runner_namespace" {
   description = "Kubernetes namespace the benchmark runner Job's ServiceAccount runs in."

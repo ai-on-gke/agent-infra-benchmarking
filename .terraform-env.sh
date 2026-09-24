@@ -27,8 +27,7 @@
 # env.sh.example).
 #
 # Requires terraform and jq, and a terraform apply that has already run. The
-# lookup happens once per shell that sources this file. TF_CLUSTER_KEY, from
-# the environment, picks the cluster when the deployment has more than one.
+# lookup happens once per shell that sources this file.
 
 # Derived from this file's own location, so the lookup finds the deployment
 # whatever directory the sourcing script runs from.
@@ -44,27 +43,13 @@ if ! _TF_OUT="$(terraform -chdir="${_TF_DIR}" output -json 2>/dev/null)" ||
   return 1 2>/dev/null || exit 1
 fi
 
-# Which entry of the clusters map the benchmark runs on, as the key from
-# terraform.tfvars rather than the final cluster name - Terraform prefixes that
-# with default_resource_name, and CLUSTER_NAME below is the prefixed one. A
-# deployment with one cluster needs no choice, so only several ask for it.
-if [[ -z "${TF_CLUSTER_KEY:-}" ]]; then
-  TF_CLUSTER_KEY="$(jq -r '.cluster_names.value | if length == 1 then (keys | first) else empty end' <<<"${_TF_OUT}")"
-fi
-if [[ -z "${TF_CLUSTER_KEY}" ]]; then
-  echo "Error: this deployment has more than one cluster, so TF_CLUSTER_KEY has" >&2
-  echo "to name the one .env.sh points at. Known keys:" >&2
-  echo "  $(jq -r '.cluster_names.value | keys | join(", ")' <<<"${_TF_OUT}")" >&2
-  return 1 2>/dev/null || exit 1
-fi
-
 # Reads one value, and stops rather than exporting an empty string. An output
 # added to outputs.tf after this deployment's last apply is absent until the
 # next one, and a silently empty BUCKET_NAME points the benchmark at the wrong
 # object store instead of failing.
 _tf_value() {
   local expr="$1" label="$2" value
-  value="$(jq -r --arg k "${TF_CLUSTER_KEY}" "${expr} // empty" <<<"${_TF_OUT}")"
+  value="$(jq -r "${expr} // empty" <<<"${_TF_OUT}")"
   if [[ -z "${value}" ]]; then
     echo "Error: Terraform published no ${label}." >&2
     echo "Outputs added since the last apply appear only after the next one:" >&2
@@ -87,12 +72,12 @@ export PROJECT_NUMBER
 
 GCE_REGION="$(_tf_value '.region.value' 'region')" || return 1 2>/dev/null || exit 1
 export GCE_REGION
-# Clusters from this module are regional, so their location is the region. A
+# The cluster from this module is regional, so its location is the region. A
 # zone here (as in env.sh.example's hand-filled block) would describe a zonal
 # cluster instead.
 export CLUSTER_LOCATION="${GCE_REGION}"
 
-CLUSTER_NAME="$(_tf_value '.cluster_names.value[$k]' "a cluster named '${TF_CLUSTER_KEY}'")" || return 1 2>/dev/null || exit 1
+CLUSTER_NAME="$(_tf_value '.cluster_name.value' 'cluster_name')" || return 1 2>/dev/null || exit 1
 export CLUSTER_NAME
 
 BUCKET_NAME="$(_tf_value '.bucket_name.value' 'bucket_name')" || return 1 2>/dev/null || exit 1
@@ -101,7 +86,7 @@ export BUCKET_NAME
 # The Artifact Registry repository Terraform created, as an image path prefix.
 # Note this is a different repository from the gcr.io compatibility one that
 # env.sh.example's hand-filled block pushes to: images built against this file
-# land in the repo this deployment owns, which is the one its clusters are
+# land in the repo this deployment owns, which is the one its cluster is
 # granted to pull from.
 DOCKER_REPO="$(_tf_value '.artifact_registry_docker_repo.value' 'artifact_registry_docker_repo')" || return 1 2>/dev/null || exit 1
 export DOCKER_REPO
