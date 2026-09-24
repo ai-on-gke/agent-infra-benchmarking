@@ -98,6 +98,21 @@ delete() {
   envsubst < "${manifest}" | kubectl delete --ignore-not-found -f -
 }
 
+# require_workload_name rejects an explicitly empty --workload-name. It has to
+# run at parse time, while an unset flag is still distinguishable from one
+# passed as "": by the time the per-backend `:=` defaults below run, an empty
+# value has already been filled with the backend default, so a check there
+# cannot tell "caller passed nothing" (default is correct) from "caller passed
+# ''" (an error). An empty name would substitute as "--workload-name=", which
+# the worker reads as unset and silently answers with its own default -- the
+# measured-the-wrong-workload result the Go side refuses for an unknown name.
+require_workload_name() {
+  if [[ -z "${BENCHMARK_WORKLOAD_NAME}" ]]; then
+    echo "Error: --workload-name cannot be empty" >&2
+    exit 1
+  fi
+}
+
 if [[ "$#" -eq 0 ]]; then
   usage
   exit 1
@@ -112,8 +127,8 @@ while [[ "$#" -gt 0 ]]; do
     --backend=*) BACKEND="${1#*=}" ;;
     --user-class) shift; BENCHMARK_USER_CLASS="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
     --user-class=*) BENCHMARK_USER_CLASS="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
-    --workload-name) shift; BENCHMARK_WORKLOAD_NAME="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
-    --workload-name=*) BENCHMARK_WORKLOAD_NAME="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
+    --workload-name) shift; BENCHMARK_WORKLOAD_NAME="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"; require_workload_name ;;
+    --workload-name=*) BENCHMARK_WORKLOAD_NAME="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')"; require_workload_name ;;
     --workload-template) shift; BENCHMARK_WORKLOAD_TEMPLATE="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
     --workload-template=*) BENCHMARK_WORKLOAD_TEMPLATE="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
     -h|--help) usage; exit 0 ;;
@@ -142,7 +157,12 @@ fi
 MANIFEST="${SCRIPT_DIR}/manifests/locust.yaml"
 if [[ "${BACKEND}" == "agent-sandbox" ]]; then
   MANIFEST="${SCRIPT_DIR}/manifests/locust-agent-sandbox.yaml"
-  LOCUST_IMAGE="${LOCUST_IMAGE:-us-docker.pkg.dev/${PROJECT_ID}/agent-infra-benchmarking/locust-runworkload:latest}"
+  # Must match the LOCUST_IMAGE default in locust/build_and_push.sh: that
+  # script builds and pushes this one image, and the agent-sandbox manifest
+  # pulls it by this path. A divergent default here is an ImagePullBackOff
+  # (the built image lives at the other path). The substrate manifest hardcodes
+  # the same path.
+  LOCUST_IMAGE="${LOCUST_IMAGE:-us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest}"
   : "${BENCHMARK_WORKLOAD_NAME:=ping}"
   : "${BENCHMARK_WORKLOAD_TEMPLATE:=ping}"
 else
@@ -150,17 +170,10 @@ else
   : "${BENCHMARK_WORKLOAD_TEMPLATE:=glutton}"
 fi
 
-# An empty value substitutes as "--workload-name=", which the worker reads
-# as unset and answers with its own default. That is the silently-measured-
-# the-wrong-workload result the Go side refuses to produce for an unknown
-# name, so refuse it here too rather than letting a blank argument through.
-# The template gets no such check: empty is how it asks the workload to
-# choose. (Both defaulted just above, so this only fires if a caller
-# explicitly passes --workload-name "".)
-if [[ -z "${BENCHMARK_WORKLOAD_NAME}" ]]; then
-  echo "Error: --workload-name cannot be empty" >&2
-  exit 1
-fi
+# BENCHMARK_WORKLOAD_NAME is now guaranteed non-empty: require_workload_name
+# rejected an explicit "" at parse time, and the per-backend `:=` above filled
+# the unset case with the backend default. The template gets no such check:
+# empty is how it asks the workload to choose its own.
 export BENCHMARK_USER_CLASS BENCHMARK_WORKLOAD_NAME BENCHMARK_WORKLOAD_TEMPLATE
 export LOCUST_IMAGE OTEL_COLLECTOR_ENDPOINT
 

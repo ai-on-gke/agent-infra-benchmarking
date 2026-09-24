@@ -285,12 +285,19 @@ func (r *runWorkloadRuntime) newBackend(templateName string) sandboxBackend {
 			warmPoolName:     pool,
 			provisionTimeout: resolveTimeout(r.opts.ProvisionTimeout, DefaultProvisionTimeout),
 		}
-	default:
+	case BackendSubstrate:
 		return &substrateBackend{
 			cfg:          r.cfg,
 			actorName:    "sb-" + uuid.NewString(),
 			templateName: templateName,
 		}
+	default:
+		// Unreachable: main rejects any --backend outside the known set at
+		// startup, and initRunWorkload defaults the empty value to substrate, so
+		// r.backend is always one of the cases above. Panic on the invariant
+		// rather than silently building a substrateBackend for an unknown value,
+		// which would drive the wrong control plane.
+		panic(fmt.Sprintf("runworkload: unknown backend %q", r.backend))
 	}
 }
 

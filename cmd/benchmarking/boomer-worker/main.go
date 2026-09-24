@@ -101,6 +101,18 @@ func main() {
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
+	// runworkload is the only user class that supports --backend agent-sandbox.
+	// The other registered classes (glutton, durdir) are substrate-only and
+	// dereference cfg.APIStub unconditionally, which is built only for --backend
+	// substrate below. Reject the combination here rather than letting a
+	// substrate class panic on a nil APIStub deep in a measured iteration.
+	if sandboxBackend == runworkload.BackendAgentSandbox && class != "runworkload" {
+		slog.Error("fatal: --backend agent-sandbox is only supported with --user-class runworkload",
+			slog.String("user-class", class),
+			slog.String("backend", string(sandboxBackend)))
+		os.Exit(1)
+	}
+
 	initialCfg, err := dynconfig.Parse([]byte(*configJSON), dynconfig.Config{MaxWait: 500 * time.Millisecond})
 	if err != nil {
 		slog.Error("failed to parse --config-json", slog.String("err", err.Error()))

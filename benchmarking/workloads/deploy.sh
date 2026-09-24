@@ -135,6 +135,19 @@ case "${BACKEND}" in
     ;;
 esac
 
+# Validated here, before the deploy/delete dispatch, so both paths reject a bad
+# value the same way. --sandbox-class is substrate-only, but substitute_substrate
+# (used by delete_substrate too) maps it with a default-less case, so an
+# unvalidated value would silently yield an empty SandboxConfig name/enum on the
+# delete path rather than a clear error.
+case "${SANDBOX_CLASS}" in
+  gvisor|microvm) ;;
+  *)
+    echo "Error: --sandbox-class must be gvisor or microvm, got '${SANDBOX_CLASS}'" >&2
+    exit 1
+    ;;
+esac
+
 ###############################################################################
 # substrate backend
 ###############################################################################
@@ -391,13 +404,7 @@ deploy_substrate() {
     echo "Error: ${POOL_MANIFEST} not found in $(pwd)" >&2
     exit 1
   fi
-  case "${SANDBOX_CLASS}" in
-    gvisor|microvm) ;;
-    *)
-      echo "Error: --sandbox-class must be gvisor or microvm, got '${SANDBOX_CLASS}'" >&2
-      exit 1
-      ;;
-  esac
+  # --sandbox-class is validated at the top level (covers deploy and delete).
 
   build_kubectl_ate
   resolve_otlp_endpoint
