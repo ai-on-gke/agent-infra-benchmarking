@@ -82,7 +82,7 @@ gcloud application-default credentials already in place.
 5. Run a benchmark job script.
 
    ```bash
-   ./benchmarking/run_locust_job.sh --test-case glutton-baseline
+   ./benchmarking/run_locust_job.sh --test-case glutton-baseline --follow-logs
    ```
 
 6. Collect the artifacts
