@@ -57,41 +57,65 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
             if assistant_message_count == 0:
-                # Turn 1: touch test.txt
+                # Turn 1: Create buggy app
+                cmd = 'cat << \'EOF\' > /tmp/app.py\ndef slugify(text):\n    return text.replace(" ", "-")\nEOF'
                 tool_call = {
-                    "id": "call_touch",
+                    "id": "call_create_app",
                     "type": "function",
                     "function": {
                         "name": "exec",
-                        "arguments": json.dumps({"command": "touch test.txt", "title": "Create file"})
+                        "arguments": json.dumps({"command": cmd, "title": "Create target application file"})
                     }
                 }
                 self._send_tool_call_sse(tool_call, "turn1")
             elif assistant_message_count == 1:
-                # Turn 2: ls -la
+                # Turn 2: Create failing test
+                cmd = 'cat << \'EOF\' > /tmp/test_app.py\nfrom app import slugify\n\ndef test_slugify():\n    assert slugify("hello world") == "hello-world"\n    assert slugify("HELLO World") == "hello-world", "Failed: Should be lowercase"\n    print("Tests passed!")\n\nif __name__ == "__main__":\n    test_slugify()\nEOF'
                 tool_call = {
-                    "id": "call_ls",
+                    "id": "call_create_test",
                     "type": "function",
                     "function": {
                         "name": "exec",
-                        "arguments": json.dumps({"command": "ls -la test.txt", "title": "List file"})
+                        "arguments": json.dumps({"command": cmd, "title": "Write reproduction test"})
                     }
                 }
                 self._send_tool_call_sse(tool_call, "turn2")
             elif assistant_message_count == 2:
-                # Turn 3: cat test.txt
+                # Turn 3: Run the failing test
                 tool_call = {
-                    "id": "call_cat",
+                    "id": "call_run_test_fail",
                     "type": "function",
                     "function": {
                         "name": "exec",
-                        "arguments": json.dumps({"command": "cat test.txt", "title": "Read file"})
+                        "arguments": json.dumps({"command": "python3 /tmp/test_app.py", "title": "Run reproduction script"})
                     }
                 }
                 self._send_tool_call_sse(tool_call, "turn3")
+            elif assistant_message_count == 3:
+                # Turn 4: Patch the buggy app using sed
+                tool_call = {
+                    "id": "call_patch_app",
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": json.dumps({"command": "sed -i 's/text.replace/text.lower().replace/g' /tmp/app.py", "title": "Patch app.py to fix casing"})
+                    }
+                }
+                self._send_tool_call_sse(tool_call, "turn4")
+            elif assistant_message_count == 4:
+                # Turn 5: Run the test again (now it passes)
+                tool_call = {
+                    "id": "call_run_test_pass",
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": json.dumps({"command": "python3 /tmp/test_app.py", "title": "Verify fix with reproduction script"})
+                    }
+                }
+                self._send_tool_call_sse(tool_call, "turn5")
             else:
                 # Final turn: text response
-                self._send_text_sse("I have successfully executed the bash commands!", "turn4")
+                self._send_text_sse("I have successfully executed the bash commands!", "turn6")
 
             self.wfile.write(b"data: [DONE]\n\n")
         else:
@@ -246,7 +270,7 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                 output = result.stdout + result.stderr
                 if result.returncode != 0 and not output.strip():
                     output = f"OpenClaw exited with code {result.returncode} and no output (possibly OOM killed)."
-                
+
                 status_code = 200 if result.returncode == 0 else 500
 
                 self.send_response(status_code)

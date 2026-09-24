@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mock-openclaw
+  namespace: default
+spec:
+  containers:
+  - name: openclaw
+    image: us-central1-docker.pkg.dev/akvelon-gke-aieco/ate-images-dima/openclaw:latest
+    imagePullPolicy: Always
+    command: ["python3", "-u", "/mock/openclaw_actor.py"]
+    env:
+    - name: OPENCLAW_USE_MOCK_LLM
+      value: "true"
+    ports:
+    - containerPort: 80
+    volumeMounts:
+    - name: script-vol
+      mountPath: /mock
+  volumes:
+  - name: script-vol
+    configMap:
+      name: mock-openclaw-actor
