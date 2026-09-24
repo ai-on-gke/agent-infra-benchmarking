@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TTFI p50 against concurrent users, as one HTML file.
+"""TTFI latency against concurrent users, one HTML file per percentile.
 
 Most useful on a ramped run (--spawn-rate below --users), where the ramp
 sweeps the user count and the run traces a load curve. A fixed-load run
@@ -36,8 +36,13 @@ RATE_WINDOW = "1m"
 # trailing edge.
 HALF_WINDOW_SECS = 30
 
-P50_QUERY = (
-    "histogram_quantile(0.5, sum by (le) ("
+# The percentiles a report is generated for. p50 and p99 bound the span the
+# run is judged on; the two between them are where a saturating pool shows up
+# first.
+PERCENTILES = (50, 90, 95, 99)
+
+QUANTILE_QUERY = (
+    "histogram_quantile({quantile}, sum by (le) ("
     "rate(locust_request_duration_milliseconds_bucket"
     '{{run_id="{run_id}",name="TTFI",status="success"}}[{window}])))'
 )
@@ -45,15 +50,18 @@ USERS_QUERY = 'sum(locust_users{{run_id="{run_id}"}})'
 
 
 class TTFIvsUsersReport:
-    name = "ttfi-vs-users"
-    filename = "ttfi-vs-users.html"
+    def __init__(self, percentile: int) -> None:
+        self.percentile = percentile
+        self.label = f"p{percentile}"
+        self.name = f"ttfi-vs-users-{self.label}"
+        self.filename = f"ttfi-vs-users-{self.label}.html"
 
     def render(self, ctx: RunContext) -> str:
         points = self._collect(ctx)
         if not points:
-            raise ValueError(f"no TTFI p50 samples for run_id={ctx.run_id}")
+            raise ValueError(f"no TTFI {self.label} samples for run_id={ctx.run_id}")
         return html_page(
-            title="TTFI p50 vs concurrent users",
+            title=f"TTFI {self.label} vs concurrent users",
             subtitle=f"run {ctx.run_id} — {ctx.workload} on {ctx.template or 'default template'}",
             meta={
                 "run_id": ctx.run_id,
@@ -62,7 +70,7 @@ class TTFIvsUsersReport:
                 "duration": ctx.duration,
                 "user class": ctx.user_class,
                 "load levels": len(points),
-                "p50 range": "%.0f–%.0f ms" % (
+                f"{self.label} range": "%.0f–%.0f ms" % (
                     min(v for _, v in points),
                     max(v for _, v in points),
                 ),
@@ -71,11 +79,15 @@ class TTFIvsUsersReport:
         )
 
     def _collect(self, ctx: RunContext) -> list[tuple[int, float]]:
-        """(users, mean p50 ms) with one entry per distinct user count."""
-        p50 = series(
+        """(users, mean latency ms) with one entry per distinct user count."""
+        latency = series(
             range_query(
                 ctx.prometheus_url,
-                P50_QUERY.format(run_id=ctx.run_id, window=RATE_WINDOW),
+                QUANTILE_QUERY.format(
+                    quantile=self.percentile / 100,
+                    run_id=ctx.run_id,
+                    window=RATE_WINDOW,
+                ),
                 ctx.started,
                 ctx.ended,
                 STEP_SECS,
@@ -92,7 +104,7 @@ class TTFIvsUsersReport:
         )
 
         buckets: dict[int, list[float]] = {}
-        for ts, value in p50.items():
+        for ts, value in latency.items():
             at_midpoint = users.get(ts - HALF_WINDOW_SECS)
             now = users.get(ts)
             if at_midpoint is None or now is None or at_midpoint <= 0:
@@ -113,7 +125,7 @@ class TTFIvsUsersReport:
         ax.plot(xs, ys, color=SERIES_BLUE, linewidth=2, marker="o", markersize=4)
 
         ax.set_xlabel("concurrent users", color=INK_MUTED, fontsize=11)
-        ax.set_ylabel("TTFI p50 (ms)", color=INK_MUTED, fontsize=11)
+        ax.set_ylabel(f"TTFI {self.label} (ms)", color=INK_MUTED, fontsize=11)
         ax.set_ylim(bottom=0)
         ax.set_xlim(left=0)
         ax.grid(axis="y", color=INK_MUTED, alpha=0.25, linewidth=0.8)
