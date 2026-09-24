@@ -50,6 +50,20 @@ from reports.prometheus import DEFAULT_URL as DEFAULT_PROMETHEUS_URL
 # benchmarking/locust/Dockerfile.
 BOOMER_BINARY = "/app/boomer-worker"
 
+# Where --test-case looks, copied into the image from benchmarking/tests.yaml.
+TESTS_FILE = "/app/tests.yaml"
+
+# The case keys that are the run's load rather than the worker's flags. Every
+# other key in a case goes to the worker verbatim, so this tuple is the whole
+# of what this wrapper claims from a case.
+LOAD_KEYS = ("duration", "users", "spawn-rate")
+
+# Case keys that shape the WorkerPool, which run_locust_job.sh deploys before
+# the Job starts. Dropped here rather than passed on: the pool is already up by
+# the time this runs, and the worker has no such flags — an unknown one is
+# fatal to it, so a case carrying these would never reach a first iteration.
+HOST_KEYS = ("worker-count", "sandbox-class")
+
 # How long boomer gets to suspend and delete its actors after the run. Longer
 # than the worker's own 60s shutdown budget, so the timeout here is reached
 # only by a worker that is not going to finish at all.
@@ -80,40 +94,18 @@ def report_names() -> list[str]:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("-f", required=True, dest="file", help="Locust test file (-f)")
-    p.add_argument("-t", required=True, dest="duration", help="Run duration (-t)")
+    # A case is the whole run: the load and the worker's flags both, named as
+    # one word so the run is reproducible from it.
     p.add_argument(
-        "-u", required=True, type=int, dest="users", help="Number of users (-u)"
-    )
-    # Locust fills in 1 user/sec when -r is absent, which makes the ramp of a
-    # large run longer than the run: -u 100 would spend 100s climbing, and
-    # every sample taken during the climb is at a concurrency the run never
-    # reports. Defaulting to the user count puts the whole load on at the
-    # first dispatch instead, so the measurement covers one load level.
-    p.add_argument(
-        "-r",
-        "--spawn-rate",
-        type=float,
-        default=None,
-        dest="spawn_rate",
-        help="Users per second (-r). Unset starts every user at once, which "
-        "is what a fixed-load measurement wants; give a smaller number to "
-        "ramp in.",
-    )
-    # The two runworkload settings, which have no locust counterpart: they are
-    # the worker's flags and are forwarded to it rather than to locust. Empty
-    # is meaningful for both and is the default, so that what a value is left
-    # unset selects stays a question for the worker to answer.
-    p.add_argument(
-        "--workload-name",
-        default="",
-        help="runworkload only: the workload a RunWorkloadUser drives. "
-        "Unset selects the worker's own default.",
+        "--test-case",
+        required=True,
+        help=f"Name a case in --tests-file. {', '.join(LOAD_KEYS)} are the "
+        f"load; every other key is a worker flag.",
     )
     p.add_argument(
-        "--workload-template",
-        default="",
-        help="runworkload only: the ActorTemplate the workload is measured on. "
-        "Unset selects the workload's own.",
+        "--tests-file",
+        default=TESTS_FILE,
+        help=f"Where --test-case looks (default: {TESTS_FILE}).",
     )
     p.add_argument(
         "--run-id",
@@ -152,10 +144,13 @@ def parse_args() -> argparse.Namespace:
         help="Subfolder under --report-bucket.",
     )
     args, extra = p.parse_known_args()
-    # Resolved here rather than at the flag, because the default is another
-    # argument's value and argparse cannot express that.
-    if args.spawn_rate is None:
-        args.spawn_rate = float(args.users)
+    case = load_test_case(args.tests_file, args.test_case)
+    # Split before anything reads either half: what is left after the load
+    # comes out is the worker's, whatever it is named.
+    args.duration, args.users, args.spawn_rate = take_load(case, args.test_case)
+    for key in HOST_KEYS:
+        case.pop(key, None)
+    args.worker_flags = case
     # The manifest passes --report unconditionally, so an unset one arrives as
     # an empty string rather than not at all.
     args.report = [r for r in args.report if r]
@@ -164,6 +159,73 @@ def parse_args() -> argparse.Namespace:
     # --stop-timeout, and so on).
     args.locust_extra = extra
     return args
+
+
+def take_load(case: dict[str, str], name: str) -> tuple[str, int, float]:
+    """Remove the load keys from `case` and return them validated.
+
+    The checks are here because nothing downstream makes them: locust reads -u
+    and -r as numbers and a wrong one becomes a traceback inside the pod, long
+    after the Job was accepted. The duration is left to locust, which knows its
+    own spelling of one and rejects anything else at startup.
+    """
+    for key in ("duration", "users"):
+        if key not in case:
+            sys.exit(f"Test case {name!r} has no `{key}`; a case states the load it runs at.")
+
+    duration = case.pop("duration")
+    try:
+        users = int(case.pop("users"))
+    except ValueError:
+        sys.exit(f"Test case {name!r}: `users` must be a whole number.")
+    if users < 1:
+        sys.exit(f"Test case {name!r}: `users` must be at least 1, got {users}.")
+
+    # Locust fills in 1 user/sec when -r is absent, which makes the ramp of a
+    # large run longer than the run: 100 users would spend 100s climbing, and
+    # every sample taken during the climb is at a concurrency the run never
+    # reports. Defaulting to the user count puts the whole load on at the first
+    # dispatch instead, so the measurement covers one load level.
+    raw = case.pop("spawn-rate", None)
+    if raw is None:
+        return duration, users, float(users)
+    try:
+        spawn_rate = float(raw)
+    except ValueError:
+        sys.exit(f"Test case {name!r}: `spawn-rate` must be a number.")
+    if spawn_rate <= 0:
+        sys.exit(f"Test case {name!r}: `spawn-rate` must be positive, got {spawn_rate}.")
+    return duration, users, spawn_rate
+
+
+def load_test_case(path: str, name: str) -> dict[str, str]:
+    """The named case from `path`, or exit saying which names it does hold."""
+    try:
+        import yaml
+    except ModuleNotFoundError:
+        sys.exit("--test-case needs PyYAML; add it to locust/requirements.txt.")
+
+    try:
+        with open(path) as f:
+            doc = yaml.safe_load(f) or {}
+    except OSError as e:
+        sys.exit(f"Cannot read {path}: {e}")
+    except yaml.YAMLError as e:
+        sys.exit(f"{path} is not valid YAML: {e}")
+
+    cases = doc.get("cases")
+    if not isinstance(cases, dict):
+        sys.exit(f"{path} has no `cases` mapping.")
+    if name not in cases:
+        sys.exit(f"No test case {name!r} in {path}. Known: {', '.join(sorted(cases)) or '(none)'}")
+
+    case = cases[name] or {}
+    if not isinstance(case, dict):
+        sys.exit(f"Test case {name!r} in {path} is not a mapping of flags.")
+    # str() rather than the YAML type: every one of these is about to be a
+    # command-line argument, and a bare 0.05 or 2s parses as float and str
+    # respectively for no difference that survives the argv.
+    return {str(k): str(v) for k, v in case.items()}
 
 
 def user_class(test_path: str) -> str:
@@ -193,8 +255,8 @@ def log_run_config(args: argparse.Namespace) -> None:
         f"  users:        {args.users}",
         f"  spawn_rate:   {args.spawn_rate:g}/s"
         + (" (all at once)" if args.spawn_rate >= args.users else ""),
-        f"  workload:     {args.workload_name or '(the worker default)'}",
-        f"  template:     {args.workload_template or '(the workload default)'}",
+        f"  test_case:    {args.test_case or '(none)'}",
+        f"  worker flags: {' '.join(f'--{k}={v}' for k, v in args.worker_flags.items()) or '(none)'}",
         f"  reports:      {', '.join(args.report) or '(none)'}",
         f"  report dest:  {'gs://' + args.report_bucket + '/' + args.report_prefix if args.report_bucket else args.report_dir + ' (pod-local)'}",
         f"  extra flags:  {' '.join(args.locust_extra) or '(none)'}",
@@ -226,13 +288,7 @@ def build_boomer_cmd(args: argparse.Namespace) -> list[str]:
         BOOMER_BINARY,
         "--user-class", user_class(args.file),
     ]
-    # Passed only when set: the flags read an empty value as unset, and
-    # leaving them off entirely says the same thing more plainly in the log.
-    if args.workload_name:
-        cmd += ["--workload-name", args.workload_name]
-    if args.workload_template:
-        cmd += ["--workload-template", args.workload_template]
-    return cmd
+    return cmd + [f"--{name}={value}" for name, value in args.worker_flags.items()]
 
 
 def stop_boomer(proc: subprocess.Popen) -> int:
@@ -320,8 +376,8 @@ def write_reports(args: argparse.Namespace, started: float, ended: float) -> Non
             users=args.users,
             spawn_rate=args.spawn_rate,
             duration=args.duration,
-            workload=args.workload_name,
-            template=args.workload_template,
+            workload=args.worker_flags.get("workload-name", ""),
+            template=args.worker_flags.get("workload-template", ""),
             user_class=user_class(args.file),
             started=started,
             ended=time.time(),

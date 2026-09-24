@@ -14,66 +14,94 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Runs the benchmark as a Job, waits for it, and exits with its result.
-# The counterpart of deploy_locust.sh, which deploys the same benchmark as a
-# Deployment and leaves the web UI holding it open.
+# Runs the benchmark as a Job, waits for it, and exits with its result. In
+# order: it builds and pushes the images, resolves the case out of the image it
+# just built, recreates the WorkerPool, renders manifests/job.yaml and submits
+# it, follows the run, and reports what Prometheus recorded.
 #
-# Submitting and watching are separate concerns and separate scripts:
-# locust/deploy.sh --deploy-job creates the Job and returns, and everything
-# below is this script waiting on what that created. --no-wait stops at the
-# same place deploy.sh does.
+# It assumes the thing being measured is already in the cluster.
+# deploy-benchmarking.sh puts it there, and owns every teardown but the Job's:
 #
-# It assumes the thing being measured is already in the cluster. That is the
-# difference worth knowing between the two scripts: deploy_locust.sh stands a
-# whole stack up because a session at the web UI is a thing that is set up
-# once and then used, while a Job is a single run and is usually one of
-# several against workloads that must not change between them. Redeploying
-# the workloads per run would reset the golden snapshots underneath, so the
-# runs either side of it would not be comparable.
+#   ./benchmarking/deploy-benchmarking.sh --deploy
+#   ./benchmarking/run_locust_job.sh --test-case glutton-baseline
+#   ./benchmarking/run_locust_job.sh --test-case glutton-scale
 #
-# --build and --deploy-workloads are for when nothing is deployed yet. They
-# set up and exit, rather than going on to run something, so that no run
-# measures the deployment it just made — the first run against fresh golden
-# snapshots pays for warming what the rest inherit:
-#
-#   ./benchmarking/run_locust_job.sh --build --deploy-workloads
-#   ./benchmarking/run_locust_job.sh --users 50
-#   ./benchmarking/run_locust_job.sh --users 100
-#
-# Each run there blocks until it is over and fails if it did, so a series like
-# that is a script rather than three things to sit and watch.
-#
-# Deleting is left to deploy_locust.sh --delete, which owns the workloads;
-# --delete here removes only the Job.
+# Each run blocks until it is over and fails if it did, so a series like that
+# is a script rather than three things to sit and watch.
 
 set -o errexit -o nounset -o pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
+cd "${ROOT}"
 BENCHMARKING_DIR="${ROOT}/benchmarking"
 
-# Have to match what locust/deploy.sh creates, which is what this waits on.
-# Mirrored rather than shared because two scripts and a manifest is not enough
-# to justify a file that exists only to hold two strings.
+if [[ -f .env.sh ]]; then
+  source .env.sh
+fi
+
+# The manifest's only unconditional substitution. Unset would render an empty
+# image field, which kubectl rejects without naming the cause.
+if [[ -z "${LOCUST_IMAGE:-}" ]]; then
+  echo "Error: LOCUST_IMAGE must be set; .terraform-env.sh exports it, and .env.sh" >&2
+  echo "sources that." >&2
+  exit 1
+fi
+
+JOB_MANIFEST="${BENCHMARKING_DIR}/locust/manifests/job.yaml"
+
+# Has to match metadata.name in the manifest. Fixed rather than generated, so a
+# run can be followed, waited on and deleted by name.
 JOB_NAME=locust-job
 NAMESPACE=benchmarking
+
+# The WorkerPool, recreated per run so every run starts on cold workers rather
+# than on whatever the last one left warm. Names have to match the manifest.
+POOL_MANIFEST="${BENCHMARKING_DIR}/workloads/manifests/workloads.yaml.tmpl"
+POOL_NAME=benchmark-ateom
+POOL_NAMESPACE=benchmark-workloads
+
+# ko resolves the manifest's ko:// workerImage, and both the tool wrapper and
+# that import path only work inside the submodule.
+SUBSTRATE_DIR="${ROOT}/dependency-repos/substrate"
+
+# Pool shape, read off the case by jq below rather than taken as flags: the
+# case is the whole run, and the pool it needs is part of that. These are the
+# fallbacks for a case that states neither.
+DEFAULT_WORKER_COUNT=1
+DEFAULT_SANDBOX_CLASS=gvisor
+WORKER_COUNT=""
+SANDBOX_CLASS=""
+
+DEFAULT_POOL_TIMEOUT_SECS=300
+POOL_TIMEOUT_SECS=""
+
+# The case a run measures when none is named, so that every run carries one:
+# it is what the benchmark-test-case label records and what a series of runs is
+# told apart by.
+DEFAULT_TEST_CASE=glutton-baseline
+
+# Locust user class, lowercased at the flag. Names the tests/<class>.py the
+# master loads and the --user-class the boomer container is passed.
+DEFAULT_USER_CLASS=runworkload
+
+# The Job's ServiceAccount, created by infra/terraform-gke together with the
+# bucket binding that names it. Has to match benchmark_runner_ksa_name there.
+BENCHMARK_RUNNER_KSA="${BENCHMARK_RUNNER_KSA:-benchmark-runner}"
 
 # How often to report that the pod has not started yet, and — without
 # --follow-logs, where nothing else reports — that the run is still going.
 PROGRESS_EVERY_SECS=30
 
-# Every setting that belongs to a run rather than to a setup action. Empty
-# means the caller did not give it, which is what the check below reads to
-# tell a run option apart from an unset one, and what leaves each default
-# where it is defined rather than restating it in a second place. The two
-# timeouts are the exception in having a default here, since nothing further
-# down the chain holds one.
-DURATION=""
-USERS=""
-SPAWN_RATE=""
+# Empty means the caller did not give it, which leaves each default where it
+# is defined rather than restating it here. The two timeouts are the exception,
+# since nothing further down the chain holds one.
 RUN_ID=""
 USER_CLASS=""
-WORKLOAD_NAME=""
-WORKLOAD_TEMPLATE=""
+
+# Names a case in tests.yaml, forwarded to the Job and read by runner.py
+# inside the pod. It is the whole of the worker's configuration: the workload,
+# its template, and every other flag the worker takes.
+TEST_CASE=""
 WAIT_TIMEOUT_SECS=""
 POD_START_TIMEOUT_SECS=""
 NO_WAIT=0
@@ -86,6 +114,11 @@ NO_METRICS=0
 # Off by default: a report costs a Prometheus query and an upload that most
 # runs do not need.
 REPORTS=0
+
+# Bucket the reports upload to, under reports/<run-id>/. Defaults to the
+# deployment's own bucket, which is where the runner's Workload Identity grant
+# applies; empty leaves them on the pod, where the Job's TTL takes them.
+REPORT_BUCKET="${BUCKET_NAME:-}"
 
 # The lookback for the queries at the end. It has only to reach back to the
 # run's last scrape, which was seconds before the query, so it is generous
@@ -103,48 +136,32 @@ DEFAULT_WAIT_TIMEOUT_SECS=3600
 # scheduling rather than the run.
 DEFAULT_POD_START_TIMEOUT_SECS=300
 
-# The setup actions. Each one exits when its work is done rather than going on
-# to run something: setting the cluster up and measuring it are separate
-# steps, because a series of runs has to measure one unchanging deployment.
-BUILD=0
-DEPLOY_WORKLOADS=0
-DEPLOY_MONITORING=0
 DELETE=0
-
-# Prometheus, deployed by --deploy-monitoring. Grafana is not deployed: it
-# sits in monitoring/grafana.yaml next to this, for when it is wanted.
-MONITORING_MANIFEST="${BENCHMARKING_DIR}/monitoring/prometheus.yaml"
-
-# Forwarded to workloads/deploy.sh, and only meaningful with
-# --deploy-workloads. Empty keeps that script's own defaults.
-WORKER_COUNT=""
-SANDBOX_CLASS=""
-OTLP_ENDPOINT=""
-ACTOR_MEMORY=""
-WORKLOAD_WAIT_TIMEOUT=""
 
 usage() {
   echo "Usage: $0 [options]"
   echo ""
-  echo "Runs the benchmark as a Job, waits for it, and exits with its result."
-  echo "The workloads it measures are assumed to be deployed already."
+  echo "Builds and pushes the images, recreates the WorkerPool, runs the benchmark as a"
+  echo "Job, waits for it, and exits with its result. The ActorTemplates it measures are"
+  echo "assumed to be deployed already."
   echo ""
   echo "The run:"
-  echo "  --duration TIME         How long to run, in locust's spelling of a duration"
-  echo "                          like 30s, 5m or 1h30m (default: 5m)"
-  echo "  --users N               Number of users (default: 10)"
-  echo "  --spawn-rate N          Users per second (default: --users, so the whole load"
-  echo "                          starts at once). Lower it to ramp in instead."
   echo "  --run-id NAME           Names this run in Prometheus, as the run_id label on"
   echo "                          every series it produces (default: a UTC timestamp)"
   echo "  --user-class NAME       Locust user class, lowercase; runs tests/NAME.py"
   echo "                          (default: runworkload)"
-  echo "  --workload-name NAME    The workload a RunWorkloadUser drives: glutton | openclaw"
-  echo "                          (default: glutton)"
-  echo "  --workload-template NAME"
-  echo "                          The ActorTemplate the workload is measured on (default:"
-  echo "                          glutton). Has to be one --workload-name can address, so"
-  echo "                          set it whenever that changes."
+  echo "  --test-case NAME        The run, named as a case in benchmarking/tests.yaml"
+  echo "                          (default: ${DEFAULT_TEST_CASE}). A case is the whole of"
+  echo "                          it — the duration and user count as much as the"
+  echo "                          workload — so another load level is another case."
+  echo ""
+  echo "The WorkerPool is deleted and recreated before every run, so that no run"
+  echo "inherits the workers the last one warmed. Its shape comes from the case —"
+  echo "\`worker-count\` (default ${DEFAULT_WORKER_COUNT}) and \`sandbox-class\` (default"
+  echo "${DEFAULT_SANDBOX_CLASS}) — not from a flag, because a pool that differs is a"
+  echo "different run and so is a different case."
+  echo "  --pool-timeout SECONDS  Ceiling on the wait for the new pool's workers to be"
+  echo "                          ready (default: ${DEFAULT_POOL_TIMEOUT_SECS})"
   echo ""
   echo "Waiting:"
   echo "  --no-wait               Submit the Job and return, instead of following it."
@@ -157,6 +174,9 @@ usage() {
   echo "                          the run ends is kept, so the result is unaffected."
   echo "  --reports               Write every report when the run ends and upload them to"
   echo "                          gs://\${BUCKET_NAME}/reports/<run-id>/. Off by default."
+  echo "  --report-bucket NAME    Bucket the reports upload to (default: \${BUCKET_NAME})."
+  echo "                          Empty leaves them on the pod, where the Job's TTL takes"
+  echo "                          them."
   echo "  --wait-timeout SECONDS  Ceiling on the wait for the run (default: 3600). Reaching"
   echo "                          it stops the waiting, not the Job."
   echo "  --pod-start-timeout SECONDS"
@@ -166,36 +186,13 @@ usage() {
   echo "                          summary is skipped anyway where Prometheus is not"
   echo "                          deployed, or where jq or curl is missing."
   echo ""
-  echo "Setup, which runs nothing. Either one ends the command when its work is done,"
-  echo "so a run is started separately afterwards:"
-  echo "  --build                 Build and push the locust image, then exit"
-  echo "  --deploy-workloads      Deploy the benchmark workloads, then exit. Redeploying"
-  echo "                          retakes the golden snapshots, so runs that straddle it"
-  echo "                          are not comparable; do it once, before a series."
-  echo "  --deploy-monitoring     Deploy Prometheus into the benchmarking namespace, then"
-  echo "                          exit. It scrapes every run that starts after it, so"
-  echo "                          deploy it before the runs it is meant to record — a"
-  echo "                          run already finished cannot be scraped retroactively,"
-  echo "                          and its storage does not outlive its pod. Grafana is"
-  echo "                          not deployed; see monitoring/grafana.yaml."
-  echo ""
-  echo "With --deploy-workloads, forwarded to workloads/deploy.sh:"
-  echo "  --worker-count N        Number of WorkerPool replicas (default: 1)"
-  echo "  --sandbox-class CLASS   Sandbox runtime for the WorkerPool: gvisor | microvm"
-  echo "                          (default: gvisor)"
-  echo "  --actor-memory SIZE     Memory limit for the benchmark ActorTemplates"
-  echo "                          (default: 256Mi, the microvm minimum)"
-  echo "  --otlp-endpoint URL     The address an instrumented actor container sends"
-  echo "                          telemetry to"
-  echo "  --workload-wait-timeout SECONDS"
-  echo "                          Timeout waiting for the ateom workers to be ready"
-  echo "                          (default: 300). It bounds this deploy; --wait-timeout"
-  echo "                          above bounds the run that follows it."
-  echo ""
   echo "Other:"
   echo "  --delete                Delete the Job and exit. The workloads are left alone;"
-  echo "                          deploy_locust.sh --delete removes those."
+  echo "                          deploy-benchmarking.sh --delete removes those."
   echo "  -h|--help               Show this help message"
+  echo ""
+  echo "Deploying what a run measures is deploy-benchmarking.sh, which runs nothing:"
+  echo "  ./benchmarking/deploy-benchmarking.sh --deploy"
   echo ""
   echo "Environment:"
   echo "  PROJECT_ID, BUCKET_NAME, etc. are read from .env.sh by the"
@@ -204,20 +201,16 @@ usage() {
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
-    --duration) shift; DURATION="$1" ;;
-    --duration=*) DURATION="${1#*=}" ;;
-    --users) shift; USERS="$1" ;;
-    --users=*) USERS="${1#*=}" ;;
-    --spawn-rate) shift; SPAWN_RATE="$1" ;;
-    --spawn-rate=*) SPAWN_RATE="${1#*=}" ;;
     --run-id) shift; RUN_ID="$1" ;;
     --run-id=*) RUN_ID="${1#*=}" ;;
-    --user-class) shift; USER_CLASS="$1" ;;
-    --user-class=*) USER_CLASS="${1#*=}" ;;
-    --workload-name) shift; WORKLOAD_NAME="$1" ;;
-    --workload-name=*) WORKLOAD_NAME="${1#*=}" ;;
-    --workload-template) shift; WORKLOAD_TEMPLATE="$1" ;;
-    --workload-template=*) WORKLOAD_TEMPLATE="${1#*=}" ;;
+    --user-class) shift; USER_CLASS="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
+    --user-class=*) USER_CLASS="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
+    --report-bucket) shift; REPORT_BUCKET="$1" ;;
+    --report-bucket=*) REPORT_BUCKET="${1#*=}" ;;
+    --pool-timeout) shift; POOL_TIMEOUT_SECS="$1" ;;
+    --pool-timeout=*) POOL_TIMEOUT_SECS="${1#*=}" ;;
+    --test-case) shift; TEST_CASE="$1" ;;
+    --test-case=*) TEST_CASE="${1#*=}" ;;
     --no-wait) NO_WAIT=1 ;;
     --follow-logs) FOLLOW_LOGS=1 ;;
     --only-summary) ONLY_SUMMARY=1 ;;
@@ -227,19 +220,6 @@ while [[ "$#" -gt 0 ]]; do
     --wait-timeout=*) WAIT_TIMEOUT_SECS="${1#*=}" ;;
     --pod-start-timeout) shift; POD_START_TIMEOUT_SECS="$1" ;;
     --pod-start-timeout=*) POD_START_TIMEOUT_SECS="${1#*=}" ;;
-    --build) BUILD=1 ;;
-    --deploy-workloads) DEPLOY_WORKLOADS=1 ;;
-    --deploy-monitoring) DEPLOY_MONITORING=1 ;;
-    --worker-count) shift; WORKER_COUNT="$1" ;;
-    --worker-count=*) WORKER_COUNT="${1#*=}" ;;
-    --sandbox-class) shift; SANDBOX_CLASS="$1" ;;
-    --sandbox-class=*) SANDBOX_CLASS="${1#*=}" ;;
-    --otlp-endpoint) shift; OTLP_ENDPOINT="$1" ;;
-    --otlp-endpoint=*) OTLP_ENDPOINT="${1#*=}" ;;
-    --actor-memory) shift; ACTOR_MEMORY="$1" ;;
-    --actor-memory=*) ACTOR_MEMORY="${1#*=}" ;;
-    --workload-wait-timeout) shift; WORKLOAD_WAIT_TIMEOUT="$1" ;;
-    --workload-wait-timeout=*) WORKLOAD_WAIT_TIMEOUT="${1#*=}" ;;
     --delete) DELETE=1 ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -250,6 +230,87 @@ while [[ "$#" -gt 0 ]]; do
   esac
   shift
 done
+
+# The manifest targets the benchmarking namespace, which Prometheus is also in.
+# Ensured here so a run works in a cluster where monitoring was never deployed.
+ensure_namespace() {
+  kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+}
+
+run_ko() {
+  (cd "${SUBSTRATE_DIR}" && hack/run-tool.sh ko "$@")
+}
+
+# resolve_test_case prints the named case as JSON, by running the
+# testcase-helper binary that ships in the locust image beside the tests.yaml it
+# reads. Going through the image is what keeps a YAML parser off the host, which
+# has kubectl and docker and not necessarily PyYAML or yq.
+#
+# It also moves the "no such case" failure to before the pool is rebuilt and
+# the Job submitted, where it used to surface in the pod once both had happened.
+resolve_test_case() {
+  if ! command -v docker &>/dev/null; then
+    echo "Error: docker is required to resolve --test-case, which runs the" >&2
+    echo "testcase-helper binary out of ${LOCUST_IMAGE}." >&2
+    return 1
+  fi
+  # --entrypoint because the distroless python3 base image launches python.
+  docker run --rm --entrypoint /app/testcase-helper "${LOCUST_IMAGE}" --case "$1"
+}
+
+# recreate_worker_pool gives the run its own pool: the old one goes, a new one
+# is applied, and the wait is for its workers to be ready.
+#
+# It deletes the WorkerPool by name rather than through the manifest, which also
+# carries the namespace — tearing that down would take the atespace's pods and
+# anything else in it along with the pool.
+#
+# The ActorTemplates and their golden snapshots are untouched by this. They are
+# not in this manifest and their snapshots live in the bucket, so a run gets
+# cold workers without paying to re-warm what it restores from.
+recreate_worker_pool() {
+  echo "Deleting any previous ${POOL_NAME} WorkerPool..."
+  kubectl delete workerpool "${POOL_NAME}" --namespace="${POOL_NAMESPACE}" \
+    --ignore-not-found --wait=true
+  # The Deployment goes by owner reference, which is collected asynchronously
+  # after the pool object is gone. Waiting for it keeps the apply below from
+  # racing a Deployment of the same name that is still terminating.
+  kubectl wait --for=delete "deployment/${POOL_NAME}" \
+    --namespace="${POOL_NAMESPACE}" --timeout="${POOL_TIMEOUT_SECS}s" 2>/dev/null || true
+
+  echo "Deploying ${POOL_NAME} WorkerPool (replicas=${WORKER_COUNT}, sandbox_class=${SANDBOX_CLASS})..."
+  sed -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
+      -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
+      "${POOL_MANIFEST}" | run_ko apply -f -
+
+  kubectl wait --for=create "deployment/${POOL_NAME}" \
+    --namespace="${POOL_NAMESPACE}" --timeout="${POOL_TIMEOUT_SECS}s"
+  kubectl rollout status "deployment/${POOL_NAME}" \
+    --namespace="${POOL_NAMESPACE}" --timeout="${POOL_TIMEOUT_SECS}s"
+}
+
+# submit_job renders the manifest and applies it, then returns; it does not
+# wait. What to do with a run in flight is decided below, not here.
+submit_job() {
+  ensure_namespace
+  # A Job's pod template is immutable, so a second run cannot be an apply over
+  # the first. Deleting also keeps the fixed name unambiguous: the logs and the
+  # status under it are the run just submitted. --wait=true so the old pods are
+  # gone before the new Job creates its own.
+  echo "Deleting any previous ${JOB_NAME}..."
+  kubectl delete job "${JOB_NAME}" --namespace="${NAMESPACE}" \
+    --ignore-not-found --wait=true
+  echo "Running Locust benchmark as a Job:"
+  echo "  image:     ${LOCUST_IMAGE}"
+  echo "  class:     ${BENCHMARK_USER_CLASS}"
+  echo "  case:      ${BENCHMARK_TEST_CASE}"
+  echo "  run_id:    ${BENCHMARK_RUN_ID}"
+  envsubst < "${JOB_MANIFEST}" | kubectl apply -f -
+}
+
+delete_job() {
+  envsubst < "${JOB_MANIFEST}" | kubectl delete --ignore-not-found -f -
+}
 
 # job_status prints the Job's succeeded and failed counts as one pipe-joined
 # pair. One get for both, so they cannot come from different reads of a Job
@@ -431,7 +492,9 @@ report_metrics() {
   done
   if ! kubectl get deployment prometheus --namespace="${NAMESPACE}" &>/dev/null; then
     echo "Skipping the metrics summary: Prometheus is not deployed."
-    echo "  $0 --deploy-monitoring   deploys it, for the runs after it"
+    echo "  kubectl apply -f benchmarking/monitoring/prometheus.yaml"
+    echo "  adds it for the runs after it, without retaking the golden snapshots that"
+    echo "  deploy-benchmarking.sh --deploy would."
     return 0
   fi
   start_port_forward || return 0
@@ -543,147 +606,123 @@ report_metrics() {
   stop_port_forward
 }
 
+BENCHMARK_USER_CLASS="${USER_CLASS:-${DEFAULT_USER_CLASS}}"
+if [[ ! -f "${BENCHMARKING_DIR}/locust/tests/${BENCHMARK_USER_CLASS}.py" ]]; then
+  echo "Error: no locust/tests/${BENCHMARK_USER_CLASS}.py; --user-class must name a test file" >&2
+  exit 1
+fi
+
+# Exported for envsubst, which reads the environment rather than arguments.
+export LOCUST_IMAGE BENCHMARK_USER_CLASS BENCHMARK_RUNNER_KSA
+
 if [[ "${DELETE}" -eq 1 ]]; then
+  # The manifest renders with whatever is set, because delete matches on the
+  # name and kind alone; the run-shaped values below are not needed for it.
+  export BENCHMARK_RUN_ID="" BENCHMARK_TEST_CASE="" \
+    BENCHMARK_ONLY_SUMMARY=false BENCHMARK_REPORTS="" BENCHMARK_REPORT_BUCKET=""
   echo "=== Deleting the locust Job ==="
-  "${BENCHMARKING_DIR}/locust/deploy.sh" --delete-job
+  delete_job
   exit 0
 fi
 
-if [[ -n "${SANDBOX_CLASS}" ]]; then
-  case "${SANDBOX_CLASS}" in
-    gvisor|microvm) ;;
-    *)
-      echo "Error: --sandbox-class must be gvisor or microvm, got '${SANDBOX_CLASS}'" >&2
-      exit 1
-      ;;
-  esac
-fi
-
-# A workload option without the stage that would use it is reported rather
-# than ignored: it reads as having shaped the deployment the run measures,
-# and a run that quietly measured the previous deployment instead answers a
-# different question than the one asked.
-if [[ "${DEPLOY_WORKLOADS}" -eq 0 ]]; then
-  for pair in "--worker-count:${WORKER_COUNT}" \
-              "--sandbox-class:${SANDBOX_CLASS}" \
-              "--otlp-endpoint:${OTLP_ENDPOINT}" \
-              "--actor-memory:${ACTOR_MEMORY}" \
-              "--workload-wait-timeout:${WORKLOAD_WAIT_TIMEOUT}"; do
-    if [[ -n "${pair#*:}" ]]; then
-      echo "Error: ${pair%%:*} only applies with --deploy-workloads, which was not given." >&2
-      echo "The workloads already in the cluster are what this run measures." >&2
-      exit 1
-    fi
-  done
-fi
-
-# The setup actions, which end the invocation. A setup that went on to run
-# something would measure the deployment it had just made, which is the one
-# case where the run is not comparable to the ones after it: the golden
-# snapshots are new, so the first run pays for warming what the rest inherit.
-# Setting up and measuring are therefore two commands, and a run option given
-# alongside a setup action is a mistake worth naming rather than dropping —
-# nothing here would run it.
-if [[ "${BUILD}" -eq 1 || "${DEPLOY_WORKLOADS}" -eq 1 || "${DEPLOY_MONITORING}" -eq 1 ]]; then
-  for pair in "--duration:${DURATION}" \
-              "--users:${USERS}" \
-              "--spawn-rate:${SPAWN_RATE}" \
-              "--run-id:${RUN_ID}" \
-              "--user-class:${USER_CLASS}" \
-              "--workload-name:${WORKLOAD_NAME}" \
-              "--workload-template:${WORKLOAD_TEMPLATE}" \
-              "--wait-timeout:${WAIT_TIMEOUT_SECS}" \
-              "--pod-start-timeout:${POD_START_TIMEOUT_SECS}"; do
-    if [[ -n "${pair#*:}" ]]; then
-      echo "Error: ${pair%%:*} describes a run, and the setup actions only set up for" >&2
-      echo "one. Run this again without it, then start the run on its own:" >&2
-      echo "  $0 ${pair%%:*} ${pair#*:}" >&2
-      exit 1
-    fi
-  done
-  for flag in "--no-wait:${NO_WAIT}" "--no-metrics:${NO_METRICS}" \
-              "--follow-logs:${FOLLOW_LOGS}" "--only-summary:${ONLY_SUMMARY}" \
-              "--reports:${REPORTS}"; do
-    if [[ "${flag#*:}" -eq 1 ]]; then
-      echo "Error: ${flag%%:*} describes a run, and the setup actions start none." >&2
-      exit 1
-    fi
-  done
-
-  if [[ "${BUILD}" -eq 1 ]]; then
-    echo
-    echo "=== Building and pushing locust image ==="
-    "${BENCHMARKING_DIR}/locust/build_and_push.sh"
-  fi
-
-  # Before the workloads, so that a single setup command leaves Prometheus
-  # already watching while they come up.
-  if [[ "${DEPLOY_MONITORING}" -eq 1 ]]; then
-    echo
-    echo "=== Deploying Prometheus ==="
-    if [[ ! -f "${MONITORING_MANIFEST}" ]]; then
-      echo "Error: ${MONITORING_MANIFEST} not found." >&2
-      exit 1
-    fi
-    kubectl apply -f "${MONITORING_MANIFEST}"
-    kubectl rollout status deployment/prometheus --namespace="${NAMESPACE}" --timeout=300s
-    echo "Prometheus is up. Reach it with:"
-    echo "  kubectl port-forward -n ${NAMESPACE} svc/prometheus 9090:9090"
-  fi
-
-  if [[ "${DEPLOY_WORKLOADS}" -eq 1 ]]; then
-    echo
-    echo "=== Deploying benchmark workloads ==="
-    # An empty value must not become an empty argument, which would overwrite
-    # the default in workloads/deploy.sh rather than leave it in place.
-    workload_args=(--deploy)
-    [[ -n "${WORKER_COUNT}" ]] && workload_args+=(--worker-count "${WORKER_COUNT}")
-    [[ -n "${SANDBOX_CLASS}" ]] && workload_args+=(--sandbox-class "${SANDBOX_CLASS}")
-    [[ -n "${OTLP_ENDPOINT}" ]] && workload_args+=(--otlp-endpoint "${OTLP_ENDPOINT}")
-    [[ -n "${ACTOR_MEMORY}" ]] && workload_args+=(--actor-memory "${ACTOR_MEMORY}")
-    [[ -n "${WORKLOAD_WAIT_TIMEOUT}" ]] && workload_args+=(--wait-timeout "${WORKLOAD_WAIT_TIMEOUT}")
-    "${BENCHMARKING_DIR}/workloads/deploy.sh" "${workload_args[@]}"
-  fi
-
-  echo
-  echo "Setup done. Start a run with:"
-  echo "  $0 --duration 5m --users 10"
-  exit 0
-fi
-
-# Resolved here rather than at the declaration, so that the check above can
-# tell a timeout the caller gave from one it did not.
 WAIT_TIMEOUT_SECS="${WAIT_TIMEOUT_SECS:-${DEFAULT_WAIT_TIMEOUT_SECS}}"
 POD_START_TIMEOUT_SECS="${POD_START_TIMEOUT_SECS:-${DEFAULT_POD_START_TIMEOUT_SECS}}"
+POOL_TIMEOUT_SECS="${POOL_TIMEOUT_SECS:-${DEFAULT_POOL_TIMEOUT_SECS}}"
 for pair in "--wait-timeout:${WAIT_TIMEOUT_SECS}" \
-            "--pod-start-timeout:${POD_START_TIMEOUT_SECS}"; do
+            "--pod-start-timeout:${POD_START_TIMEOUT_SECS}" \
+            "--pool-timeout:${POOL_TIMEOUT_SECS}"; do
   if ! [[ "${pair#*:}" =~ ^[0-9]+$ ]]; then
-    echo "Error: ${pair%%:*} must be a whole number of seconds, got '${pair#*:}'" >&2
+    echo "Error: ${pair%%:*} must be a whole number, got '${pair#*:}'" >&2
     exit 1
   fi
 done
 
-# Generated here rather than left to deploy.sh, which would default it out of
-# reach: the summary at the end has to name the run it is querying for. The
-# spelling matches that default, and an id the caller gave is left alone for
-# deploy.sh to validate.
+# Required rather than best-effort, unlike the metrics summary further down:
+# the pool's shape is read off the case with it, so a run cannot start without.
+if ! command -v jq &>/dev/null; then
+  echo "Error: jq is required to read the pool's shape out of the test case." >&2
+  exit 1
+fi
+
+if [[ ! -f "${SUBSTRATE_DIR}/go.mod" ]]; then
+  echo "Error: substrate submodule not initialized at ${SUBSTRATE_DIR}; the" >&2
+  echo "WorkerPool manifest's ko:// workerImage cannot be resolved without it." >&2
+  echo "Run: git submodule update --init dependency-repos/substrate" >&2
+  exit 1
+fi
+if [[ ! -f "${POOL_MANIFEST}" ]]; then
+  echo "Error: ${POOL_MANIFEST} not found." >&2
+  exit 1
+fi
+
+# A timestamp rather than a random string, so the ids of a series of runs sort
+# into the order the runs happened in. Seconds are enough: the Job it names can
+# only exist one at a time.
 if [[ -z "${RUN_ID}" ]]; then
   RUN_ID="$(date -u +%Y%m%dt%H%M%Sz)"
 fi
+# Checked here rather than left to the API server, which would reject the whole
+# manifest for it and say so in terms of label syntax rather than of the flag
+# that produced it.
+if ! [[ "${RUN_ID}" =~ ^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$ ]]; then
+  echo "Error: --run-id must be 1-63 alphanumerics, dashes, underscores or dots," >&2
+  echo "starting and ending with an alphanumeric. Got '${RUN_ID}'" >&2
+  exit 1
+fi
+
+# locust rejects an empty --only-summary rather than reading it as false, so
+# this is never blank. --reports selects every registered report by name.
+export BENCHMARK_RUN_ID="${RUN_ID}"
+export BENCHMARK_TEST_CASE="${TEST_CASE:-${DEFAULT_TEST_CASE}}"
+export BENCHMARK_REPORT_BUCKET="${REPORT_BUCKET}"
+if [[ "${ONLY_SUMMARY}" -eq 1 ]]; then
+  export BENCHMARK_ONLY_SUMMARY=true
+else
+  export BENCHMARK_ONLY_SUMMARY=false
+fi
+if [[ "${REPORTS}" -eq 1 ]]; then
+  export BENCHMARK_REPORTS=all
+else
+  export BENCHMARK_REPORTS=""
+fi
+
+# Ahead of the resolve below, not merely ahead of the pool: the case is read
+# out of the locust image, so building first is what makes a run measure the
+# tests.yaml in the working tree rather than the one the last build baked in.
+echo
+echo "=== Building and pushing images ==="
+"${BENCHMARKING_DIR}/locust/build_and_push.sh"
+
+echo
+echo "=== Resolving test case ==="
+TEST_CASE_JSON="$(resolve_test_case "${BENCHMARK_TEST_CASE}")"
+echo "  ${BENCHMARK_TEST_CASE}: ${TEST_CASE_JSON}"
+
+# The pool keys, defaulted here rather than in the file so a case states only
+# what it means to change. runner.py drops the same two before the rest of the
+# case becomes worker flags.
+WORKER_COUNT="$(jq -r --argjson d "${DEFAULT_WORKER_COUNT}" '."worker-count" // $d' <<<"${TEST_CASE_JSON}")"
+SANDBOX_CLASS="$(jq -r --arg d "${DEFAULT_SANDBOX_CLASS}" '."sandbox-class" // $d' <<<"${TEST_CASE_JSON}")"
+
+if ! [[ "${WORKER_COUNT}" =~ ^[0-9]+$ ]]; then
+  echo "Error: case ${BENCHMARK_TEST_CASE}: \`worker-count\` must be a whole number, got '${WORKER_COUNT}'" >&2
+  exit 1
+fi
+case "${SANDBOX_CLASS}" in
+  gvisor|microvm) ;;
+  *)
+    echo "Error: case ${BENCHMARK_TEST_CASE}: \`sandbox-class\` must be gvisor or microvm, got '${SANDBOX_CLASS}'" >&2
+    exit 1
+    ;;
+esac
+
+echo
+echo "=== Recreating the WorkerPool ==="
+recreate_worker_pool
 
 echo
 echo "=== Running the benchmark Job ==="
-job_args=(--deploy-job)
-[[ -n "${DURATION}" ]] && job_args+=(--duration "${DURATION}")
-[[ -n "${USERS}" ]] && job_args+=(--users "${USERS}")
-[[ -n "${SPAWN_RATE}" ]] && job_args+=(--spawn-rate "${SPAWN_RATE}")
-[[ -n "${RUN_ID}" ]] && job_args+=(--run-id "${RUN_ID}")
-[[ -n "${USER_CLASS}" ]] && job_args+=(--user-class "${USER_CLASS}")
-[[ -n "${WORKLOAD_NAME}" ]] && job_args+=(--workload-name "${WORKLOAD_NAME}")
-[[ -n "${WORKLOAD_TEMPLATE}" ]] && job_args+=(--workload-template "${WORKLOAD_TEMPLATE}")
-[[ "${ONLY_SUMMARY}" -eq 1 ]] && job_args+=(--only-summary)
-[[ "${REPORTS}" -eq 1 ]] && job_args+=(--reports)
-"${BENCHMARKING_DIR}/locust/deploy.sh" "${job_args[@]}"
+submit_job
 
 if [[ "${NO_WAIT}" -eq 1 ]]; then
   exit 0

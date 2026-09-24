@@ -12,18 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The run-to-completion counterpart of deployment.yaml: the same benchmark,
-# ended by its own clock rather than held open for an operator.
+# One benchmark run, ended by its own clock. Rendered and submitted by
+# run_locust_job.sh.
 #
-# One container rather than the Deployment's two. /app/runner.py owns both
-# processes here, which is what lets the pod finish: a Job's pod is done only
-# once every container has exited, and two peer containers would each have to
-# decide to stop on their own. See that file for the shutdown ordering.
+# One container: /app/runner.py owns both processes, which is what lets the pod
+# finish — a Job's pod is done only once every container has exited, and two
+# peer containers would each have to decide to stop on their own. See that file
+# for the shutdown ordering.
 #
-# The duration, the user count, the workload and the template are baked in at
-# apply time, where the web UI would otherwise carry them, so a run is
-# described entirely by the manifest that started it. There is no Service and
-# no UI; the results of a run are the logs of its pod.
+# The run is named rather than spelled out: --test-case picks it from
+# /app/tests.yaml. There is no Service and no UI; the results of a run are the
+# logs of its pod.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -40,9 +39,8 @@ spec:
   template:
     metadata:
       labels:
-        # Deliberately not `app: locust`. The Service in deployment.yaml
-        # selects that label, and would otherwise publish the web UI's port at
-        # a pod that is running headless and has no web UI behind it.
+        # Deliberately not `app: locust`, which is what wait_for_pod and the
+        # log lookups in run_locust_job.sh select on.
         #
         # Prometheus is told about both spellings, so this pod is scraped by
         # the same job as the Deployment's. There are no prometheus.io
@@ -57,15 +55,14 @@ spec:
         #
         # The values are constrained by what a label may hold — 63 characters
         # of alphanumerics, dashes, underscores and dots — which the run id is
-        # checked against in deploy.sh. The others are safe by construction:
-        # a duration, a count, and two names that have to match a resource.
+        # checked against in deploy.sh; the case name is safe by construction,
+        # having to match a key in tests.yaml.
+        #
+        # The run is a case, read inside the pod, so its name is what this
+        # manifest can record — the load and the worker's flags are both in it,
+        # and the case is what a series of runs is grouped by.
         benchmark-run-id: "${BENCHMARK_RUN_ID}"
-        benchmark-users: "${BENCHMARK_USERS}"
-        benchmark-duration: "${BENCHMARK_DURATION}"
-        benchmark-workload: "${BENCHMARK_WORKLOAD_NAME}"
-        # Empty when the workload was left to choose, which is a valid label
-        # value and one Prometheus drops rather than stores as empty.
-        benchmark-template: "${BENCHMARK_WORKLOAD_TEMPLATE}"
+        benchmark-test-case: "${BENCHMARK_TEST_CASE}"
     spec:
       restartPolicy: Never
       # Created by infra/terraform-gke, which names the same account in the
@@ -81,22 +78,10 @@ spec:
         args:
         - "-f"
         - "/app/tests/${BENCHMARK_USER_CLASS}.py"
-        - "-t"
-        - "${BENCHMARK_DURATION}"
-        - "-u"
-        - "${BENCHMARK_USERS}"
-        # Resolved to a concrete number by deploy.sh, defaulting to the user
-        # count so every user starts at the first dispatch. Stated rather than
-        # left to locust, whose own default of 1/s would ramp a large run for
-        # longer than the run spends measuring.
-        - "-r"
-        - "${BENCHMARK_SPAWN_RATE}"
-        # Read only when the user class is runworkload; the other classes
-        # parse these and ignore them. Stated rather than defaulted so the
-        # applied manifest names what was measured. An empty template asks the
-        # workload for its own.
-        - "--workload-name=${BENCHMARK_WORKLOAD_NAME}"
-        - "--workload-template=${BENCHMARK_WORKLOAD_TEMPLATE}"
+        # Names a case in /app/tests.yaml, which is the whole of the run: the
+        # duration and user count as much as the worker's flags. Stated rather
+        # than defaulted so the applied manifest names what was measured.
+        - "--test-case=${BENCHMARK_TEST_CASE}"
         # The run_id is a pod label for Prometheus's benefit, and the reports
         # query on it, so the container needs it too. An empty --report is
         # dropped by runner.py rather than read as a report named "".

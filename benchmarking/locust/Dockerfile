@@ -33,6 +33,9 @@ RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 # COPY pkg ./pkg
+# Read from outside the image too: run_locust_job.sh resolves a case by running
+# this binary, so the host needs no YAML parser of its own.
+RUN CGO_ENABLED=0 go build -o /out/testcase-helper ./cmd/benchmarking/testcase-helper
 RUN CGO_ENABLED=0 go build -o /out/boomer-worker ./cmd/benchmarking/boomer-worker
 
 # Stage 3: Distroless runner. Carries the locust install AND the boomer
@@ -40,10 +43,13 @@ RUN CGO_ENABLED=0 go build -o /out/boomer-worker ./cmd/benchmarking/boomer-worke
 FROM gcr.io/distroless/python3-debian12
 WORKDIR /app
 COPY --from=pydeps /app/deps /app/deps
+COPY --from=goboomer /out/testcase-helper /app/testcase-helper
 COPY --from=goboomer /out/boomer-worker /app/boomer-worker
 COPY benchmarking/locust/tests/ /app/tests/
 COPY benchmarking/locust/reports/ /app/reports/
 COPY benchmarking/locust/runner.py /app/runner.py
+# The cases --test-case selects from.
+COPY benchmarking/tests.yaml /app/tests.yaml
 
 ENV PYTHONPATH=/app:/app/deps
 ENV PYTHONUNBUFFERED=1

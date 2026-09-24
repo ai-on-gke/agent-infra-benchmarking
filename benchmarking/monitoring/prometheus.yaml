@@ -171,12 +171,15 @@ data:
           - source_labels: [__meta_kubernetes_pod_label_benchmark_run_id]
             action: replace
             target_label: run_id
-          - source_labels: [__meta_kubernetes_pod_label_benchmark_users]
+          # A Job run is a case, read inside the pod, so its name is the whole
+          # of what the pod carries: the load and the worker's flags are both
+          # in benchmarking/tests.yaml under it, and a series of runs is
+          # grouped by this rather than by users or workload.
+          - source_labels: [__meta_kubernetes_pod_label_benchmark_test_case]
             action: replace
-            target_label: users
-          - source_labels: [__meta_kubernetes_pod_label_benchmark_duration]
-            action: replace
-            target_label: duration
+            target_label: test_case
+          # A Deployment pod labels the workload directly, having no case to
+          # read; a Job pod carries neither and simply has no such label.
           - source_labels: [__meta_kubernetes_pod_label_benchmark_workload]
             action: replace
             target_label: workload

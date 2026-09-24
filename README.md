@@ -80,68 +80,34 @@ any upstream executable the same way:
 
 ## Deploying the benchmarking
 
-### 1. Deploy the locust stack
-
 ```bash
-./benchmarking/deploy_locust.sh --deploy \
-  --user-class runworkload \
-  --workload-name glutton \
-  --workload-template glutton
+./benchmarking/deploy-benchmarking.sh --deploy
 ```
 
-#### Options
+`deploy-benchmarking.sh` deploys and runs nothing; `run_locust_job.sh` is what
+measures what it deployed. One command does all three steps, in this order:
 
-- **`--user-class NAME`** (default: `runworkload`) — the locust user class to
-  run. It has to name a `benchmarking/locust/tests/NAME.py`, and this repo ships
-  only `runworkload.py`, so `runworkload` is the sole value today. The worker
-  binary also registers upstream's `glutton` and `durdir` classes, but their
-  locust files live in substrate rather than here.
+1. `locust/build_and_push.sh` builds and pushes the locust image (which carries
+   the `boomer-worker` Go binary) and the openclaw actor image.
+2. Prometheus goes into the `benchmarking` namespace.
+3. `workloads/deploy.sh` applies the benchmark ActorTemplates and the
+   WorkerPool, and waits for their golden snapshots.
 
-- **`--workload-name NAME`** (default: `glutton`) — the workload a
-  `RunWorkloadUser` drives, meaning what counts as an instruction the sandbox
-  demonstrably ran:
-  - `glutton` — POSTs a protobuf ping to `/ping` and verifies the echoed nonce.
-  - `openclaw` — POSTs a fast-path prompt to `/invoke` and checks the reply.
+None of the three is skippable. Prometheus comes before the workloads so it is
+already watching while they come up, and it only ever scrapes runs that start
+after it — a stack deployed without it produces runs it has no record of.
 
-- **`--workload-template NAME`** (default: `glutton`) — the ActorTemplate the
-  workload runs on:
-  - `glutton`
-  - `openclaw`
-
-This runs three stages in order: `locust/build_and_push.sh` builds and pushes
-the locust image (which carries the `boomer-worker` Go binary) and the openclaw
-actor image, `workloads/deploy.sh` applies the benchmark ActorTemplates and the
-WorkerPool and waits for their golden snapshots, and `locust/deploy.sh` deploys
-locust into the `benchmarking` namespace.
-
-What gets measured is chosen here rather than in the web UI, because the three
-values below are baked into the deployed pod. The values above are the defaults
-spelled out, so `--deploy` on its own does the same thing; pass them to measure
-anything else.
+That is everything a run needs. Locust itself is not deployed here: it is a Job
+per run, created by `run_locust_job.sh` below.
 
 <details>
 <summary><strong>Re-deploying</strong></summary>
 
-**Locust only.** The faster path, for when the workloads are unchanged and only
-the benchmark code is:
+Tear the whole stack down and put it back:
 
 ```bash
-./benchmarking/locust/deploy.sh --delete
-./benchmarking/locust/build_and_push.sh
-./benchmarking/locust/deploy.sh --deploy \
-  --user-class runworkload \
-  --workload-name glutton \
-  --workload-template glutton
-```
-
-**Everything, workloads included.** Tear the whole stack down and put it back:
-
-```bash
-./benchmarking/deploy_locust.sh --delete
-./benchmarking/deploy_locust.sh --deploy \
-  --user-class runworkload \
-  --workload-name glutton \
-  --workload-template glutton
+./benchmarking/deploy-benchmarking.sh --delete
+./benchmarking/deploy-benchmarking.sh --deploy
 ```
 
 Use this whenever the workloads themselves change — a new or edited
@@ -150,69 +116,119 @@ image. An actor image in particular needs this path: the template pins it by
 digest, and only `workloads/deploy.sh` re-resolves that digest and retakes the
 golden snapshot.
 
+Rebuilding only the benchmark code still goes through `--deploy`, since the
+image is what a run pulls. That retakes the golden snapshots, so runs from
+either side of it are not comparable.
+
 </details>
-
-### 2. Forward the locust web UI
-
-In a separate terminal, since this holds the terminal open for as long as the
-UI is needed:
-
-```bash
-kubectl port-forward -n benchmarking svc/locust 8089:8089
-```
-
-### 3. Open the locust UI
-
-With the port-forward running, open [http://localhost:8089](http://localhost:8089).
-
-This is where the run is started and the `RunWorkloadUser` class is picked.
 
 ## Running a benchmark as a Job
 
-Everything above deploys locust as a Deployment: it is held open, and a run
-starts and stops from the web UI. `run_locust_job.sh` is the other way to run
-the same benchmark — as a Job that runs for a stated duration and then
-finishes, so that its completion is something a script can wait for.
+`run_locust_job.sh` is the only way to run a benchmark:
 
 ```bash
-./benchmarking/run_locust_job.sh --duration 5m --users 10
+./benchmarking/run_locust_job.sh --test-case glutton-baseline
 ```
 
-It submits the Job, waits for the pod, streams the run's logs as they are
-produced, and exits with the Job's result — so a failed run is a non-zero exit
-without having to go and ask. `--no-wait` stops after submitting instead, and
-leaves the run going in the cluster.
+In order, it builds and pushes the images, resolves the case out of the image
+it just built, recreates the WorkerPool, renders `locust/manifests/job.yaml`
+and submits it, waits for the pod, streams the run's logs, and exits with the
+Job's result — so a failed run is a non-zero exit without having to go and ask.
+`--no-wait` stops after submitting instead, and leaves the run going in the
+cluster.
 
-Every user starts at once. `--spawn-rate` is what changes that, and it defaults
-to `--users`: locust's own default is one user a second, which on a 100-user
-run would spend the first 100s climbing and report the samples taken on the way
-up in the same table as the ones taken at full load. A run that is meant to
-measure the ramp rather than a fixed load sets the rate deliberately:
+Building on every run is what lets a change to the benchmark code or to
+`tests.yaml` reach the next run without a separate deploy step. Docker's layer
+cache makes it cheap when nothing changed.
+
+### The pool is new every run
+
+Before each Job the existing `benchmark-ateom` WorkerPool is deleted and a
+fresh one applied, so no run inherits the workers the last one warmed. That is
+what makes a series of runs comparable to each other rather than each one
+measuring a pool that the previous run left in some state.
+
+The ActorTemplates and their golden snapshots are untouched by this. They are
+not in the pool manifest and their snapshots live in the bucket, so a run gets
+cold workers without paying to re-warm what it restores from — which is why
+this is safe to do per run, where redeploying the workloads is not.
+
+The pool's shape comes from the case, not from a flag — a pool that differs is
+a different run, and so is a different case. `worker-count` sizes it and
+`sandbox-class` picks its runtime, defaulting to 1 and `gvisor`:
+
+```yaml
+glutton-scale:
+  duration: 10m
+  users: 200
+  worker-count: 2      # 200 actors onto 2 workers, so queueing shows as latency
+```
+
+`sandbox-class` has to match what the ActorTemplates were deployed with: a
+snapshot cannot be restored across runtimes, so actors never schedule onto a
+pool of the other class. `--pool-timeout` stays a flag, since how long you are
+willing to wait is not part of what a run measures.
+
+### How the case is read
+
+`run_locust_job.sh` resolves the case by running `testcase-helper`, a small Go
+binary baked into the locust image beside the `tests.yaml` it reads:
 
 ```bash
-./benchmarking/run_locust_job.sh --duration 10m --users 100 --spawn-rate 5
+docker run --rm --entrypoint /app/testcase-helper "${LOCUST_IMAGE}" --case glutton-scale
+# {"duration":"10m","users":200,"worker-count":2,...}
+```
+
+That keeps a YAML parser off the host — the machine starting a run needs
+`kubectl`, `docker` and `jq`, not PyYAML or yq — and it fails an unknown case
+name before the pool is rebuilt and the Job submitted, rather than in the pod
+once both have happened.
+
+It also means the host reads **the same file the pod will**, because both read
+the copy baked into the image — and since the build runs first, that copy is
+the one in the working tree. Editing a case is therefore enough on its own; no
+separate deploy step stands between the edit and the next run.
+
+`worker-count` and `sandbox-class` are the host's keys, so `runner.py` drops
+them before the rest of the case becomes worker flags — `boomer-worker` has no
+such flags, and an unknown one is fatal to it.
+
+### The load is in the case
+
+`duration` and `users` are required keys of a case and `spawn-rate` defaults to
+`users`, which starts the whole load at once. That default matters: locust's own
+is one user a second, so a 100-user run would spend its first 100s climbing and
+report the samples taken on the way up in the same table as the ones at full
+load. A case meant to measure the ramp rather than a fixed load sets the rate
+deliberately:
+
+```yaml
+glutton-ramp:
+  duration: 10m
+  users: 100
+  spawn-rate: 5
 ```
 
 Starting everything at once means the actors are created at once too, so a pool
-that cannot take `--users` activations concurrently reports the queueing as
+that cannot take `users` activations concurrently reports the queueing as
 latency. That is a real measurement of a cold pool, and it is not the same
-number as the steady-state one — which is the reason to hold the rate fixed
-across a series of runs being compared.
+number as the steady-state one — which is the reason a case holds the rate
+rather than a flag, so every run under a name is the same run.
 
-The Job assumes the workloads are already deployed, because a series of runs
-has to measure one unchanging deployment — redeploying retakes the golden
-snapshots, and runs either side of that are not comparable. Setting up is
-therefore its own command, which runs nothing and exits when it is done:
+The Job assumes the ActorTemplates are already deployed, because a series of
+runs has to measure one unchanging set of them — redeploying retakes the golden
+snapshots, and runs either side of that are not comparable. Deploying is
+therefore a different script, which runs nothing:
 
 ```bash
-./benchmarking/run_locust_job.sh --build --deploy-workloads --deploy-monitoring
+./benchmarking/deploy-benchmarking.sh --deploy
 ```
 
-`--deploy-monitoring` brings up Prometheus in the `benchmarking` namespace, and
-every run started after it is scraped — which is the reason it belongs in the
-setup step rather than alongside a run. Prometheus pulls, so a run that has
-already finished cannot be collected retroactively. Grafana is not deployed;
-it sits in `benchmarking/monitoring/grafana.yaml` for when it is wanted.
+Prometheus comes up as part of that, and every run started after it is scraped
+— which is the reason it belongs in the setup step rather than alongside a run.
+Prometheus pulls, so a run that has already finished cannot be collected
+retroactively. Grafana is not deployed; it sits in
+`benchmarking/monitoring/grafana.yaml` for when it is wanted.
 
 ```bash
 kubectl port-forward -n benchmarking svc/prometheus 9090:9090
@@ -222,34 +238,38 @@ Every run after it measures that same deployment, and each one blocks until it
 is over, so a series can be a script:
 
 ```bash
-./benchmarking/run_locust_job.sh --users 50
-./benchmarking/run_locust_job.sh --users 100
+./benchmarking/run_locust_job.sh --test-case glutton-baseline
+./benchmarking/run_locust_job.sh --test-case glutton-scale
 ```
 
-Passing a run's options to the setup command is an error rather than something
-quietly dropped, since nothing there would have run them.
+The two scripts take disjoint flags, so a run option cannot reach the setup
+script or the other way round: either one rejects a flag it does not know.
 
-`--user-class`, `--workload-name` and `--workload-template` mean what they do
-in `deploy_locust.sh`, and `--deploy-workloads` takes that script's
-`--worker-count`, `--sandbox-class`, `--actor-memory` and `--otlp-endpoint`
-alongside it. `--help` lists them all.
+`--deploy` takes `--worker-count`, `--sandbox-class`, `--actor-memory`,
+`--otlp-endpoint` and `--wait-timeout`, all forwarded to `workloads/deploy.sh`.
+`deploy-benchmarking.sh --help` lists them.
 
-There is no web UI and no port-forward for the run itself. The duration and the
-user count are arguments here, where the UI's form carries them for the
-Deployment, and the results are the pod's logs: locust prints its aggregated
-table when the run ends, and the per-span lines from the worker are in the same
-stream. That is what gets streamed above, and a finished Job keeps it for a day:
+Its `--worker-count` only sizes the pool that warms the golden snapshots, since
+every run replaces that pool with the one its case asks for. `--sandbox-class`
+is the one to get right here: it fixes the class of the ActorTemplates, which
+is immutable, and a case whose `sandbox-class` disagrees with it will deploy a
+pool no actor can schedule onto.
+
+There is no web UI and no port-forward for a run. The duration and the user
+count come from the case, and the results are the pod's logs: locust prints its
+aggregated table when the run ends, and the per-span lines from the worker are
+in the same stream. That is what gets streamed above, and a finished Job keeps
+it for a day:
 
 ```bash
 kubectl logs job/locust-job -n benchmarking
 ```
 
-That table is the result of a run. Prometheus, when deployed, holds the same
-measurements as a time series instead — the worker's `/metrics` on port 8001,
-scraped every 10s under the `boomer-worker` job, and kept after the pod is
-gone. It is the only live endpoint either pod has: the port 8000 the locust
-container declares belongs to `common/metrics.py`, which this repo does not
-ship.
+That table is the result of a run. Prometheus holds the same measurements as a
+time series instead — the worker's `/metrics` on port 8001, scraped every 10s
+under the `boomer-worker` job, and kept after the pod is gone. It is the only
+live endpoint the pod has: the port 8000 the locust container declares belongs
+to `common/metrics.py`, which this repo does not ship.
 
 ### Telling one run from another
 
@@ -313,8 +333,7 @@ sum by (users) (rate(locust_requests_total{status="failure"}[1m]))
 
 The worker's own labels — `method`, `name`, `status`, `user_class` — are fixed
 upstream and say nothing about the run, which is why this comes from the pod
-rather than from the metric. A run under the Deployment carries none of these
-labels, since a session steered from the web UI has no fixed shape to record.
+rather than from the metric.
 
 Reusing a `run_id` merges two runs into one series, so leave it to the
 timestamp unless a run is worth naming.
@@ -340,8 +359,8 @@ containers would each have to decide to stop on their own.
 locust runs headless with `-t`, so the time limit stops the test and sends a
 `quit` to the worker. The worker returns from its run loop on that, then
 suspends and deletes every actor it created — which is why the pod can take a
-little longer than `--duration` to finish. `runner.py` waits for both, and
-exits with locust's status, or the worker's if locust was content.
+little longer than the case's `duration` to finish. `runner.py` waits for both,
+and exits with locust's status, or the worker's if locust was content.
 
 A run where some requests failed is a failed Job, because that is locust's
 default. Pass `--exit-code-on-error 0` through to locust when failures are an
@@ -357,15 +376,19 @@ after the first if the cluster is being kept for another run.
 ### 1. Delete the benchmarking stack
 
 ```bash
-./benchmarking/deploy_locust.sh --delete
+./benchmarking/deploy-benchmarking.sh --delete
 ```
 
-Deletes locust first, then the benchmark workloads. Stop the `kubectl
-port-forward` in the other terminal as well; it does not exit on its own.
+Deletes the benchmark workloads, then Prometheus — the mirror of what
+`--deploy` put there, and as all-or-nothing as that is.
 
-This deletes the Deployment, not the Job — a finished Job is kept for a day so
-its logs outlive it. `./benchmarking/run_locust_job.sh --delete` removes it
-sooner, and leaves the workloads alone.
+**Prometheus goes with it, and so does every run it recorded.** Its storage
+does not outlive its pod, so a run worth keeping should be saved before this —
+from the Job's log, or from `--reports` on the run itself.
+
+A Job is left alone, so a finished run keeps its log for its remaining day.
+`./benchmarking/run_locust_job.sh --delete` removes one, and a run still in
+flight should go before the workloads under it do.
 
 ### 2. Uninstall substrate from the cluster
 
