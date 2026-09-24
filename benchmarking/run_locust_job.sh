@@ -247,7 +247,9 @@ resolve_test_case() {
     return 1
   fi
   # --entrypoint because the distroless python3 base image launches python.
-  docker run --rm --entrypoint /app/testcase-helper "${LOCUST_IMAGE}" --case "$1"
+  # --platform suppresses the Docker warning about host/image architecture mismatch
+  # when resolving the case locally on an ARM Mac.
+  docker run --rm --platform "${LOCUST_IMAGE_PLATFORM:-linux/amd64}" --entrypoint /app/testcase-helper "${LOCUST_IMAGE}" --case "$1"
 }
 
 # recreate_worker_pool gives the run its own pool: the old one goes, a new one
@@ -321,17 +323,22 @@ wait_for_pod() {
   local started=${SECONDS}
   local deadline=$((SECONDS + POD_START_TIMEOUT_SECS))
   local next_report=$((SECONDS + PROGRESS_EVERY_SECS))
-  local phase
+  local phase job_uid
 
   echo "Waiting for the pod to start..."
   while ((SECONDS < deadline)); do
-    # The app label is this manifest's own, so it cannot match a pod from the
-    # Deployment, which labels its own `app: locust`.
-    phase="$(kubectl get pods --namespace="${NAMESPACE}" -l app="${JOB_NAME}" \
-      -o jsonpath='{.items[0].status.phase}' 2>/dev/null || true)"
-    case "${phase}" in
-      Running|Succeeded|Failed) return 0 ;;
-    esac
+    if [[ -z "${job_uid:-}" ]]; then
+      job_uid="$(kubectl get job "${JOB_NAME}" --namespace="${NAMESPACE}" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
+    fi
+    if [[ -n "${job_uid:-}" ]]; then
+      # controller-uid isolates the pod to this specific Job run, ignoring
+      # terminating pods from the previous run.
+      phase="$(kubectl get pods --namespace="${NAMESPACE}" -l "controller-uid=${job_uid}" \
+        -o jsonpath='{.items[0].status.phase}' 2>/dev/null || true)"
+      case "${phase}" in
+        Running|Succeeded|Failed) return 0 ;;
+      esac
+    fi
     if ((SECONDS >= next_report)); then
       echo "  $((SECONDS - started))s/${POD_START_TIMEOUT_SECS}s — pod is ${phase:-not created yet}"
       next_report=$((SECONDS + PROGRESS_EVERY_SECS))

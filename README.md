@@ -57,6 +57,8 @@ gcloud application-default credentials already in place.
 
    ```bash
    cp env.sh.example .env.sh
+   source .env.sh
+   gcloud container clusters get-credentials $CLUSTER_NAME --location=$CLUSTER_LOCATION
    ```
 
 2. Install substrate into the cluster
@@ -132,5 +134,8 @@ system.
 
 ### 3. Delete the cluster
 
-TBD, and only if the cluster is no longer wanted — it is created outside this
-repo, so it is deleted outside it too.
+Use terraform to destroy the cluster:
+
+   ```bash
+   terraform -chdir=infra/terraform-gke destroy --var-file terraform.tfvars
+   ```
