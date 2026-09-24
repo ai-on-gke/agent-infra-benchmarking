@@ -9,15 +9,8 @@ containers:
   image: ${IMAGE_WITH_DIGEST}
   command: ["python3", "-u", "/app/openclaw_actor.py"]
   env:
-  # Configure Vertex AI
-  - name: GOOGLE_CLOUD_PROJECT
-    value: "${PROJECT_ID}"
-  - name: VERTEX_REGION
-    value: "${GCE_REGION}"
-  - name: GOOGLE_CLOUD_LOCATION
-    value: "${GCE_REGION}"
-  - name: GCP_SA_KEY_B64
-    value: "${GCP_SA_KEY_B64}"
+  - name: OPENCLAW_USE_MOCK_LLM
+    value: "true"
   readyz:
     httpGet:
       path: /readyz
