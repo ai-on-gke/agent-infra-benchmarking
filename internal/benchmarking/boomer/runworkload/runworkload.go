@@ -12,41 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package runworkload drives a workload actor through substrate's activation
-// path and measures the wall clock a client waits before the sandbox accepts
-// work.
+// Package runworkload drives a workload actor through substrate's actor
+// lifecycle: each VU creates one actor and then cycles it suspend/resume for
+// the rest of the run, removing it at teardown.
 //
-// It is deliberately not the sum of the other benchmarks' rows: ResumeActor
-// returning is not the same as the actor being reachable, and under implicit
-// resume no ResumeActor RPC is issued at all. So the measurement brackets
-// everything between "client wants the sandbox" and "an instruction came back
-// correct", including the routing hop and any retry a client would really
-// have made.
+// Every control-plane call reports its own row and span through tracedCall.
+// On top of them each cycle reports TTFI: the wait from having a suspended
+// actor to that actor taking work. See measureTTFI for what the window
+// includes.
 //
-// Two windows are measured, because they answer different questions:
-//
-//   - FirstResume: the actor has just been created and has no snapshot of
-//     its own, so substrate activates it from whatever source its template
-//     resolves to — the template's golden snapshot when it has one, the OCI
-//     image when it does not. Point --workload-template at a template
-//     without snapshotsConfig to measure a true cold boot.
-//   - WarmStart: the actor exists and was suspended to object storage.
-//     This is resuming an existing session, and is the number substrate's
-//     100ms activation target is about.
-//
-// The timing comes off the span tree rather than off arithmetic on the stats
-// rows: a window's row latency is its parent span's duration, and each phase
-// is a child span, so a trace shows where the time went. The attributes on
-// the parent carry the split (control-plane handler time vs. the instruction
-// round trip) so one sampled trace explains its own total.
-//
-// What is under measurement is substrate's activation path, not any
-// application, so the workload the actor runs is a parameter rather than a
-// fixture: --workload-name selects an implementation of the workload
-// interface (see workload.go) and --workload-template overrides the
-// ActorTemplate it names. The flags themselves are declared by
-// cmd/benchmarking/boomer-worker and arrive here through SetOptions, so the
-// binary's --help lists every argument it takes in one place.
+// The workload the actor runs is a parameter: --workload-name selects an
+// implementation of the workload interface (see workload.go) and
+// --workload-template overrides the ActorTemplate it names. Both flags are
+// declared by cmd/benchmarking/boomer-worker and arrive through SetOptions.
 package runworkload
 
 import (
@@ -56,11 +34,11 @@ import (
 	"math/rand/v2"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -76,8 +54,7 @@ import (
 )
 
 // The atespace workloads/deploy.sh creates its ActorTemplates in. Mirrored
-// from that script rather than imported, and shared by every workload, so it
-// stays here rather than in any one of them.
+// from that script rather than imported.
 const templateAtespace = "benchmark-workloads"
 
 const (
@@ -85,58 +62,71 @@ const (
 	runWorkloadUserClass = "RunWorkloadUser"
 
 	// DefaultWorkload is the workload a RunWorkloadUser drives unless Options
-	// names another. The default template follows from the workload rather than
-	// being fixed here, so the two settings cannot drift into naming a template
-	// the workload has no way to address. Exported because the worker's
-	// --workload-name usage string states it.
+	// names another. Exported because the worker's --workload-name usage
+	// string states it.
 	DefaultWorkload = gluttonWorkloadName
 
-	// DefaultTimeout bounds the instruction retry loop when Options leaves it
-	// zero. An actor that has not taken an instruction by then is recorded as
-	// a failure instead of being waited on for the rest of the run.
+	// DefaultTimeout is unread here; exported for the worker's
+	// --workload-timeout usage string. See Options.Timeout.
 	DefaultTimeout = 60 * time.Second
 
-	// Delay between instruction attempts, short relative to a resume so the
-	// retry granularity does not show up in the measurement.
-	retryDelay = 25 * time.Millisecond
+	ttfiMetric          = "TTFI"
+	resumeMetric        = "Resume"
+	suspendMetric       = "Suspend"
+	executionTimeMetric = "ExecutionTime"
 
-	firstResumeMetric = "FirstResume"
-	warmStartMetric   = "WarmStart"
-	resumeMetric      = "Resume"
-	instructionMetric = "Instruction"
-	suspendMetric     = "Suspend"
-
-	// Transport label for the composite rows. A measurement window spans a gRPC
-	// resume and an HTTP instruction, so neither transport label the other
-	// rows use describes it.
+	// Transport label for TTFI. The window spans a gRPC resume and an HTTP
+	// instruction, so neither transport label describes it.
 	runWorkloadMethod = "runworkload"
+
+	// Caps the teardown's concurrent control-plane calls. Every VU's actor is
+	// removed at once, so an unbounded run would open one suspend and one
+	// delete per actor against an ateapi still draining the run's own traffic.
+	teardownConcurrency = 16
+
+	// drainTimeout bounds the wait for in-flight iterations at the start of
+	// the teardown. Well under the budget the caller allows for the whole
+	// teardown, so that the actors already created are still removed when an
+	// iteration is wedged rather than merely slow.
+	drainTimeout = 15 * time.Second
 )
 
-// Options are the runworkload-only settings of a run. They are handed to
-// this package rather than parsed by it: every flag the worker accepts is
-// declared in cmd/benchmarking/boomer-worker, so one --help lists them all and
-// a user class has no command-line surface of its own to keep in sync.
-//
-// The zero value asks for the defaults throughout.
+// Resume modes. Explicit issues a ResumeActor before the instruction;
+// implicit leaves the wake to the router.
+const (
+	ResumeModeExplicit = "explicit"
+	ResumeModeImplicit = "implicit"
+)
+
+// Options are the runworkload-only settings of a run, handed to this package
+// rather than parsed by it: every flag the worker accepts is declared in
+// cmd/benchmarking/boomer-worker. The zero value asks for the defaults.
 type Options struct {
 	// Workload names a registered workload (see workload.go). Empty selects
 	// DefaultWorkload.
 	Workload string
 
-	// Template overrides the ActorTemplate the workload would measure. Empty
-	// leaves that choice to the workload, which is the only place that knows
-	// what it can address.
+	// Template overrides the ActorTemplate the workload would run on. Empty
+	// leaves that choice to the workload.
 	Template string
 
-	// Timeout is the ceiling on the instruction retry loop. Zero selects
-	// DefaultTimeout. Negative is a caller error, rejected where the flag is
-	// declared rather than silently treated as unset.
+	// Timeout is unread: the instruction is sent once, so there is no retry
+	// loop to bound. Kept because cmd/benchmarking/boomer-worker declares
+	// --workload-timeout against it.
 	Timeout time.Duration
+
+	// MinWait and MaxWait bound the think time between iterations. An upper
+	// bound at or below the lower one waits MinWait exactly.
+	MinWait time.Duration
+	MaxWait time.Duration
+
+	// ResumeMode is ResumeModeExplicit or ResumeModeImplicit; empty selects
+	// explicit.
+	ResumeMode string
 }
 
-// configured is what SetOptions recorded. It is read exactly once, by
-// initRunWorkload, and passed by value from there on, so nothing on the
-// measurement path reads mutable package state.
+// configured is what SetOptions recorded, read once by initRunWorkload and
+// passed by value from there on.
 var configured Options
 
 var (
@@ -158,10 +148,7 @@ var (
 
 // SetOptions records the settings initRunWorkload will use. It must run
 // before the registered entry's Init, which main satisfies by calling it
-// after flag.Parse and before the userclass lookup. A setter rather than an
-// Init parameter because the registry hands every user class the same
-// userclass.Config, which is upstream's type and carries no runworkload
-// fields.
+// after flag.Parse and before the userclass lookup.
 func SetOptions(o Options) { configured = o }
 
 func init() {
@@ -175,21 +162,17 @@ func init() {
 }
 
 // initRunWorkload creates a runtime tied to cfg and returns a
-// boomer-compatible task function plus a shutdown hook the caller should run
-// before exit.
+// boomer-compatible task function plus a shutdown hook to run before exit.
 func initRunWorkload(cfg *userclass.Config) (taskFn func(), shutdown func(context.Context)) {
 	if cfg.Tracer == nil {
-		// Scope names the benchmark, not the workload: the same spans are
-		// emitted whichever workload --workload-name selects.
 		cfg.Tracer = otel.Tracer("substrate-boomer/runworkload")
 	}
-	// Resolved once at startup rather than per iteration: an unselectable
-	// workload is a configuration mistake, and a run that reports it after
-	// producing rows has already wasted the run.
+	// Resolved once at startup: an unselectable workload is a configuration
+	// mistake, and reporting it after producing rows has already wasted the
+	// run.
 	wl, err := resolveWorkload(configured.Workload)
 	if err != nil {
-		slog.Error("fatal: cannot select the workload",
-			slog.String("err", err.Error()))
+		slog.Error("fatal: cannot select the workload", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
 	rt := &runWorkloadRuntime{cfg: cfg, opts: configured, workload: wl}
@@ -201,25 +184,41 @@ type runWorkloadRuntime struct {
 	opts     Options
 	workload workload
 	users    sync.Map // goroutineID -> *runWorkloadUser
+
+	// Gates the task function so the teardown can wait for the iterations
+	// boomer leaves running when it returns. See inflight.go.
+	inflight inflight
 }
 
 func (r *runWorkloadRuntime) dynamicWait() time.Duration {
-	cfg := r.cfg.Dyn.Load()
-	if cfg.MaxWait <= cfg.MinWait {
-		return cfg.MinWait
+	if r.opts.MaxWait <= r.opts.MinWait {
+		return r.opts.MinWait
 	}
-	jitter := cfg.MaxWait - cfg.MinWait
-	return cfg.MinWait + time.Duration(rand.Float64()*float64(jitter))
+	jitter := r.opts.MaxWait - r.opts.MinWait
+	return r.opts.MinWait + time.Duration(rand.Float64()*float64(jitter))
 }
 
 // iterate is the task function boomer calls in a loop on each VU goroutine.
-// The first call on a goroutine creates the actor and measures its first
-// resume; every later call suspends it and measures the warm one.
+// The first call on a goroutine creates the actor; every later one cycles it
+// down and back up.
+//
+// The gate is taken for the whole iteration, so the teardown can tell an
+// iteration that is still creating an actor from one that has finished. A
+// refused entry means the run is being torn down, and the only correct thing
+// left to do is return: an actor created past this point would not be in the
+// map the teardown has already walked.
 func (r *runWorkloadRuntime) iterate() {
+	if !r.inflight.enter() {
+		return
+	}
+	defer r.inflight.leave()
+
+	ctx := context.Background()
+
 	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
-		u, err := r.startUser(context.Background(), r.cfg.Dyn.Load(), r.opts)
+		u, err := r.startUser(ctx, r.opts)
 		if err != nil {
 			slog.Warn("runworkload on_start failed; goroutine will retry next iter",
 				slog.String("err", err.Error()))
@@ -227,33 +226,58 @@ func (r *runWorkloadRuntime) iterate() {
 			return
 		}
 		if _, loaded := r.users.LoadOrStore(gid, u); loaded {
-			// A user is already registered under this goroutine id, so the
-			// actor just created would never be reached again — and never
-			// torn down. Drop it now instead of leaking it for the rest of
-			// the run.
-			u.suspendAndDelete(context.Background())
+			// Another user already holds this goroutine id, so the actor just
+			// created would never be reached again. Drop it now rather than
+			// leak it for the rest of the run.
+			_ = u.suspendAndDelete(ctx)
 			bmetrics.UpdateUsers(runWorkloadUserClass, -1)
 		}
-		// The cold window was measured inside startUser. Returning here
-		// keeps one iteration to one measurement, so the two rows stay
-		// independent samples rather than a cold and a warm number
-		// averaged into one iteration's think time.
 		time.Sleep(r.dynamicWait())
 		return
 	}
 	user := val.(*runWorkloadUser)
 
-	dynCfg := r.cfg.Dyn.Load()
-	ctx := context.Background()
-	// Suspend is the precondition for a warm measurement, not part of it:
-	// it runs outside the measured span and reports its own row.
-	user.suspend(ctx)
-	user.measure(ctx, warmStartMetric, dynCfg, r.opts, false)
+	if err := user.suspend(ctx); err != nil {
+		r.discard(ctx, gid, user, suspendMetric, err)
+		time.Sleep(r.dynamicWait())
+		return
+	}
+	// Called with the actor just suspended, which is where the TTFI window
+	// opens.
+	if err := user.measureTTFI(ctx, r.opts.ResumeMode); err != nil {
+		r.discard(ctx, gid, user, ttfiMetric, err)
+		time.Sleep(r.dynamicWait())
+		return
+	}
 
 	time.Sleep(r.dynamicWait())
 }
 
-func (r *runWorkloadRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config, opts Options) (*runWorkloadUser, error) {
+// discard throws away an actor whose state is no longer known. Any failed
+// call can leave it mid transition and nothing reconciles it, so the actor is
+// deleted and the goroutine's slot freed; the next iteration starts a fresh
+// one rather than working against a broken actor for the rest of the run.
+//
+// The slot is freed whether or not the delete worked, because a VU that
+// cannot get rid of its actor still has to stop using it. A delete that
+// failed is named, since that actor holds a worker until someone removes it.
+func (r *runWorkloadRuntime) discard(ctx context.Context, gid int64, u *runWorkloadUser, call string, cause error) {
+	slog.Warn("discarding the actor after a failed call",
+		slog.String("actor", u.actorName),
+		slog.String("call", call),
+		slog.String("err", cause.Error()))
+
+	if err := u.suspendAndDelete(ctx); err != nil {
+		slog.Warn("discarded actor was left behind",
+			slog.String("actor", u.actorName),
+			slog.String("template", u.templateName),
+			slog.String("err", err.Error()))
+	}
+	r.users.Delete(gid)
+	bmetrics.UpdateUsers(runWorkloadUserClass, -1)
+}
+
+func (r *runWorkloadRuntime) startUser(ctx context.Context, opts Options) (*runWorkloadUser, error) {
 	tmpl := opts.Template
 	if tmpl == "" {
 		tmpl = r.workload.DefaultTemplate()
@@ -275,21 +299,71 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, dynCfg dynconfig.Con
 		bmetrics.UpdateUsers(runWorkloadUserClass, -1)
 		return nil, err
 	}
-
-	// A failed first-resume window is a result, not a reason to drop the
-	// actor: it is already recorded as a FirstResume failure, and the next
-	// iteration's suspend normalizes whatever state the actor was left in.
-	u.measure(ctx, firstResumeMetric, dynCfg, opts, true)
 	return u, nil
 }
 
+// shutdown removes every actor the run created, and says per actor whether it
+// went. An actor that outlives the run holds a worker until someone deletes
+// it by hand, so the one place that knows it was left behind names it.
+//
+// The actors go in parallel, capped at teardownConcurrency: a run's worth of
+// them removed one at a time would outlast the budget the caller allows.
+//
+// It begins by draining the task function, because boomer.Run returns while
+// iterations are still in flight (see inflight.go) and the walk below has to
+// happen after the last actor has been recorded, not during it.
 func (r *runWorkloadRuntime) shutdown(ctx context.Context) {
+	// The drain takes a slice of the caller's budget rather than all of it, so
+	// that one wedged iteration cannot spend every second the suspend and
+	// delete calls need — turning a drain meant to prevent leaked actors into
+	// the cause of them.
+	drainCtx, cancel := context.WithTimeout(ctx, drainTimeout)
+	defer cancel()
+	if !r.inflight.drain(drainCtx) {
+		// Not fatal, and deliberately still followed by the walk: the actors
+		// already recorded are worth removing even though the map may still
+		// grow behind us. What it costs is the guarantee, so name it.
+		slog.Warn("teardown drain timed out; tearing down with iterations still in flight",
+			slog.Duration("drain_timeout", drainTimeout))
+	}
+
+	// Snapshotted before the teardown so nothing is walked while goroutines are
+	// being launched against it.
+	var users []*runWorkloadUser
 	r.users.Range(func(_, val any) bool {
-		u := val.(*runWorkloadUser)
-		u.suspendAndDelete(ctx)
-		bmetrics.UpdateUsers(runWorkloadUserClass, -1)
+		users = append(users, val.(*runWorkloadUser))
 		return true
 	})
+
+	var removed, left atomic.Int64
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, teardownConcurrency)
+	for _, u := range users {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			err := u.suspendAndDelete(ctx)
+			bmetrics.UpdateUsers(runWorkloadUserClass, -1)
+			if err != nil {
+				left.Add(1)
+				slog.Warn("teardown left an actor behind",
+					slog.String("actor", u.actorName),
+					slog.String("template", u.templateName),
+					slog.String("err", err.Error()))
+				return
+			}
+			removed.Add(1)
+			slog.Info("teardown removed an actor", slog.String("actor", u.actorName))
+		}()
+	}
+	wg.Wait()
+
+	slog.Info("teardown finished",
+		slog.Int64("removed", removed.Load()),
+		slog.Int64("left", left.Load()))
 }
 
 type runWorkloadUser struct {
@@ -309,8 +383,8 @@ func (u *runWorkloadUser) ref() *ateapipb.ObjectRef {
 	return &ateapipb.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
 }
 
-// actor is the handle the workload addresses. Built per call rather than
-// stored so the workload can hold no benchmark state of its own.
+// actor is the handle a workload addresses. Built per call rather than stored
+// so the workload holds no benchmark state of its own.
 func (u *runWorkloadUser) actor() actorRef {
 	return actorRef{
 		HTTPClient: u.cfg.HTTPClient,
@@ -320,148 +394,11 @@ func (u *runWorkloadUser) actor() actorRef {
 	}
 }
 
-// budget is the ceiling on the instruction retry loop.
-func (u *runWorkloadUser) budget(opts Options) time.Duration {
-	if opts.Timeout > 0 {
-		return opts.Timeout
-	}
-	return DefaultTimeout
-}
-
-// measure times one window and reports it as metricName. The parent
-// span's duration is the measurement, so every phase that a client would
-// wait through runs inside it and nothing else does.
-func (u *runWorkloadUser) measure(ctx context.Context, metricName string, dynCfg dynconfig.Config, opts Options, firstResume bool) {
-	mode := dynCfg.ResumeMode
-	if mode == "" {
-		// Matches common/resume_mode.py's default, so the mode is the same
-		// whether the value arrives from locust or from nothing at all.
-		// Implicit is the more realistic client path — a harness sends
-		// traffic rather than calling ResumeActor — so the tests.yaml
-		// matrix measures both rather than assuming one.
-		mode = dynconfig.ResumeModeExplicit
-	}
-	ctx, span := u.cfg.Tracer.Start(ctx, metricName)
-	defer span.End()
-	span.SetAttributes(
-		attribute.String("workload", u.workload.Name()),
-		attribute.String("template", u.templateName),
-		attribute.String("resume_mode", mode),
-		attribute.Bool("first_resume", firstResume),
-	)
-
-	start := time.Now()
-
-	var controlPlane time.Duration
-	if mode == dynconfig.ResumeModeExplicit {
-		elapsed, err := u.resume(ctx)
-		controlPlane = elapsed
-		if err != nil {
-			u.recordWindow(span, metricName, time.Since(start), 0, controlPlane, 0, err)
-			return
-		}
-	}
-
-	attempts, instruction, err := u.firstInstruction(ctx, u.budget(opts))
-	u.recordWindow(span, metricName, time.Since(start), attempts, controlPlane, instruction, err)
-}
-
-// recordWindow closes out a measurement window: the attributes make one
-// sampled trace self-explaining, and the row carries client wall clock. That
-// is a deliberate departure from the other benchmarks, which prefer the
-// server's elapsed trailer — the gaps between the phases are exactly what the
-// benchmark is measuring, and a server-side number cannot see them.
-func (u *runWorkloadUser) recordWindow(span trace.Span, metricName string, total time.Duration, attempts int, controlPlane, instruction time.Duration, err error) {
-	span.SetAttributes(
-		attribute.Float64("total_ms", boomerutil.MsFloat(total)),
-		attribute.Int("attempts", attempts),
-	)
-	if controlPlane > 0 {
-		span.SetAttributes(attribute.Float64("control_plane_ms", boomerutil.MsFloat(controlPlane)))
-	}
-	if instruction > 0 {
-		span.SetAttributes(attribute.Float64("instruction_ms", boomerutil.MsFloat(instruction)))
-	}
-	boomerutil.LogSampledTrace(span, metricName, total, boomerutil.SourceClient, err)
-	if err != nil {
-		bmetrics.RecordFailure(runWorkloadMethod, metricName, u.userClass, total, err.Error())
-		return
-	}
-	bmetrics.RecordSuccess(runWorkloadMethod, metricName, u.userClass, total, 0)
-}
-
-// firstInstruction drives the workload until one instruction comes back
-// correct or the budget elapses, and reports the whole loop as one row. The
-// retries are inside the measurement window on purpose: until an instruction
-// lands, the client cannot use the sandbox, so a request the router rejected
-// while the actor was still activating is part of the wait. Whether a given
-// failure is worth retrying is the workload's call, since only it knows what
-// its own answers mean. Per-attempt visibility comes from the router's own
-// server-side spans, which the injected trace context parents to this one.
-func (u *runWorkloadUser) firstInstruction(ctx context.Context, budget time.Duration) (int, time.Duration, error) {
-	ctx, span := u.cfg.Tracer.Start(ctx, instructionMetric)
-	defer span.End()
-
-	start := time.Now()
-	deadline := start.Add(budget)
-
-	var attempts int
-	var lastErr error
-	for {
-		attempts++
-		retryable, err := u.workload.SendInstruction(ctx, u.actor())
-		if err == nil {
-			latency := time.Since(start)
-			span.SetAttributes(attribute.Int("attempts", attempts))
-			boomerutil.LogSampledTrace(span, instructionMetric, latency, boomerutil.SourceClient, nil)
-			bmetrics.RecordSuccess("http", instructionMetric, u.userClass, latency, 0)
-			return attempts, latency, nil
-		}
-		lastErr = err
-		if !retryable {
-			break
-		}
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			lastErr = fmt.Errorf("no instruction accepted within %s (%d attempts), last error: %w", budget, attempts, err)
-			break
-		}
-		time.Sleep(min(retryDelay, remaining))
-	}
-
-	latency := time.Since(start)
-	span.SetAttributes(attribute.Int("attempts", attempts))
-	boomerutil.LogSampledTrace(span, instructionMetric, latency, boomerutil.SourceClient, lastErr)
-	bmetrics.RecordFailure("http", instructionMetric, u.userClass, latency, lastErr.Error())
-	return attempts, latency, lastErr
-}
-
-// resume issues the explicit ResumeActor that opens an explicit-mode
-// window, and returns the server-side handler duration so the parent can
-// attribute how much of the window ateapi owns.
-func (u *runWorkloadUser) resume(ctx context.Context) (time.Duration, error) {
-	var serverElapsed time.Duration
-	err := u.tracedCall(ctx, resumeMetric, &serverElapsed, func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
-			Actor: u.ref(),
-		}, grpc.Trailer(tr))
-		return err
-	})
-	if err == nil && !u.isActive {
-		suspendedActors.WithLabelValues(u.workload.Name()).Dec()
-		activeActors.WithLabelValues(u.workload.Name()).Inc()
-		u.isActive = true
-	}
-	return serverElapsed, err
-}
-
 func (u *runWorkloadUser) ensureAtespace(ctx context.Context) error {
-	return u.tracedCall(ctx, "CreateAtespace", nil, func(callCtx context.Context, tr *metadata.MD) error {
+	return u.tracedCall(ctx, "CreateAtespace", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapipb.CreateAtespaceRequest{
 			Atespace: &ateapipb.Atespace{
-				Metadata: &ateapipb.ResourceMetadata{
-					Name: u.cfg.Atespace,
-				},
+				Metadata: &ateapipb.ResourceMetadata{Name: u.cfg.Atespace},
 			},
 		}, grpc.Trailer(tr))
 		if err == nil {
@@ -474,11 +411,8 @@ func (u *runWorkloadUser) ensureAtespace(ctx context.Context) error {
 	})
 }
 
-// create registers the actor. It runs before the cold window opens, so its
-// latency is reported but not counted in the window: a harness creates the
-// record once and may do it long before the first instruction.
 func (u *runWorkloadUser) create(ctx context.Context) error {
-	err := u.tracedCall(ctx, "CreateActor", nil, func(callCtx context.Context, tr *metadata.MD) error {
+	err := u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
@@ -495,40 +429,184 @@ func (u *runWorkloadUser) create(ctx context.Context) error {
 	return err
 }
 
-func (u *runWorkloadUser) suspend(ctx context.Context) {
-	err := u.tracedCall(ctx, suspendMetric, nil, func(callCtx context.Context, tr *metadata.MD) error {
+// measureTTFI brings the actor back up, sends it one instruction, and reports
+// the wait as TTFI. It must be called with the actor freshly suspended: the
+// window opens here, so the suspend that preceded it is outside.
+//
+// Only explicit mode issues ResumeActor. Implicit leaves the wake to the
+// router, which does it while holding the instruction — so under implicit
+// resume the window contains nothing and TTFI is near zero. The number to read
+// there is the ExecutionTime row.
+//
+// The window closes at the moment the instruction was issued, not when it
+// answered: serving it is the application's cost and differs per workload.
+// Since the instruction is sent once and expected to be served, that instant
+// is right after the resume returned — so TTFI is the resume the client waited
+// through, and the instruction is what proves the actor was ready for it
+// rather than what dates the readiness.
+//
+// Either call failing reports the window as a failure over the wait it spent
+// and hands the error back for the actor to be discarded, so the cycle stops
+// there either way.
+func (u *runWorkloadUser) measureTTFI(ctx context.Context, mode string) error {
+	if mode == "" {
+		mode = ResumeModeExplicit
+	}
+
+	ctx, span := u.cfg.Tracer.Start(ctx, ttfiMetric)
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("workload", u.workload.Name()),
+		attribute.String("template", u.templateName),
+		attribute.String("resume_mode", mode),
+	)
+
+	start := time.Now()
+	if mode == ResumeModeExplicit {
+		if err := u.resume(ctx); err != nil {
+			u.recordTTFI(span, time.Since(start), err)
+			return err
+		}
+	}
+
+	// The window closes here, with the instruction about to go out: serving it
+	// is the application's cost, not substrate's.
+	total := time.Since(start)
+	if err := u.executeInstruction(ctx); err != nil {
+		// Nothing was served, so there is no instant to close on; the row
+		// carries the whole wait the window did spend.
+		u.recordTTFI(span, time.Since(start), err)
+		return err
+	}
+
+	u.recordTTFI(span, total, nil)
+	return nil
+}
+
+// recordTTFI closes out the window, as a success or as a failure over the wait
+// it spent.
+func (u *runWorkloadUser) recordTTFI(span trace.Span, total time.Duration, err error) {
+	span.SetAttributes(attribute.Float64("total_ms", boomerutil.MsFloat(total)))
+	boomerutil.LogSampledTrace(span, ttfiMetric, total, boomerutil.SourceClient, err)
+	if err != nil {
+		bmetrics.RecordFailure(runWorkloadMethod, ttfiMetric, u.userClass, total, err.Error())
+		return
+	}
+	bmetrics.RecordSuccess(runWorkloadMethod, ttfiMetric, u.userClass, total, 0)
+}
+
+// executeInstruction sends one instruction and reports it as the ExecutionTime
+// row. There are no retries: the actor is resumed before this runs, so a
+// command it will not serve is a fault to surface rather than a state to wait
+// out. The workload's retryable verdict is therefore ignored.
+//
+// The round trip it takes is this row's own latency and the ExecutionTime
+// span's duration, so a caller that closes a window before the instruction
+// only has to take its own timestamp first.
+//
+// A non-nil error leaves the actor in a state the run cannot reason about: it
+// is the signal to discard the actor, not merely a failed sample.
+func (u *runWorkloadUser) executeInstruction(ctx context.Context) error {
+	ctx, span := u.cfg.Tracer.Start(ctx, executionTimeMetric)
+	defer span.End()
+
+	start := time.Now()
+	_, err := u.workload.SendInstruction(ctx, u.actor())
+	service := time.Since(start)
+
+	boomerutil.LogSampledTrace(span, executionTimeMetric, service, boomerutil.SourceClient, err)
+	if err != nil {
+		bmetrics.RecordFailure("http", executionTimeMetric, u.userClass, service, err.Error())
+		return err
+	}
+	bmetrics.RecordSuccess("http", executionTimeMetric, u.userClass, service, 0)
+	return nil
+}
+
+func (u *runWorkloadUser) resume(ctx context.Context) error {
+	err := u.tracedCall(ctx, resumeMetric, func(callCtx context.Context, tr *metadata.MD) error {
+		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
+			Actor: u.ref(),
+		}, grpc.Trailer(tr))
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if !u.isActive {
+		suspendedActors.WithLabelValues(u.workload.Name()).Dec()
+		activeActors.WithLabelValues(u.workload.Name()).Inc()
+		u.isActive = true
+	}
+	return nil
+}
+
+// suspend takes the actor down and reports whether it went. A failed suspend
+// can leave the actor mid transition, and nothing reconciles it, so the
+// caller decides what the run does next rather than assuming it is suspended.
+func (u *runWorkloadUser) suspend(ctx context.Context) error {
+	err := u.tracedCall(ctx, suspendMetric, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})
-	if err == nil && u.isActive {
+	if err != nil {
+		// tracedCall records the row but logs only a sampled trace, so this
+		// is the one place the reason is always said.
+		slog.Warn("suspend failed; the actor may be left mid transition",
+			slog.String("actor", u.actorName),
+			slog.String("err", err.Error()))
+		return err
+	}
+	if u.isActive {
 		activeActors.WithLabelValues(u.workload.Name()).Dec()
 		suspendedActors.WithLabelValues(u.workload.Name()).Inc()
 		u.isActive = false
 	}
+	return nil
 }
 
 // suspendAndDelete suspends the actor before deleting it. DeleteActor
 // requires SUSPENDED or CRASHED; deleting a running actor leaks it. The
 // suspend is unmetered (teardown precondition, not benchmark latency), while
-// the delete is metered so true leaks still surface in failures.csv.
-func (u *runWorkloadUser) suspendAndDelete(ctx context.Context) {
-	_, err := u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+// the delete is metered so true leaks still surface.
+//
+// A nil return means the actor is gone, so the delete decides it and a failed
+// suspend rides along as context: the two fail together when the actor is
+// still in a transitional state, and the pair is what names that cause.
+func (u *runWorkloadUser) suspendAndDelete(ctx context.Context) error {
+	_, suspendErr := u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor: u.ref(),
 	})
-	if err == nil && u.isActive {
+	if suspendErr == nil && u.isActive {
 		activeActors.WithLabelValues(u.workload.Name()).Dec()
 		suspendedActors.WithLabelValues(u.workload.Name()).Inc()
 		u.isActive = false
 	}
-	u.delete(ctx)
+
+	// A failed suspend leaves the actor in a state the delete precondition
+	// refuses, and it is the case where leaving it behind costs a worker for
+	// the rest of the run, so that delete is the one allowed from any state.
+	deleteErr := u.delete(ctx, suspendErr != nil)
+	if deleteErr == nil {
+		return nil
+	}
+	if suspendErr != nil {
+		return fmt.Errorf("delete: %w (after suspend: %v)", deleteErr, suspendErr)
+	}
+	return fmt.Errorf("delete: %w", deleteErr)
 }
 
-func (u *runWorkloadUser) delete(ctx context.Context) {
-	_ = u.tracedCall(ctx, "DeleteActor", nil, func(callCtx context.Context, tr *metadata.MD) error {
+// delete removes the actor. anyState relaxes the SUSPENDED-or-CRASHED
+// precondition the control plane otherwise enforces; the rest of the teardown
+// (atelet termination, volume detach, worker release) runs either way, so it
+// frees the worker rather than only dropping the record.
+func (u *runWorkloadUser) delete(ctx context.Context, anyState bool) error {
+	err := u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
-			Actor: u.ref(),
+			Actor:    u.ref(),
+			AnyState: anyState,
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -545,14 +623,14 @@ func (u *runWorkloadUser) delete(ctx context.Context) {
 		u.isCreated = false
 		u.isActive = false
 	}
+	return err
 }
 
 // tracedCall wraps a unary gRPC call with a span and Prometheus/locust
-// reporting, as the other user classes do. It additionally hands the
-// server-side elapsed time back through serverElapsed (when non-nil) so a
-// caller inside a measurement window can report what share of the window
-// ateapi's handler accounted for.
-func (u *runWorkloadUser) tracedCall(ctx context.Context, name string, serverElapsed *time.Duration, do func(context.Context, *metadata.MD) error) error {
+// reporting, as the other user classes do. The latency reported is the
+// server's own elapsed trailer when it sent one, and client wall clock
+// otherwise.
+func (u *runWorkloadUser) tracedCall(ctx context.Context, name string, do func(context.Context, *metadata.MD) error) error {
 	ctx, span := u.cfg.Tracer.Start(ctx, name)
 	defer span.End()
 
@@ -564,9 +642,6 @@ func (u *runWorkloadUser) tracedCall(ctx context.Context, name string, serverEla
 	latency, source := boomerutil.ElapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, clientLatency)
 	if source == boomerutil.SourceServer {
 		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(latency)))
-	}
-	if serverElapsed != nil {
-		*serverElapsed = latency
 	}
 	boomerutil.LogSampledTrace(span, name, latency, source, err)
 	if err != nil {

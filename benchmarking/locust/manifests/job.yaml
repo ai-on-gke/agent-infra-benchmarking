@@ -1,0 +1,162 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# One benchmark run, ended by its own clock. Rendered and submitted by
+# run_locust_job.sh.
+#
+# One container: /app/runner.py owns both processes, which is what lets the pod
+# finish — a Job's pod is done only once every container has exited, and two
+# peer containers would each have to decide to stop on their own. See that file
+# for the shutdown ordering.
+#
+# The run is named rather than spelled out: --test-case picks it from
+# /app/tests.yaml. There is no Service and no UI; the results of a run are the
+# logs of its pod.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: locust-job
+  namespace: benchmarking
+spec:
+  # A benchmark that died partway is not one to quietly run again: the actors
+  # it abandoned and the rows it already reported would both carry into the
+  # retry, and the second run's numbers would be read as the first's.
+  backoffLimit: 0
+  # The logs are the results and they live in the pod, so the pod outlives the
+  # run by a day rather than being collected as soon as it ends.
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        # Deliberately not `app: locust`, which is what wait_for_pod and the
+        # log lookups in run_locust_job.sh select on.
+        #
+        # Prometheus is told about both spellings, so this pod is scraped by
+        # the same job as the Deployment's. There are no prometheus.io
+        # annotations here for that reason: they would add a second scrape of
+        # the one endpoint this pod serves, under a second job name.
+        app: locust-job
+        # What the run was, carried as labels so Prometheus can relabel them
+        # onto every series the run produces. The worker's own metric labels
+        # are fixed upstream at method/name/status/user_class and say nothing
+        # about which run they came from, so without these one run is told
+        # from another only by the generated pod name.
+        #
+        # The values are constrained by what a label may hold — 63 characters
+        # of alphanumerics, dashes, underscores and dots — which the run id is
+        # checked against in deploy.sh; the case name is safe by construction,
+        # having to match a key in tests.yaml.
+        #
+        # The run is a case, read inside the pod, so its name is what this
+        # manifest can record — the load and the worker's flags are both in it,
+        # and the case is what a series of runs is grouped by.
+        benchmark-run-id: "${BENCHMARK_RUN_ID}"
+        benchmark-test-case: "${BENCHMARK_TEST_CASE}"
+    spec:
+      restartPolicy: Never
+      # Created by infra/terraform-gke, which names the same account in the
+      # bucket's objectCreator binding. Workload Identity gives the pod that
+      # grant and nothing else, so a report uploads and nothing here can read
+      # or delete what earlier runs wrote.
+      serviceAccountName: ${BENCHMARK_RUNNER_KSA}
+      containers:
+      - name: runner
+        image: ${LOCUST_IMAGE}
+        imagePullPolicy: Always
+        command: ["python3", "/app/runner.py"]
+        args:
+        - "-f"
+        - "/app/tests/${BENCHMARK_USER_CLASS}.py"
+        # Names a case in /app/tests.yaml, which is the whole of the run: the
+        # duration and user count as much as the worker's flags. Stated rather
+        # than defaulted so the applied manifest names what was measured.
+        - "--test-case=${BENCHMARK_TEST_CASE}"
+        # The run_id is a pod label for Prometheus's benefit, and the reports
+        # query on it, so the container needs it too. An empty --report is
+        # dropped by runner.py rather than read as a report named "".
+        - "--run-id=${BENCHMARK_RUN_ID}"
+        - "--report=${BENCHMARK_REPORTS}"
+        # Empty leaves the reports on the pod, where the Job's TTL takes them.
+        - "--report-bucket=${BENCHMARK_REPORT_BUCKET}"
+        env:
+        # locust's own --only-summary, which it reads from this name. An env
+        # var rather than an argument because an unset argument would reach
+        # locust as an empty one; "false" is spelled out for the same reason,
+        # as locust rejects an empty value instead of reading it as unset.
+        - name: LOCUST_ONLY_SUMMARY
+          value: "${BENCHMARK_ONLY_SUMMARY}"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+        ports:
+        # The worker's own diagnostics. The master's aggregate endpoint on
+        # 8000 is not exposed here: a run this short is over before a scrape
+        # interval makes much of it, and the aggregate is printed to the log
+        # when the run ends.
+        - name: boomer-prom
+          containerPort: 8001
+          protocol: TCP
+        volumeMounts:
+        - name: servicedns-ca
+          mountPath: /run/servicedns-ca
+          readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        resources:
+          requests:
+            cpu: "1"
+            memory: "768Mi"
+
+      volumes:
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: ca.crt
+      # The benchmark's client identity, presented to ateapi over mTLS.
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+---
+# The account the pod runs as. infra/terraform-gke grants this exact
+# namespace/name pair objectCreator on the bucket through a principal://
+# subject, so no iam.gke.io annotation is needed here — but the two spellings
+# have to agree or the grant lands on nothing.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${BENCHMARK_RUNNER_KSA}
+  namespace: benchmarking
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: benchmarking-job-permissions
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: ${BENCHMARK_RUNNER_KSA}
+  namespace: benchmarking
+roleRef:
+  kind: Role
+  name: atelet-endpointslices
+  apiGroup: rbac.authorization.k8s.io

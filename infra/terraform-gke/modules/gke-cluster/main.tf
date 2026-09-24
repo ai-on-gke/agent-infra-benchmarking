@@ -19,6 +19,15 @@ resource "google_container_cluster" "autopilot" {
 
   enable_autopilot = true
 
+  min_master_version = var.kubernetes_version != "" ? var.kubernetes_version : null
+
+  dynamic "release_channel" {
+    for_each = var.release_channel != "" ? [var.release_channel] : []
+    content {
+      channel = release_channel.value
+    }
+  }
+
   ip_allocation_policy {}
 
   workload_identity_config {
@@ -35,8 +44,16 @@ resource "google_container_cluster" "autopilot" {
     }
   }
 
-  managed_opentelemetry_config {
-    scope = var.managed_otel_scope
+  # SCOPE_UNSPECIFIED is the proto zero value, so the provider serializes it to
+  # nothing and the block reaches GKE empty. That is fine in the create request
+  # and fatal in an update, which comes back "Must specify a field to update"
+  # and fails every apply that touches this cluster. Emitting no block at all is
+  # what "leave managed OTel alone" has to look like.
+  dynamic "managed_opentelemetry_config" {
+    for_each = var.managed_otel_scope == "SCOPE_UNSPECIFIED" ? [] : [1]
+    content {
+      scope = var.managed_otel_scope
+    }
   }
 
   dynamic "enable_k8s_beta_apis" {
@@ -69,6 +86,15 @@ resource "google_container_cluster" "standard" {
 
   datapath_provider = var.enable_dataplane_v2 ? "ADVANCED_DATAPATH" : null
 
+  min_master_version = var.kubernetes_version != "" ? var.kubernetes_version : null
+
+  dynamic "release_channel" {
+    for_each = var.release_channel != "" ? [var.release_channel] : []
+    content {
+      channel = release_channel.value
+    }
+  }
+
   ip_allocation_policy {}
 
   workload_identity_config {
@@ -85,8 +111,16 @@ resource "google_container_cluster" "standard" {
     }
   }
 
-  managed_opentelemetry_config {
-    scope = var.managed_otel_scope
+  # SCOPE_UNSPECIFIED is the proto zero value, so the provider serializes it to
+  # nothing and the block reaches GKE empty. That is fine in the create request
+  # and fatal in an update, which comes back "Must specify a field to update"
+  # and fails every apply that touches this cluster. Emitting no block at all is
+  # what "leave managed OTel alone" has to look like.
+  dynamic "managed_opentelemetry_config" {
+    for_each = var.managed_otel_scope == "SCOPE_UNSPECIFIED" ? [] : [1]
+    content {
+      scope = var.managed_otel_scope
+    }
   }
 
   dynamic "enable_k8s_beta_apis" {
@@ -112,6 +146,7 @@ resource "google_container_node_pool" "this" {
   location = var.region
   project  = var.project_id
   cluster  = local.cluster_name
+  version  = each.value.version
 
   node_locations = length(each.value.node_locations) > 0 ? each.value.node_locations : null
 
@@ -148,13 +183,20 @@ resource "google_container_node_pool" "this" {
       }
     }
 
+    service_account = var.node_service_account
+
+    # cloud-platform is the scope Google pairs with a dedicated service
+    # account: the scope is the coarse filter and IAM is the fine one, so the
+    # roles held by the account above are what a node can actually do.
+    # Narrowing the scope is what you do instead when the nodes are stuck on
+    # the default account and its project-wide roles.
     oauth_scopes = [
       "https://www.googleapis.com/auth/cloud-platform",
     ]
   }
 
   management {
-    auto_repair  = true
-    auto_upgrade = true
+    auto_repair  = each.value.auto_repair
+    auto_upgrade = each.value.auto_upgrade
   }
 }

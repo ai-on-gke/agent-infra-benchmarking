@@ -44,14 +44,19 @@ import (
 
 func main() {
 	var (
-		apiEndpoint        = flag.String("api-endpoint", "k8s:///api.ate-system.svc.cluster.local:443", "ateapi gRPC dial target.")
-		routerURL          = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "atenet HTTP router base URL (no trailing slash).")
-		atespace           = flag.String("atespace", "benchmark", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
-		promAddr           = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
-		configJSON         = flag.String("config-json", "", "Initial dynconfig as a JSON object (keys: trace_probability, min_wait_time, max_wait_time in seconds, durdir_file_size_bytes, resume_mode, lifecycle_mode, durdir_read_mode, durdir_template, mem_target, mem_churn, mem_read). Unset fields keep their built-in defaults.")
-		masterWebPort      = flag.Int("master-web-port", 0, "If non-zero, fetch dynconfig from http://{master-host}:{master-web-port}/boomer-config on each spawn message and fail fatally on error. {master-host} comes from boomer's existing --master-host flag.")
-		configPollInterval = flag.Duration("config-poll-interval", 10*time.Second, "With --master-web-port, also fetch dynconfig on this interval. A spawn message comes only when the number of users or the spawn rate changes, thus a load shape that changes the sample rate alone needs this. Zero stops the polling.")
-		userClass          = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
+		apiEndpoint = flag.String("api-endpoint", "k8s:///api.ate-system.svc.cluster.local:443", "ateapi gRPC dial target.")
+		routerURL   = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "atenet HTTP router base URL (no trailing slash).")
+		atespace    = flag.String("atespace", "benchmark", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
+		promAddr    = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
+		userClass   = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
+
+		// Settings a run holds from start to end. They were fetched from the
+		// locust master's /boomer-config while the web UI could change them
+		// mid-run; nothing in this repo does, so they are flags.
+		minWait          = flag.Duration("min-wait", 0, "Lower bound on the think time between iterations.")
+		maxWait          = flag.Duration("max-wait", 500*time.Millisecond, "Upper bound on the think time between iterations. At or below --min-wait waits exactly that.")
+		resumeMode       = flag.String("resume-mode", runworkload.ResumeModeExplicit, fmt.Sprintf("How an actor is woken: %s issues ResumeActor before the instruction, %s leaves the wake to the router.", runworkload.ResumeModeExplicit, runworkload.ResumeModeImplicit))
+		traceProbability = flag.Float64("trace-probability", 0, "Fraction of iterations to sample a trace for, 0 to 1.")
 
 		// runworkload settings. Declared here with every other flag, so
 		// --help is the whole command line rather than one list per user
@@ -74,14 +79,17 @@ func main() {
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
-	initialCfg, err := dynconfig.Parse([]byte(*configJSON), dynconfig.Config{MaxWait: 500 * time.Millisecond})
-	if err != nil {
-		slog.Error("failed to parse --config-json", slog.String("err", err.Error()))
+	switch *resumeMode {
+	case runworkload.ResumeModeExplicit, runworkload.ResumeModeImplicit:
+	default:
+		slog.Error("fatal: unknown --resume-mode value",
+			slog.String("resume_mode", *resumeMode),
+			slog.String("known", runworkload.ResumeModeExplicit+","+runworkload.ResumeModeImplicit))
 		os.Exit(1)
 	}
 
 	ctx := context.Background()
-	sampler := btrace.NewUpdatableSampler(initialCfg.TraceProbability)
+	sampler := btrace.NewUpdatableSampler(*traceProbability)
 	tp, err := btrace.Init(ctx, "substrate-boomer", sampler)
 	if err != nil {
 		slog.Error("failed to initialize tracing", slog.String("err", err.Error()))
@@ -102,41 +110,20 @@ func main() {
 
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 
-	dyn := dynconfig.NewHolder(initialCfg)
-
-	if *masterWebPort > 0 {
-		masterHost := flag.Lookup("master-host").Value.String()
-		configURL := fmt.Sprintf("http://%s:%d/boomer-config", masterHost, *masterWebPort)
-		if err := dynconfig.SubscribeSpawn(configURL, dyn, sampler, 5*time.Second, func(err error) {
-			slog.Error("fatal: dynconfig fetch failed; exiting so the pod restarts",
-				slog.String("url", configURL), slog.String("err", err.Error()))
-			os.Exit(1)
-		}); err != nil {
-			slog.Error("fatal: failed to subscribe to boomer:spawn",
-				slog.String("err", err.Error()))
-			os.Exit(1)
-		}
-		// A spawn message is not sufficient by itself: locust sends one only
-		// when the number of users or the spawn rate changes. Poll also, thus
-		// a step of a load shape that changes only the sample rate reaches
-		// this worker. A failed poll is not fatal, because the worker holds
-		// the last good value.
-		dynconfig.StartPoll(ctx, configURL, dyn, sampler,
-			*configPollInterval, 5*time.Second, func(err error) {
-				slog.Warn("dynconfig poll failed; keeping the current values",
-					slog.String("url", configURL), slog.String("err", err.Error()))
-			})
-		slog.Info("dynconfig fetch enabled",
-			slog.String("url", configURL),
-			slog.Duration("poll_interval", *configPollInterval))
-	}
-
 	cfg := &userclass.Config{
 		APIStub:    apiStub,
 		HTTPClient: httpClient,
 		RouterURL:  *routerURL,
 		Atespace:   *atespace,
-		Dyn:        dyn,
+		// runworkload reads the flags above through SetOptions; this is for
+		// the upstream user classes, which take the same values off the
+		// holder that userclass.Config requires.
+		Dyn: dynconfig.NewHolder(dynconfig.Config{
+			MinWait:          *minWait,
+			MaxWait:          *maxWait,
+			ResumeMode:       *resumeMode,
+			TraceProbability: *traceProbability,
+		}),
 	}
 
 	if *workloadTimeout < 0 {
@@ -148,9 +135,12 @@ func main() {
 	// only that entry's Init reads these, so a run of another user class
 	// carries them without ever looking at them.
 	runworkload.SetOptions(runworkload.Options{
-		Workload: *workloadName,
-		Template: *workloadTemplate,
-		Timeout:  *workloadTimeout,
+		Workload:   *workloadName,
+		Template:   *workloadTemplate,
+		Timeout:    *workloadTimeout,
+		MinWait:    *minWait,
+		MaxWait:    *maxWait,
+		ResumeMode: *resumeMode,
 	})
 
 	entry, ok := userclass.Lookup(class)
@@ -181,10 +171,8 @@ func main() {
 		defer cancel()
 		shutdownFn(shutdownCtx)
 
-		// Immediately exit the process so Kubernetes restarts the container.
-		// This guarantees all boomer Task instances, memory maps, and 
-		// goroutine states are entirely wiped clean before the next Start.
 		slog.Info("forcing container restart to ensure clean state")
+
 		os.Exit(0)
 	})
 
@@ -196,8 +184,5 @@ func main() {
 		Fn:     taskFn,
 	})
 
-	slog.Info("boomer exited; suspending+deleting actors")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	shutdownFn(shutdownCtx)
+	slog.Info("boomer exited")
 }

@@ -19,9 +19,9 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
@@ -29,19 +29,38 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-// errResumeRefused stands in for a control plane that could not place the
-// actor on a worker.
-var errResumeRefused = errors.New("no worker available")
+var (
+	// errResumeRefused stands in for a control plane that could not place the
+	// actor on a worker.
+	errResumeRefused = errors.New("no worker available")
+	// errActorBusy stands in for a call refused because the actor is still in
+	// a transitional state.
+	errActorBusy = errors.New("actor is not SUSPENDED")
+)
 
 type fakeControlClient struct {
 	ateapipb.ControlClient
-	// resumeErr, when set, fails every ResumeActor call with it.
-	resumeErr error
+	// Each, when set, fails every call of its name.
+	resumeErr  error
+	suspendErr error
+	deleteErr  error
 	// serverElapsedUs, when set, is returned as the x-server-elapsed-us
 	// trailer the real ServerUnaryInterceptor emits.
 	serverElapsedUs string
-	mu              sync.Mutex
-	calls           []string
+	// suspendDelay holds each SuspendActor open, so a test can tell whether a
+	// window that should start after the suspend counted it.
+	suspendDelay time.Duration
+	// deleteDelay holds each DeleteActor open, so a teardown test can see how
+	// many run at once.
+	deleteDelay time.Duration
+
+	mu sync.Mutex
+	// inFlight and peak track overlapping DeleteActor calls.
+	inFlight int
+	peak     int
+	// deleteAnyState is the AnyState flag from the most recent DeleteActor.
+	deleteAnyState bool
+	calls          []string
 	// template is the ActorTemplate name from the last CreateActor.
 	template string
 }
@@ -97,14 +116,52 @@ func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.Suspe
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "SuspendActor")
+	time.Sleep(f.suspendDelay)
+	if f.suspendErr != nil {
+		return nil, f.suspendErr
+	}
 	return &ateapipb.SuspendActorResponse{}, nil
 }
 
 func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, "DeleteActor")
+	f.deleteAnyState = in.GetAnyState()
+	f.inFlight++
+	f.peak = max(f.peak, f.inFlight)
+	anyState, suspendErr, deleteErr := in.GetAnyState(), f.suspendErr, f.deleteErr
+	f.mu.Unlock()
+
+	// Outside the lock, so concurrent callers actually overlap here.
+	time.Sleep(f.deleteDelay)
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inFlight--
+	// Mirrors ensureMarkedDeleting: a refused suspend leaves the actor in a
+	// state only an any-state delete may remove.
+	if suspendErr != nil && !anyState {
+		return nil, errActorBusy
+	}
+	if deleteErr != nil {
+		return nil, deleteErr
+	}
 	return &ateapipb.Actor{}, nil
+}
+
+// peakInFlight is the most DeleteActor calls that overlapped.
+func (f *fakeControlClient) peakInFlight() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.peak
+}
+
+// deletedFromAnyState reports whether the most recent DeleteActor asked to
+// bypass the state precondition.
+func (f *fakeControlClient) deletedFromAnyState() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deleteAnyState
 }
 
 func (f *fakeControlClient) recordedCalls() []string {
@@ -113,8 +170,19 @@ func (f *fakeControlClient) recordedCalls() []string {
 	return append([]string(nil), f.calls...)
 }
 
+// countCalls is how many times the named RPC was made.
+func (f *fakeControlClient) countCalls(name string) int {
+	var n int
+	for _, c := range f.recordedCalls() {
+		if c == name {
+			n++
+		}
+	}
+	return n
+}
+
 // newTestConfig starts srv, sets HTTPClient and RouterURL, and ensures
-// APIStub, Tracer, and Dyn are populated if nil.
+// APIStub and Tracer are populated if nil.
 func newTestConfig(t *testing.T, srv *pingServer, cfg *userclass.Config) *userclass.Config {
 	t.Helper()
 	ts := srv.Start(t)
@@ -129,9 +197,6 @@ func newTestConfig(t *testing.T, srv *pingServer, cfg *userclass.Config) *usercl
 	}
 	if cfg.Atespace == "" {
 		cfg.Atespace = "benchmark"
-	}
-	if cfg.Dyn == nil {
-		cfg.Dyn = dynconfig.NewHolder(dynconfig.Config{})
 	}
 	cfg.HTTPClient = ts.Client()
 	cfg.RouterURL = ts.URL

@@ -1,129 +1,104 @@
 # agent-infra-benchmarking
 Backend for benchmarks and corresponding recipes for agent infra offerings.
 
-## Preparation
+## Setting up the infrastructure
 
-### 1. Create a cluster
+The cluster, the snapshot bucket and the Artifact Registry repository come from
+the Terraform config in `infra/terraform-gke`. Run from the repo root, with
+gcloud application-default credentials already in place.
 
-TBD. The cluster has to exist before any of the steps below; this repo does not
-create one.
+1. Copy the example — the real file is gitignored and per-developer:
 
-You can create one using terraform in the folder infra. Example tfvars should cover everything *EXPERIMENTAL STILL*
+   ```bash
+   cp infra/terraform-gke/terraform.tfvars.example infra/terraform-gke/terraform.tfvars
+   ```
 
-### 2. Configure the environment
+   Then set in it:
 
-Copy the example and fill in the values for your project:
+   - `project_id` — required, no default.
+   - `default_resource_name` — default name for all created resources.
+   - `cluster.node_pools` — the hardware the benchmark runs on, see below.
 
-```bash
-cp env.sh.example .env.sh
-```
+   The example ships two pools:
 
-### 3. Install substrate into the cluster
+   - **`default`** — GKE's own system workloads and substrate's control plane.
+   - **`sandboxed`** — the benchmark workers. 
 
-Upstream's installer expects to run from the substrate repo root, so invoke it
-through the wrapper:
+   Sizing a pool: `node_count` is the size it starts at, and
+   `min_node_count` / `max_node_count` bound the autoscaler around it
+   (defaulting to 1 and 3). Setting min and max equal pins the pool, which is
+   what the example does for `sandboxed` — a run that is being compared with
+   another has to measure a fixed amount of hardware.
 
-```bash
-./scripts/substrate/upstream.sh hack/install-ate.sh --deploy-ate-system
-```
+   `node_locations` pins a pool to the zones it lists. Leaving it empty spreads
+   the pool across every zone in the region, and `node_count` is **per zone**
+   on a regional cluster like this one, so an unpinned pool is three times the
+   nodes and three times the bill.
 
-The wrapper sources `.env.sh`, regenerates
-`dependency-repos/substrate/.ate-dev-env.sh` from it, and runs the given
-executable with `dependency-repos/substrate` as the working directory. It takes
-any upstream executable the same way:
+2. Download the providers:
 
-```bash
-./scripts/substrate/upstream.sh hack/install-ate.sh --help
-```
+   ```bash
+   terraform -chdir=infra/terraform-gke init
+   ```
 
-## Deploying the benchmarking
+3. Create everything, answering `yes` at the plan. A GKE cluster takes several
+   minutes, and this is billable:
 
-### 1. Deploy the locust stack
+   ```bash
+   terraform -chdir=infra/terraform-gke apply --var-file terraform.tfvars
+   ```
 
-```bash
-./benchmarking/deploy_locust.sh --deploy \
-  --user-class runworkload \
-  --workload-name glutton \
-  --workload-template glutton
-```
+## Setting up the Agent Substrate
 
-#### Options
 
-- **`--user-class NAME`** (default: `runworkload`) — the locust user class to
-  run. It has to name a `benchmarking/locust/tests/NAME.py`, and this repo ships
-  only `runworkload.py`, so `runworkload` is the sole value today. The worker
-  binary also registers upstream's `glutton` and `durdir` classes, but their
-  locust files live in substrate rather than here.
+1. Configure the environment
 
-- **`--workload-name NAME`** (default: `glutton`) — the workload a
-  `RunWorkloadUser` drives, meaning what counts as an instruction the sandbox
-  demonstrably ran:
-  - `glutton` — POSTs a protobuf ping to `/ping` and verifies the echoed nonce.
-  - `openclaw` — POSTs a fast-path prompt to `/invoke` and checks the reply.
+   Copy the example and fill in the values for your project:
 
-- **`--workload-template NAME`** (default: `glutton`) — the ActorTemplate the
-  workload runs on:
-  - `glutton`
-  - `openclaw`
+   ```bash
+   cp env.sh.example .env.sh
+   source .env.sh
+   gcloud container clusters get-credentials $CLUSTER_NAME --location=$CLUSTER_LOCATION
+   ```
 
-This runs three stages in order: `locust/build_and_push.sh` builds and pushes
-the locust image (which carries the `boomer-worker` Go binary) and the openclaw
-actor image, `workloads/deploy.sh` applies the benchmark ActorTemplates and the
-WorkerPool and waits for their golden snapshots, and `locust/deploy.sh` deploys
-locust into the `benchmarking` namespace.
+2. Install substrate into the cluster
 
-What gets measured is chosen here rather than in the web UI, because the three
-values below are baked into the deployed pod. The values above are the defaults
-spelled out, so `--deploy` on its own does the same thing; pass them to measure
-anything else.
+   Upstream's installer expects to run from the substrate repo root, so invoke it
+   through the wrapper:
+   
+   ```bash
+   ./scripts/substrate/upstream.sh hack/install-ate.sh --deploy-ate-system
+   ```
 
-<details>
-<summary><strong>Re-deploying</strong></summary>
+3. Deploying the benchmarking
 
-**Locust only.** The faster path, for when the workloads are unchanged and only
-the benchmark code is:
+   ```bash
+   ./benchmarking/deploy-benchmarking.sh --deploy
+   ```
 
-```bash
-./benchmarking/locust/deploy.sh --delete
-./benchmarking/locust/build_and_push.sh
-./benchmarking/locust/deploy.sh --deploy \
-  --user-class runworkload \
-  --workload-name glutton \
-  --workload-template glutton
-```
+4. Pick the test case to run
 
-**Everything, workloads included.** Tear the whole stack down and put it back:
+   A run is a named case in [`benchmarking/tests.yaml`](benchmarking/tests.yaml),
+   under `cases:`. The key is what the next step passes to `--test-case`.
 
-```bash
-./benchmarking/deploy_locust.sh --delete
-./benchmarking/deploy_locust.sh --deploy \
-  --user-class runworkload \
-  --workload-name glutton \
-  --workload-template glutton
-```
+5. Run a benchmark job script.
 
-Use this whenever the workloads themselves change — a new or edited
-ActorTemplate, a different sandbox class or actor memory, or a rebuilt actor
-image. An actor image in particular needs this path: the template pins it by
-digest, and only `workloads/deploy.sh` re-resolves that digest and retakes the
-golden snapshot.
+   ```bash
+   ./benchmarking/run_locust_job.sh --test-case glutton-baseline --follow-logs
+   ```
 
-</details>
+6. Collect the artifacts
 
-### 2. Forward the locust web UI
+   When the run ends it uploads its files to `reports/<run-id>/` in the
+   deployment's bucket. The run id defaults to a UTC timestamp and is settable
+   with `--run-id`; 
 
-In a separate terminal, since this holds the terminal open for as long as the
-UI is needed:
+   A run leaves four files:
 
-```bash
-kubectl port-forward -n benchmarking svc/locust 8089:8089
-```
-
-### 3. Open the locust UI
-
-With the port-forward running, open [http://localhost:8089](http://localhost:8089).
-
-This is where the run is started and the `RunWorkloadUser` class is picked.
+   - `locust_stats.csv`, `locust_stats_history.csv`, `locust_failures.csv` —
+     locust's own output, written as the run goes.
+   - `stats.csv` — the run's rows read back out of Prometheus.
+   - `ttfi-vs-users.html` — TTFI against concurrency, as a self-contained page.
 
 ## Cleanup
 
@@ -133,11 +108,20 @@ after the first if the cluster is being kept for another run.
 ### 1. Delete the benchmarking stack
 
 ```bash
-./benchmarking/deploy_locust.sh --delete
+./benchmarking/deploy-benchmarking.sh --delete
 ```
 
-Deletes locust first, then the benchmark workloads. Stop the `kubectl
-port-forward` in the other terminal as well; it does not exit on its own.
+Deletes the benchmark workloads, then Prometheus — the mirror of what
+`--deploy` put there, and as all-or-nothing as that is.
+
+**Prometheus goes with it, and so does every run it recorded.** Its storage
+does not outlive its pod. The reports every run uploads to
+`gs://${BUCKET_NAME}/reports/<run-id>/` are unaffected, and are the record that
+survives this.
+
+A Job is left alone, so a finished run keeps its log for its remaining day.
+`./benchmarking/run_locust_job.sh --delete` removes one, and a run still in
+flight should go before the workloads under it do.
 
 ### 2. Uninstall substrate from the cluster
 
@@ -150,5 +134,8 @@ system.
 
 ### 3. Delete the cluster
 
-TBD, and only if the cluster is no longer wanted — it is created outside this
-repo, so it is deleted outside it too.
+Use terraform to destroy the cluster:
+
+   ```bash
+   terraform -chdir=infra/terraform-gke destroy --var-file terraform.tfvars
+   ```

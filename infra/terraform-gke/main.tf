@@ -1,46 +1,47 @@
 locals {
-  bucket_name     = var.bucket_name != "" ? var.bucket_name : "${var.project_id}-bucket"
+  bucket_name            = var.bucket_name != "" ? var.bucket_name : var.default_resource_name
+  artifact_repository_id = var.artifact_repository_id != "" ? var.artifact_repository_id : var.default_resource_name
+
   bucket_location = var.bucket_location != "" ? var.bucket_location : var.region
+  cluster_name    = var.cluster.name != "" ? var.cluster.name : var.default_resource_name
 }
 
-module "clusters" {
+module "cluster" {
   source = "./modules/gke-cluster"
 
-  for_each = var.clusters
-
   project_id = var.project_id
-  region     = coalesce(each.value.region, var.region)
+  region     = coalesce(var.cluster.region, var.region)
 
-  cluster_name = each.key
+  cluster_name = local.cluster_name
 
-  autopilot            = each.value.autopilot
-  network              = each.value.network
-  subnetwork           = each.value.subnetwork
-  enable_dataplane_v2  = each.value.enable_dataplane_v2
-  node_pools           = each.value.node_pools
-  k8s_beta_apis        = each.value.k8s_beta_apis
-  enable_pod_snapshots = each.value.enable_pod_snapshots
-  enable_agent_sandbox = each.value.enable_agent_sandbox
-  managed_otel_scope   = each.value.managed_otel_scope
+  autopilot            = var.cluster.autopilot
+  network              = var.cluster.network
+  subnetwork           = var.cluster.subnetwork
+  enable_dataplane_v2  = var.cluster.enable_dataplane_v2
+  node_pools           = var.cluster.node_pools
+  kubernetes_version   = var.cluster.kubernetes_version
+  release_channel      = var.cluster.release_channel
+  k8s_beta_apis        = var.cluster.k8s_beta_apis
+  enable_pod_snapshots = var.cluster.enable_pod_snapshots
+  enable_agent_sandbox = var.cluster.enable_agent_sandbox
+  managed_otel_scope   = var.cluster.managed_otel_scope
+
+  node_service_account = google_service_account.node.email
 }
 
 # ---------------------------------------------------------------------------
 # Artifact Registry
-#
-# Shared across all clusters in var.clusters.
 # ---------------------------------------------------------------------------
 
 resource "google_artifact_registry_repository" "this" {
   project       = var.project_id
-  location      = var.region
-  repository_id = var.artifact_repository_id
+  location      = var.artifact_repository_location
+  repository_id = local.artifact_repository_id
   format        = var.artifact_repository_format
 }
 
 # ---------------------------------------------------------------------------
 # Storage bucket
-#
-# Shared across all clusters in var.clusters.
 # ---------------------------------------------------------------------------
 
 resource "google_storage_bucket" "this" {
@@ -51,7 +52,7 @@ resource "google_storage_bucket" "this" {
 
 
   storage_class               = var.bucket_storage_class
-  force_destroy               = var.bucket_force_destroy
+  force_destroy               = true
   uniform_bucket_level_access = true
 }
 
@@ -63,21 +64,13 @@ data "google_project" "this" {
   project_id = var.project_id
 }
 
+
 locals {
-  # Keyed to the project number, not the ID. Namespace-pinned: there is no
-  # "match by KSA name across all namespaces" IAM selector for Workload
-  # Identity Federation principals - each binding has to name the exact
-  # namespace/KSA pair.
-  #
-  # These are four separate KSAs/components, each with its own principal -
-  # don't collapse them into one, even if they happen to share a namespace
-  # today. atelet and ate-api-server both live in var.atelet_namespace but
-  # are still distinct KSAs.
-  atelet_wi_principal           = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${var.atelet_namespace}/sa/${var.atelet_ksa_name}"
-  ate_api_server_wi_principal   = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${var.atelet_namespace}/sa/${var.ate_api_server_ksa_name}"
-  orchestrator_wi_principal     = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${var.orchestrator_namespace}/sa/${var.orchestrator_ksa_name}"
+  atelet_wi_principal         = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${var.atelet_namespace}/sa/${var.atelet_ksa_name}"
+  ate_api_server_wi_principal = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${var.atelet_namespace}/sa/${var.ate_api_server_ksa_name}"
+  # Disabled along with the orchestrator-cluster resources below.
+  # orchestrator_wi_principal     = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${var.orchestrator_namespace}/sa/${var.orchestrator_ksa_name}"
   benchmark_runner_wi_principal = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${var.benchmark_runner_namespace}/sa/${var.benchmark_runner_ksa_name}"
-  compute_default_sa            = "serviceAccount:${data.google_project.this.number}-compute@developer.gserviceaccount.com"
 }
 
 resource "google_project_iam_member" "atelet_storage_object_admin" {
@@ -102,14 +95,14 @@ resource "google_project_iam_member" "atelet_artifact_registry_writer" {
 }
 
 resource "google_storage_bucket_iam_member" "atelet_bucket_object_admin" {
-  count  = var.enable_atelet_iam ? 1 : 0
+  count  = var.enable_atelet_bucket_iam ? 1 : 0
   bucket = google_storage_bucket.this.name
   role   = "roles/storage.objectAdmin"
   member = local.atelet_wi_principal
 }
 
 resource "google_storage_bucket_iam_member" "atelet_bucket_viewer" {
-  count  = var.enable_atelet_iam ? 1 : 0
+  count  = var.enable_atelet_bucket_iam ? 1 : 0
   bucket = google_storage_bucket.this.name
   role   = "roles/storage.bucketViewer"
   member = local.atelet_wi_principal
@@ -119,127 +112,81 @@ resource "google_storage_bucket_iam_member" "atelet_bucket_viewer" {
 # namespace) - it also needs bucket access for actor SuspendActor/ResumeActor
 # calls, but no project-level grants.
 resource "google_storage_bucket_iam_member" "ate_api_server_bucket_object_admin" {
-  count  = var.enable_atelet_iam ? 1 : 0
+  count  = var.enable_atelet_bucket_iam ? 1 : 0
   bucket = google_storage_bucket.this.name
   role   = "roles/storage.objectAdmin"
   member = local.ate_api_server_wi_principal
 }
 
 resource "google_storage_bucket_iam_member" "ate_api_server_bucket_viewer" {
-  count  = var.enable_atelet_iam ? 1 : 0
+  count  = var.enable_atelet_bucket_iam ? 1 : 0
   bucket = google_storage_bucket.this.name
   role   = "roles/storage.bucketViewer"
   member = local.ate_api_server_wi_principal
 }
 
-resource "google_project_iam_member" "atelet_node_storage_object_viewer" {
-  count   = var.enable_atelet_iam ? 1 : 0
+resource "google_service_account" "node" {
+  project      = var.project_id
+  account_id   = substr("${var.default_resource_name}-node", 0, 30)
+  display_name = "GKE nodes for ${var.default_resource_name}"
+  description  = "Runs the node pools of the ${var.default_resource_name} deployment's cluster. Holds the minimum GKE requires, plus read on this deployment's Artifact Registry repository and snapshot bucket."
+}
+
+resource "google_project_iam_member" "node_minimal" {
+  for_each = toset([
+    "roles/logging.logWriter",
+    "roles/monitoring.metricWriter",
+    "roles/monitoring.viewer",
+    "roles/stackdriver.resourceMetadata.writer",
+  ])
+
   project = var.project_id
-  role    = "roles/storage.objectViewer"
-  member  = local.compute_default_sa
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.node.email}"
 }
 
-resource "google_project_iam_member" "atelet_node_artifact_registry_reader" {
-  count   = var.enable_atelet_iam ? 1 : 0
-  project = var.project_id
-  role    = "roles/artifactregistry.reader"
-  member  = local.compute_default_sa
+# Image pulls for every pod the nodes run.
+resource "google_artifact_registry_repository_iam_member" "node_reader" {
+  project    = var.project_id
+  location   = google_artifact_registry_repository.this.location
+  repository = google_artifact_registry_repository.this.name
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.node.email}"
 }
 
-# Grants the orchestrator identity (typically a distinct KSA from atelet
-# itself, e.g. a benchmark-orchestrator running in its own namespace) full
-# GCP-level control over every cluster in the project (create/delete/update
-# clusters and node pools, fetch kubeconfig, etc.), e.g. to orchestrate
-# workload clusters from an orchestrator cluster. This is IAM-level control
-# only - it does not by itself grant any Kubernetes RBAC inside the
-# clusters, see the ClusterRoleBinding below for that.
-resource "google_project_iam_member" "orchestrator_cluster_admin" {
-  count   = var.enable_atelet_cluster_admin ? 1 : 0
-  project = var.project_id
-  role    = "roles/container.admin"
-  member  = local.orchestrator_wi_principal
+resource "google_storage_bucket_iam_member" "node_bucket_viewer" {
+  bucket = google_storage_bucket.this.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.node.email}"
 }
 
-# The orchestrator builds and pushes test images at runtime (e.g.
-# testtypes/locust.py's build_and_push), including to the legacy
-# gcr.io-compatibility Artifact Registry repo
-# (projects/PROJECT/locations/us/repositories/gcr.io) that images tagged
-# gcr.io/PROJECT/... resolve to - a separate repo from google_artifact_registry_repository.this.
-# Pulling from it only needs reader access (granted implicitly/elsewhere);
-# pushing needs uploadArtifacts, hence writer here.
-resource "google_project_iam_member" "orchestrator_artifact_registry_writer" {
-  count   = var.enable_atelet_cluster_admin ? 1 : 0
-  project = var.project_id
-  role    = "roles/artifactregistry.writer"
-  member  = local.orchestrator_wi_principal
+# atelet pulls the image an ActorTemplate names and pushes what it builds.
+# Unconditional and repository-scoped, unlike the project-level pair under
+# enable_atelet_iam above, which is the broad form kept for a deployment that
+# has to grant across every repository in its project.
+resource "google_artifact_registry_repository_iam_member" "atelet_reader" {
+  project    = var.project_id
+  location   = google_artifact_registry_repository.this.location
+  repository = google_artifact_registry_repository.this.name
+  role       = "roles/artifactregistry.reader"
+  member     = local.atelet_wi_principal
 }
 
-# Grants the orchestrator identity cluster-admin on every cluster's
-# Kubernetes API, not just IAM-level kubeconfig access above. GKE maps a
-# caller's IAM/Workload Identity Federation principal straight to an RBAC
-# "User" of the same name, so this is a plain ClusterRoleBinding - no
-# third-party identity setup needed on the target clusters.
-#
-# Terraform's kubernetes provider can't target a dynamically-sized set of
-# cluster endpoints (provider configs aren't for_each-able), so this shells
-# out instead. Requires gcloud and kubectl (plus the gke-gcloud-auth-plugin)
-# on the machine running `terraform apply`, authenticated as a principal
-# with enough IAM/RBAC on each target cluster to create the binding.
-resource "null_resource" "orchestrator_cluster_admin_rbac" {
-  for_each = var.enable_atelet_cluster_admin ? var.clusters : {}
-
-  triggers = {
-    cluster_name = each.key
-    region       = coalesce(each.value.region, var.region)
-    project_id   = var.project_id
-    principal    = local.orchestrator_wi_principal
-    # Forces re-provisioning if the cluster is replaced.
-    cluster_endpoint = module.clusters[each.key].cluster_endpoint
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      set -euo pipefail
-      gcloud container clusters get-credentials "${self.triggers.cluster_name}" \
-        --region "${self.triggers.region}" --project "${self.triggers.project_id}"
-      cat <<'YAML' | kubectl apply -f -
-      apiVersion: rbac.authorization.k8s.io/v1
-      kind: ClusterRoleBinding
-      metadata:
-        name: orchestrator-cluster-admin
-      subjects:
-      - kind: User
-        name: ${self.triggers.principal}
-        apiGroup: rbac.authorization.k8s.io
-      roleRef:
-        kind: ClusterRole
-        name: cluster-admin
-        apiGroup: rbac.authorization.k8s.io
-      YAML
-    EOT
-  }
-
-  provisioner "local-exec" {
-    when    = destroy
-    command = <<-EOT
-      set -euo pipefail
-      gcloud container clusters get-credentials "${self.triggers.cluster_name}" \
-        --region "${self.triggers.region}" --project "${self.triggers.project_id}"
-      kubectl delete clusterrolebinding orchestrator-cluster-admin --ignore-not-found
-    EOT
-  }
+resource "google_artifact_registry_repository_iam_member" "atelet_writer" {
+  project    = var.project_id
+  location   = google_artifact_registry_repository.this.location
+  repository = google_artifact_registry_repository.this.name
+  role       = "roles/artifactregistry.writer"
+  member     = local.atelet_wi_principal
 }
-
-# ---------------------------------------------------------------------------
-# benchmark-runner IAM
-#
-# The automation runner Job's identity - only needs to write results, not
-# read/list/manage them.
-# ---------------------------------------------------------------------------
 
 resource "google_storage_bucket_iam_member" "benchmark_runner_object_creator" {
-  count  = var.enable_benchmark_runner_iam ? 1 : 0
   bucket = google_storage_bucket.this.name
   role   = "roles/storage.objectCreator"
   member = local.benchmark_runner_wi_principal
 }
+
+# The binding names a principal by namespace and ServiceAccount, so the
+# account has to exist under exactly those names for it to grant anything.
+# benchmarking/locust/manifests/job.yaml creates it; the two have to agree on
+# benchmark_runner_namespace and benchmark_runner_ksa_name.

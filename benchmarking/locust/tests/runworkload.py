@@ -32,14 +32,6 @@ import os
 
 if os.environ.get("LOCUST_NO_RUNWORKLOAD_USER") != "1":
     from locust import User, task
-    from common.boomer_config import init_boomer_config
-
-    # Master serves /boomer-config so the boomer-worker workers can fetch
-    # runtime flag values (trace probability, wait times) the operator set
-    # in the web UI form. No-op on workers without a web UI. Required here,
-    # not merely useful: the boomer container runs with --master-web-port,
-    # and a failed fetch is fatal to that worker.
-    init_boomer_config()
 
     class RunWorkloadUser(User):
         host = "api.ate-system.svc.cluster.local:443"

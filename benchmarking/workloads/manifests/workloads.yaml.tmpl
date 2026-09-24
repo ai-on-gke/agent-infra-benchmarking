@@ -35,3 +35,11 @@ spec:
   replicas: ${WORKER_COUNT}
   sandboxClass: ${SANDBOX_CLASS}
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-${SANDBOX_CLASS}
+  template:
+    nodeSelector:
+      benchmarking-worker: "true"
+    tolerations:
+    - key: sandbox.gke.io/runtime
+      operator: Equal
+      value: gvisor
+      effect: NoSchedule

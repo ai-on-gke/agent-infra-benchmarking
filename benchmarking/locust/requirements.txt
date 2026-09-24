@@ -24,3 +24,10 @@ opentelemetry-exporter-otlp
 opentelemetry-instrumentation-grpc
 opentelemetry-instrumentation-requests
 google-cloud-storage
+
+# benchmarking/tests.yaml, which runner.py --test-case reads.
+pyyaml
+
+# Charts for benchmarking/locust/reports. Pulls in numpy and adds ~170MB to
+# the image; drop both if the reports are not wanted.
+matplotlib

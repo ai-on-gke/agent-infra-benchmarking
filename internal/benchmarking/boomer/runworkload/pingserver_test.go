@@ -20,6 +20,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/atenet"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
@@ -45,6 +46,9 @@ type pingServer struct {
 	// PingEcho replaces the echoed message, so a caller that verifies the
 	// echo sees a mismatch.
 	PingEcho string
+	// PingDelay is how long a request that is not rejected takes to answer,
+	// standing in for an application whose instruction is not free.
+	PingDelay time.Duration
 
 	mu          sync.Mutex
 	pingCount   int
@@ -101,6 +105,10 @@ func (s *pingServer) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, http.StatusText(status), status)
 		return
+	}
+
+	if s.PingDelay > 0 {
+		time.Sleep(s.PingDelay)
 	}
 
 	body, err := io.ReadAll(r.Body)

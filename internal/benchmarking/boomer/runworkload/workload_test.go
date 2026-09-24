@@ -20,9 +20,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"go.opentelemetry.io/otel"
 )
@@ -85,77 +83,11 @@ func newWorkloadTestUser(t *testing.T, wl workload) *runWorkloadUser {
 			APIStub:  &fakeControlClient{},
 			Tracer:   otel.Tracer("workload-test"),
 			Atespace: "benchmark",
-			Dyn:      dynconfig.NewHolder(dynconfig.Config{}),
 		},
 		workload:     wl,
 		actorName:    "fakeactor",
 		templateName: wl.DefaultTemplate(),
 		userClass:    runWorkloadUserClass,
-	}
-}
-
-// The retry loop is the benchmark's, but the verdict on each answer is the
-// workload's. Driving a workload that is not glutton is what shows the loop
-// reads that verdict rather than re-deriving it from an HTTP status.
-func TestDrivesTheWorkloadInterface(t *testing.T) {
-	tests := []struct {
-		name         string
-		results      []instructionResult
-		wantAttempts int
-		wantErr      bool
-	}{
-		{
-			name:         "ready on the first instruction",
-			wantAttempts: 1,
-		},
-		{
-			name: "retries while the workload says the actor is activating",
-			results: []instructionResult{
-				{retry: true, err: errStillActivating},
-				{retry: true, err: errStillActivating},
-			},
-			wantAttempts: 3,
-		},
-		{
-			name: "stops when the workload calls a failure unretryable",
-			results: []instructionResult{
-				{retry: false, err: errWorkloadFault},
-			},
-			wantAttempts: 1,
-			wantErr:      true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			wl := &fakeWorkload{name: "fake", template: "fake-template", results: tc.results}
-			u := newWorkloadTestUser(t, wl)
-
-			attempts, _, err := u.firstInstruction(context.Background(), 5*time.Second)
-
-			if tc.wantErr && err == nil {
-				t.Fatal("firstInstruction succeeded, want failure")
-			}
-			if !tc.wantErr && err != nil {
-				t.Fatalf("firstInstruction failed: %v", err)
-			}
-			if attempts != tc.wantAttempts {
-				t.Errorf("attempts: got %d, want %d", attempts, tc.wantAttempts)
-			}
-
-			calls := wl.recordedCalls()
-			if len(calls) != tc.wantAttempts {
-				t.Fatalf("instructions sent: got %d, want %d", len(calls), tc.wantAttempts)
-			}
-			// The workload is handed the actor to address rather than
-			// discovering it, so every attempt has to name the same one.
-			for i, got := range calls {
-				if got.Atespace != u.cfg.Atespace || got.Name != u.actorName {
-					t.Errorf("instruction %d addressed %s/%s, want %s/%s",
-						i, got.Atespace, got.Name, u.cfg.Atespace, u.actorName)
-				}
-			}
-		})
 	}
 }
 
@@ -231,15 +163,11 @@ func TestTemplateDefaultsToTheWorkloads(t *testing.T) {
 					APIStub:  ctrl,
 					Tracer:   otel.Tracer("workload-test"),
 					Atespace: "benchmark",
-					Dyn:      dynconfig.NewHolder(dynconfig.Config{}),
 				},
 				workload: &fakeWorkload{name: "fake", template: "fake-template"},
 			}
 
-			// Implicit resume keeps the control plane out of the window, so
-			// the user is built without needing a resume to succeed.
-			dyn := dynconfig.Config{ResumeMode: dynconfig.ResumeModeImplicit}
-			u, err := rt.startUser(context.Background(), dyn, tc.opts)
+			u, err := rt.startUser(context.Background(), tc.opts)
 			if err != nil {
 				t.Fatalf("startUser failed: %v", err)
 			}
