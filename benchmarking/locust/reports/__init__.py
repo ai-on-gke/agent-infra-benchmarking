@@ -22,10 +22,18 @@ from pathlib import Path
 
 from .base import Report, RunContext
 from .ttfi_vs_users import TTFIvsUsersReport
+from .upload import DEFAULT_PREFIX, UploadError, upload
 
 _REPORTS: dict[str, Report] = {r.name: r for r in (TTFIvsUsersReport(),)}
 
-__all__ = ["RunContext", "names", "generate"]
+__all__ = [
+    "DEFAULT_PREFIX",
+    "RunContext",
+    "UploadError",
+    "generate",
+    "names",
+    "upload",
+]
 
 
 def names() -> list[str]:

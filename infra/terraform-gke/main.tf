@@ -75,6 +75,7 @@ data "google_project" "this" {
   project_id = var.project_id
 }
 
+
 locals {
   # Keyed to the project number, not the ID. Namespace-pinned: there is no
   # "match by KSA name across all namespaces" IAM selector for Workload
@@ -303,8 +304,12 @@ resource "google_artifact_registry_repository_iam_member" "atelet_writer" {
 # ---------------------------------------------------------------------------
 
 resource "google_storage_bucket_iam_member" "benchmark_runner_object_creator" {
-  count  = var.enable_benchmark_runner_iam ? 1 : 0
   bucket = google_storage_bucket.this.name
   role   = "roles/storage.objectCreator"
   member = local.benchmark_runner_wi_principal
 }
+
+# The binding names a principal by namespace and ServiceAccount, so the
+# account has to exist under exactly those names for it to grant anything.
+# benchmarking/locust/manifests/job.yaml creates it; the two have to agree on
+# benchmark_runner_namespace and benchmark_runner_ksa_name.

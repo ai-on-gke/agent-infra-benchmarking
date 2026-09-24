@@ -68,6 +68,11 @@ spec:
         benchmark-template: "${BENCHMARK_WORKLOAD_TEMPLATE}"
     spec:
       restartPolicy: Never
+      # Created by infra/terraform-gke, which names the same account in the
+      # bucket's objectCreator binding. Workload Identity gives the pod that
+      # grant and nothing else, so a report uploads and nothing here can read
+      # or delete what earlier runs wrote.
+      serviceAccountName: ${BENCHMARK_RUNNER_KSA}
       containers:
       - name: runner
         image: ${LOCUST_IMAGE}
@@ -97,6 +102,8 @@ spec:
         # dropped by runner.py rather than read as a report named "".
         - "--run-id=${BENCHMARK_RUN_ID}"
         - "--report=${BENCHMARK_REPORTS}"
+        # Empty leaves the reports on the pod, where the Job's TTL takes them.
+        - "--report-bucket=${BENCHMARK_REPORT_BUCKET}"
         env:
         # locust's own --only-summary, which it reads from this name. An env
         # var rather than an argument because an unset argument would reach
@@ -145,10 +152,16 @@ spec:
               keyType: ECDSAP256
               credentialBundlePath: credential-bundle.pem
 ---
-# The Job's own binding to the Role the Deployment's pod also uses. Duplicated
-# rather than shared with deployment.yaml so that deleting either path leaves
-# the other one working: both name the `default` service account, so a single
-# binding would disappear from under whichever path did not delete it.
+# The account the pod runs as. infra/terraform-gke grants this exact
+# namespace/name pair objectCreator on the bucket through a principal://
+# subject, so no iam.gke.io annotation is needed here — but the two spellings
+# have to agree or the grant lands on nothing.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${BENCHMARK_RUNNER_KSA}
+  namespace: benchmarking
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -156,7 +169,7 @@ metadata:
   namespace: ate-system
 subjects:
 - kind: ServiceAccount
-  name: default
+  name: ${BENCHMARK_RUNNER_KSA}
   namespace: benchmarking
 roleRef:
   kind: Role

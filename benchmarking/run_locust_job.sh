@@ -82,6 +82,10 @@ NO_WAIT=0
 FOLLOW_LOGS=0
 ONLY_SUMMARY=0
 NO_METRICS=0
+# Whether runner.py writes its reports when the run ends and uploads them.
+# Off by default: a report costs a Prometheus query and an upload that most
+# runs do not need.
+REPORTS=0
 
 # The lookback for the queries at the end. It has only to reach back to the
 # run's last scrape, which was seconds before the query, so it is generous
@@ -151,6 +155,8 @@ usage() {
   echo "  --only-summary          Pass locust --only-summary, dropping the stats table it"
   echo "                          reprints while the run goes. The aggregate it prints when"
   echo "                          the run ends is kept, so the result is unaffected."
+  echo "  --reports               Write every report when the run ends and upload them to"
+  echo "                          gs://\${BUCKET_NAME}/reports/<run-id>/. Off by default."
   echo "  --wait-timeout SECONDS  Ceiling on the wait for the run (default: 3600). Reaching"
   echo "                          it stops the waiting, not the Job."
   echo "  --pod-start-timeout SECONDS"
@@ -215,6 +221,7 @@ while [[ "$#" -gt 0 ]]; do
     --no-wait) NO_WAIT=1 ;;
     --follow-logs) FOLLOW_LOGS=1 ;;
     --only-summary) ONLY_SUMMARY=1 ;;
+    --reports) REPORTS=1 ;;
     --no-metrics) NO_METRICS=1 ;;
     --wait-timeout) shift; WAIT_TIMEOUT_SECS="$1" ;;
     --wait-timeout=*) WAIT_TIMEOUT_SECS="${1#*=}" ;;
@@ -595,7 +602,8 @@ if [[ "${BUILD}" -eq 1 || "${DEPLOY_WORKLOADS}" -eq 1 || "${DEPLOY_MONITORING}" 
     fi
   done
   for flag in "--no-wait:${NO_WAIT}" "--no-metrics:${NO_METRICS}" \
-              "--follow-logs:${FOLLOW_LOGS}" "--only-summary:${ONLY_SUMMARY}"; do
+              "--follow-logs:${FOLLOW_LOGS}" "--only-summary:${ONLY_SUMMARY}" \
+              "--reports:${REPORTS}"; do
     if [[ "${flag#*:}" -eq 1 ]]; then
       echo "Error: ${flag%%:*} describes a run, and the setup actions start none." >&2
       exit 1
@@ -674,6 +682,7 @@ job_args=(--deploy-job)
 [[ -n "${WORKLOAD_NAME}" ]] && job_args+=(--workload-name "${WORKLOAD_NAME}")
 [[ -n "${WORKLOAD_TEMPLATE}" ]] && job_args+=(--workload-template "${WORKLOAD_TEMPLATE}")
 [[ "${ONLY_SUMMARY}" -eq 1 ]] && job_args+=(--only-summary)
+[[ "${REPORTS}" -eq 1 ]] && job_args+=(--reports)
 "${BENCHMARKING_DIR}/locust/deploy.sh" "${job_args[@]}"
 
 if [[ "${NO_WAIT}" -eq 1 ]]; then

@@ -90,10 +90,18 @@ BENCHMARK_RUN_ID=""
 # rather than reading it as false.
 BENCHMARK_ONLY_SUMMARY=false
 
-# Reports runner.py writes when the run ends; "all" selects every registered
-# one, empty writes none. They land on the pod's own filesystem, so a report
-# worth keeping needs a volume mounted at the runner's --report-dir.
+# Reports runner.py writes when the run ends. --reports sets it to "all",
+# which selects every registered one; empty writes none.
 BENCHMARK_REPORTS=""
+
+# Bucket the reports are uploaded to, under reports/<run-id>/. Defaults to the
+# deployment's own bucket, which is where the runner's Workload Identity grant
+# applies; empty leaves the reports on the pod, where the Job's TTL takes them.
+BENCHMARK_REPORT_BUCKET="${BUCKET_NAME:-}"
+
+# The Job's ServiceAccount, created by infra/terraform-gke together with the
+# bucket binding that names it. Has to match benchmark_runner_ksa_name there.
+BENCHMARK_RUNNER_KSA="${BENCHMARK_RUNNER_KSA:-benchmark-runner}"
 
 usage() {
   echo "Usage: $0 [options]"
@@ -114,6 +122,10 @@ usage() {
   echo "  --only-summary        --deploy-job only: drop the stats table locust reprints"
   echo "                        while the run goes. The aggregate it prints at the end,"
   echo "                        which is the result of the run, is kept either way."
+  echo "  --reports             --deploy-job only: write every report when the run ends"
+  echo "                        and upload it. Off by default."
+  echo "  --report-bucket NAME  --deploy-job only: bucket the reports upload to, under"
+  echo "                        reports/<run-id>/ (default: \${BUCKET_NAME})."
   echo "  --user-class NAME     Locust user class, lowercase; runs tests/NAME.py (default: runworkload)"
   echo "  --workload-name NAME  Workload a RunWorkloadUser drives: glutton | openclaw (default: glutton)."
   echo "                        Its ActorTemplate has to be deployed already — openclaw is not in"
@@ -208,6 +220,9 @@ while [[ "$#" -gt 0 ]]; do
     --run-id) shift; BENCHMARK_RUN_ID="$1" ;;
     --run-id=*) BENCHMARK_RUN_ID="${1#*=}" ;;
     --only-summary) BENCHMARK_ONLY_SUMMARY=true ;;
+    --reports) BENCHMARK_REPORTS=all ;;
+    --report-bucket) shift; BENCHMARK_REPORT_BUCKET="$1" ;;
+    --report-bucket=*) BENCHMARK_REPORT_BUCKET="${1#*=}" ;;
     --user-class) shift; BENCHMARK_USER_CLASS="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
     --user-class=*) BENCHMARK_USER_CLASS="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
     --workload-name) shift; BENCHMARK_WORKLOAD_NAME="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
@@ -278,6 +293,7 @@ fi
 export BENCHMARK_USER_CLASS BENCHMARK_WORKLOAD_NAME BENCHMARK_WORKLOAD_TEMPLATE
 export BENCHMARK_DURATION BENCHMARK_USERS BENCHMARK_SPAWN_RATE BENCHMARK_RUN_ID
 export BENCHMARK_ONLY_SUMMARY BENCHMARK_REPORTS
+export BENCHMARK_REPORT_BUCKET BENCHMARK_RUNNER_KSA
 
 if [[ "${action}" == "deploy" ]]; then
   deploy

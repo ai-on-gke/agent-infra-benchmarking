@@ -65,6 +65,11 @@ BOOMER_STOP_TIMEOUT_SECS = 300
 # does. Reports wait this long before querying rather than missing the tail.
 REPORT_SETTLE_SECS = 15
 
+# Bucket subfolder the reports are uploaded under. Mirrors
+# reports.upload.DEFAULT_PREFIX, named here so --help states it without
+# importing a package that may be absent.
+REPORT_PREFIX = "reports"
+
 
 def report_names() -> list[str]:
     """Registered report names, or empty when the reports package cannot
@@ -140,6 +145,18 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_PROMETHEUS_URL,
         help="Prometheus the reports read the run back from.",
     )
+    p.add_argument(
+        "--report-bucket",
+        default="",
+        help="GCS bucket the reports are uploaded to, as gs://<bucket>/"
+        "<prefix>/<run-id>/. Empty leaves them on the pod, where the Job's "
+        "TTL eventually takes them.",
+    )
+    p.add_argument(
+        "--report-prefix",
+        default=REPORT_PREFIX,
+        help="Subfolder under --report-bucket.",
+    )
     args, extra = p.parse_known_args()
     # Resolved here rather than at the flag, because the default is another
     # argument's value and argparse cannot express that.
@@ -184,6 +201,8 @@ def log_run_config(args: argparse.Namespace) -> None:
         + (" (all at once)" if args.spawn_rate >= args.users else ""),
         f"  workload:     {args.workload_name or '(the worker default)'}",
         f"  template:     {args.workload_template or '(the workload default)'}",
+        f"  reports:      {', '.join(args.report) or '(none)'}",
+        f"  report dest:  {'gs://' + args.report_bucket + '/' + args.report_prefix if args.report_bucket else args.report_dir + ' (pod-local)'}",
         f"  extra flags:  {' '.join(args.locust_extra) or '(none)'}",
         "====================",
     ):
@@ -333,11 +352,31 @@ def write_reports(args: argparse.Namespace, started: float, ended: float) -> Non
         print(f"reports: skipped ({type(exc).__name__}: {exc})", flush=True)
         return
 
+    written = []
     for name, path, error in results:
         if error:
             print(f"reports: {name} failed: {error}", flush=True)
         else:
+            written.append(path)
             print(f"reports: wrote {path} ({path.stat().st_size} bytes)", flush=True)
+
+    if written and args.report_bucket:
+        upload_reports(written, args, reports)
+
+
+def upload_reports(paths: list[Path], args: argparse.Namespace, reports) -> None:
+    try:
+        results = reports.upload(
+            paths, args.report_bucket, args.run_id, args.report_prefix
+        )
+    except reports.UploadError as exc:
+        print(f"reports: upload skipped ({exc})", flush=True)
+        return
+    for path, uri, error in results:
+        if error:
+            print(f"reports: upload of {path.name} failed: {error}", flush=True)
+        else:
+            print(f"reports: uploaded {uri}", flush=True)
 
 
 def main() -> None:

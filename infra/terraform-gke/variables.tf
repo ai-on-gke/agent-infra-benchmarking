@@ -255,12 +255,6 @@ variable "ate_api_server_ksa_name" {
 # needs to write results to the bucket, not read/list/manage them.
 # ---------------------------------------------------------------------------
 
-variable "enable_benchmark_runner_iam" {
-  description = "Grants the benchmark-runner WI principal roles/storage.objectCreator on the bucket."
-  type        = bool
-  default     = false
-}
-
 variable "benchmark_runner_namespace" {
   description = "Kubernetes namespace the benchmark runner Job's ServiceAccount runs in."
   type        = string
@@ -272,3 +266,4 @@ variable "benchmark_runner_ksa_name" {
   type        = string
   default     = "benchmark-runner"
 }
+
