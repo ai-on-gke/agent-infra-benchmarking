@@ -271,6 +271,12 @@ under the `boomer-worker` job, and kept after the pod is gone. It is the only
 live endpoint the pod has: the port 8000 the locust container declares belongs
 to `common/metrics.py`, which this repo does not ship.
 
+Every run also writes its reports and uploads them to
+`gs://${BUCKET_NAME}/reports/<run-id>/`. That is not optional and takes no
+flag: the log expires with the Job after a day and Prometheus expires with its
+pod, so the bucket is the only copy of a run that outlives both. An unset
+`BUCKET_NAME` leaves the reports on the pod, where the Job's TTL takes them.
+
 ### Telling one run from another
 
 When the run ends, `run_locust_job.sh` queries Prometheus for what it recorded
@@ -383,8 +389,9 @@ Deletes the benchmark workloads, then Prometheus — the mirror of what
 `--deploy` put there, and as all-or-nothing as that is.
 
 **Prometheus goes with it, and so does every run it recorded.** Its storage
-does not outlive its pod, so a run worth keeping should be saved before this —
-from the Job's log, or from `--reports` on the run itself.
+does not outlive its pod. The reports every run uploads to
+`gs://${BUCKET_NAME}/reports/<run-id>/` are unaffected, and are the record that
+survives this.
 
 A Job is left alone, so a finished run keeps its log for its remaining day.
 `./benchmarking/run_locust_job.sh --delete` removes one, and a run still in

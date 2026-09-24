@@ -110,15 +110,15 @@ NO_WAIT=0
 FOLLOW_LOGS=0
 ONLY_SUMMARY=0
 NO_METRICS=0
-# Whether runner.py writes its reports when the run ends and uploads them.
-# Off by default: a report costs a Prometheus query and an upload that most
-# runs do not need.
-REPORTS=0
-
-# Bucket the reports upload to, under reports/<run-id>/. Defaults to the
-# deployment's own bucket, which is where the runner's Workload Identity grant
-# applies; empty leaves them on the pod, where the Job's TTL takes them.
-REPORT_BUCKET="${BUCKET_NAME:-}"
+# runner.py writes every registered report when the run ends and uploads it to
+# reports/<run-id>/ in the deployment's own bucket, which is where the runner's
+# Workload Identity grant applies. Not optional: a run whose reports were
+# skipped is one whose results have to be reconstructed from the log.
+#
+# An unset BUCKET_NAME leaves the reports on the pod, where the Job's TTL takes
+# them with it.
+BENCHMARK_REPORTS=all
+BENCHMARK_REPORT_BUCKET="${BUCKET_NAME:-}"
 
 # The lookback for the queries at the end. It has only to reach back to the
 # run's last scrape, which was seconds before the query, so it is generous
@@ -172,11 +172,6 @@ usage() {
   echo "  --only-summary          Pass locust --only-summary, dropping the stats table it"
   echo "                          reprints while the run goes. The aggregate it prints when"
   echo "                          the run ends is kept, so the result is unaffected."
-  echo "  --reports               Write every report when the run ends and upload them to"
-  echo "                          gs://\${BUCKET_NAME}/reports/<run-id>/. Off by default."
-  echo "  --report-bucket NAME    Bucket the reports upload to (default: \${BUCKET_NAME})."
-  echo "                          Empty leaves them on the pod, where the Job's TTL takes"
-  echo "                          them."
   echo "  --wait-timeout SECONDS  Ceiling on the wait for the run (default: 3600). Reaching"
   echo "                          it stops the waiting, not the Job."
   echo "  --pod-start-timeout SECONDS"
@@ -205,8 +200,6 @@ while [[ "$#" -gt 0 ]]; do
     --run-id=*) RUN_ID="${1#*=}" ;;
     --user-class) shift; USER_CLASS="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
     --user-class=*) USER_CLASS="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
-    --report-bucket) shift; REPORT_BUCKET="$1" ;;
-    --report-bucket=*) REPORT_BUCKET="${1#*=}" ;;
     --pool-timeout) shift; POOL_TIMEOUT_SECS="$1" ;;
     --pool-timeout=*) POOL_TIMEOUT_SECS="${1#*=}" ;;
     --test-case) shift; TEST_CASE="$1" ;;
@@ -214,7 +207,6 @@ while [[ "$#" -gt 0 ]]; do
     --no-wait) NO_WAIT=1 ;;
     --follow-logs) FOLLOW_LOGS=1 ;;
     --only-summary) ONLY_SUMMARY=1 ;;
-    --reports) REPORTS=1 ;;
     --no-metrics) NO_METRICS=1 ;;
     --wait-timeout) shift; WAIT_TIMEOUT_SECS="$1" ;;
     --wait-timeout=*) WAIT_TIMEOUT_SECS="${1#*=}" ;;
@@ -614,12 +606,12 @@ fi
 
 # Exported for envsubst, which reads the environment rather than arguments.
 export LOCUST_IMAGE BENCHMARK_USER_CLASS BENCHMARK_RUNNER_KSA
+export BENCHMARK_REPORTS BENCHMARK_REPORT_BUCKET
 
 if [[ "${DELETE}" -eq 1 ]]; then
   # The manifest renders with whatever is set, because delete matches on the
   # name and kind alone; the run-shaped values below are not needed for it.
-  export BENCHMARK_RUN_ID="" BENCHMARK_TEST_CASE="" \
-    BENCHMARK_ONLY_SUMMARY=false BENCHMARK_REPORTS="" BENCHMARK_REPORT_BUCKET=""
+  export BENCHMARK_RUN_ID="" BENCHMARK_TEST_CASE="" BENCHMARK_ONLY_SUMMARY=false
   echo "=== Deleting the locust Job ==="
   delete_job
   exit 0
@@ -670,20 +662,14 @@ if ! [[ "${RUN_ID}" =~ ^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$ ]]; then
   exit 1
 fi
 
-# locust rejects an empty --only-summary rather than reading it as false, so
-# this is never blank. --reports selects every registered report by name.
 export BENCHMARK_RUN_ID="${RUN_ID}"
 export BENCHMARK_TEST_CASE="${TEST_CASE:-${DEFAULT_TEST_CASE}}"
-export BENCHMARK_REPORT_BUCKET="${REPORT_BUCKET}"
+# locust rejects an empty --only-summary rather than reading it as false, so
+# this is never blank.
 if [[ "${ONLY_SUMMARY}" -eq 1 ]]; then
   export BENCHMARK_ONLY_SUMMARY=true
 else
   export BENCHMARK_ONLY_SUMMARY=false
-fi
-if [[ "${REPORTS}" -eq 1 ]]; then
-  export BENCHMARK_REPORTS=all
-else
-  export BENCHMARK_REPORTS=""
 fi
 
 # Ahead of the resolve below, not merely ahead of the pool: the case is read
