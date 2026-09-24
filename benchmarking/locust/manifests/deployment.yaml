@@ -122,12 +122,6 @@ spec:
         command: ["/app/boomer-worker"]
         args:
         - "--prometheus-addr=:8001"
-        # Fetch runtime config (trace probability, wait-time bounds) from
-        # http://{master-host}:{master-web-port}/boomer-config on each
-        # spawn message so values the operator types into the web UI form
-        # are honored. The endpoint is served by
-        # benchmarking/locust/common/boomer_config.py on the master.
-        - "--master-web-port=8089"
         - "--user-class=${BENCHMARK_USER_CLASS}"
         # The workload a RunWorkloadUser drives and the ActorTemplate it is
         # measured on, read only when the user class is runworkload — the

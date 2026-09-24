@@ -44,17 +44,11 @@ import time
 from pathlib import Path
 from typing import IO
 
-from common.boomer_config import build_config_json
 from reports.prometheus import DEFAULT_URL as DEFAULT_PROMETHEUS_URL
 
 # Path inside the locust image to the boomer-worker binary baked in by
 # benchmarking/locust/Dockerfile.
 BOOMER_BINARY = "/app/boomer-worker"
-
-# Port for the headless /boomer-config server (common/boomer_config.py), which
-# gives boomer the values that change while a run continues. Locust already
-# holds 5557 (master) and 8089 (web UI) in this container.
-BOOMER_CONFIG_PORT = 5560
 
 # How long boomer gets to suspend and delete its actors after the run. Longer
 # than the worker's own 60s shutdown budget, so the timeout here is reached
@@ -223,11 +217,6 @@ def build_locust_cmd(args: argparse.Namespace) -> list[str]:
         # seconds before a worker attaches would otherwise be counted as part
         # of the run rather than as part of its setup.
         "--master", "--expect-workers", "1",
-        # Headless registers no Flask app, so /boomer-config is served on the
-        # loopback interface instead of by the web UI. Paired with the
-        # worker's --master-web-port below; the worker treats a failed fetch
-        # as fatal, so neither side can be dropped on its own.
-        "--boomer-config-port", str(BOOMER_CONFIG_PORT),
     ]
     return cmd + list(args.locust_extra)
 
@@ -236,10 +225,6 @@ def build_boomer_cmd(args: argparse.Namespace) -> list[str]:
     cmd = [
         BOOMER_BINARY,
         "--user-class", user_class(args.file),
-        # Re-read at each spawn message, so a value that changes while the run
-        # continues reaches the worker. boomer's --master-host default is the
-        # loopback address, where the server above listens.
-        "--master-web-port", str(BOOMER_CONFIG_PORT),
     ]
     # Passed only when set: the flags read an empty value as unset, and
     # leaving them off entirely says the same thing more plainly in the log.
@@ -247,11 +232,6 @@ def build_boomer_cmd(args: argparse.Namespace) -> list[str]:
         cmd += ["--workload-name", args.workload_name]
     if args.workload_template:
         cmd += ["--workload-template", args.workload_template]
-    # The initial values, for the window before the first fetch. Empty when
-    # the run named none of the tunable flags.
-    cfg_json = build_config_json(args.locust_extra)
-    if cfg_json:
-        cmd += ["--config-json", cfg_json]
     return cmd
 
 

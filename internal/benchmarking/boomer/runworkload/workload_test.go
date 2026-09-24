@@ -21,7 +21,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"go.opentelemetry.io/otel"
 )
@@ -84,7 +83,6 @@ func newWorkloadTestUser(t *testing.T, wl workload) *runWorkloadUser {
 			APIStub:  &fakeControlClient{},
 			Tracer:   otel.Tracer("workload-test"),
 			Atespace: "benchmark",
-			Dyn:      dynconfig.NewHolder(dynconfig.Config{}),
 		},
 		workload:     wl,
 		actorName:    "fakeactor",
@@ -165,7 +163,6 @@ func TestTemplateDefaultsToTheWorkloads(t *testing.T) {
 					APIStub:  ctrl,
 					Tracer:   otel.Tracer("workload-test"),
 					Atespace: "benchmark",
-					Dyn:      dynconfig.NewHolder(dynconfig.Config{}),
 				},
 				workload: &fakeWorkload{name: "fake", template: "fake-template"},
 			}

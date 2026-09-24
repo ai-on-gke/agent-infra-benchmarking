@@ -39,7 +39,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -92,6 +91,13 @@ const (
 	drainTimeout = 15 * time.Second
 )
 
+// Resume modes. Explicit issues a ResumeActor before the instruction;
+// implicit leaves the wake to the router.
+const (
+	ResumeModeExplicit = "explicit"
+	ResumeModeImplicit = "implicit"
+)
+
 // Options are the runworkload-only settings of a run, handed to this package
 // rather than parsed by it: every flag the worker accepts is declared in
 // cmd/benchmarking/boomer-worker. The zero value asks for the defaults.
@@ -108,6 +114,15 @@ type Options struct {
 	// loop to bound. Kept because cmd/benchmarking/boomer-worker declares
 	// --workload-timeout against it.
 	Timeout time.Duration
+
+	// MinWait and MaxWait bound the think time between iterations. An upper
+	// bound at or below the lower one waits MinWait exactly.
+	MinWait time.Duration
+	MaxWait time.Duration
+
+	// ResumeMode is ResumeModeExplicit or ResumeModeImplicit; empty selects
+	// explicit.
+	ResumeMode string
 }
 
 // configured is what SetOptions recorded, read once by initRunWorkload and
@@ -176,12 +191,11 @@ type runWorkloadRuntime struct {
 }
 
 func (r *runWorkloadRuntime) dynamicWait() time.Duration {
-	cfg := r.cfg.Dyn.Load()
-	if cfg.MaxWait <= cfg.MinWait {
-		return cfg.MinWait
+	if r.opts.MaxWait <= r.opts.MinWait {
+		return r.opts.MinWait
 	}
-	jitter := cfg.MaxWait - cfg.MinWait
-	return cfg.MinWait + time.Duration(rand.Float64()*float64(jitter))
+	jitter := r.opts.MaxWait - r.opts.MinWait
+	return r.opts.MinWait + time.Duration(rand.Float64()*float64(jitter))
 }
 
 // iterate is the task function boomer calls in a loop on each VU goroutine.
@@ -230,7 +244,7 @@ func (r *runWorkloadRuntime) iterate() {
 	}
 	// Called with the actor just suspended, which is where the TTFI window
 	// opens.
-	if err := user.measureTTFI(ctx); err != nil {
+	if err := user.measureTTFI(ctx, r.opts.ResumeMode); err != nil {
 		r.discard(ctx, gid, user, ttfiMetric, err)
 		time.Sleep(r.dynamicWait())
 		return
@@ -434,12 +448,9 @@ func (u *runWorkloadUser) create(ctx context.Context) error {
 // Either call failing reports the window as a failure over the wait it spent
 // and hands the error back for the actor to be discarded, so the cycle stops
 // there either way.
-func (u *runWorkloadUser) measureTTFI(ctx context.Context) error {
-	mode := u.cfg.Dyn.Load().ResumeMode
+func (u *runWorkloadUser) measureTTFI(ctx context.Context, mode string) error {
 	if mode == "" {
-		// Matches common/resume_mode.py's default, so an unset value behaves
-		// the same as the one locust always sends.
-		mode = dynconfig.ResumeModeExplicit
+		mode = ResumeModeExplicit
 	}
 
 	ctx, span := u.cfg.Tracer.Start(ctx, ttfiMetric)
@@ -451,7 +462,7 @@ func (u *runWorkloadUser) measureTTFI(ctx context.Context) error {
 	)
 
 	start := time.Now()
-	if mode == dynconfig.ResumeModeExplicit {
+	if mode == ResumeModeExplicit {
 		if err := u.resume(ctx); err != nil {
 			u.recordTTFI(span, time.Since(start), err)
 			return err

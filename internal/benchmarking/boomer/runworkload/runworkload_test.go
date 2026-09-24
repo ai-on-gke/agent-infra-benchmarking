@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -178,12 +177,12 @@ func TestResumeModeSelectsTheControlPlaneCall(t *testing.T) {
 	}{
 		{
 			name:        "explicit resume mode",
-			resumeMode:  dynconfig.ResumeModeExplicit,
+			resumeMode:  ResumeModeExplicit,
 			wantResumes: 1,
 		},
 		{
 			name:       "implicit resume mode",
-			resumeMode: dynconfig.ResumeModeImplicit,
+			resumeMode: ResumeModeImplicit,
 		},
 		{
 			// Same default as common/resume_mode.py, so an unset value behaves
@@ -198,7 +197,7 @@ func TestResumeModeSelectsTheControlPlaneCall(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := &fakeControlClient{}
 			rt, sr := newMeasuringUser(t, &pingServer{}, ctrl)
-			rt.cfg.Dyn.Store(dynconfig.Config{ResumeMode: tc.resumeMode})
+			rt.opts.ResumeMode = tc.resumeMode
 
 			rt.iterate()
 
@@ -207,7 +206,7 @@ func TestResumeModeSelectsTheControlPlaneCall(t *testing.T) {
 			}
 			// The instruction goes out either way; only the wake differs.
 			span := spanByName(t, sr, ttfiMetric)
-			if got := mustAttr(t, span, "resume_mode").AsString(); got != cmp.Or(tc.resumeMode, dynconfig.ResumeModeExplicit) {
+			if got := mustAttr(t, span, "resume_mode").AsString(); got != cmp.Or(tc.resumeMode, ResumeModeExplicit) {
 				t.Errorf("resume_mode: got %q, want the effective mode", got)
 			}
 		})
@@ -523,9 +522,7 @@ func TestShutdownRemovesActorsConcurrently(t *testing.T) {
 }
 
 func TestDynamicWait(t *testing.T) {
-	rt := &runWorkloadRuntime{cfg: &userclass.Config{
-		Dyn: dynconfig.NewHolder(dynconfig.Config{MinWait: 0, MaxWait: 0}),
-	}}
+	rt := &runWorkloadRuntime{opts: Options{MinWait: 0, MaxWait: 0}}
 	if got := rt.dynamicWait(); got != 0 {
 		t.Errorf("dynamicWait with no bounds: got %v, want 0", got)
 	}

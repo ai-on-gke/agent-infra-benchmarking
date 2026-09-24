@@ -41,7 +41,6 @@ FROM gcr.io/distroless/python3-debian12
 WORKDIR /app
 COPY --from=pydeps /app/deps /app/deps
 COPY --from=goboomer /out/boomer-worker /app/boomer-worker
-COPY benchmarking/locust/common/ /app/common/
 COPY benchmarking/locust/tests/ /app/tests/
 COPY benchmarking/locust/reports/ /app/reports/
 COPY benchmarking/locust/runner.py /app/runner.py

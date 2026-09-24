@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
@@ -183,7 +182,7 @@ func (f *fakeControlClient) countCalls(name string) int {
 }
 
 // newTestConfig starts srv, sets HTTPClient and RouterURL, and ensures
-// APIStub, Tracer, and Dyn are populated if nil.
+// APIStub and Tracer are populated if nil.
 func newTestConfig(t *testing.T, srv *pingServer, cfg *userclass.Config) *userclass.Config {
 	t.Helper()
 	ts := srv.Start(t)
@@ -198,9 +197,6 @@ func newTestConfig(t *testing.T, srv *pingServer, cfg *userclass.Config) *usercl
 	}
 	if cfg.Atespace == "" {
 		cfg.Atespace = "benchmark"
-	}
-	if cfg.Dyn == nil {
-		cfg.Dyn = dynconfig.NewHolder(dynconfig.Config{})
 	}
 	cfg.HTTPClient = ts.Client()
 	cfg.RouterURL = ts.URL
