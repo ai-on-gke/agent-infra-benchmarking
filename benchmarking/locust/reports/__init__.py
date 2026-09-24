@@ -21,11 +21,12 @@ _REPORTS. runner.py selects them by name with --report.
 from pathlib import Path
 
 from .base import Report, RunContext
-from .ttfi_vs_users import PERCENTILES, TTFIvsUsersReport
+from .stats_csv import StatsCSVReport
+from .ttfi_vs_users import TTFIvsUsersReport
 from .upload import DEFAULT_PREFIX, UploadError, upload
 
 _REPORTS: dict[str, Report] = {
-    r.name: r for r in (TTFIvsUsersReport(p) for p in PERCENTILES)
+    r.name: r for r in (StatsCSVReport(), TTFIvsUsersReport())
 }
 
 __all__ = [

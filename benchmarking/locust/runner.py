@@ -53,6 +53,11 @@ BOOMER_BINARY = "/app/boomer-worker"
 # Where --test-case looks, copied into the image from benchmarking/tests.yaml.
 TESTS_FILE = "/app/tests.yaml"
 
+# Prefix locust's --csv appends _stats.csv, _stats_history.csv, _failures.csv
+# and _exceptions.csv to, inside --report-dir so one folder holds everything a
+# run produced and the upload collects it in one pass.
+LOCUST_CSV_STEM = "locust"
+
 # The case keys that are the run's load rather than the worker's flags. Every
 # other key in a case goes to the worker verbatim, so this tuple is the whole
 # of what this wrapper claims from a case.
@@ -279,6 +284,16 @@ def build_locust_cmd(args: argparse.Namespace) -> list[str]:
         # seconds before a worker attaches would otherwise be counted as part
         # of the run rather than as part of its setup.
         "--master", "--expect-workers", "1",
+        # locust's own stats, at its own precision: it holds response times
+        # rounded to 1ms below 100ms, where the worker's Prometheus histogram
+        # buckets exponentially and cannot resolve better than the bucket a
+        # value lands in. These files are the run's numbers; the Prometheus
+        # reports beside them are what survives the pod.
+        "--csv", str(Path(args.report_dir) / LOCUST_CSV_STEM),
+        # A row per second per request name, rather than one Aggregated row.
+        # The user count is recorded in the row with the percentiles, so a
+        # ramp needs nothing inferred to say what load a sample was taken at.
+        "--csv-full-history",
     ]
     return cmd + list(args.locust_extra)
 
@@ -317,6 +332,10 @@ def stop_boomer(proc: subprocess.Popen) -> int:
 
 
 def run(args: argparse.Namespace) -> int:
+    # locust opens its CSVs at startup, so the directory has to exist before
+    # it launches rather than when the reports are written.
+    Path(args.report_dir).mkdir(parents=True, exist_ok=True)
+
     locust_cmd = build_locust_cmd(args)
     print(f"Running: {' '.join(locust_cmd)}", flush=True)
     locust_proc = subprocess.Popen(
@@ -356,15 +375,36 @@ def run(args: argparse.Namespace) -> int:
     return boomer_exit
 
 
+def locust_csvs(args: argparse.Namespace) -> list[Path]:
+    """The CSVs locust wrote for this run, already complete by the time it
+    exited. Collected by glob rather than by name so a file locust adds in a
+    later version is uploaded without this list being updated."""
+    return sorted(Path(args.report_dir).glob(f"{LOCUST_CSV_STEM}_*.csv"))
+
+
 def write_reports(args: argparse.Namespace, started: float, ended: float) -> None:
-    """Write the selected reports. Never raises: a report is a by-product of
-    the run, so a broken one must not change what the run concluded."""
-    if not args.report:
-        return
+    """Write the selected reports and upload them with locust's own CSVs.
+    Never raises: a report is a by-product of the run, so a broken one must
+    not change what the run concluded."""
     if not args.run_id:
         print("reports: --run-id is unset, so there is nothing to query on; skipping", flush=True)
         return
 
+    # Locust's files are on disk already, whatever the Prometheus reports do.
+    collected = locust_csvs(args)
+    for path in collected:
+        print(f"reports: locust wrote {path} ({path.stat().st_size} bytes)", flush=True)
+
+    if args.report:
+        collected += generate_reports(args, started)
+
+    if collected and args.report_bucket:
+        upload_reports(collected, args)
+
+
+def generate_reports(args: argparse.Namespace, started: float) -> list[Path]:
+    """The Prometheus-derived reports, or an empty list if they cannot be
+    produced. Each failure is named; none of them is fatal."""
     print(f"Waiting {REPORT_SETTLE_SECS}s for the run's last scrape...", flush=True)
     time.sleep(REPORT_SETTLE_SECS)
 
@@ -386,7 +426,7 @@ def write_reports(args: argparse.Namespace, started: float, ended: float) -> Non
         results = reports.generate(args.report, ctx, Path(args.report_dir))
     except Exception as exc:
         print(f"reports: skipped ({type(exc).__name__}: {exc})", flush=True)
-        return
+        return []
 
     written = []
     for name, path, error in results:
@@ -395,16 +435,19 @@ def write_reports(args: argparse.Namespace, started: float, ended: float) -> Non
         else:
             written.append(path)
             print(f"reports: wrote {path} ({path.stat().st_size} bytes)", flush=True)
-
-    if written and args.report_bucket:
-        upload_reports(written, args, reports)
+    return written
 
 
-def upload_reports(paths: list[Path], args: argparse.Namespace, reports) -> None:
+def upload_reports(paths: list[Path], args: argparse.Namespace) -> None:
     try:
+        import reports
+
         results = reports.upload(
             paths, args.report_bucket, args.run_id, args.report_prefix
         )
+    except ImportError as exc:
+        print(f"reports: upload skipped ({exc})", flush=True)
+        return
     except reports.UploadError as exc:
         print(f"reports: upload skipped ({exc})", flush=True)
         return

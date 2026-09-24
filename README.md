@@ -277,6 +277,39 @@ flag: the log expires with the Job after a day and Prometheus expires with its
 pod, so the bucket is the only copy of a run that outlives both. An unset
 `BUCKET_NAME` leaves the reports on the pod, where the Job's TTL takes them.
 
+locust's own files, written by the master as the run goes:
+
+- **`locust_stats.csv`** — the stats table, one row per request name plus
+  `Aggregated`. Min, Max and Average Content Size are real here: boomer
+  reports them to the master per request.
+- **`locust_stats_history.csv`** — a row per second per request name, each
+  carrying the user count alongside every percentile. This is the ramp curve,
+  with nothing inferred about what load a sample was taken at.
+- **`locust_failures.csv`**, **`locust_exceptions.csv`** — empty on a clean run.
+
+and the Prometheus-derived ones, written after it ends:
+
+- **`stats.csv`** — the same shape as `locust_stats.csv`, queried back out of
+  Prometheus rather than held by the master.
+- **`ttfi-vs-users.html`** — TTFI against concurrent users, one chart per
+  percentile stacked in a single page. Most informative on a ramped case,
+  where the ramp sweeps the user count and the run traces a curve.
+
+**The two sets do not agree to the digit, and locust's are the finer.** It
+holds response times rounded to 1 ms below 100 ms and 10 ms below 1 s, where
+the worker's Prometheus histogram uses `ExponentialBuckets(1, 2, 16)` and
+cannot resolve better than the bucket a value lands in — 64 ms wide around a
+typical TTFI. That is also why `stats.csv` leaves Min, Max and `100%` empty:
+the nearest available values there are bucket bounds, which describe the
+bucket layout and not the run. Its latency columns cover successful requests
+only, since a failure is usually a timeout and folding one in moves the
+percentiles by the size of the timeout; locust's pool both.
+
+What the Prometheus pair still buys is survival: they are queried after the
+run, so they can be regenerated for a run whose pod is gone, and Prometheus is
+where a series of runs is compared. locust's files exist only because the pod
+wrote them, which is why they are uploaded rather than left there.
+
 ### Telling one run from another
 
 When the run ends, `run_locust_job.sh` queries Prometheus for what it recorded

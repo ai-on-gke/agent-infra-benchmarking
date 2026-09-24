@@ -53,6 +53,31 @@ def range_query(
     return payload["data"]["result"]
 
 
+def instant_query(base_url: str, query: str, timeout: float = 15.0) -> list[dict]:
+    """Run one instant query and return its raw result series."""
+    url = f"{base_url.rstrip('/')}/api/v1/query?{urllib.parse.urlencode({'query': query})}"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            payload = json.load(resp)
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+        raise PrometheusError(f"{url}: {exc}") from exc
+    if payload.get("status") != "success":
+        raise PrometheusError(payload.get("error", "query rejected"))
+    return payload["data"]["result"]
+
+
+def labelled(result: list[dict], *labels: str) -> dict[tuple[str, ...], float]:
+    """Instant-query results keyed by the named labels. NaN is dropped: it
+    means the window held no observations, not that the value was zero."""
+    out: dict[tuple[str, ...], float] = {}
+    for item in result:
+        value = item["value"][1]
+        if value == "NaN":
+            continue
+        out[tuple(item["metric"].get(name, "") for name in labels)] = float(value)
+    return out
+
+
 def series(result: list[dict], index: int = 0) -> dict[int, float]:
     """One series as {unix_second: value}. NaN samples are dropped — they mean
     the window held no observations, not that the value was zero."""
