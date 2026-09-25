@@ -13,8 +13,9 @@
 # limitations under the License.
 
 """Chart one benchmark run: TTFI percentiles, worker nodes' CPU utilization and
-the user count over time, read from the run's locust_stats_history.csv and
-cluster_vitals_history.csv and shown in a matplotlib window.
+the actor counts over time, read from the run's
+locust_stats_history.csv, cluster_vitals_history.csv and
+custom_stats_history.csv and shown in a matplotlib window.
 """
 
 from __future__ import annotations
@@ -40,6 +41,17 @@ def latest_run(reports_dir: Path) -> Path:
     return runs[-1]
 
 
+def read_optional(run_dir: Path, filename: str, part: str) -> list[dict[str, str]]:
+    """A file only part of the chart needs. Reports reach Prometheus only
+    best-effort, so a run can lack it; the chart then goes without that part
+    rather than not at all."""
+    try:
+        return data.read(run_dir, filename)
+    except FileNotFoundError as exc:
+        print(f"benchmark-report: {exc}; drawing without {part}", file=sys.stderr)
+        return []
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="benchmark-report", description=__doc__)
     p.add_argument(
@@ -56,13 +68,8 @@ def main() -> None:
     except OSError as exc:
         sys.exit(f"benchmark-report: {exc}")
 
-    # Reports reach Prometheus only best-effort, so a run can lack this file;
-    # the chart then goes without its CPU panel rather than not at all.
-    try:
-        vitals = data.read(run_dir, data.CLUSTER_VITALS)
-    except FileNotFoundError as exc:
-        print(f"benchmark-report: {exc}; drawing without CPU", file=sys.stderr)
-        vitals = []
+    vitals = read_optional(run_dir, data.CLUSTER_VITALS, "CPU")
+    custom = read_optional(run_dir, data.CUSTOM_HISTORY, "actors")
 
     try:
         from . import ttfi_vs_users
@@ -80,7 +87,7 @@ def main() -> None:
 
     print(f"run: {run_dir}")
     try:
-        ttfi_vs_users.show(rows, run_dir.name, vitals)
+        ttfi_vs_users.show(rows, run_dir.name, vitals, custom)
     except ValueError as exc:
         sys.exit(f"benchmark-report: {exc}")
 

@@ -12,16 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TTFI percentiles, worker nodes' CPU utilization and the user count over the
-run, from the rows of locust_stats_history.csv and cluster_vitals_history.csv.
+"""TTFI percentiles, worker nodes' CPU utilization and the actor counts over the
+run, from the rows of locust_stats_history.csv, cluster_vitals_history.csv and
+custom_stats_history.csv.
 
 Panels on one time axis, each on its own y scale: latency, then CPU, then
-users. CPU is drawn for the nodes the vitals mark Pool=worker, the ones the
-WorkerPool runs on, rather than for every node or the cluster as a whole. Each row's percentiles cover locust's trailing 10s window, so a step in
-users shows up in latency spread over the 10s after it.
+actors: all of them, and the worker's active and idle (suspended) ones. Each
+locust user holds one actor, so all of them is locust's user count.
+
+CPU is drawn for the nodes the vitals mark Pool=worker, the ones the
+WorkerPool runs on, rather than for every node or the cluster as a whole.
+
+Each row's percentiles cover locust's trailing 10s window, so a step in users
+shows up in latency spread over the 10s after it.
 
 Every percentile column in the file is drawn; p50 alone starts visible, and
-the legend toggles the rest.
+the legend toggles the rest. Idle actors start hidden too.
 """
 
 from __future__ import annotations
@@ -49,11 +55,19 @@ RAMP = (
 
 CPU_METRIC = "CPUUtilizationPercent"
 WORKER_POOL = "worker"
-# Categorical slots after blue, which the latency panel already means. A node
-# past the last slot is drawn muted rather than in a repeated hue.
-NODE_COLORS = ("#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948")
+# Categorical slots after blue, which the latency panel already means, and
+# without the two ACTORS takes. A node past the last slot is drawn muted rather
+# than in a repeated hue.
+NODE_COLORS = ("#eb6834", "#1baf7a", "#eda100", "#008300", "#e34948")
 
-USERS_COLOR = "#52514e"
+ACTORS_COLOR = "#52514e"
+# (custom_stats_history.csv Name, legend label, color).
+ACTORS = (
+    ("ActiveActors", "active actors", "#4a3aa7"),
+    ("IdleActors", "idle actors", "#e87ba4"),
+)
+# Off until toggled on in the legend, like the percentiles past DEFAULT_VISIBLE.
+ACTORS_DEFAULT_HIDDEN = {"IdleActors"}
 INK_MUTED = "#898781"
 GRIDLINE = "#e1e0d9"
 
@@ -91,6 +105,20 @@ def cpu(vitals: list[dict[str, str]]) -> dict[str, tuple[list[datetime], list[fl
     return dict(sorted(series.items()))
 
 
+def actors(custom: list[dict[str, str]]) -> dict[str, tuple[list[datetime], list[float]]]:
+    """Each ACTORS gauge over time, by Name; a gauge the file lacks is left out."""
+    names = {name for name, _, _ in ACTORS}
+    series: dict[str, tuple[list[datetime], list[float]]] = {}
+    for r in custom:
+        value = data.number(r["Value"])
+        if r["Name"] not in names or value is None:
+            continue
+        times, values = series.setdefault(r["Name"], ([], []))
+        times.append(_time(r["Timestamp"]))
+        values.append(value)
+    return series
+
+
 def users(rows: list[dict[str, str]]) -> tuple[list[datetime], list[int]]:
     """The user count at each second, which every row of that second repeats."""
     counts = {int(r["Timestamp"]): int(r["User Count"]) for r in rows}
@@ -98,24 +126,27 @@ def users(rows: list[dict[str, str]]) -> tuple[list[datetime], list[int]]:
     return [_time(s) for s in seconds], [counts[s] for s in seconds]
 
 
-def show(rows: list[dict[str, str]], run_id: str = "", vitals=()) -> None:
+def show(rows: list[dict[str, str]], run_id: str = "", vitals=(), custom=()) -> None:
     """Draw the chart and block on its matplotlib window."""
-    figure(rows, run_id, vitals)
+    figure(rows, run_id, vitals, custom)
     plt.show()
 
 
-def figure(rows: list[dict[str, str]], run_id: str = "", vitals=()):
+def figure(rows: list[dict[str, str]], run_id: str = "", vitals=(), custom=()):
     """`rows` from locust_stats_history.csv; `vitals` from
-    cluster_vitals_history.csv, without which there is no CPU panel."""
+    cluster_vitals_history.csv, without which there is no CPU panel; `custom`
+    from custom_stats_history.csv, without which there are no actor lines."""
     times, values = latency(rows)
     if all(math.isnan(v) for col in values.values() for v in col):
         raise ValueError(f"no {REQUEST_NAME} samples in {data.STATS_HISTORY}")
     user_times, user_counts = users(rows)
     cpu_series = cpu(vitals)
-    title = f"{REQUEST_NAME}{', worker CPU' if cpu_series else ''} and users over time"
+    actor_series = actors(custom)
+    parts = [p for p in (REQUEST_NAME, cpu_series and "pool CPU", "actors") if p]
+    title = f"{', '.join(parts[:-1])} and {parts[-1]} over time"
     title += f" — run {run_id}" if run_id else ""
 
-    heights = (3, 2, 1) if cpu_series else (3, 1)
+    heights = (3, 2, 1.5) if cpu_series else (3, 1.5)
     fig, axes = plt.subplots(
         len(heights),
         1,
@@ -123,7 +154,7 @@ def figure(rows: list[dict[str, str]], run_id: str = "", vitals=()):
         figsize=(10, 2 * len(heights) + 2),
         gridspec_kw={"height_ratios": heights},
     )
-    ax_ms, ax_users = axes[0], axes[-1]
+    ax_ms, ax_actors = axes[0], axes[-1]
 
     # Drawn tail first, so the legend lists the percentiles top to bottom in
     # the order the lines stack.
@@ -151,14 +182,11 @@ def figure(rows: list[dict[str, str]], run_id: str = "", vitals=()):
     if cpu_series:
         _cpu_panel(fig, axes[1], cpu_series)
 
-    ax_users.step(user_times, user_counts, where="post", color=USERS_COLOR, linewidth=1.5)
-    ax_users.set_ylabel("users", color=INK_MUTED)
-    ax_users.set_ylim(bottom=0)
-    ax_users.yaxis.set_major_locator(MaxNLocator(integer=True))
-    ax_users.set_xlabel("time (UTC)", color=INK_MUTED)
+    _actors_panel(fig, ax_actors, (user_times, user_counts), actor_series)
+    ax_actors.set_xlabel("time (UTC)", color=INK_MUTED)
     locator = mdates.AutoDateLocator()
-    ax_users.xaxis.set_major_locator(locator)
-    ax_users.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+    ax_actors.xaxis.set_major_locator(locator)
+    ax_actors.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
 
     for ax in axes:
         _style(ax)
@@ -179,10 +207,35 @@ def _cpu_panel(fig, ax, series: dict[str, tuple[list[datetime], list[float]]]) -
         )[0]
         for node, (times, values) in series.items()
     ]
-    ax.set_ylabel("worker CPU (%)", color=INK_MUTED)
+    ax.set_ylabel("pool CPU (%)", color=INK_MUTED)
     legend = ax.legend(frameon=False, loc="upper left", bbox_to_anchor=(1, 1))
     # From 0, unlike latency: utilization is a share of capacity.
     _toggle_on_click(fig, ax, legend, lines, bottom=0)
+
+
+def _actors_panel(fig, ax, user_series, actor_series) -> None:
+    """Every actor, which is locust's user count, and the active and idle
+    gauges beside it on the same scale."""
+    lines = ax.step(
+        *user_series, where="post", color=ACTORS_COLOR, linewidth=1.5, label="actors"
+    )
+    for name, label, color in ACTORS:
+        if name in actor_series:
+            lines += ax.step(
+                *actor_series[name],
+                where="post",
+                color=color,
+                linewidth=1.5,
+                label=label,
+                visible=name not in ACTORS_DEFAULT_HIDDEN,
+            )
+    ax.set_ylabel("actors", color=INK_MUTED)
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    if actor_series:
+        legend = ax.legend(frameon=False, loc="upper left", bbox_to_anchor=(1, 1))
+        _toggle_on_click(fig, ax, legend, lines, bottom=0)
+    else:
+        ax.set_ylim(bottom=0)
 
 
 def _short_name(node: str) -> str:
