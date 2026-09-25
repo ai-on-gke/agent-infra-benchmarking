@@ -12,8 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Charts drawn from a benchmark run's raw CSVs.
-
-Only the standard library and matplotlib may be imported: runner.py uploads
-this package beside the CSVs, and it runs wherever they are downloaded to.
-"""
+"""Charts drawn from a benchmark run's raw CSVs."""
