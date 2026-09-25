@@ -11,6 +11,8 @@ containers:
   env:
   - name: OPENCLAW_USE_MOCK_LLM
     value: "true"
+  - name: MOCK_LLM_BASE_URL
+    value: "http://mock-llm.benchmark-workloads.svc.cluster.local/v1"
   readyz:
     httpGet:
       path: /readyz
