@@ -24,14 +24,12 @@ from .base import Report, RunContext
 from .cluster_vitals import ClusterVitalsReport
 from .custom_history import CustomHistoryReport
 from .stats_csv import StatsCSVReport
-from .ttfi_vs_users import TTFIvsUsersReport
 from .upload import DEFAULT_PREFIX, UploadError, upload
 
 _REPORTS: dict[str, Report] = {
     r.name: r
     for r in (
         StatsCSVReport(),
-        TTFIvsUsersReport(),
         CustomHistoryReport(),
         ClusterVitalsReport(),
     )

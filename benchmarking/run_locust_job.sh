@@ -639,6 +639,7 @@ download_reports() {
   mkdir -p "${REPORTS_DIR}"
   if gcloud storage cp --recursive "${src}" "${REPORTS_DIR}/"; then
     echo "  ${REPORTS_DIR}/${run_id}/"
+    echo "  cd ${REPORTS_DIR}/${run_id} && python3 -m benchmark_charts ."
   else
     echo "  Could not download ${src}/; to retry:" >&2
     echo "    gcloud storage cp --recursive ${src} ${REPORTS_DIR}/" >&2

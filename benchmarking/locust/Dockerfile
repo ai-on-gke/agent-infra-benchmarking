@@ -46,6 +46,9 @@ COPY --from=goboomer /out/testcase-helper /app/testcase-helper
 COPY --from=goboomer /out/boomer-worker /app/boomer-worker
 COPY benchmarking/locust/tests/ /app/tests/
 COPY benchmarking/locust/reports/ /app/reports/
+# Uploaded beside the run's CSVs rather than run here.
+COPY benchmark-charts/pyproject.toml /app/analysis/
+COPY benchmark-charts/benchmark_charts/ /app/analysis/benchmark_charts/
 COPY benchmarking/locust/runner.py /app/runner.py
 # The cases --test-case selects from.
 COPY benchmarking/tests.yaml /app/tests.yaml

@@ -36,6 +36,7 @@ because this repo ships no shapes/ directory for the second path to name.
 """
 
 import argparse
+import shutil
 import subprocess
 import signal
 import sys
@@ -52,6 +53,10 @@ BOOMER_BINARY = "/app/boomer-worker"
 
 # Where --test-case looks, copied into the image from benchmarking/tests.yaml.
 TESTS_FILE = "/app/tests.yaml"
+
+# The benchmark_charts package and its pyproject.toml, copied into --report-dir
+# so they are uploaded beside the CSVs they chart.
+ANALYSIS_DIR = "/app/analysis"
 
 # Prefix locust's --csv appends _stats.csv, _stats_history.csv, _failures.csv
 # and _exceptions.csv to, inside --report-dir so one folder holds everything a
@@ -86,8 +91,8 @@ REPORT_PREFIX = "reports"
 
 def report_names() -> list[str]:
     """Registered report names, or empty when the reports package cannot
-    load. Imported lazily so a missing matplotlib costs the reports and not
-    the run."""
+    load. Imported lazily so a broken package costs the reports and not the
+    run."""
     try:
         import reports
 
@@ -398,6 +403,9 @@ def write_reports(args: argparse.Namespace, started: float, ended: float) -> Non
     if args.report:
         collected += generate_reports(args, started)
 
+    if collected:
+        collected += bundle_analysis(args)
+
     if collected and args.report_bucket:
         upload_reports(collected, args)
 
@@ -438,12 +446,30 @@ def generate_reports(args: argparse.Namespace, started: float) -> list[Path]:
     return written
 
 
+def bundle_analysis(args: argparse.Namespace) -> list[Path]:
+    """Copy ANALYSIS_DIR into --report-dir, so a downloaded run folder can
+    chart itself. Returns the copies."""
+    src = Path(ANALYSIS_DIR)
+    copied = []
+    try:
+        for path in sorted(src.rglob("*")):
+            if not path.is_file() or "__pycache__" in path.parts:
+                continue
+            dst = Path(args.report_dir) / path.relative_to(src)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            copied.append(Path(shutil.copy2(path, dst)))
+    except OSError as exc:
+        print(f"reports: chart bundle skipped ({exc})", flush=True)
+        return []
+    return copied
+
+
 def upload_reports(paths: list[Path], args: argparse.Namespace) -> None:
     try:
         import reports
 
         results = reports.upload(
-            paths, args.report_bucket, args.run_id, args.report_prefix
+            paths, args.report_bucket, args.run_id, Path(args.report_dir), args.report_prefix
         )
     except ImportError as exc:
         print(f"reports: upload skipped ({exc})", flush=True)
