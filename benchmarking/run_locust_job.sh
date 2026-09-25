@@ -29,6 +29,7 @@
 #
 # Each run blocks until it is over and fails if it did, so a series like that
 # is a script rather than three things to sit and watch.
+# run_all_test_cases.sh is that script for every case in tests.yaml.
 
 set -o errexit -o nounset -o pipefail
 
@@ -108,6 +109,7 @@ USER_CLASS=""
 # inside the pod. It is the whole of the worker's configuration: the workload,
 # its template, and every other flag the worker takes.
 TEST_CASE=""
+NO_BUILD=0
 WAIT_TIMEOUT_SECS=""
 POD_START_TIMEOUT_SECS=""
 NO_WAIT=0
@@ -116,7 +118,7 @@ NO_WAIT=0
 FOLLOW_LOGS=0
 ONLY_SUMMARY=0
 # runner.py writes every registered report when the run ends and uploads it to
-# reports/<run-id>/ in the deployment's own bucket, which is where the runner's
+# reports/<run-id>/<test-case>/ in the deployment's own bucket, which is where the runner's
 # Workload Identity grant applies. Not optional: a run whose reports were
 # skipped is one whose results have to be reconstructed from the log.
 #
@@ -126,8 +128,8 @@ BENCHMARK_REPORTS=all
 BENCHMARK_REPORT_BUCKET="${BUCKET_NAME:-}"
 # Has to match runner.py's --report-prefix default, which the manifest leaves.
 REPORT_PREFIX=reports
-# Where the uploaded reports are copied to once the run ends, one folder per
-# run_id beneath it.
+# Where the uploaded reports are copied to once the run ends, as
+# <run-id>/<test-case>/ beneath it.
 REPORTS_DIR="${ROOT}/reports"
 NO_DOWNLOAD=0
 
@@ -150,9 +152,10 @@ usage() {
   echo "assumed to be deployed already."
   echo ""
   echo "The run:"
-  echo "  --run-id NAME           Names this run in Prometheus, as the run_id label on"
-  echo "                          every series it produces, suffixed with the test case:"
-  echo "                          NAME-<test-case> (default NAME: a UTC timestamp)"
+  echo "  --run-id NAME           The run this test case is part of (default: a UTC"
+  echo "                          timestamp). run_all_test_cases.sh passes one to every"
+  echo "                          case. The run_id label in Prometheus, beside test_case;"
+  echo "                          the reports go to reports/NAME/<test-case>/."
   echo "  --user-class NAME       Locust user class, lowercase; runs tests/NAME.py"
   echo "                          (default: runworkload)"
   echo "  --test-case NAME        The run, named as a case in benchmarking/tests.yaml"
@@ -167,6 +170,7 @@ usage() {
   echo "different run and so is a different case."
   echo "  --pool-timeout SECONDS  Ceiling on the wait for the new pool's workers to be"
   echo "                          ready (default: ${DEFAULT_POOL_TIMEOUT_SECS})"
+  echo "  --no-build              Use the images already pushed rather than building them."
   echo ""
   echo "Waiting:"
   echo "  --no-wait               Submit the Job and return, instead of following it."
@@ -185,7 +189,7 @@ usage() {
   echo "                          Ceiling on the wait for the pod to start, which covers the"
   echo "                          image pull and the scheduling (default: 300)"
   echo "  --reports-dir DIR       Where the run's reports are downloaded from the bucket,"
-  echo "                          into DIR/<run-id>/ (default: ${ROOT}/reports)"
+  echo "                          into DIR/<run-id>/<test-case>/ (default: ${ROOT}/reports)"
   echo "  --no-download           Leave the reports in the bucket."
   echo ""
   echo "Other:"
@@ -211,6 +215,7 @@ while [[ "$#" -gt 0 ]]; do
     --pool-timeout=*) POOL_TIMEOUT_SECS="${1#*=}" ;;
     --test-case) shift; TEST_CASE="$1" ;;
     --test-case=*) TEST_CASE="${1#*=}" ;;
+    --no-build) NO_BUILD=1 ;;
     --no-wait) NO_WAIT=1 ;;
     --follow-logs) FOLLOW_LOGS=1 ;;
     --only-summary) ONLY_SUMMARY=1 ;;
@@ -448,12 +453,13 @@ follow_run() {
   return 1
 }
 
-# download_reports copies what runner.py uploaded for one run into
-# REPORTS_DIR/<run-id>/. Best-effort: the reports stay in the bucket either
-# way, so a failed copy is only a command to rerun.
+# download_reports copies what runner.py uploaded for one test case into
+# REPORTS_DIR/<run-id>/<test-case>/. Best-effort: the reports stay in the bucket
+# either way, so a failed copy is only a command to rerun.
 download_reports() {
-  local run_id="$1"
-  local src="gs://${BENCHMARK_REPORT_BUCKET}/${REPORT_PREFIX}/${run_id}"
+  local run_id="$1" test_case="$2"
+  local src="gs://${BENCHMARK_REPORT_BUCKET}/${REPORT_PREFIX}/${run_id}/${test_case}"
+  local dest="${REPORTS_DIR}/${run_id}"
 
   if [[ -z "${BENCHMARK_REPORT_BUCKET}" ]]; then
     echo "Skipping the report download: BUCKET_NAME is unset, so nothing was uploaded."
@@ -467,13 +473,13 @@ download_reports() {
 
   echo
   echo "=== Downloading reports ==="
-  mkdir -p "${REPORTS_DIR}"
-  if gcloud storage cp --recursive "${src}" "${REPORTS_DIR}/"; then
-    echo "  ${REPORTS_DIR}/${run_id}/"
-    echo "  benchmark-report ${REPORTS_DIR}/${run_id}   (pip install ./benchmark-charts)"
+  mkdir -p "${dest}"
+  if gcloud storage cp --recursive "${src}" "${dest}/"; then
+    echo "  ${dest}/${test_case}/"
+    echo "  benchmark-report ${dest}/${test_case}   (pip install ./benchmark-charts)"
   else
     echo "  Could not download ${src}/; to retry:" >&2
-    echo "    gcloud storage cp --recursive ${src} ${REPORTS_DIR}/" >&2
+    echo "    mkdir -p ${dest} && gcloud storage cp --recursive ${src} ${dest}/" >&2
   fi
 }
 
@@ -533,18 +539,15 @@ fi
 
 export BENCHMARK_TEST_CASE="${TEST_CASE:-${DEFAULT_TEST_CASE}}"
 
-# A timestamp rather than a random string, so the ids of a series of runs sort
-# into the order the runs happened in, and the case after it, so a listing of
-# runs says what each one measured. Seconds are enough: the Job it names can
-# only exist one at a time.
-RUN_ID="${RUN_ID:-$(date -u +%Y%m%dt%H%M%Sz)}-${BENCHMARK_TEST_CASE}"
+# A timestamp, so the ids of a series of runs sort into the order they happened
+# in. Must match run_all_test_cases.sh's.
+RUN_ID="${RUN_ID:-$(date -u +%Y%m%dt%H%M%Sz)}"
 # Checked here rather than left to the API server, which would reject the whole
 # manifest for it and say so in terms of label syntax rather than of the flag
 # that produced it.
 if ! [[ "${RUN_ID}" =~ ^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$ ]]; then
-  echo "Error: the run id, --run-id (or the timestamp) and the test case joined by" >&2
-  echo "a dash, must be 1-63 alphanumerics, dashes, underscores or dots, starting" >&2
-  echo "and ending with an alphanumeric. Got '${RUN_ID}'" >&2
+  echo "Error: --run-id must be 1-63 alphanumerics, dashes, underscores or dots," >&2
+  echo "starting and ending with an alphanumeric. Got '${RUN_ID}'" >&2
   exit 1
 fi
 
@@ -560,9 +563,11 @@ fi
 # Ahead of the resolve below, not merely ahead of the pool: the case is read
 # out of the locust image, so building first is what makes a run measure the
 # tests.yaml in the working tree rather than the one the last build baked in.
-echo
-echo "=== Building and pushing images ==="
-"${BENCHMARKING_DIR}/locust/build_and_push.sh"
+if [[ "${NO_BUILD}" -eq 0 ]]; then
+  echo
+  echo "=== Building and pushing images ==="
+  "${BENCHMARKING_DIR}/locust/build_and_push.sh"
+fi
 
 echo
 echo "=== Resolving test case ==="
@@ -611,7 +616,7 @@ echo "=== Deleting actors ==="
 delete_actors || true
 
 if [[ "${NO_DOWNLOAD}" -eq 0 ]]; then
-  download_reports "${RUN_ID}" || true
+  download_reports "${RUN_ID}" "${BENCHMARK_TEST_CASE}" || true
 fi
 
 exit "${run_status}"

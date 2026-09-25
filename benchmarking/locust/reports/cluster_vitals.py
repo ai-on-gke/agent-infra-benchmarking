@@ -80,7 +80,7 @@ class ClusterVitalsReport:
         if not any(samples.values()):
             raise ValueError("no cAdvisor node series in the run's window")
 
-        users = series(self._range(ctx, USERS_QUERY.format(run_id=ctx.run_id)))
+        users = series(self._range(ctx, USERS_QUERY.format(run_id=ctx.run_id, test_case=ctx.test_case)))
         workers = series_by(self._range(ctx, WORKER_NODES_QUERY), NODE_LABEL)
         return history_csv(users, samples, {node: WORKER_POOL for node in workers})
 

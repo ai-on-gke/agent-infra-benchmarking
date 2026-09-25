@@ -40,14 +40,26 @@ CHARTS = {
 
 
 def latest_run(reports_dir: Path) -> Path:
-    """The newest run folder in `reports_dir`. Run ids start with a UTC
-    timestamp by default, so the last by name is the latest."""
+    """The newest run folder in `reports_dir`. Run ids are a UTC timestamp by
+    default, so the last by name is the latest."""
     if not reports_dir.is_dir():
         raise FileNotFoundError(f"no {reports_dir}/ folder in {Path.cwd()}")
     runs = sorted(p for p in reports_dir.iterdir() if p.is_dir())
     if not runs:
         raise FileNotFoundError(f"no run folders in {reports_dir.resolve()}")
     return runs[-1]
+
+
+def case_dir(path: Path) -> Path:
+    """`path` when it holds a test case's CSVs, or else the one test case in
+    it: a run folder holds one folder per case."""
+    if (path / data.STATS_HISTORY).is_file() or not path.is_dir():
+        return path
+    cases = sorted(p for p in path.iterdir() if (p / data.STATS_HISTORY).is_file())
+    if len(cases) > 1:
+        names = ", ".join(c.name for c in cases)
+        raise ValueError(f"{path} holds {len(cases)} test cases; pass one of {path}/{{{names}}}")
+    return cases[0] if cases else path
 
 
 def read_optional(run_dir: Path, filename: str, part: str) -> list[dict[str, str]]:
@@ -67,7 +79,8 @@ def main() -> None:
         "path",
         nargs="?",
         type=Path,
-        help=f"A run's folder of CSVs (default: the latest one in ./{REPORTS_DIR}).",
+        help=f"A test case's folder of CSVs, {REPORTS_DIR}/<run-id>/<test-case>, or a "
+        f"run folder holding one (default: the latest run in ./{REPORTS_DIR}).",
     )
     p.add_argument(
         "--chart",
@@ -79,9 +92,9 @@ def main() -> None:
     args = p.parse_args()
 
     try:
-        run_dir = (args.path or latest_run(REPORTS_DIR)).resolve()
+        run_dir = case_dir(args.path or latest_run(REPORTS_DIR)).resolve()
         rows = data.read(run_dir, data.STATS_HISTORY)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         sys.exit(f"benchmark-report: {exc}")
 
     vitals = read_optional(run_dir, data.CLUSTER_VITALS, "CPU")
@@ -116,7 +129,12 @@ def main() -> None:
         if chart == args.chart:
             active = len(mains)
         mains.append(panel)
-    panels.figure(mains, rows, run_dir.name, vitals, custom, active=active)
+    # <run-id>/<test-case> when it is under ./reports, for the title.
+    try:
+        name = run_dir.relative_to(REPORTS_DIR.resolve()).as_posix()
+    except ValueError:
+        name = run_dir.name
+    panels.figure(mains, rows, name, vitals, custom, active=active)
     plt.show()
 
 

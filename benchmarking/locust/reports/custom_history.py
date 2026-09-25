@@ -33,13 +33,13 @@ STEP_SECS = 1
 
 COLUMNS = ["Timestamp", "User Count", "Type", "Name", "Value"]
 
-USERS_QUERY = 'sum(locust_users{{run_id="{run_id}"}})'
+USERS_QUERY = 'sum(locust_users{{run_id="{run_id}",test_case="{test_case}"}})'
 
 # (Type, Name, query). Adding a metric to the file is adding a row here.
 METRICS = (
-    ("gauge", "ActiveActors", 'sum(boomer_active_actors{{run_id="{run_id}"}})'),
+    ("gauge", "ActiveActors", 'sum(boomer_active_actors{{run_id="{run_id}",test_case="{test_case}"}})'),
     # Idle is the worker's suspended gauge: actors waiting to be resumed.
-    ("gauge", "IdleActors", 'sum(boomer_suspended_actors{{run_id="{run_id}"}})'),
+    ("gauge", "IdleActors", 'sum(boomer_suspended_actors{{run_id="{run_id}",test_case="{test_case}"}})'),
 )
 
 
@@ -51,14 +51,14 @@ class CustomHistoryReport:
         users = self._query(ctx, USERS_QUERY)
         samples = {(kind, name): self._query(ctx, query) for kind, name, query in METRICS}
         if not any(samples.values()):
-            raise ValueError(f"no custom metrics for run_id={ctx.run_id}")
+            raise ValueError(f"no custom metrics for run_id={ctx.run_id} test_case={ctx.test_case}")
         return history_csv(users, samples)
 
     def _query(self, ctx: RunContext, query: str) -> dict[int, float]:
         return series(
             range_query(
                 ctx.prometheus_url,
-                query.format(run_id=ctx.run_id),
+                query.format(run_id=ctx.run_id, test_case=ctx.test_case),
                 ctx.started,
                 ctx.ended,
                 STEP_SECS,

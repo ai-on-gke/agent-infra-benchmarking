@@ -28,6 +28,7 @@ class RunContext:
     """What a report knows about the run it is describing."""
 
     run_id: str
+    test_case: str
     users: int
     spawn_rate: float
     duration: str
