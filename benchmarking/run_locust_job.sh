@@ -16,8 +16,9 @@
 
 # Runs the benchmark as a Job, waits for it, and exits with its result. In
 # order: it builds and pushes the images, resolves the case out of the image it
-# just built, recreates the WorkerPool, renders manifests/job.yaml and submits
-# it, follows the run, and downloads the reports runner.py uploaded.
+# just built, recreates the WorkerPool and deletes every actor in between,
+# renders manifests/job.yaml and submits it, follows the run, deletes the actors
+# again, and downloads the reports runner.py uploaded.
 #
 # It assumes the thing being measured is already in the cluster.
 # deploy-benchmarking.sh puts it there, and owns every teardown but the Job's:
@@ -59,6 +60,11 @@ NAMESPACE=benchmarking
 POOL_MANIFEST="${BENCHMARKING_DIR}/workloads/manifests/workloads.yaml.tmpl"
 POOL_NAME=benchmark-ateom
 POOL_NAMESPACE=benchmark-workloads
+
+# The atespace the run's actors are created in: boomer-worker's --atespace
+# default, which no case overrides. The ActorTemplates they are created from
+# are in benchmark-workloads, and are left alone.
+ACTOR_ATESPACE=benchmark
 
 # ko resolves the manifest's ko:// workerImage, and both the tool wrapper and
 # that import path only work inside the submodule.
@@ -164,7 +170,8 @@ usage() {
   echo ""
   echo "Waiting:"
   echo "  --no-wait               Submit the Job and return, instead of following it."
-  echo "                          The run continues in the cluster either way."
+  echo "                          The run continues in the cluster either way, and its"
+  echo "                          actors are left for the next run to delete."
   echo "  --follow-logs           Stream the run's logs while it runs. Without it the run"
   echo "                          is still waited on, and its log read afterwards from the"
   echo "                          finished Job: kubectl logs job/${JOB_NAME} -n ${NAMESPACE}"
@@ -172,7 +179,8 @@ usage() {
   echo "                          reprints while the run goes. The aggregate it prints when"
   echo "                          the run ends is kept, so the result is unaffected."
   echo "  --wait-timeout SECONDS  Ceiling on the wait for the run (default: 3600). Reaching"
-  echo "                          it stops the waiting, not the Job."
+  echo "                          it stops the waiting, not the Job, though the Job's"
+  echo "                          actors are deleted all the same."
   echo "  --pod-start-timeout SECONDS"
   echo "                          Ceiling on the wait for the pod to start, which covers the"
   echo "                          image pull and the scheduling (default: 300)"
@@ -234,6 +242,30 @@ run_ko() {
   (cd "${SUBSTRATE_DIR}" && hack/run-tool.sh ko "$@")
 }
 
+# delete_actors deletes every actor in ACTOR_ATESPACE, whatever its state. The
+# worker deletes the actors it created when a run ends, but not ones it lost
+# track of, such as those that crashed, and those would otherwise carry into
+# the next run. Returns non-zero when an actor may be left.
+delete_actors() {
+  local names
+  if ! names="$(kubectl ate get actors --atespace="${ACTOR_ATESPACE}" -o json |
+    jq -r '(.actors // [])[].metadata.name')"; then
+    echo "Warning: could not list the actors in ${ACTOR_ATESPACE}." >&2
+    return 1
+  fi
+  if [[ -z "${names}" ]]; then
+    echo "No actors in ${ACTOR_ATESPACE}."
+    return 0
+  fi
+  echo "Deleting $(wc -l <<<"${names}") actor(s) in ${ACTOR_ATESPACE}..."
+  # Several at a time, since every call opens its own port-forward to the API.
+  if ! xargs -P 8 -I{} kubectl ate delete actor {} \
+    --atespace="${ACTOR_ATESPACE}" --any-state >/dev/null <<<"${names}"; then
+    echo "Warning: not every actor in ${ACTOR_ATESPACE} was deleted; see above." >&2
+    return 1
+  fi
+}
+
 # resolve_test_case prints the named case as JSON, by running the
 # testcase-helper binary that ships in the locust image beside the tests.yaml it
 # reads. Going through the image is what keeps a YAML parser off the host, which
@@ -272,6 +304,10 @@ recreate_worker_pool() {
   # racing a Deployment of the same name that is still terminating.
   kubectl wait --for=delete "deployment/${POOL_NAME}" \
     --namespace="${POOL_NAMESPACE}" --timeout="${POOL_TIMEOUT_SECS}s" 2>/dev/null || true
+
+  # With no workers left to run them, so the new pool starts with no actors.
+  # Not fatal: a leftover actor skews the run, but does not stop it.
+  delete_actors || true
 
   echo "Deploying ${POOL_NAME} WorkerPool (replicas=${WORKER_COUNT}, sandbox_class=${SANDBOX_CLASS})..."
   sed -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
@@ -477,6 +513,12 @@ if ! command -v jq &>/dev/null; then
   echo "Error: jq is required to read the pool's shape out of the test case." >&2
   exit 1
 fi
+if ! command -v kubectl-ate &>/dev/null; then
+  echo "Error: kubectl ate is required to delete the actors around a run. Install it" >&2
+  echo "from the substrate submodule:" >&2
+  echo "  (cd dependency-repos/substrate && go install ./cmd/kubectl-ate)" >&2
+  exit 1
+fi
 
 if [[ ! -f "${SUBSTRATE_DIR}/go.mod" ]]; then
   echo "Error: substrate submodule not initialized at ${SUBSTRATE_DIR}; the" >&2
@@ -562,6 +604,11 @@ fi
 # gets one: what it managed to record before it stopped is usually the point.
 run_status=0
 follow_run || run_status=$?
+
+# Whether the run finished or --wait-timeout was reached with it still going.
+echo
+echo "=== Deleting actors ==="
+delete_actors || true
 
 if [[ "${NO_DOWNLOAD}" -eq 0 ]]; then
   download_reports "${RUN_ID}" || true
