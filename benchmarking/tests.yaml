@@ -38,37 +38,27 @@
 cases:
   glutton-baseline:
     duration: 5m
-    users: 5
+    users: 80
+    spawn-rate: 1
+    worker-count: 200
+    sandbox-class: gvisor
+    workload-name: glutton
+    workload-template: glutton
+    resume-mode: explicit
+  
+  glutton:
+    duration: 5m
+    users: 
     worker-count: 15
     sandbox-class: gvisor
     workload-name: glutton
     workload-template: glutton
     resume-mode: explicit
 
-  glutton-implicit:
-    duration: 5m
-    users: 1
-    worker-count: 1
-    sandbox-class: gvisor
-    workload-name: glutton
-    workload-template: glutton
-    resume-mode: implicit
-
-  glutton-idle:
-    duration: 5m
-    users: 1
-    worker-count: 1
-    sandbox-class: gvisor
-    workload-name: glutton
-    workload-template: glutton
-    resume-mode: explicit
-    min-wait: 2s
-    max-wait: 10s
-
   openclaw-baseline:
-    duration: 5m
-    users: 50
-    worker-count: 1
+    duration: 1m
+    users: 1
+    worker-count: 15
     sandbox-class: gvisor
     workload-name: openclaw
     workload-template: openclaw

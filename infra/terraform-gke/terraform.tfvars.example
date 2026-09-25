@@ -27,9 +27,10 @@ cluster = {
       node_locations = ["us-central1-a"]
       min_node_count = 1
       max_node_count = 1
+      # ate.dev/substrate-version is not set here: Terraform reads it off the
+      # substrate submodule and adds it to every pool. See main.tf.
       labels = {
         "benchmarking-worker" = "true",
-        # "ate.dev/substrate-version" = "6ec93a45",
       }
     }
   }
