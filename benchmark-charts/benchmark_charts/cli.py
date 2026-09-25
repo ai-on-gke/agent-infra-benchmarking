@@ -40,8 +40,8 @@ CHARTS = {
 
 
 def latest_run(reports_dir: Path) -> Path:
-    """The newest run folder in `reports_dir`. Run ids are UTC timestamps by
-    default, so the last by name is the latest."""
+    """The newest run folder in `reports_dir`. Run ids start with a UTC
+    timestamp by default, so the last by name is the latest."""
     if not reports_dir.is_dir():
         raise FileNotFoundError(f"no {reports_dir}/ folder in {Path.cwd()}")
     runs = sorted(p for p in reports_dir.iterdir() if p.is_dir())

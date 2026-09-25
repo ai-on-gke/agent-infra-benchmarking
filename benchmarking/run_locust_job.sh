@@ -153,7 +153,8 @@ usage() {
   echo ""
   echo "The run:"
   echo "  --run-id NAME           Names this run in Prometheus, as the run_id label on"
-  echo "                          every series it produces (default: a UTC timestamp)"
+  echo "                          every series it produces, suffixed with the test case:"
+  echo "                          NAME-<test-case> (default NAME: a UTC timestamp)"
   echo "  --user-class NAME       Locust user class, lowercase; runs tests/NAME.py"
   echo "                          (default: runworkload)"
   echo "  --test-case NAME        The run, named as a case in benchmarking/tests.yaml"
@@ -695,23 +696,24 @@ if [[ ! -f "${POOL_MANIFEST}" ]]; then
   exit 1
 fi
 
+export BENCHMARK_TEST_CASE="${TEST_CASE:-${DEFAULT_TEST_CASE}}"
+
 # A timestamp rather than a random string, so the ids of a series of runs sort
-# into the order the runs happened in. Seconds are enough: the Job it names can
+# into the order the runs happened in, and the case after it, so a listing of
+# runs says what each one measured. Seconds are enough: the Job it names can
 # only exist one at a time.
-if [[ -z "${RUN_ID}" ]]; then
-  RUN_ID="$(date -u +%Y%m%dt%H%M%Sz)"
-fi
+RUN_ID="${RUN_ID:-$(date -u +%Y%m%dt%H%M%Sz)}-${BENCHMARK_TEST_CASE}"
 # Checked here rather than left to the API server, which would reject the whole
 # manifest for it and say so in terms of label syntax rather than of the flag
 # that produced it.
 if ! [[ "${RUN_ID}" =~ ^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$ ]]; then
-  echo "Error: --run-id must be 1-63 alphanumerics, dashes, underscores or dots," >&2
-  echo "starting and ending with an alphanumeric. Got '${RUN_ID}'" >&2
+  echo "Error: the run id, --run-id (or the timestamp) and the test case joined by" >&2
+  echo "a dash, must be 1-63 alphanumerics, dashes, underscores or dots, starting" >&2
+  echo "and ending with an alphanumeric. Got '${RUN_ID}'" >&2
   exit 1
 fi
 
 export BENCHMARK_RUN_ID="${RUN_ID}"
-export BENCHMARK_TEST_CASE="${TEST_CASE:-${DEFAULT_TEST_CASE}}"
 # locust rejects an empty --only-summary rather than reading it as false, so
 # this is never blank.
 if [[ "${ONLY_SUMMARY}" -eq 1 ]]; then
