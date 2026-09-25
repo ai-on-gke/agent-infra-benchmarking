@@ -18,7 +18,7 @@ figure() stacks panels on one time axis, each on its own y scale: the main
 panel, then worker nodes' CPU utilization, then actors: all of them, and the
 worker's active and idle (suspended) ones. Each locust user holds one actor,
 so all of them is locust's user count. Given several main panels, it shows one
-at a time, and radio buttons above the chart switch between them in place.
+at a time, and a drop-down above the chart switches between them in place.
 
 CPU is drawn for the nodes the vitals mark Pool=worker, the ones the
 WorkerPool runs on, rather than for every node or the cluster as a whole.
@@ -33,9 +33,9 @@ from typing import Protocol
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
-from matplotlib.widgets import RadioButtons
 
 from . import data
+from .dropdown import Dropdown
 
 CPU_METRIC = "CPUUtilizationPercent"
 WORKER_POOL = "worker"
@@ -54,9 +54,10 @@ ACTORS_DEFAULT_HIDDEN = {"IdleActors"}
 INK_MUTED = "#898781"
 GRIDLINE = "#e1e0d9"
 
-# The strip above the panels that holds the main panel switch.
-SWITCH_HEIGHT_IN = 0.6
-SWITCH_COLOR = "#2a78d6"
+# The strip above the panels that holds the main panel switch, and the
+# switch's own height within it.
+SWITCH_STRIP_IN = 0.45
+SWITCH_HEIGHT_IN = 0.28
 
 
 class Panel(Protocol):
@@ -159,27 +160,20 @@ def figure(
         fig.tight_layout()
         return fig
 
-    strip = SWITCH_HEIGHT_IN / fig.get_figheight()
+    strip = SWITCH_STRIP_IN / fig.get_figheight()
+    height = SWITCH_HEIGHT_IN / fig.get_figheight()
     fig.tight_layout(rect=(0, 0, 1, 1 - strip))
     # Over the legend column, which is where the other toggles are.
-    left = ax_main.get_position().x1
-    switch = RadioButtons(
-        fig.add_axes((left, 1 - strip, 1 - left, strip)),
-        [m.title for m in mains],
-        active=active,
-        activecolor=SWITCH_COLOR,
-    )
-    switch.ax.set_frame_on(False)
+    left = ax_main.get_position().x1 + 0.01
     by_title = {m.title: m for m in mains}
-
-    def on_switch(title: str) -> None:
-        show(by_title[title])
-        fig.canvas.draw_idle()
-
-    switch.on_clicked(on_switch)
-    # The canvas holds a widget's handlers weakly; without a reference of its
-    # own the switch would be collected and stop responding.
-    fig.main_switch = switch
+    # Held by the figure, since the canvas holds widget handlers only weakly.
+    fig.main_switch = Dropdown(
+        fig,
+        (left, 1 - (strip + height) / 2, 1 - left - 0.015, height),
+        list(by_title),
+        active,
+        on_select=lambda title: show(by_title[title]),
+    )
     return fig
 
 

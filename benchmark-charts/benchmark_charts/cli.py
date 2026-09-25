@@ -73,8 +73,8 @@ def main() -> None:
         "--chart",
         choices=list(CHARTS),
         default="ttfi",
-        help="The top panel the window opens on (default: ttfi). The buttons "
-        "above it switch to the others.",
+        help="The top panel the window opens on (default: ttfi). The drop-down "
+        "above it switches to the others.",
     )
     args = p.parse_args()
 
