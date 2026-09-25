@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Chart one benchmark run: TTFI against concurrent users, read from the run's
-locust_stats_history.csv and shown in a matplotlib window.
+"""Chart one benchmark run: TTFI percentiles and the user count over time, read
+from the run's locust_stats_history.csv and shown in a matplotlib window.
 """
 
 from __future__ import annotations
