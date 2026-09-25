@@ -12,22 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Reader for locust_stats_history.csv, which locust writes with
---csv-full-history: one row per second per request name, plus an Aggregated
-row."""
+"""Readers for a run's CSVs."""
 
 from __future__ import annotations
 
 import csv
 from pathlib import Path
 
-FILENAME = "locust_stats_history.csv"
+# locust's --csv-full-history: one row per second per request name, plus an
+# Aggregated row.
+STATS_HISTORY = "locust_stats_history.csv"
+
+# runner.py's cluster-vitals report, from Prometheus: one row per second per
+# metric, for each node and for the cluster as a whole.
+CLUSTER_VITALS = "cluster_vitals_history.csv"
 
 
-def read(data_dir: Path) -> list[dict[str, str]]:
-    path = data_dir / FILENAME
+def read(data_dir: Path, filename: str) -> list[dict[str, str]]:
+    path = data_dir / filename
     if not path.is_file():
-        raise FileNotFoundError(f"no {FILENAME} in {data_dir}")
+        raise FileNotFoundError(f"no {filename} in {data_dir}")
     with path.open(newline="") as f:
         return list(csv.DictReader(f))
 

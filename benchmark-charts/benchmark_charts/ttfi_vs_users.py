@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TTFI percentiles and the user count over the run, from the rows of
-locust_stats_history.csv.
+"""TTFI percentiles, worker nodes' CPU utilization and the user count over the
+run, from the rows of locust_stats_history.csv and cluster_vitals_history.csv.
 
-Two panels on one time axis, each on its own y scale: latency above, users
-below. Each row's percentiles cover locust's trailing 10s window, so a step in
+Panels on one time axis, each on its own y scale: latency, then CPU, then
+users. CPU is drawn for the nodes the vitals mark Pool=worker, the ones the
+WorkerPool runs on, rather than for every node or the cluster as a whole. Each row's percentiles cover locust's trailing 10s window, so a step in
 users shows up in latency spread over the 10s after it.
 
 Every percentile column in the file is drawn; p50 alone starts visible, and
@@ -33,7 +34,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.ticker import MaxNLocator
 
-from . import stats_history
+from . import data
 
 REQUEST_NAME = "TTFI"
 
@@ -45,6 +46,12 @@ RAMP = (
     "#86b6ef", "#6da7ec", "#5598e7", "#3987e5", "#2a78d6",
     "#256abf", "#1c5cab", "#184f95", "#104281", "#0d366b",
 )
+
+CPU_METRIC = "CPUUtilizationPercent"
+WORKER_POOL = "worker"
+# Categorical slots after blue, which the latency panel already means. A node
+# past the last slot is drawn muted rather than in a repeated hue.
+NODE_COLORS = ("#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948")
 
 USERS_COLOR = "#52514e"
 INK_MUTED = "#898781"
@@ -64,10 +71,24 @@ def latency(rows: list[dict[str, str]]) -> tuple[list[datetime], dict[str, list[
     # locust writes 0 for a window that held no requests; NaN breaks the line
     # there instead of drawing it down to zero.
     values = {
-        col: [stats_history.number(r[col]) or math.nan for r in ttfi]
+        col: [data.number(r[col]) or math.nan for r in ttfi]
         for col in percentile_columns(rows)
     }
     return [_time(r["Timestamp"]) for r in ttfi], values
+
+
+def cpu(vitals: list[dict[str, str]]) -> dict[str, tuple[list[datetime], list[float]]]:
+    """CPU utilization % over time for each worker node, by name. Empty for a
+    file from before the Pool column, which marks no node a worker."""
+    series: dict[str, tuple[list[datetime], list[float]]] = {}
+    for r in vitals:
+        value = data.number(r["Value"])
+        if r["Name"] != CPU_METRIC or r.get("Pool") != WORKER_POOL or value is None:
+            continue
+        times, values = series.setdefault(r["Type"], ([], []))
+        times.append(_time(r["Timestamp"]))
+        values.append(value)
+    return dict(sorted(series.items()))
 
 
 def users(rows: list[dict[str, str]]) -> tuple[list[datetime], list[int]]:
@@ -77,22 +98,32 @@ def users(rows: list[dict[str, str]]) -> tuple[list[datetime], list[int]]:
     return [_time(s) for s in seconds], [counts[s] for s in seconds]
 
 
-def show(rows: list[dict[str, str]], run_id: str = "") -> None:
+def show(rows: list[dict[str, str]], run_id: str = "", vitals=()) -> None:
     """Draw the chart and block on its matplotlib window."""
-    figure(rows, run_id)
+    figure(rows, run_id, vitals)
     plt.show()
 
 
-def figure(rows: list[dict[str, str]], run_id: str = ""):
+def figure(rows: list[dict[str, str]], run_id: str = "", vitals=()):
+    """`rows` from locust_stats_history.csv; `vitals` from
+    cluster_vitals_history.csv, without which there is no CPU panel."""
     times, values = latency(rows)
     if all(math.isnan(v) for col in values.values() for v in col):
-        raise ValueError(f"no {REQUEST_NAME} samples in {stats_history.FILENAME}")
+        raise ValueError(f"no {REQUEST_NAME} samples in {data.STATS_HISTORY}")
     user_times, user_counts = users(rows)
-    title = f"{REQUEST_NAME} and users over time" + (f" — run {run_id}" if run_id else "")
+    cpu_series = cpu(vitals)
+    title = f"{REQUEST_NAME}{', worker CPU' if cpu_series else ''} and users over time"
+    title += f" — run {run_id}" if run_id else ""
 
-    fig, (ax_ms, ax_users) = plt.subplots(
-        2, 1, sharex=True, figsize=(10, 6), gridspec_kw={"height_ratios": (3, 1)}
+    heights = (3, 2, 1) if cpu_series else (3, 1)
+    fig, axes = plt.subplots(
+        len(heights),
+        1,
+        sharex=True,
+        figsize=(10, 2 * len(heights) + 2),
+        gridspec_kw={"height_ratios": heights},
     )
+    ax_ms, ax_users = axes[0], axes[-1]
 
     # Drawn tail first, so the legend lists the percentiles top to bottom in
     # the order the lines stack.
@@ -117,24 +148,56 @@ def figure(rows: list[dict[str, str]], run_id: str = ""):
     legend.get_title().set_color(INK_MUTED)
     _toggle_on_click(fig, ax_ms, legend, lines)
 
+    if cpu_series:
+        _cpu_panel(fig, axes[1], cpu_series)
+
     ax_users.step(user_times, user_counts, where="post", color=USERS_COLOR, linewidth=1.5)
     ax_users.set_ylabel("users", color=INK_MUTED)
+    ax_users.set_ylim(bottom=0)
     ax_users.yaxis.set_major_locator(MaxNLocator(integer=True))
     ax_users.set_xlabel("time (UTC)", color=INK_MUTED)
     locator = mdates.AutoDateLocator()
     ax_users.xaxis.set_major_locator(locator)
     ax_users.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
 
-    for ax in (ax_ms, ax_users):
+    for ax in axes:
         _style(ax)
     fig.tight_layout()
     fig.canvas.manager.set_window_title(title)
     return fig
 
 
-def _toggle_on_click(fig, ax, legend, lines) -> None:
+def _cpu_panel(fig, ax, series: dict[str, tuple[list[datetime], list[float]]]) -> None:
+    node_colors = iter(NODE_COLORS)
+    lines = [
+        ax.plot(
+            times,
+            values,
+            color=next(node_colors, INK_MUTED),
+            linewidth=1.5,
+            label=_short_name(node),
+        )[0]
+        for node, (times, values) in series.items()
+    ]
+    ax.set_ylabel("worker CPU (%)", color=INK_MUTED)
+    legend = ax.legend(frameon=False, loc="upper left", bbox_to_anchor=(1, 1))
+    # From 0, unlike latency: utilization is a share of capacity.
+    _toggle_on_click(fig, ax, legend, lines, bottom=0)
+
+
+def _short_name(node: str) -> str:
+    """A GKE node, gke-<cluster>-<pool>-<hash>-<id>, as <hash>-<id>: the
+    rest is the same for every node of the pool. Other names are kept."""
+    if not node.startswith("gke-"):
+        return node
+    return "-".join(node.split("-")[-2:])
+
+
+def _toggle_on_click(fig, ax, legend, lines, bottom: float | None = None) -> None:
     """Clicking a legend entry, its line or its label, shows or hides that
-    line, and rescales the y axis to the lines left showing."""
+    line, and fits the y axis to the lines left showing. Without `bottom` the
+    fit is to the lines rather than to 0, so a flat line's variation stays
+    readable."""
     entries = {}
     for line, handle, text in zip(lines, legend.get_lines(), legend.get_texts()):
         # The legend copies a hidden line's visibility onto its sample; the
@@ -148,7 +211,8 @@ def _toggle_on_click(fig, ax, legend, lines) -> None:
     def fit_y() -> None:
         ax.relim(visible_only=True)
         ax.autoscale(axis="y")
-        ax.set_ylim(bottom=0)
+        if bottom is not None:
+            ax.set_ylim(bottom=bottom)
 
     def on_pick(event) -> None:
         if event.artist not in entries:
@@ -175,7 +239,6 @@ def _time(timestamp: str | int) -> datetime:
 
 
 def _style(ax) -> None:
-    ax.set_ylim(bottom=0)
     ax.grid(axis="y", color=GRIDLINE, linewidth=0.8)
     ax.set_axisbelow(True)
     ax.tick_params(colors=INK_MUTED)

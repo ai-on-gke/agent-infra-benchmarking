@@ -66,29 +66,37 @@ class CustomHistoryReport:
         )
 
 
-def history_csv(users: dict[int, float], samples: dict[tuple[str, str], dict[int, float]]) -> str:
+def history_csv(
+    users: dict[int, float],
+    samples: dict[tuple[str, str], dict[int, float]],
+    pools: dict[str, str] | None = None,
+) -> str:
     """`samples`, keyed by (Type, Name), as rows ordered by timestamp and then
     by `samples` order. Shared with cluster_vitals so both files keep one
-    shape."""
+    shape.
+
+    With `pools`, a trailing Pool column holds each Type's pool, empty for a
+    Type not in it."""
     timestamps = sorted({ts for values in samples.values() for ts in values})
 
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\n")
-    writer.writerow(COLUMNS)
+    writer.writerow(COLUMNS if pools is None else [*COLUMNS, "Pool"])
     for ts in timestamps:
         user_count = users.get(ts)
         for (kind, name), values in samples.items():
             if ts not in values:
                 continue
-            writer.writerow(
-                [
-                    ts,
-                    "" if user_count is None else f"{user_count:.0f}",
-                    kind,
-                    name,
-                    _value(values[ts]),
-                ]
-            )
+            row = [
+                ts,
+                "" if user_count is None else f"{user_count:.0f}",
+                kind,
+                name,
+                _value(values[ts]),
+            ]
+            if pools is not None:
+                row.append(pools.get(kind, ""))
+            writer.writerow(row)
     return out.getvalue()
 
 

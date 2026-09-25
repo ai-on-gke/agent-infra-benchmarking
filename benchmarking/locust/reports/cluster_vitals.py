@@ -20,6 +20,9 @@ node and not only the run's pods. The series carry no run_id: the run is
 picked out by its time window alone.
 
 Utilization is against the node's capacity, not its allocatable.
+
+Pool is "worker" on the rows of a node labelled benchmarking-worker=true, which is
+where the WorkerPool schedules, and empty otherwise.
 """
 
 from .base import RunContext
@@ -30,6 +33,12 @@ from .prometheus import range_query, series, series_by
 # the same on all of them; the hostname label the scrape copies off the node
 # is what tells them apart.
 NODE_LABEL = "kubernetes_io_hostname"
+
+# The node label benchmarking-worker=true, as the scrape copies it: Prometheus
+# replaces the dash, which a label name cannot hold.
+WORKER_LABEL = "benchmarking_worker"
+WORKER_POOL = "worker"
+WORKER_NODES_QUERY = f'group by ({NODE_LABEL}) (machine_cpu_cores{{{WORKER_LABEL}="true"}})'
 
 RATE_WINDOW = "1m"
 
@@ -72,7 +81,8 @@ class ClusterVitalsReport:
             raise ValueError("no cAdvisor node series in the run's window")
 
         users = series(self._range(ctx, USERS_QUERY.format(run_id=ctx.run_id)))
-        return history_csv(users, samples)
+        workers = series_by(self._range(ctx, WORKER_NODES_QUERY), NODE_LABEL)
+        return history_csv(users, samples, {node: WORKER_POOL for node in workers})
 
     def _query(self, ctx: RunContext, query: str, by: str) -> list[dict]:
         return self._range(ctx, query.format(by=by, window=RATE_WINDOW))
