@@ -38,9 +38,9 @@
 cases:
   glutton-baseline:
     duration: 5m
-    users: 80
+    users: 10
     spawn-rate: 1
-    worker-count: 200
+    worker-count: 20
     sandbox-class: gvisor
     workload-name: glutton
     workload-template: glutton

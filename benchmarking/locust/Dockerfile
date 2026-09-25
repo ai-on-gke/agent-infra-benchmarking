@@ -32,7 +32,6 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
-# COPY pkg ./pkg
 # Read from outside the image too: run_locust_job.sh resolves a case by running
 # this binary, so the host needs no YAML parser of its own.
 RUN CGO_ENABLED=0 go build -o /out/testcase-helper ./cmd/benchmarking/testcase-helper

@@ -119,6 +119,12 @@ NO_METRICS=0
 # them with it.
 BENCHMARK_REPORTS=all
 BENCHMARK_REPORT_BUCKET="${BUCKET_NAME:-}"
+# Has to match runner.py's --report-prefix default, which the manifest leaves.
+REPORT_PREFIX=reports
+# Where the uploaded reports are copied to once the run ends, one folder per
+# run_id beneath it.
+REPORTS_DIR="${ROOT}/reports"
+NO_DOWNLOAD=0
 
 # The lookback for the queries at the end. It has only to reach back to the
 # run's last scrape, which was seconds before the query, so it is generous
@@ -180,6 +186,9 @@ usage() {
   echo "  --no-metrics            Skip the Prometheus summary printed after the run. The"
   echo "                          summary is skipped anyway where Prometheus is not"
   echo "                          deployed, or where jq or curl is missing."
+  echo "  --reports-dir DIR       Where the run's reports are downloaded from the bucket,"
+  echo "                          into DIR/<run-id>/ (default: ${ROOT}/reports)"
+  echo "  --no-download           Leave the reports in the bucket."
   echo ""
   echo "Other:"
   echo "  --delete                Delete the Job and exit. The workloads are left alone;"
@@ -208,6 +217,9 @@ while [[ "$#" -gt 0 ]]; do
     --follow-logs) FOLLOW_LOGS=1 ;;
     --only-summary) ONLY_SUMMARY=1 ;;
     --no-metrics) NO_METRICS=1 ;;
+    --reports-dir) shift; REPORTS_DIR="$1" ;;
+    --reports-dir=*) REPORTS_DIR="${1#*=}" ;;
+    --no-download) NO_DOWNLOAD=1 ;;
     --wait-timeout) shift; WAIT_TIMEOUT_SECS="$1" ;;
     --wait-timeout=*) WAIT_TIMEOUT_SECS="${1#*=}" ;;
     --pod-start-timeout) shift; POD_START_TIMEOUT_SECS="$1" ;;
@@ -605,6 +617,34 @@ report_metrics() {
   stop_port_forward
 }
 
+# download_reports copies what runner.py uploaded for one run into
+# REPORTS_DIR/<run-id>/. Best-effort like the metrics summary: the reports stay
+# in the bucket either way, so a failed copy is only a command to rerun.
+download_reports() {
+  local run_id="$1"
+  local src="gs://${BENCHMARK_REPORT_BUCKET}/${REPORT_PREFIX}/${run_id}"
+
+  if [[ -z "${BENCHMARK_REPORT_BUCKET}" ]]; then
+    echo "Skipping the report download: BUCKET_NAME is unset, so nothing was uploaded."
+    return 0
+  fi
+  if ! command -v gcloud &>/dev/null; then
+    echo "Skipping the report download: gcloud is not installed."
+    echo "  The reports are in ${src}/"
+    return 0
+  fi
+
+  echo
+  echo "=== Downloading reports ==="
+  mkdir -p "${REPORTS_DIR}"
+  if gcloud storage cp --recursive "${src}" "${REPORTS_DIR}/"; then
+    echo "  ${REPORTS_DIR}/${run_id}/"
+  else
+    echo "  Could not download ${src}/; to retry:" >&2
+    echo "    gcloud storage cp --recursive ${src} ${REPORTS_DIR}/" >&2
+  fi
+}
+
 BENCHMARK_USER_CLASS="${USER_CLASS:-${DEFAULT_USER_CLASS}}"
 if [[ ! -f "${BENCHMARKING_DIR}/locust/tests/${BENCHMARK_USER_CLASS}.py" ]]; then
   echo "Error: no locust/tests/${BENCHMARK_USER_CLASS}.py; --user-class must name a test file" >&2
@@ -729,6 +769,10 @@ follow_run || run_status=$?
 
 if [[ "${NO_METRICS}" -eq 0 ]]; then
   report_metrics "${RUN_ID}" || true
+fi
+
+if [[ "${NO_DOWNLOAD}" -eq 0 ]]; then
+  download_reports "${RUN_ID}" || true
 fi
 
 exit "${run_status}"
