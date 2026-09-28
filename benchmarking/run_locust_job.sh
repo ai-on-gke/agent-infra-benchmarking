@@ -68,7 +68,7 @@ SUBSTRATE_DIR="${ROOT}/dependency-repos/substrate"
 # case is the whole run, and the pool it needs is part of that. These are the
 # fallbacks for a case that states neither.
 DEFAULT_WORKER_COUNT=1
-DEFAULT_SANDBOX_CLASS=gvisor
+DEFAULT_SANDBOX_CLASS=microvm
 WORKER_COUNT=""
 SANDBOX_CLASS=""
 

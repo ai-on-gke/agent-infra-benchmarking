@@ -54,7 +54,7 @@ if [[ ! -f "${POOL_MANIFEST}" ]]; then
 fi
 
 WORKER_COUNT=1
-SANDBOX_CLASS="gvisor"
+SANDBOX_CLASS="microvm"
 # Actor memory limit (ActorTemplate resources.limits.memory). The default
 # is the smallest size microvm admits (128Mi VMM reserve + 128Mi guest floor),
 # so benchmark actors do not inherit the 2 GiB kata default and drag its page
@@ -78,7 +78,7 @@ usage() {
   echo "  --deploy                    Substitute env vars and deploy workloads to the cluster using ko apply"
   echo "  --delete                    Substitute env vars and delete workloads from the cluster"
   echo "  --worker-count N            Number of WorkerPool replicas (default: 1)"
-  echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
+  echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: microvm)."
   echo "                              microvm requires dependency-repos/substrate/hack/install-microvm-deps.sh --install to have run."
   echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi,"
   echo "                              the smallest size microvm admits)"

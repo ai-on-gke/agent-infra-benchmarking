@@ -56,7 +56,7 @@ usage() {
   echo "With --deploy, forwarded to workloads/deploy.sh:"
   echo "  --worker-count N        Number of WorkerPool replicas (default: 1)"
   echo "  --sandbox-class CLASS   Sandbox runtime for the WorkerPool: gvisor | microvm"
-  echo "                          (default: gvisor). microvm requires"
+  echo "                          (default: microvm). microvm requires"
   echo "                          dependency-repos/substrate/hack/install-microvm-deps.sh"
   echo "  --actor-memory SIZE     Memory limit for the benchmark ActorTemplates"
   echo "                          (default: 256Mi, the microvm minimum)"
