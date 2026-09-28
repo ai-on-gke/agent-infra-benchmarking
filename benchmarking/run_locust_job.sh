@@ -731,4 +731,22 @@ if [[ "${NO_METRICS}" -eq 0 ]]; then
   report_metrics "${RUN_ID}" || true
 fi
 
+if [[ "${run_status}" -eq 0 && -n "${BENCHMARK_REPORT_BUCKET:-}" ]]; then
+  GCS_URL="gs://${BENCHMARK_REPORT_BUCKET}/reports/${RUN_ID}"
+  echo
+  echo "=== Calculating Cost per Agent Month ==="
+  if command -v python3 &>/dev/null; then
+    python3 "${BENCHMARKING_DIR}/calculate_cost.py" \
+      --gcs_url "${GCS_URL}" \
+      --terraform_vars_path "${ROOT}/infra/terraform-gke/terraform.tfvars" \
+      --output_csv "cost_analysis.csv"
+
+    echo "Uploading cost_analysis.csv to ${GCS_URL}/cost_analysis.csv"
+    gsutil cp cost_analysis.csv "${GCS_URL}/cost_analysis.csv" || true
+    rm -f cost_analysis.csv
+  else
+    echo "Skipping cost calculation: python3 is not installed."
+  fi
+fi
+
 exit "${run_status}"
