@@ -50,7 +50,7 @@ usage() {
   echo "  --wait-timeout SECONDS      Timeout waiting for the pool to be ready (default: 300)"
   echo ""
   echo "substrate-only options:"
-  echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
+  echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: microvm)."
   echo "                              microvm requires dependency-repos/substrate/hack/install-microvm-deps.sh --install to have run."
   echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi,"
   echo "                              the smallest size microvm admits)"
@@ -71,7 +71,7 @@ WORKER_COUNT=1
 WAIT_TIMEOUT_SECS=300
 
 # substrate-only settings.
-SANDBOX_CLASS="gvisor"
+SANDBOX_CLASS="microvm"
 # Actor memory limit (ActorTemplate resources.limits.memory). The default
 # is the smallest size microvm admits (128Mi VMM reserve + 128Mi guest floor),
 # so benchmark actors do not inherit the 2 GiB kata default and drag its page

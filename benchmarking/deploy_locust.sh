@@ -36,7 +36,7 @@ SKIP_BUILD=0
 WAIT_TIMEOUT_SECS=""
 
 # substrate-only, forwarded to workloads/deploy.sh.
-SANDBOX_CLASS=gvisor
+SANDBOX_CLASS=microvm
 OTLP_ENDPOINT=""
 # Empty keeps the default in workloads/deploy.sh (256Mi, the microvm minimum).
 ACTOR_MEMORY=""
@@ -75,7 +75,7 @@ usage() {
   echo "  --skip-build            Skip image build/push (use existing :latest images)"
   echo ""
   echo "substrate-only options (forwarded to workloads/deploy.sh):"
-  echo "  --sandbox-class CLASS   Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
+  echo "  --sandbox-class CLASS   Sandbox runtime for the WorkerPool: gvisor | microvm (default: microvm)."
   echo "                          microvm requires dependency-repos/substrate/hack/install-microvm-deps.sh"
   echo "  --otlp-endpoint URL     The address to which an instrumented actor container sends telemetry."
   echo "  --actor-memory SIZE     Memory limit for the benchmark ActorTemplates (default: 256Mi,"
