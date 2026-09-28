@@ -100,3 +100,4 @@ export OPENCLAW_IMAGE="${DOCKER_REPO}/openclaw-workload:latest"
 
 unset -f _tf_value
 unset _TF_DIR _TF_OUT
+export MOCK_LLM_IMAGE="${DOCKER_REPO}/mock-llm:latest"
