@@ -246,6 +246,42 @@ func TestTTFIEndsBeforeTheInstruction(t *testing.T) {
 	}
 }
 
+// CycleTime runs from the resume to the suspend returning, so unlike TTFI it
+// holds both the instruction's service time and the suspend, and its span is
+// the one the suspend is traced under.
+func TestCycleTimeSpansTheResumeThroughTheSuspend(t *testing.T) {
+	const service, suspend = 100 * time.Millisecond, 100 * time.Millisecond
+	rt, sr := newMeasuringUser(t, &pingServer{PingDelay: service}, &fakeControlClient{suspendDelay: suspend})
+
+	rt.iterate()
+
+	cycle := spanByName(t, sr, cycleTimeMetric)
+	if total, want := mustAttr(t, cycle, "total_ms").AsFloat64(), boomerutil.MsFloat(service+suspend); total < want {
+		t.Errorf("total_ms: got %v, want >= %v", total, want)
+	}
+	for _, name := range []string{ttfiMetric, suspendMetric} {
+		if got := spanByName(t, sr, name).Parent().SpanID(); got != cycle.SpanContext().SpanID() {
+			t.Errorf("%s span is not a child of the %s span", name, cycleTimeMetric)
+		}
+	}
+}
+
+// A refused suspend still reports the cycle, as a failure over the time it
+// spent, and the actor is discarded like after any other failed call.
+func TestAFailedSuspendReportsAFailedCycle(t *testing.T) {
+	ctrl := &fakeControlClient{suspendErr: errActorBusy}
+	rt, sr := newMeasuringUser(t, &pingServer{}, ctrl)
+
+	rt.iterate()
+
+	if got := mustAttr(t, spanByName(t, sr, cycleTimeMetric), "total_ms").AsFloat64(); got <= 0 {
+		t.Errorf("total_ms: got %v, want > 0", got)
+	}
+	if _, ok := rt.users.Load(boomerutil.GoroutineID()); ok {
+		t.Error("the user kept its slot after the suspend was refused")
+	}
+}
+
 // The instruction is sent once. A refused one is a fault to surface, not a
 // state to wait out, so nothing retries it.
 func TestTheInstructionIsSentOnce(t *testing.T) {

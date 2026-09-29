@@ -38,6 +38,7 @@ REPORTS_DIR = Path("reports")
 CHARTS = {
     "ttfi": ("TTFI", "time to first instruction"),
     "execution-time": ("ExecutionTime", "ExecutionTime"),
+    "cycle-time": ("CycleTime", "resume to suspend"),
 }
 
 
