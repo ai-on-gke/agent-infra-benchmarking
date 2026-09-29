@@ -13,10 +13,11 @@
 # limitations under the License.
 
 """Chart one benchmark run: request latency percentiles, worker nodes' CPU
-utilization and the actor counts over time, read from the run's
+utilization and the actor counts over time, read from each job's
 locust_stats_history.csv, cluster_vitals_history.csv and
-custom_stats_history.csv and shown in a matplotlib window. The top panel
-switches in the window between the requests in CHARTS.
+custom_stats_history.csv and shown in a matplotlib window. A job is one test
+case of the run; drop-downs in the window switch between the run's jobs, and
+between the requests in CHARTS.
 """
 
 from __future__ import annotations
@@ -31,8 +32,8 @@ from . import data
 REPORTS_DIR = Path("reports")
 
 # Chart name -> the request name in locust_stats_history.csv whose latency the
-# chart draws above the shared panels. Every one the run has samples of is in
-# the window's switch; --chart picks the one it opens on.
+# chart draws above the shared panels. Every one a job has samples of is in the
+# window's switch; --chart picks the one it opens on.
 CHARTS = {
     "ttfi": "TTFI",
     "execution-time": "ExecutionTime",
@@ -50,27 +51,58 @@ def latest_run(reports_dir: Path) -> Path:
     return runs[-1]
 
 
-def case_dir(path: Path) -> Path:
-    """`path` when it holds a test case's CSVs, or else the one test case in
-    it: a run folder holds one folder per case."""
-    if (path / data.STATS_HISTORY).is_file() or not path.is_dir():
-        return path
-    cases = sorted(p for p in path.iterdir() if (p / data.STATS_HISTORY).is_file())
-    if len(cases) > 1:
-        names = ", ".join(c.name for c in cases)
-        raise ValueError(f"{path} holds {len(cases)} test cases; pass one of {path}/{{{names}}}")
-    return cases[0] if cases else path
+def job_dirs(path: Path) -> list[Path]:
+    """The run's jobs, one folder per test case; or `path` alone when it holds
+    the CSVs itself: one job's folder, or a run from before runs had jobs."""
+    if (path / data.STATS_HISTORY).is_file():
+        return [path]
+    jobs = sorted(p for p in path.iterdir() if (p / data.STATS_HISTORY).is_file()) if path.is_dir() else []
+    if not jobs:
+        raise FileNotFoundError(f"no {data.STATS_HISTORY} in {path} or in any folder in it")
+    return jobs
 
 
-def read_optional(run_dir: Path, filename: str, part: str) -> list[dict[str, str]]:
+def title(job_dir: Path) -> str:
+    """<run-id>/<test-case> when the job is under ./reports."""
+    try:
+        return job_dir.resolve().relative_to(REPORTS_DIR.resolve()).as_posix()
+    except ValueError:
+        return job_dir.name
+
+
+def read_optional(job_dir: Path, filename: str, part: str) -> list[dict[str, str]]:
     """A file only part of the chart needs. Reports reach Prometheus only
-    best-effort, so a run can lack it; the chart then goes without that part
+    best-effort, so a job can lack it; the chart then goes without that part
     rather than not at all."""
     try:
-        return data.read(run_dir, filename)
+        return data.read(job_dir, filename)
     except FileNotFoundError as exc:
         print(f"benchmark-report: {exc}; drawing without {part}", file=sys.stderr)
         return []
+
+
+def load(job_dir: Path):
+    from . import latency, panels, window
+
+    rows = data.read(job_dir, data.STATS_HISTORY)
+    vitals = read_optional(job_dir, data.CLUSTER_VITALS, "CPU")
+    custom = read_optional(job_dir, data.CUSTOM_HISTORY, "actors")
+    if vitals and not panels.cpu(vitals):
+        print(
+            f"benchmark-report: no Pool=worker rows in {job_dir / data.CLUSTER_VITALS}, as "
+            "in any run from before that column; drawing without CPU",
+            file=sys.stderr,
+        )
+
+    mains = []
+    for chart, request_name in CHARTS.items():
+        try:
+            mains.append(latency.LatencyPanel(rows, request_name))
+        except ValueError as exc:
+            print(f"benchmark-report: {job_dir.name}: {exc}; leaving out {chart}", file=sys.stderr)
+    if not mains:
+        raise ValueError(f"no {' or '.join(CHARTS.values())} samples in {data.STATS_HISTORY}")
+    return window.Job(title(job_dir), mains, rows, vitals, custom)
 
 
 def main() -> None:
@@ -79,62 +111,46 @@ def main() -> None:
         "path",
         nargs="?",
         type=Path,
-        help=f"A test case's folder of CSVs, {REPORTS_DIR}/<run-id>/<test-case>, or a "
-        f"run folder holding one (default: the latest run in ./{REPORTS_DIR}).",
+        help=f"A run's folder, {REPORTS_DIR}/<run-id>, or one job's, "
+        f"{REPORTS_DIR}/<run-id>/<test-case> (default: the latest run in ./{REPORTS_DIR}).",
+    )
+    p.add_argument(
+        "--job",
+        metavar="TEST_CASE",
+        help="The job the window opens on (default: the first by name). The "
+        "drop-down above the chart switches to the others.",
     )
     p.add_argument(
         "--chart",
         choices=list(CHARTS),
         default="ttfi",
-        help="The top panel the window opens on (default: ttfi). The drop-down "
-        "above it switches to the others.",
+        help="The top panel the window opens on, where a job has it (default: "
+        "ttfi). The drop-down above it switches to the others.",
     )
     args = p.parse_args()
 
     try:
-        run_dir = case_dir(args.path or latest_run(REPORTS_DIR)).resolve()
-        rows = data.read(run_dir, data.STATS_HISTORY)
-    except (OSError, ValueError) as exc:
+        run_dir = args.path or latest_run(REPORTS_DIR)
+        jobs = {d.name: d for d in job_dirs(run_dir)}
+    except OSError as exc:
         sys.exit(f"benchmark-report: {exc}")
-
-    vitals = read_optional(run_dir, data.CLUSTER_VITALS, "CPU")
-    custom = read_optional(run_dir, data.CUSTOM_HISTORY, "actors")
+    if args.job and args.job not in jobs:
+        sys.exit(f"benchmark-report: no job {args.job!r} in {run_dir}; it has {', '.join(jobs)}")
 
     try:
         import matplotlib.pyplot as plt
 
-        from . import latency, panels
+        from . import window
     except ModuleNotFoundError as exc:
         if exc.name != "matplotlib":
             raise
         sys.exit("benchmark-report needs matplotlib: pip install matplotlib")
 
-    if vitals and not panels.cpu(vitals):
-        print(
-            f"benchmark-report: no Pool=worker rows in {data.CLUSTER_VITALS}, as in any "
-            "run from before that column; drawing without CPU",
-            file=sys.stderr,
-        )
-
-    print(f"run: {run_dir}")
-    mains, active = [], 0
-    for chart, request_name in CHARTS.items():
-        try:
-            panel = latency.LatencyPanel(rows, request_name)
-        except ValueError as exc:
-            if chart == args.chart:
-                sys.exit(f"benchmark-report: {exc}")
-            print(f"benchmark-report: {exc}; leaving out {chart}", file=sys.stderr)
-            continue
-        if chart == args.chart:
-            active = len(mains)
-        mains.append(panel)
-    # <run-id>/<test-case> when it is under ./reports, for the title.
-    try:
-        name = run_dir.relative_to(REPORTS_DIR.resolve()).as_posix()
-    except ValueError:
-        name = run_dir.name
-    panels.figure(mains, rows, name, vitals, custom, active=active)
+    print(f"run: {run_dir.resolve()}")
+    win = window.Window(jobs, load, args.job or next(iter(jobs)), CHARTS[args.chart])
+    # With no other job to switch to, the error already printed is all there is.
+    if len(jobs) == 1 and not win.drawn:
+        sys.exit(1)
     plt.show()
 
 

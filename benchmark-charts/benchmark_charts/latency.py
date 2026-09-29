@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """One request's latency percentiles over the run, from the rows of
-locust_stats_history.csv, as a main panel for panels.figure.
+locust_stats_history.csv, as a main panel for panels.draw.
 
 Each row's percentiles cover locust's trailing 10s window, so a step in users
 shows up in latency spread over the 10s after it.

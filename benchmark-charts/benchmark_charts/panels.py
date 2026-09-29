@@ -14,11 +14,11 @@
 
 """The panels every chart shares, under a chart's own main panel.
 
-figure() stacks panels on one time axis, each on its own y scale: the main
+draw() stacks panels on one time axis, each on its own y scale: the main
 panel, then worker nodes' CPU utilization, then actors: all of them, and the
 worker's active and idle (suspended) ones. Each locust user holds one actor,
 so all of them is locust's user count. Given several main panels, it shows one
-at a time, and a drop-down above the chart switches between them in place.
+at a time, and swaps between them in place.
 
 CPU is drawn for the nodes the vitals mark Pool=worker, the ones the
 WorkerPool runs on, rather than for every node or the cluster as a whole.
@@ -31,11 +31,9 @@ from datetime import datetime, timezone
 from typing import Protocol
 
 import matplotlib.dates as mdates
-import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
 from . import data
-from .dropdown import Dropdown
 
 CPU_METRIC = "CPUUtilizationPercent"
 WORKER_POOL = "worker"
@@ -54,14 +52,9 @@ ACTORS_DEFAULT_HIDDEN = {"IdleActors"}
 INK_MUTED = "#898781"
 GRIDLINE = "#e1e0d9"
 
-# The strip above the panels that holds the main panel switch, and the
-# switch's own height within it.
-SWITCH_STRIP_IN = 0.45
-SWITCH_HEIGHT_IN = 0.28
-
 
 class Panel(Protocol):
-    """A chart's own panel, which figure() puts above the shared ones."""
+    """A chart's own panel, which draw() puts above the shared ones."""
 
     # Names the panel in the figure's title.
     title: str
@@ -104,28 +97,29 @@ def users(rows: list[dict[str, str]]) -> tuple[list[datetime], list[int]]:
     return [to_time(s) for s in seconds], [counts[s] for s in seconds]
 
 
-def figure(
+def draw(
+    fig,
     mains: list[Panel],
     rows: list[dict[str, str]],
-    run_id: str = "",
+    name: str = "",
     vitals=(),
     custom=(),
     active: int = 0,
+    top: float = 1.0,
 ):
-    """`mains[active]` above the shared panels, switchable to the rest of
-    `mains`. `rows` from locust_stats_history.csv; `vitals` from
-    cluster_vitals_history.csv, without which there is no CPU panel; `custom`
-    from custom_stats_history.csv, without which there are no actor lines."""
+    """`mains[active]` above the shared panels, drawn into `fig` below `top`
+    (a figure fraction), which leaves the space above for widgets. `rows` from
+    locust_stats_history.csv; `vitals` from cluster_vitals_history.csv, without
+    which there is no CPU panel; `custom` from custom_stats_history.csv,
+    without which there are no actor lines.
+
+    Returns the main panel's axes, and a function that swaps it in place to
+    another of `mains`, by index.
+    """
     cpu_series = cpu(vitals)
 
     heights = (3, 2, 1.5) if cpu_series else (3, 1.5)
-    fig, axes = plt.subplots(
-        len(heights),
-        1,
-        sharex=True,
-        figsize=(10, 2 * len(heights) + 2),
-        gridspec_kw={"height_ratios": heights},
-    )
+    axes = fig.subplots(len(heights), 1, sharex=True, gridspec_kw={"height_ratios": heights})
     ax_main, ax_actors = axes[0], axes[-1]
 
     if cpu_series:
@@ -140,7 +134,7 @@ def figure(
     for ax in axes:
         style(ax)
 
-    def show(main: Panel) -> None:
+    def show(index: int) -> None:
         # What the last main panel drew goes, and the axes stay, so the shared
         # time axis keeps its range and format. The removed legend's click
         # handler stays connected, but nothing it knows can be clicked again.
@@ -148,33 +142,17 @@ def figure(
             artist.remove()
         if ax_main.get_legend():
             ax_main.get_legend().remove()
+        main = mains[index]
         main.draw(fig, ax_main)
         parts = [p for p in (main.title, cpu_series and "pool CPU", "actors") if p]
         title = f"{', '.join(parts[:-1])} and {parts[-1]} over time"
-        title += f" — run {run_id}" if run_id else ""
+        title += f" — run {name}" if name else ""
         ax_main.set_title(title, loc="left")
         fig.canvas.manager.set_window_title(title)
 
-    show(mains[active])
-    if len(mains) == 1:
-        fig.tight_layout()
-        return fig
-
-    strip = SWITCH_STRIP_IN / fig.get_figheight()
-    height = SWITCH_HEIGHT_IN / fig.get_figheight()
-    fig.tight_layout(rect=(0, 0, 1, 1 - strip))
-    # Over the legend column, which is where the other toggles are.
-    left = ax_main.get_position().x1 + 0.01
-    by_title = {m.title: m for m in mains}
-    # Held by the figure, since the canvas holds widget handlers only weakly.
-    fig.main_switch = Dropdown(
-        fig,
-        (left, 1 - (strip + height) / 2, 1 - left - 0.015, height),
-        list(by_title),
-        active,
-        on_select=lambda title: show(by_title[title]),
-    )
-    return fig
+    show(active)
+    fig.tight_layout(rect=(0, 0, 1, top))
+    return ax_main, show
 
 
 def cpu_panel(fig, ax, series: dict[str, tuple[list[datetime], list[float]]]) -> None:

@@ -63,7 +63,7 @@ class Dropdown:
             item.on_clicked(lambda _, option=option: self.select(option))
             self._items[option] = item
 
-        fig.canvas.mpl_connect("button_press_event", self._on_press)
+        self._cid = fig.canvas.mpl_connect("button_press_event", self._on_press)
         self._set_open(False)
         self._mark_selected()
 
@@ -75,6 +75,13 @@ class Dropdown:
         if self._on_select:
             self._on_select(option)
         self.fig.canvas.draw_idle()
+
+    def remove(self) -> None:
+        """Disconnect from the canvas. Call it before the figure is cleared: a
+        Button takes clicks in its axes' old area even once they are gone."""
+        for button in (self._header, *self._items.values()):
+            button.disconnect_events()
+        self.fig.canvas.mpl_disconnect(self._cid)
 
     def _button(self, rect, label: str) -> Button:
         button = Button(self.fig.add_axes(rect), label, color=FACE, hovercolor=HOVER)
