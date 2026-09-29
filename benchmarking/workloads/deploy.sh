@@ -350,6 +350,13 @@ deploy() {
   echo "  bucket:         gs://${BUCKET_NAME}/benchmark-workloads/"
   echo "  substrate:      ${SUBSTRATE_DIR} ($(cd "${SUBSTRATE_DIR}" && git rev-parse --short HEAD 2>/dev/null || echo 'unknown rev'))"
   substitute "${POOL_MANIFEST}" | run_ko apply -f -
+  echo "Deploying mock-llm service..."
+  local mock_llm_digest
+  mock_llm_digest="$(resolve_image_digest "${MOCK_LLM_IMAGE:-}")"
+  sed "s|\${IMAGE_WITH_DIGEST}|${mock_llm_digest}|g" "${MANIFEST_DIR}/mock-llm.yaml.tmpl" | kubectl apply -f -
+  echo "Waiting for mock-llm to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
+  kubectl rollout status deployment/mock-llm --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
+
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
   kubectl wait --for=create deployment/benchmark-ateom \
     --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
@@ -399,6 +406,7 @@ delete() {
   # The pool manifest contains ko:// image references; route through
   # `ko delete` so they get resolved before kubectl sees them.
   substitute "${POOL_MANIFEST}" | run_ko delete --ignore-not-found -f -
+  kubectl delete -f "${MANIFEST_DIR}/mock-llm.yaml.tmpl" --ignore-not-found 2>/dev/null || true
 }
 
 if [[ "$#" -eq 0 ]]; then

@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-llm
+  namespace: benchmark-workloads
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mock-llm
+  template:
+    metadata:
+      labels:
+        app: mock-llm
+    spec:
+      containers:
+      - name: mock-llm
+        image: ${IMAGE_WITH_DIGEST}
+        ports:
+        - containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          initialDelaySeconds: 2
+          periodSeconds: 5
+        resources:
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-llm
+  namespace: benchmark-workloads
+spec:
+  selector:
+    app: mock-llm
+  ports:
+  - port: 80
+    targetPort: 8080

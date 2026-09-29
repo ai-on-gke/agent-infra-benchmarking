@@ -9,10 +9,10 @@ containers:
   image: ${IMAGE_WITH_DIGEST}
   command: ["python3", "-u", "/app/openclaw_actor.py"]
   env:
-  # OpenClaw likely requires an LLM API key to function. 
-  # You can safely substitute this using envsubst before applying, or hardcode a test key here.
-  - name: OPENAI_API_KEY
-    value: "${OPENAI_API_KEY}"
+  - name: OPENCLAW_USE_MOCK_LLM
+    value: "true"
+  - name: MOCK_LLM_BASE_URL
+    value: "http://mock-llm.benchmark-workloads.svc.cluster.local/v1"
   readyz:
     httpGet:
       path: /readyz

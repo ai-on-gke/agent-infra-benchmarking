@@ -33,7 +33,7 @@ fi
 # push and whatever resolves them name one string. An environment predating
 # that move does not set them, and nounset would report only the bare variable
 # name.
-for var in LOCUST_IMAGE OPENCLAW_IMAGE; do
+for var in LOCUST_IMAGE OPENCLAW_IMAGE MOCK_LLM_IMAGE; do
   if [ -z "${!var:-}" ]; then
     echo "Error: ${var} must be set; .terraform-env.sh exports it, and .env.sh" >&2
     echo "sources that. An .env.sh not built from env.sh.example has to set it itself." >&2
@@ -53,7 +53,7 @@ PLATFORM="${LOCUST_IMAGE_PLATFORM:-linux/amd64}"
 docker_login() {
   local host token
   # One login per host, so two images in one repository do not log in twice.
-  for host in $(printf '%s\n' "${LOCUST_IMAGE%%/*}" "${OPENCLAW_IMAGE%%/*}" | sort -u); do
+  for host in $(printf '%s\n' "${LOCUST_IMAGE%%/*}" "${OPENCLAW_IMAGE%%/*}" "${MOCK_LLM_IMAGE%%/*}" | sort -u); do
     # Captured rather than piped straight into docker login: under pipefail a
     # failing gcloud would otherwise surface as docker's complaint about an
     # empty password.
@@ -92,4 +92,7 @@ build_and_push "${LOCUST_IMAGE}" benchmarking/locust/Dockerfile .
 echo
 build_and_push "${OPENCLAW_IMAGE}" demos/openclaw/Dockerfile demos/openclaw
 
+
+echo
+build_and_push "${MOCK_LLM_IMAGE}" demos/mock-llm/Dockerfile demos/mock-llm
 echo "Done!"

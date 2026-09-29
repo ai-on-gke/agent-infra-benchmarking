@@ -1,7 +1,11 @@
 import sys
 import subprocess
+import json
+import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+# MAIN ACTOR SERVER (Runs on port 80)
+# ==========================================
 class OpenClawHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/readyz":
@@ -30,26 +34,56 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                # Use `openclaw agent exec` to run an isolated headless agent turn
-                # Since we don't want to spend money on OpenAI API calls right now,
-                # we pass an intentionally invalid mock API key.
-                # OpenClaw will boot up, attempt the API call, and immediately fail.
-                # This is perfect for load-testing Substrate's infrastructure overhead!
                 import os
-                os.environ["OPENAI_API_KEY"] = "sk-mock-key-do-not-charge"
+                import base64
+
+                env = os.environ.copy()
+                use_mock = env.get("OPENCLAW_USE_MOCK_LLM", "").lower() in ["true", "1", "yes"]
+
+                if use_mock:
+                    base_url = env.get("MOCK_LLM_BASE_URL", "http://127.0.0.1:8080/v1")
+                    config = {
+                        "models": {
+                            "providers": {
+                                "mock-provider": {
+                                    "api": "openai-completions",
+                                    "baseUrl": base_url,
+                                    "models": [{"id": "mock-model", "name": "mock-model"}]
+                                }
+                            }
+                        }
+                    }
+                    with open("/tmp/mock-config.json", "w") as f:
+                        json.dump(config, f)
+
+                    env["OPENCLAW_MOCK_PROVIDER_API_KEY"] = "mock-key"
+                    cmd = ["openclaw", "agent", "exec", "--config", "/tmp/mock-config.json", "--model", "mock-provider/mock-model", post_data]
+                else:
+                    # Substrate's ActorTemplate doesn't directly support Kubernetes Secret volume mounts,
+                    # so the deploy script injects the base64-encoded secret into the environment.
+                    # If present, we decode it and write it to disk so Vertex AI can authenticate!
+                    if "GCP_SA_KEY_B64" in env and env["GCP_SA_KEY_B64"]:
+                        key_path = "/tmp/gcp_key.json"
+                        with open(key_path, "wb") as f:
+                            f.write(base64.b64decode(env["GCP_SA_KEY_B64"]))
+                        env["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
+
+                    # Use `openclaw agent exec` to run an isolated headless agent turn.
+                    cmd = ["openclaw", "agent", "exec", "--isolated", "--model", "google-vertex/gemini-2.5-flash-lite", post_data]
 
                 result = subprocess.run(
-                    ["openclaw", "agent", "exec", "--isolated", "--auth-env-only", "--model", "openai/gpt-5.6-sol", post_data],
+                    cmd,
                     capture_output=True,
                     text=True,
-                    timeout=120 # AI agents can be slow, giving it 2 minutes
+                    timeout=120, # AI agents can be slow, giving it 2 minutes
+                    env=env
                 )
 
-                # Because we passed a fake key, openclaw will exit with a non-zero status.
-                # For benchmarking purposes, we'll intercept the auth failure and return 200 OK
-                # to Locust so that it records the latency of the "attempt" as a success!
                 output = result.stdout + result.stderr
-                status_code = 200 if "authentication failed" in output.lower() or "incorrect api key" in output.lower() else (200 if result.returncode == 0 else 500)
+                if result.returncode != 0 and not output.strip():
+                    output = f"OpenClaw exited with code {result.returncode} and no output (possibly OOM killed)."
+
+                status_code = 200 if result.returncode == 0 else 500
 
                 self.send_response(status_code)
                 self.send_header("Content-type", "text/plain")

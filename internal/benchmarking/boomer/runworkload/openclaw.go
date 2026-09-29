@@ -34,18 +34,11 @@ const (
 
 	openclawInvokePath = "/invoke"
 
-	// The actor answers this prompt from a fast path that returns immediately
-	// instead of booting the Node agent underneath. That is the right
-	// instruction to time: the window closes on the sandbox taking work, and
-	// an agent turn would bury substrate's activation latency under seconds of
-	// model and process startup that have nothing to do with it. Measuring the
-	// agent turn itself is a different benchmark.
-	openclawFastPathPrompt = "echo 'hello'"
+	// The instruction we send to OpenClaw to trigger the mock agent loop.
+	openclawPrompt = "do something please"
 
-	// What the fast path replies. Checked rather than trusting the status
-	// code, so an answer from anything between the client and the sandbox —
-	// the router, a proxy, an error page — cannot close the window.
-	openclawFastPathReply = "Mock Substrate Benchmark Response"
+	// What the mock agent replies when it has successfully finished the loop.
+	openclawExpectedReply = "I have successfully executed the bash commands!"
 
 	textContentType = "text/plain"
 )
@@ -55,8 +48,8 @@ func init() {
 }
 
 // openclawWorkload drives the openclaw actor from demos/openclaw. Its /invoke
-// route wraps a headless coding agent, but the instruction deliberately
-// takes the actor's fast path (see openclawFastPathPrompt).
+// route wraps a headless coding agent. We send a prompt that triggers a 
+// mock agent loop simulating a multi-turn LLM interaction.
 //
 // Unlike glutton's ping, the reply carries no per-request nonce, so it proves
 // the actor's handler ran but not that the answer is fresh. The actor's
@@ -68,19 +61,20 @@ func (openclawWorkload) Name() string { return openclawWorkloadName }
 
 func (openclawWorkload) DefaultTemplate() string { return openclawTemplate }
 
-// SendInstruction POSTs the fast-path prompt to /invoke and verifies the
-// reply. The actor answers 500 when an agent turn fails and 504 when one times
-// out; neither is reachable from the fast path, so the shared retry
-// classification treating 5xx as "still activating" stays true here.
+// SendInstruction POSTs the prompt to /invoke and verifies the
+// reply contains the expected response. The actor answers 500 when an agent 
+// turn fails and 504 when one times out; neither is reachable from the fast 
+// path, so the shared retry classification treating 5xx as "still activating" 
+// stays true here.
 func (openclawWorkload) SendInstruction(ctx context.Context, actor actorRef) (bool, error) {
 	return sendHTTPInstruction(ctx, actor, httpInstruction{
 		Method:      http.MethodPost,
 		Path:        openclawInvokePath,
 		ContentType: textContentType,
-		Body:        []byte(openclawFastPathPrompt),
+		Body:        []byte(openclawPrompt),
 		Verify: func(respBody []byte) error {
-			if got := strings.TrimSpace(string(respBody)); got != openclawFastPathReply {
-				return fmt.Errorf("unexpected /invoke reply: got %q, want %q", got, openclawFastPathReply)
+			if !strings.Contains(string(respBody), openclawExpectedReply) {
+				return fmt.Errorf("unexpected /invoke reply: got %q, want it to contain %q", string(respBody), openclawExpectedReply)
 			}
 			return nil
 		},

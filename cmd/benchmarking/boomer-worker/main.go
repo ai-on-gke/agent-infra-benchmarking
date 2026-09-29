@@ -108,7 +108,7 @@ func main() {
 	}
 	defer conn.Close()
 
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+	httpClient := &http.Client{Timeout: 5 * time.Minute}
 
 	cfg := &userclass.Config{
 		APIStub:    apiStub,
