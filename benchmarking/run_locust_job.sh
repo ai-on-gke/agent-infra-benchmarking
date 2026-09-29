@@ -24,8 +24,8 @@
 # deploy-benchmarking.sh puts it there, and owns every teardown but the Job's:
 #
 #   ./benchmarking/deploy-benchmarking.sh --deploy
-#   ./benchmarking/run_locust_job.sh --test-case glutton-baseline
-#   ./benchmarking/run_locust_job.sh --test-case glutton-scale
+#   ./benchmarking/run_locust_job.sh --test-case glutton
+#   ./benchmarking/run_locust_job.sh --test-case openclaw
 #
 # Each run blocks until it is over and fails if it did, so a series like that
 # is a script rather than three things to sit and watch.
@@ -85,7 +85,7 @@ POOL_TIMEOUT_SECS=""
 # The case a run measures when none is named, so that every run carries one:
 # it is what the benchmark-test-case label records and what a series of runs is
 # told apart by.
-DEFAULT_TEST_CASE=glutton-baseline
+DEFAULT_TEST_CASE=glutton
 
 # Locust user class, lowercased at the flag. Names the tests/<class>.py the
 # master loads and the --user-class the boomer container is passed.

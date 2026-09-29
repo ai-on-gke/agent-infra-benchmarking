@@ -89,7 +89,7 @@ gcloud application-default credentials already in place.
 5. Run a benchmark job script.
 
    ```bash
-   ./benchmarking/run_locust_job.sh --test-case glutton-baseline --follow-logs
+   ./benchmarking/run_locust_job.sh --test-case glutton --follow-logs
    ```
 
    A run can hold several jobs, one per test case. To run every case in
