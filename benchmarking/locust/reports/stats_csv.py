@@ -68,25 +68,25 @@ WINDOW_MARGIN_SECS = 300
 
 COUNT_QUERY = (
     'sum by (method,name,status) (last_over_time('
-    'locust_requests_total{{run_id="{run_id}"}}[{window}s]))'
+    'locust_requests_total{{run_id="{run_id}",test_case="{test_case}"}}[{window}s]))'
 )
 SUM_QUERY = (
     "sum by (method,name) (last_over_time("
-    'locust_request_duration_milliseconds_sum{{run_id="{run_id}",status="success"}}[{window}s]))'
+    'locust_request_duration_milliseconds_sum{{run_id="{run_id}",test_case="{test_case}",status="success"}}[{window}s]))'
 )
 OBSERVATIONS_QUERY = (
     "sum by (method,name) (last_over_time("
-    'locust_request_duration_milliseconds_count{{run_id="{run_id}",status="success"}}[{window}s]))'
+    'locust_request_duration_milliseconds_count{{run_id="{run_id}",test_case="{test_case}",status="success"}}[{window}s]))'
 )
 QUANTILE_QUERY = (
     "histogram_quantile({quantile}, sum by (le,method,name) (last_over_time("
-    'locust_request_duration_milliseconds_bucket{{run_id="{run_id}",status="success"}}[{window}s])))'
+    'locust_request_duration_milliseconds_bucket{{run_id="{run_id}",test_case="{test_case}",status="success"}}[{window}s])))'
 )
 # The same distribution pooled across every request, which is what locust's
 # trailing row is a quantile of.
 AGGREGATE_QUANTILE_QUERY = (
     "histogram_quantile({quantile}, sum by (le) (last_over_time("
-    'locust_request_duration_milliseconds_bucket{{run_id="{run_id}",status="success"}}[{window}s])))'
+    'locust_request_duration_milliseconds_bucket{{run_id="{run_id}",test_case="{test_case}",status="success"}}[{window}s])))'
 )
 
 
@@ -99,22 +99,22 @@ class StatsCSVReport:
         elapsed = max(ctx.ended - ctx.started, 1.0)
 
         counts = labelled(
-            instant_query(ctx.prometheus_url, COUNT_QUERY.format(run_id=ctx.run_id, window=window)),
+            instant_query(ctx.prometheus_url, COUNT_QUERY.format(run_id=ctx.run_id, test_case=ctx.test_case, window=window)),
             "method",
             "name",
             "status",
         )
         if not counts:
-            raise ValueError(f"no request counters for run_id={ctx.run_id}")
+            raise ValueError(f"no request counters for run_id={ctx.run_id} test_case={ctx.test_case}")
 
         latency_sum = labelled(
-            instant_query(ctx.prometheus_url, SUM_QUERY.format(run_id=ctx.run_id, window=window)),
+            instant_query(ctx.prometheus_url, SUM_QUERY.format(run_id=ctx.run_id, test_case=ctx.test_case, window=window)),
             "method",
             "name",
         )
         observations = labelled(
             instant_query(
-                ctx.prometheus_url, OBSERVATIONS_QUERY.format(run_id=ctx.run_id, window=window)
+                ctx.prometheus_url, OBSERVATIONS_QUERY.format(run_id=ctx.run_id, test_case=ctx.test_case, window=window)
             ),
             "method",
             "name",
@@ -124,7 +124,7 @@ class StatsCSVReport:
                 instant_query(
                     ctx.prometheus_url,
                     QUANTILE_QUERY.format(
-                        quantile=float(p) / 100, run_id=ctx.run_id, window=window
+                        quantile=float(p) / 100, run_id=ctx.run_id, test_case=ctx.test_case, window=window
                     ),
                 ),
                 "method",
@@ -137,7 +137,7 @@ class StatsCSVReport:
                 instant_query(
                     ctx.prometheus_url,
                     AGGREGATE_QUANTILE_QUERY.format(
-                        quantile=float(p) / 100, run_id=ctx.run_id, window=window
+                        quantile=float(p) / 100, run_id=ctx.run_id, test_case=ctx.test_case, window=window
                     ),
                 )
             ).get(())

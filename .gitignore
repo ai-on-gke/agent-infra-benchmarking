@@ -2,3 +2,10 @@
 .env.sh
 
 **/__pycache__/
+
+# Reports run_locust_job.sh downloads from the bucket.
+/reports/
+
+# What `pip install ./benchmark-charts` leaves behind.
+/benchmark-charts/build/
+*.egg-info/

@@ -13,13 +13,14 @@
 // limitations under the License.
 
 // Package runworkload drives a workload actor through substrate's actor
-// lifecycle: each VU creates one actor and then cycles it suspend/resume for
+// lifecycle: each VU creates one actor and then cycles it resume/suspend for
 // the rest of the run, removing it at teardown.
 //
 // Every control-plane call reports its own row and span through tracedCall.
 // On top of them each cycle reports TTFI: the wait from having a suspended
 // actor to that actor taking work. See measureTTFI for what the window
-// includes.
+// includes. It also reports CycleTime, the whole cycle from the resume to the
+// suspend returning; see cycle.
 //
 // The workload the actor runs is a parameter: --workload-name selects an
 // implementation of the workload interface (see workload.go) and
@@ -71,12 +72,13 @@ const (
 	DefaultTimeout = 60 * time.Second
 
 	ttfiMetric          = "TTFI"
+	cycleTimeMetric     = "CycleTime"
 	resumeMetric        = "Resume"
 	suspendMetric       = "Suspend"
 	executionTimeMetric = "ExecutionTime"
 
-	// Transport label for TTFI. The window spans a gRPC resume and an HTTP
-	// instruction, so neither transport label describes it.
+	// Transport label for TTFI and CycleTime. Their windows span gRPC calls and
+	// an HTTP instruction, so neither transport label describes them.
 	runWorkloadMethod = "runworkload"
 
 	// Caps the teardown's concurrent control-plane calls. Every VU's actor is
@@ -199,8 +201,10 @@ func (r *runWorkloadRuntime) dynamicWait() time.Duration {
 }
 
 // iterate is the task function boomer calls in a loop on each VU goroutine.
-// The first call on a goroutine creates the actor; every later one cycles it
-// down and back up.
+// The first call on a goroutine creates the actor, which CreateActor leaves
+// SUSPENDED; every later one resumes it, sends it one instruction and suspends
+// it again. The actor therefore sits suspended through the think time between
+// iterations, and each iteration finds it that way.
 //
 // The gate is taken for the whole iteration, so the teardown can tell an
 // iteration that is still creating an actor from one that has finished. A
@@ -237,15 +241,8 @@ func (r *runWorkloadRuntime) iterate() {
 	}
 	user := val.(*runWorkloadUser)
 
-	if err := user.suspend(ctx); err != nil {
-		r.discard(ctx, gid, user, suspendMetric, err)
-		time.Sleep(r.dynamicWait())
-		return
-	}
-	// Called with the actor just suspended, which is where the TTFI window
-	// opens.
-	if err := user.measureTTFI(ctx, r.opts.ResumeMode); err != nil {
-		r.discard(ctx, gid, user, ttfiMetric, err)
+	if call, err := user.cycle(ctx, r.opts.ResumeMode); err != nil {
+		r.discard(ctx, gid, user, call, err)
 		time.Sleep(r.dynamicWait())
 		return
 	}
@@ -429,9 +426,34 @@ func (u *runWorkloadUser) create(ctx context.Context) error {
 	return err
 }
 
+// cycle runs one resume/instruction/suspend cycle and reports its whole
+// duration as CycleTime: the window opens where measureTTFI's does and closes
+// when the suspend returns, so it holds the resume, the instruction's service
+// time and the suspend together. Under implicit resume there is no ResumeActor,
+// so it opens on the instruction that has the router wake the actor.
+//
+// Its span parents the TTFI and Suspend spans, so a trace shows the cycle as
+// one unit. A failed call reports the window as a failure over the time spent
+// and names that call, for the actor to be discarded.
+func (u *runWorkloadUser) cycle(ctx context.Context, mode string) (call string, err error) {
+	ctx, span := u.cfg.Tracer.Start(ctx, cycleTimeMetric)
+	defer span.End()
+
+	start := time.Now()
+	defer func() { u.recordWindow(span, cycleTimeMetric, time.Since(start), err) }()
+
+	if err := u.measureTTFI(ctx, mode); err != nil {
+		return ttfiMetric, err
+	}
+	if err := u.suspend(ctx); err != nil {
+		return suspendMetric, err
+	}
+	return "", nil
+}
+
 // measureTTFI brings the actor back up, sends it one instruction, and reports
-// the wait as TTFI. It must be called with the actor freshly suspended: the
-// window opens here, so the suspend that preceded it is outside.
+// the wait as TTFI. It must be called with the actor suspended, which is how
+// iterate leaves it between iterations: the window opens here.
 //
 // Only explicit mode issues ResumeActor. Implicit leaves the wake to the
 // router, which does it while holding the instruction — so under implicit
@@ -464,7 +486,7 @@ func (u *runWorkloadUser) measureTTFI(ctx context.Context, mode string) error {
 	start := time.Now()
 	if mode == ResumeModeExplicit {
 		if err := u.resume(ctx); err != nil {
-			u.recordTTFI(span, time.Since(start), err)
+			u.recordWindow(span, ttfiMetric, time.Since(start), err)
 			return err
 		}
 	}
@@ -475,24 +497,24 @@ func (u *runWorkloadUser) measureTTFI(ctx context.Context, mode string) error {
 	if err := u.executeInstruction(ctx); err != nil {
 		// Nothing was served, so there is no instant to close on; the row
 		// carries the whole wait the window did spend.
-		u.recordTTFI(span, time.Since(start), err)
+		u.recordWindow(span, ttfiMetric, time.Since(start), err)
 		return err
 	}
 
-	u.recordTTFI(span, total, nil)
+	u.recordWindow(span, ttfiMetric, total, nil)
 	return nil
 }
 
-// recordTTFI closes out the window, as a success or as a failure over the wait
-// it spent.
-func (u *runWorkloadUser) recordTTFI(span trace.Span, total time.Duration, err error) {
+// recordWindow closes out the window reported as name, as a success or as a
+// failure over the wait it spent.
+func (u *runWorkloadUser) recordWindow(span trace.Span, name string, total time.Duration, err error) {
 	span.SetAttributes(attribute.Float64("total_ms", boomerutil.MsFloat(total)))
-	boomerutil.LogSampledTrace(span, ttfiMetric, total, boomerutil.SourceClient, err)
+	boomerutil.LogSampledTrace(span, name, total, boomerutil.SourceClient, err)
 	if err != nil {
-		bmetrics.RecordFailure(runWorkloadMethod, ttfiMetric, u.userClass, total, err.Error())
+		bmetrics.RecordFailure(runWorkloadMethod, name, u.userClass, total, err.Error())
 		return
 	}
-	bmetrics.RecordSuccess(runWorkloadMethod, ttfiMetric, u.userClass, total, 0)
+	bmetrics.RecordSuccess(runWorkloadMethod, name, u.userClass, total, 0)
 }
 
 // executeInstruction sends one instruction and reports it as the ExecutionTime

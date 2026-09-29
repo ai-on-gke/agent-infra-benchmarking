@@ -188,4 +188,4 @@ workload_args=(--deploy)
 
 echo
 echo "Done. Start a run with:"
-echo "  ${BENCHMARKING_DIR#"${ROOT}/"}/run_locust_job.sh --test-case glutton-baseline"
+echo "  ${BENCHMARKING_DIR#"${ROOT}/"}/run_locust_job.sh --test-case glutton"

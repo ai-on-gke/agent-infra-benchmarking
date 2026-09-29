@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,8 +66,9 @@ func TestUserClassIsRegistered(t *testing.T) {
 }
 
 // The first iteration on a goroutine creates the actor; every later one
-// cycles it, so the run settles into suspend/resume rather than creating an
-// actor per iteration.
+// resumes it and suspends it again, so the run settles into resume/suspend
+// rather than creating an actor per iteration, and the actor ends every
+// iteration suspended.
 func TestIterateCreatesOnceThenCycles(t *testing.T) {
 	ctrl := &fakeControlClient{}
 	rt := newTestRuntime(t, ctrl)
@@ -82,14 +84,13 @@ func TestIterateCreatesOnceThenCycles(t *testing.T) {
 	rt.iterate()
 	rt.iterate()
 
-	if got := ctrl.countCalls("CreateActor"); got != 1 {
-		t.Errorf("CreateActor after three iterations: got %d, want 1", got)
+	want := []string{
+		"CreateAtespace", "CreateActor",
+		"ResumeActor", "SuspendActor",
+		"ResumeActor", "SuspendActor",
 	}
-	if got := ctrl.countCalls("SuspendActor"); got != 2 {
-		t.Errorf("SuspendActor: got %d, want 2", got)
-	}
-	if got := ctrl.countCalls("ResumeActor"); got != 2 {
-		t.Errorf("ResumeActor: got %d, want 2", got)
+	if got := ctrl.recordedCalls(); !slices.Equal(got, want) {
+		t.Errorf("calls after three iterations:\n got  %v\n want %v", got, want)
 	}
 }
 
@@ -213,9 +214,9 @@ func TestResumeModeSelectsTheControlPlaneCall(t *testing.T) {
 	}
 }
 
-// The window opens after the suspend, so however long the suspend took must
-// not appear in TTFI.
-func TestTTFIStartsAfterTheSuspend(t *testing.T) {
+// The suspend that ends the cycle comes after the window has closed, so
+// however long it took must not appear in TTFI.
+func TestTTFIExcludesTheSuspend(t *testing.T) {
 	const suspend = 200 * time.Millisecond
 	rt, sr := newMeasuringUser(t, &pingServer{}, &fakeControlClient{suspendDelay: suspend})
 
@@ -242,6 +243,42 @@ func TestTTFIEndsBeforeTheInstruction(t *testing.T) {
 	instruction := spanByName(t, sr, executionTimeMetric)
 	if got := instruction.EndTime().Sub(instruction.StartTime()); got < service {
 		t.Errorf("%s span duration: got %v, want >= %v", executionTimeMetric, got, service)
+	}
+}
+
+// CycleTime runs from the resume to the suspend returning, so unlike TTFI it
+// holds both the instruction's service time and the suspend, and its span is
+// the one the suspend is traced under.
+func TestCycleTimeSpansTheResumeThroughTheSuspend(t *testing.T) {
+	const service, suspend = 100 * time.Millisecond, 100 * time.Millisecond
+	rt, sr := newMeasuringUser(t, &pingServer{PingDelay: service}, &fakeControlClient{suspendDelay: suspend})
+
+	rt.iterate()
+
+	cycle := spanByName(t, sr, cycleTimeMetric)
+	if total, want := mustAttr(t, cycle, "total_ms").AsFloat64(), boomerutil.MsFloat(service+suspend); total < want {
+		t.Errorf("total_ms: got %v, want >= %v", total, want)
+	}
+	for _, name := range []string{ttfiMetric, suspendMetric} {
+		if got := spanByName(t, sr, name).Parent().SpanID(); got != cycle.SpanContext().SpanID() {
+			t.Errorf("%s span is not a child of the %s span", name, cycleTimeMetric)
+		}
+	}
+}
+
+// A refused suspend still reports the cycle, as a failure over the time it
+// spent, and the actor is discarded like after any other failed call.
+func TestAFailedSuspendReportsAFailedCycle(t *testing.T) {
+	ctrl := &fakeControlClient{suspendErr: errActorBusy}
+	rt, sr := newMeasuringUser(t, &pingServer{}, ctrl)
+
+	rt.iterate()
+
+	if got := mustAttr(t, spanByName(t, sr, cycleTimeMetric), "total_ms").AsFloat64(); got <= 0 {
+		t.Errorf("total_ms: got %v, want > 0", got)
+	}
+	if _, ok := rt.users.Load(boomerutil.GoroutineID()); ok {
+		t.Error("the user kept its slot after the suspend was refused")
 	}
 }
 

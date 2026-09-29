@@ -23,8 +23,8 @@ the repo README.
 import mimetypes
 from pathlib import Path
 
-# Default subfolder under the bucket root. One folder per run beneath it, so
-# a run's files stay together and two runs cannot collide.
+# Default subfolder under the bucket root. Beneath it, <run-id>/<test-case>/,
+# so a run's files stay together and two runs cannot collide.
 DEFAULT_PREFIX = "reports"
 
 
@@ -32,18 +32,23 @@ class UploadError(Exception):
     pass
 
 
-def object_name(prefix: str, run_id: str, filename: str) -> str:
-    return f"{prefix.strip('/')}/{run_id}/{filename}"
+def object_name(prefix: str, folder: str, relpath: str) -> str:
+    return f"{prefix.strip('/')}/{folder}/{relpath}"
 
 
 def upload(
-    paths: list[Path], bucket_name: str, run_id: str, prefix: str = DEFAULT_PREFIX
+    paths: list[Path],
+    bucket_name: str,
+    folder: str,
+    root: Path,
+    prefix: str = DEFAULT_PREFIX,
 ) -> list[tuple[Path, str | None, str | None]]:
-    """Upload each path. Returns (path, gs_uri, error) per file.
+    """Upload each path to <prefix>/<folder>/, under its location relative to
+    `root`. Returns (path, gs_uri, error) per file.
 
     The runner grants this objectCreator and nothing more, so an object that
-    already exists is a failure rather than an overwrite. Run ids are unique
-    by default, which is what keeps that from happening.
+    already exists is a failure rather than an overwrite. A run runs each test
+    case once, which is what keeps that from happening.
     """
     try:
         from google.cloud import storage
@@ -57,7 +62,7 @@ def upload(
 
     results = []
     for path in paths:
-        name = object_name(prefix, run_id, path.name)
+        name = object_name(prefix, folder, path.relative_to(root).as_posix())
         try:
             blob = bucket.blob(name)
             content_type, _ = mimetypes.guess_type(path.name)

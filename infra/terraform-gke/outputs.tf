@@ -23,6 +23,14 @@ output "cluster_endpoint" {
   sensitive   = true
 }
 
+# What the nodes are labeled with, so a dataplane that schedules nowhere can be
+# checked against what the install put on the atelet DaemonSet:
+#   kubectl get ds -n ate-system -l app=atelet -L ate.dev/substrate-version
+output "substrate_version" {
+  description = "Build version of the substrate submodule, as the ate.dev/substrate-version label on every node pool."
+  value       = local.substrate_version
+}
+
 output "artifact_registry_repository" {
   description = "Full resource name of the Artifact Registry repository."
   value       = google_artifact_registry_repository.this.name

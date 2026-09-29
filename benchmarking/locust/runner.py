@@ -86,8 +86,8 @@ REPORT_PREFIX = "reports"
 
 def report_names() -> list[str]:
     """Registered report names, or empty when the reports package cannot
-    load. Imported lazily so a missing matplotlib costs the reports and not
-    the run."""
+    load. Imported lazily so a broken package costs the reports and not the
+    run."""
     try:
         import reports
 
@@ -115,8 +115,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--run-id",
         default="",
-        help="Names this run in Prometheus. Reports query on it, so without "
-        "it they are skipped.",
+        help="The run this test case is part of: the run_id label in Prometheus, "
+        "and the <run-id> of the upload folder. Reports query on it with the "
+        "test_case label, so without it they are skipped.",
     )
     p.add_argument(
         "--report",
@@ -140,7 +141,7 @@ def parse_args() -> argparse.Namespace:
         "--report-bucket",
         default="",
         help="GCS bucket the reports are uploaded to, as gs://<bucket>/"
-        "<prefix>/<run-id>/. Empty leaves them on the pod, where the Job's "
+        "<prefix>/<run-id>/<test-case>/. Empty leaves them on the pod, where the Job's "
         "TTL eventually takes them.",
     )
     p.add_argument(
@@ -263,7 +264,8 @@ def log_run_config(args: argparse.Namespace) -> None:
         f"  test_case:    {args.test_case or '(none)'}",
         f"  worker flags: {' '.join(f'--{k}={v}' for k, v in args.worker_flags.items()) or '(none)'}",
         f"  reports:      {', '.join(args.report) or '(none)'}",
-        f"  report dest:  {'gs://' + args.report_bucket + '/' + args.report_prefix if args.report_bucket else args.report_dir + ' (pod-local)'}",
+        f"  run_id:       {args.run_id or '(none)'}",
+        f"  report dest:  {f'gs://{args.report_bucket}/{args.report_prefix}/{args.run_id}/{args.test_case}' if args.report_bucket else args.report_dir + ' (pod-local)'}",
         f"  extra flags:  {' '.join(args.locust_extra) or '(none)'}",
         "====================",
     ):
@@ -413,6 +415,7 @@ def generate_reports(args: argparse.Namespace, started: float) -> list[Path]:
 
         ctx = reports.RunContext(
             run_id=args.run_id,
+            test_case=args.test_case,
             users=args.users,
             spawn_rate=args.spawn_rate,
             duration=args.duration,
@@ -443,7 +446,11 @@ def upload_reports(paths: list[Path], args: argparse.Namespace) -> None:
         import reports
 
         results = reports.upload(
-            paths, args.report_bucket, args.run_id, args.report_prefix
+            paths,
+            args.report_bucket,
+            f"{args.run_id}/{args.test_case}",
+            Path(args.report_dir),
+            args.report_prefix,
         )
     except ImportError as exc:
         print(f"reports: upload skipped ({exc})", flush=True)

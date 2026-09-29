@@ -79,12 +79,18 @@ def labelled(result: list[dict], *labels: str) -> dict[tuple[str, ...], float]:
 
 
 def series(result: list[dict], index: int = 0) -> dict[int, float]:
-    """One series as {unix_second: value}. NaN samples are dropped — they mean
-    the window held no observations, not that the value was zero."""
+    """One series as {unix_second: value}."""
     if not result:
         return {}
-    return {
-        int(float(ts)): float(val)
-        for ts, val in result[index]["values"]
-        if val != "NaN"
-    }
+    return _samples(result[index])
+
+
+def series_by(result: list[dict], label: str) -> dict[str, dict[int, float]]:
+    """Every series as {its `label` value: {unix_second: value}}."""
+    return {item["metric"].get(label, ""): _samples(item) for item in result}
+
+
+def _samples(item: dict) -> dict[int, float]:
+    """NaN samples are dropped — they mean the window held no observations,
+    not that the value was zero."""
+    return {int(float(ts)): float(val) for ts, val in item["values"] if val != "NaN"}

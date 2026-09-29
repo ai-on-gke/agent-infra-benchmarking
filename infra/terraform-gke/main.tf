@@ -6,6 +6,35 @@ locals {
   cluster_name    = var.cluster.name != "" ? var.cluster.name : var.default_resource_name
 }
 
+# The build version of the substrate submodule, read from its git checkout by
+# substrate-version.sh rather than written into terraform.tfvars, so bumping
+# the submodule is the only step in moving to another version.
+data "external" "substrate_version" {
+  program = ["${path.module}/substrate-version.sh"]
+}
+
+locals {
+  substrate_version = data.external.substrate_version.result.version
+
+  # Substrate's dataplane schedules only onto nodes carrying this label, and
+  # hack/install-ate.sh stamps it on the nodes that exist when it runs. Setting
+  # it on the pools instead covers the nodes GKE adds afterwards — autoscaling,
+  # auto-repair, an upgrade — which are born with their pool's labels and would
+  # otherwise host no workers.
+  #
+  # Every pool gets it, which is what the installer does to every node. Bumping
+  # the submodule therefore changes a node label, and GKE rolls the pool's nodes
+  # to apply it; that is the same node-by-node move the version is there to
+  # describe, so it belongs in the plan rather than out of it.
+  node_pools = {
+    for key, pool in var.cluster.node_pools : key => merge(pool, {
+      labels = merge(pool.labels, {
+        "ate.dev/substrate-version" = local.substrate_version
+      })
+    })
+  }
+}
+
 module "cluster" {
   source = "./modules/gke-cluster"
 
@@ -18,7 +47,7 @@ module "cluster" {
   network              = var.cluster.network
   subnetwork           = var.cluster.subnetwork
   enable_dataplane_v2  = var.cluster.enable_dataplane_v2
-  node_pools           = var.cluster.node_pools
+  node_pools           = local.node_pools
   kubernetes_version   = var.cluster.kubernetes_version
   release_channel      = var.cluster.release_channel
   k8s_beta_apis        = var.cluster.k8s_beta_apis
