@@ -35,6 +35,7 @@ from .dropdown import HEIGHT_IN, Dropdown
 STRIP_IN = 0.45
 # Figure fractions.
 JOB_SWITCH_WIDTH = 0.3
+MAIN_SWITCH_WIDTH = 0.25
 DEFAULT_LEFT = 0.1
 
 
@@ -102,8 +103,9 @@ class Window:
             )
             left = ax_main.get_position().x0
             if len(titles) > 1:
-                # Over the legend column, which is where the other toggles are.
-                x = ax_main.get_position().x1 + 0.01
+                # Ending over the legend column, which is where the other
+                # toggles are, and reaching left of it for the titles to fit.
+                x = 1 - 0.015 - MAIN_SWITCH_WIDTH
 
                 def on_main(title: str) -> None:
                     self._main = title
@@ -112,7 +114,7 @@ class Window:
                 switches.append(
                     Dropdown(
                         fig,
-                        (x, y, 1 - x - 0.015, height),
+                        (x, y, MAIN_SWITCH_WIDTH, height),
                         titles,
                         titles.index(self._main),
                         on_select=on_main,

@@ -32,11 +32,12 @@ from . import data
 REPORTS_DIR = Path("reports")
 
 # Chart name -> the request name in locust_stats_history.csv whose latency the
-# chart draws above the shared panels. Every one a job has samples of is in the
-# window's switch; --chart picks the one it opens on.
+# chart draws above the shared panels, and the title the window shows it by.
+# Every one a job has samples of is in the window's switch; --chart picks the
+# one it opens on.
 CHARTS = {
-    "ttfi": "TTFI",
-    "execution-time": "ExecutionTime",
+    "ttfi": ("TTFI", "time to first instruction"),
+    "execution-time": ("ExecutionTime", "ExecutionTime"),
 }
 
 
@@ -110,13 +111,14 @@ def load(job_dir: Path):
         )
 
     mains = []
-    for chart, request_name in CHARTS.items():
+    for chart, (request_name, chart_title) in CHARTS.items():
         try:
-            mains.append(latency.LatencyPanel(rows, request_name))
+            mains.append(latency.LatencyPanel(rows, request_name, chart_title))
         except ValueError as exc:
             print(f"benchmark-report: {job_dir.name}: {exc}; leaving out {chart}", file=sys.stderr)
     if not mains:
-        raise ValueError(f"no {' or '.join(CHARTS.values())} samples in {data.STATS_HISTORY}")
+        names = " or ".join(name for name, _ in CHARTS.values())
+        raise ValueError(f"no {names} samples in {data.STATS_HISTORY}")
     return window.Job(title(job_dir), mains, rows, vitals, custom)
 
 
@@ -166,7 +168,7 @@ def main() -> None:
         sys.exit("benchmark-report needs matplotlib: pip install matplotlib")
 
     print(f"run: {run_dir.resolve()}")
-    win = window.Window(jobs, load, args.job or next(iter(jobs)), CHARTS[args.chart])
+    win = window.Window(jobs, load, args.job or next(iter(jobs)), CHARTS[args.chart][1])
     # With no other job to switch to, the error already printed is all there is.
     if len(jobs) == 1 and not win.drawn:
         sys.exit(1)

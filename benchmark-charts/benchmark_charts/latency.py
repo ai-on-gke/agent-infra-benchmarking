@@ -44,10 +44,11 @@ RAMP = (
 
 class LatencyPanel:
     """Percentiles over time of the rows named `request_name` (TTFI,
-    ExecutionTime, ...). Raises ValueError when the run has none."""
+    ExecutionTime, ...), which `title` names in the window if given. Raises
+    ValueError when the run has none."""
 
-    def __init__(self, rows: list[dict[str, str]], request_name: str):
-        self.title = request_name
+    def __init__(self, rows: list[dict[str, str]], request_name: str, title: str = ""):
+        self.title = title or request_name
         self.times, self.values = latency(rows, request_name)
         if all(math.isnan(v) for col in self.values.values() for v in col):
             raise ValueError(f"no {request_name} samples in {data.STATS_HISTORY}")
