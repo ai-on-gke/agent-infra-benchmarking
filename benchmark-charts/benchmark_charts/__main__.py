@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Chart one benchmark run: request latency percentiles, worker nodes' CPU
-utilization and the actor counts over time, read from each job's
-locust_stats_history.csv, cluster_vitals_history.csv and
+"""Chart one benchmark run: request latency percentiles and throughput, worker
+nodes' CPU and memory utilization and the actor counts over time, read from
+each job's locust_stats_history.csv, cluster_vitals_history.csv and
 custom_stats_history.csv and shown in a matplotlib window. A job is one test
 case of the run; drop-downs in the window switch between the run's jobs, and
 between the requests in CHARTS.
@@ -104,7 +104,7 @@ def load(job_dir: Path):
     rows = data.read(job_dir, data.STATS_HISTORY)
     vitals = read_optional(job_dir, data.CLUSTER_VITALS, "CPU")
     custom = read_optional(job_dir, data.CUSTOM_HISTORY, "actors")
-    if vitals and not panels.cpu(vitals):
+    if vitals and not panels.pool_metric(vitals, panels.CPU_METRIC):
         print(
             f"benchmark-report: no Pool=worker rows in {job_dir / data.CLUSTER_VITALS}, as "
             "in any run from before that column; drawing without CPU",

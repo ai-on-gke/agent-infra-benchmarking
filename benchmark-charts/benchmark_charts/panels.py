@@ -15,15 +15,15 @@
 """The panels every chart shares, under a chart's own main panel.
 
 draw() stacks panels on one time axis, each on its own y scale: the main
-panel, then its request's throughput, then worker nodes' CPU utilization,
-then actors: all of them, and the worker's active and idle (suspended) ones.
-Each locust user holds one actor, so all of them is locust's user count. Given
-several main panels, it shows one at a time, and swaps between them in place,
-throughput along with it.
+panel, then its request's throughput, then worker nodes' CPU and memory
+utilization, then actors: all of them, and the worker's active and idle
+(suspended) ones. Each locust user holds one actor, so all of them is locust's
+user count. Given several main panels, it shows one at a time, and swaps
+between them in place, throughput along with it.
 
-CPU is drawn for the nodes the vitals mark Pool=worker, the ones the
-WorkerPool runs on, rather than for every node or the cluster as a whole. A
-pool can have many nodes, so a drop-down beside the panel picks them, all or
+CPU and memory are drawn for the nodes the vitals mark Pool=worker, the ones
+the WorkerPool runs on, rather than for every node or the cluster as a whole.
+A pool can have many nodes, so a drop-down beside the panel picks them, all or
 one alone, rather than a legend listing each.
 Idle actors start hidden; the legend toggles them.
 """
@@ -34,12 +34,14 @@ from datetime import datetime, timezone
 from typing import Protocol
 
 import matplotlib.dates as mdates
+from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
 
 from . import data
 from .dropdown import HEIGHT_IN, Dropdown
 
 CPU_METRIC = "CPUUtilizationPercent"
+MEMORY_METRIC = "MemoryUtilizationPercent"
 WORKER_POOL = "worker"
 # Categorical slots after blue, which the main panel's latency already means,
 # and without the two ACTORS takes. A node past the last slot is drawn muted
@@ -68,13 +70,15 @@ class Panel(Protocol):
         panel under it."""
 
 
-def cpu(vitals: list[dict[str, str]]) -> dict[str, tuple[list[datetime], list[float]]]:
-    """CPU utilization % over time for each worker node, by name. Empty for a
-    file from before the Pool column, which marks no node a worker."""
+def pool_metric(
+    vitals: list[dict[str, str]], metric: str
+) -> dict[str, tuple[list[datetime], list[float]]]:
+    """`metric` over time for each worker node, by name. Empty for a file from
+    before the Pool column, which marks no node a worker."""
     series: dict[str, tuple[list[datetime], list[float]]] = {}
     for r in vitals:
         value = data.number(r["Value"])
-        if r["Name"] != CPU_METRIC or r.get("Pool") != WORKER_POOL or value is None:
+        if r["Name"] != metric or r.get("Pool") != WORKER_POOL or value is None:
             continue
         times, values = series.setdefault(r["Type"], ([], []))
         times.append(to_time(r["Timestamp"]))
@@ -123,14 +127,17 @@ def draw(
     another of `mains`, by index, and the panels' drop-downs, to remove() before
     the figure is cleared.
     """
-    cpu_series = cpu(vitals)
+    cpu_series = pool_metric(vitals, CPU_METRIC)
+    memory_series = pool_metric(vitals, MEMORY_METRIC)
 
     heights = (3, 1.5, 2, 1.5) if cpu_series else (3, 1.5, 1.5)
     axes = fig.subplots(len(heights), 1, sharex=True, gridspec_kw={"height_ratios": heights})
     ax_main, ax_rate, ax_actors = axes[0], axes[1], axes[-1]
 
+    pool_title = ""
     if cpu_series:
-        cpu_lines = cpu_panel(axes[2], cpu_series)
+        pool = pool_panel(fig, axes[2], cpu_series, memory_series)
+        pool_title = "pool CPU/memory" if memory_series else "pool CPU"
 
     actors_panel(fig, ax_actors, users(rows), actors(custom))
     ax_actors.set_xlabel("time (UTC)", color=INK_MUTED)
@@ -152,7 +159,7 @@ def draw(
                 ax.get_legend().remove()
         main = mains[index]
         main.draw(fig, ax_main, ax_rate)
-        parts = [p for p in (main.title, "throughput", cpu_series and "pool CPU", "actors") if p]
+        parts = [p for p in (main.title, "throughput", pool_title, "actors") if p]
         title = f"{', '.join(parts[:-1])} and {parts[-1]} over time"
         title += f" — run {name}" if name else ""
         ax_main.set_title(title, loc="left")
@@ -161,48 +168,97 @@ def draw(
     show(active)
     fig.tight_layout(rect=(0, 0, 1, top))
     # Placed once the layout has settled where the panel is.
-    switches = [node_switch(fig, axes[2], cpu_lines)] if cpu_series else []
+    switches = [node_switch(fig, pool)] if cpu_series else []
     return ax_main, show, switches
 
 
-def cpu_panel(ax, series: dict[str, tuple[list[datetime], list[float]]]) -> list:
+class PoolLines:
+    """The pool panel's lines, by node's short name and then metric ("CPU",
+    "memory"). A line shows while the drop-down has its node, or every node,
+    and the key has its metric on."""
+
+    def __init__(self, ax, lines: dict[str, dict]):
+        self.ax = ax
+        self.lines = lines
+        self.node: str | None = None  # None: every node.
+        self.off: set[str] = set()
+
+    def show_node(self, node: str | None) -> None:
+        self.node = node
+        self.apply()
+
+    def apply(self) -> None:
+        for node, by_metric in self.lines.items():
+            for metric, line in by_metric.items():
+                line.set_visible(self.node in (None, node) and metric not in self.off)
+        fit_y(self.ax, bottom=0)
+
+
+class MetricToggle:
+    """One metric's lines, every node's, as a single line to toggle_on_click:
+    the key's entry for it shows and hides them all."""
+
+    def __init__(self, pool: PoolLines, metric: str):
+        self.pool = pool
+        self.metric = metric
+
+    def get_visible(self) -> bool:
+        return self.metric not in self.pool.off
+
+    def set_visible(self, on: bool) -> None:
+        if on:
+            self.pool.off.discard(self.metric)
+        else:
+            self.pool.off.add(self.metric)
+        self.pool.apply()
+
+
+def pool_panel(fig, ax, cpu_series, memory_series) -> PoolLines:
+    """Each node's CPU utilization, and its memory utilization dashed in the
+    same color: both a share of the node's capacity, so they read off one
+    scale."""
     node_colors = iter(NODE_COLORS)
-    lines = [
-        ax.plot(
-            times,
-            values,
-            color=next(node_colors, INK_MUTED),
-            linewidth=1.5,
-            label=label,
-        )[0]
-        for label, (times, values) in zip(_short_names(list(series)), series.values())
-    ]
-    ax.set_ylabel("pool CPU (%)", color=INK_MUTED)
+    lines = {}
+    for label, (node, series) in zip(_short_names(list(cpu_series)), cpu_series.items()):
+        color = next(node_colors, INK_MUTED)
+        lines[label] = {"CPU": ax.plot(*series, color=color, linewidth=1.5)[0]}
+        if node in memory_series:
+            lines[label]["memory"] = ax.plot(
+                *memory_series[node], color=color, linewidth=1.5, linestyle="--"
+            )[0]
+    pool = PoolLines(ax, lines)
+    if memory_series:
+        ax.set_ylabel("pool CPU/memory (%)", color=INK_MUTED)
+        # The node drop-down takes the top of the legend column; this key
+        # sits at its foot, since the node colors alone do not say which
+        # line is which.
+        key = [
+            Line2D([], [], color=INK_MUTED, linewidth=1.5, linestyle=style, label=metric)
+            for metric, style in (("CPU", "-"), ("memory", "--"))
+        ]
+        legend = ax.legend(handles=key, frameon=False, loc="lower left", bbox_to_anchor=(1, 0))
+        toggles = [MetricToggle(pool, handle.get_label()) for handle in key]
+        toggle_on_click(fig, ax, legend, toggles, bottom=0)
+    else:
+        ax.set_ylabel("pool CPU (%)", color=INK_MUTED)
     # From 0, unlike latency: utilization is a share of capacity.
     fit_y(ax, bottom=0)
-    return lines
+    return pool
 
 
-def node_switch(fig, ax, lines) -> Dropdown:
-    """A drop-down over the legend column beside the CPU panel, that shows
-    every node's line or one node's alone."""
-    every = f"all nodes ({len(lines)})"
-    by_label = {line.get_label(): line for line in lines}
-
-    def on_select(option: str) -> None:
-        for line in lines:
-            line.set_visible(option in (every, line.get_label()))
-        fit_y(ax, bottom=0)
-
-    pos = ax.get_position()
+def node_switch(fig, pool: PoolLines) -> Dropdown:
+    """A drop-down over the legend column beside the pool panel, that shows
+    every node's lines or one node's alone."""
+    every = f"all nodes ({len(pool.lines)})"
+    pos = pool.ax.get_position()
     height = HEIGHT_IN / fig.get_figheight()
     x = pos.x1 + 0.01
     return Dropdown(
         fig,
         (x, pos.y1 - height, 1 - x - 0.015, height),
-        [every, *by_label],
-        on_select=on_select,
-        colors={label: line.get_color() for label, line in by_label.items()},
+        [every, *pool.lines],
+        on_select=lambda option: pool.show_node(None if option == every else option),
+        colors={label: by_metric["CPU"].get_color() for label, by_metric in pool.lines.items()},
     )
 
 
@@ -235,7 +291,7 @@ def toggle_on_click(fig, ax, legend, lines, bottom: float | None = None) -> None
     """Clicking a legend entry, its line or its label, shows or hides that
     line, and fits the y axis to the lines left showing. Without `bottom` the
     fit is to the lines rather than to 0, so a flat line's variation stays
-    readable."""
+    readable. `lines` may hold anything that shows and hides like a line."""
     entries = {}
     for line, handle, text in zip(lines, legend.get_lines(), legend.get_texts()):
         # The legend copies a hidden line's visibility onto its sample; the

@@ -38,19 +38,19 @@
 cases:
   glutton:
     duration: 5m
-    users: 10
-    spawn-rate: 1
-    worker-count: 10
+    users: 100
+    spawn-rate: 2
+    worker-count: 100
     sandbox-class: gvisor
     workload-name: glutton
     workload-template: glutton
     resume-mode: explicit 
 
   openclaw:
-    duration: 10m
-    users: 10
-    spawn-rate: 1
-    worker-count: 10
+    duration: 5m
+    users: 100
+    spawn-rate: 2
+    worker-count: 100
     sandbox-class: gvisor
     workload-name: openclaw
     workload-template: openclaw
