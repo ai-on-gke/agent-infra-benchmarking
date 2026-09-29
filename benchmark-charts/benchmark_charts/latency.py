@@ -20,6 +20,9 @@ shows up in latency spread over the 10s after it.
 
 Every percentile column in the file is drawn; p50 alone starts visible, and
 the legend toggles the rest.
+
+Under them, in a panel of its own, is the request's throughput from the same
+rows: all of it, and its successful and failed parts.
 """
 
 from __future__ import annotations
@@ -30,9 +33,19 @@ from datetime import datetime
 from matplotlib.colors import LinearSegmentedColormap
 
 from . import data
-from .panels import INK_MUTED, to_time, toggle_on_click
+from .panels import ACTORS_COLOR, INK_MUTED, to_time, toggle_on_click
 
 DEFAULT_VISIBLE = {"50%"}
+
+# (throughput() key, legend label, color, line style). Success and failure
+# wear the status colors, since that is what they mean; all of it the neutral
+# that all actors do. That one is dashed and on top, so it still shows where it
+# is the successful line too, which is whenever nothing failed.
+THROUGHPUT = (
+    ("total", "all", ACTORS_COLOR, "--"),
+    ("successful", "successful", "#0ca30c", "-"),
+    ("failed", "failed", "#d03b3b", "-"),
+)
 
 # Ordinal blue ramp, light to dark, that the percentiles are spread across so
 # the tail reads heaviest.
@@ -52,8 +65,9 @@ class LatencyPanel:
         self.times, self.values = latency(rows, request_name)
         if all(math.isnan(v) for col in self.values.values() for v in col):
             raise ValueError(f"no {request_name} samples in {data.STATS_HISTORY}")
+        self.throughput = throughput(rows, request_name)
 
-    def draw(self, fig, ax) -> None:
+    def draw(self, fig, ax, ax_rate) -> None:
         # Drawn tail first, so the legend lists the percentiles top to bottom
         # in the order the lines stack.
         columns = list(self.values)
@@ -76,6 +90,23 @@ class LatencyPanel:
         legend.get_title().set_color(INK_MUTED)
         toggle_on_click(fig, ax, legend, lines)
 
+        rates = [
+            ax_rate.plot(
+                self.times,
+                self.throughput[key],
+                color=color,
+                linestyle=style,
+                linewidth=1.5,
+                label=label,
+                zorder=3 if key == "total" else 2,
+            )[0]
+            for key, label, color, style in THROUGHPUT
+        ]
+        ax_rate.set_ylabel("throughput (req/s)", color=INK_MUTED)
+        legend = ax_rate.legend(frameon=False, loc="upper left", bbox_to_anchor=(1, 1))
+        # From 0, unlike latency: how much got done is read against none.
+        toggle_on_click(fig, ax_rate, legend, rates, bottom=0)
+
 
 def percentile_columns(rows: list[dict[str, str]]) -> list[str]:
     """The file's percentile columns ("50%", ..., "100%"), lowest first."""
@@ -96,6 +127,25 @@ def latency(
         for col in percentile_columns(rows)
     }
     return [to_time(r["Timestamp"]) for r in named], values
+
+
+def throughput(rows: list[dict[str, str]], request_name: str) -> dict[str, list[float]]:
+    """Requests per second of the rows named `request_name`, in the order
+    latency() gives their times: in total, successful and failed. Unlike
+    latency, 0 is drawn: a window where nothing got done is a throughput of
+    none."""
+    rates: dict[str, list[float]] = {"total": [], "successful": [], "failed": []}
+    for r in rows:
+        if r["Name"] != request_name:
+            continue
+        total, failed = data.number(r["Requests/s"]), data.number(r["Failures/s"])
+        if total is None or failed is None:
+            total = failed = math.nan
+        rates["total"].append(total)
+        rates["failed"].append(failed)
+        # locust counts a failed request among Requests/s too.
+        rates["successful"].append(total - failed)
+    return rates
 
 
 def _ramp(n: int) -> list:

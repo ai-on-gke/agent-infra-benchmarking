@@ -15,10 +15,11 @@
 """The panels every chart shares, under a chart's own main panel.
 
 draw() stacks panels on one time axis, each on its own y scale: the main
-panel, then worker nodes' CPU utilization, then actors: all of them, and the
-worker's active and idle (suspended) ones. Each locust user holds one actor,
-so all of them is locust's user count. Given several main panels, it shows one
-at a time, and swaps between them in place.
+panel, then its request's throughput, then worker nodes' CPU utilization,
+then actors: all of them, and the worker's active and idle (suspended) ones.
+Each locust user holds one actor, so all of them is locust's user count. Given
+several main panels, it shows one at a time, and swaps between them in place,
+throughput along with it.
 
 CPU is drawn for the nodes the vitals mark Pool=worker, the ones the
 WorkerPool runs on, rather than for every node or the cluster as a whole. A
@@ -62,7 +63,9 @@ class Panel(Protocol):
     # Names the panel in the figure's title.
     title: str
 
-    def draw(self, fig, ax) -> None: ...
+    def draw(self, fig, ax, ax_rate) -> None:
+        """Draw the request on `ax`, and its throughput on `ax_rate`, the
+        panel under it."""
 
 
 def cpu(vitals: list[dict[str, str]]) -> dict[str, tuple[list[datetime], list[float]]]:
@@ -122,12 +125,12 @@ def draw(
     """
     cpu_series = cpu(vitals)
 
-    heights = (3, 2, 1.5) if cpu_series else (3, 1.5)
+    heights = (3, 1.5, 2, 1.5) if cpu_series else (3, 1.5, 1.5)
     axes = fig.subplots(len(heights), 1, sharex=True, gridspec_kw={"height_ratios": heights})
-    ax_main, ax_actors = axes[0], axes[-1]
+    ax_main, ax_rate, ax_actors = axes[0], axes[1], axes[-1]
 
     if cpu_series:
-        cpu_lines = cpu_panel(axes[1], cpu_series)
+        cpu_lines = cpu_panel(axes[2], cpu_series)
 
     actors_panel(fig, ax_actors, users(rows), actors(custom))
     ax_actors.set_xlabel("time (UTC)", color=INK_MUTED)
@@ -142,13 +145,14 @@ def draw(
         # What the last main panel drew goes, and the axes stay, so the shared
         # time axis keeps its range and format. The removed legend's click
         # handler stays connected, but nothing it knows can be clicked again.
-        for artist in [*ax_main.lines, *ax_main.collections, *ax_main.patches]:
-            artist.remove()
-        if ax_main.get_legend():
-            ax_main.get_legend().remove()
+        for ax in (ax_main, ax_rate):
+            for artist in [*ax.lines, *ax.collections, *ax.patches]:
+                artist.remove()
+            if ax.get_legend():
+                ax.get_legend().remove()
         main = mains[index]
-        main.draw(fig, ax_main)
-        parts = [p for p in (main.title, cpu_series and "pool CPU", "actors") if p]
+        main.draw(fig, ax_main, ax_rate)
+        parts = [p for p in (main.title, "throughput", cpu_series and "pool CPU", "actors") if p]
         title = f"{', '.join(parts[:-1])} and {parts[-1]} over time"
         title += f" — run {name}" if name else ""
         ax_main.set_title(title, loc="left")
@@ -157,7 +161,7 @@ def draw(
     show(active)
     fig.tight_layout(rect=(0, 0, 1, top))
     # Placed once the layout has settled where the panel is.
-    switches = [node_switch(fig, axes[1], cpu_lines)] if cpu_series else []
+    switches = [node_switch(fig, axes[2], cpu_lines)] if cpu_series else []
     return ax_main, show, switches
 
 
