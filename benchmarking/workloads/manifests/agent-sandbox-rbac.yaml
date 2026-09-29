@@ -1,0 +1,58 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# RBAC the --backend agent-sandbox boomer-worker needs. Unlike the substrate
+# backend (which reaches ateapi over mTLS with a projected pod identity), this
+# backend talks to the Kubernetes API directly through this ServiceAccount:
+# runworkload creates and deletes the Sandboxes/SandboxClaims it measures, and
+# reads the SandboxTemplate/SandboxWarmPool that workloads/deploy.sh --backend
+# agent-sandbox already applied. Applied by that same script; a run pod (or a
+# manual boomer-worker) sets serviceAccountName: benchmark-runner to assume it.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: benchmark-runner
+  namespace: benchmarking
+---
+# Scoped to this namespace only: the benchmark owns the Sandboxes and
+# SandboxClaims it creates here, and only reads the template/pool.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: benchmark-runner
+  namespace: benchmarking
+rules:
+- apiGroups: ["agents.x-k8s.io"]
+  resources: ["sandboxes"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: ["extensions.agents.x-k8s.io"]
+  resources: ["sandboxclaims"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: ["extensions.agents.x-k8s.io"]
+  resources: ["sandboxtemplates", "sandboxwarmpools"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: benchmark-runner
+  namespace: benchmarking
+subjects:
+- kind: ServiceAccount
+  name: benchmark-runner
+  namespace: benchmarking
+roleRef:
+  kind: Role
+  name: benchmark-runner
+  apiGroup: rbac.authorization.k8s.io

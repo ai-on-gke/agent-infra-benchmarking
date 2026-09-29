@@ -1,0 +1,68 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package agentsandboxutil builds the Kubernetes clients the --backend
+// agent-sandbox path needs. It lives here, separate from substrate's own
+// internal/benchmarking/boomer/boomerutil (which owns ateapi's mTLS dial
+// logic), because this module cannot add to a package it does not own —
+// substrate's internal/ packages are only reachable, not editable, through
+// the module-path trick this repo's go.mod relies on.
+package agentsandboxutil
+
+import (
+	"fmt"
+
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	sandboxclientset "sigs.k8s.io/agent-sandbox/clients/k8s/clientset/versioned"
+	extensionsclientset "sigs.k8s.io/agent-sandbox/clients/k8s/extensions/clientset/versioned"
+)
+
+// loadKubeConfig resolves a *rest.Config the same way kubectl does: in-cluster
+// config first (the normal case — this worker runs as a Pod in the cluster it
+// benchmarks), falling back to the local kubeconfig for a benchmark driven
+// from outside the cluster (e.g. against a kind cluster during development).
+func loadKubeConfig() (*rest.Config, error) {
+	if cfg, err := rest.InClusterConfig(); err == nil {
+		return cfg, nil
+	}
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	overrides := &clientcmd.ConfigOverrides{}
+	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("k8s config: %w", err)
+	}
+	return cfg, nil
+}
+
+// Dial builds the two typed clients runworkload's agent-sandbox backend
+// needs: the core agents.x-k8s.io client for direct (cold) Sandbox creation,
+// and the extensions.agents.x-k8s.io client for SandboxClaim/SandboxWarmPool/
+// SandboxTemplate (warm-pool) access. Both share one *rest.Config and its
+// connection pool.
+func Dial() (sandboxclientset.Interface, extensionsclientset.Interface, error) {
+	cfg, err := loadKubeConfig()
+	if err != nil {
+		return nil, nil, err
+	}
+	sandboxes, err := sandboxclientset.NewForConfig(cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("agent-sandbox client: %w", err)
+	}
+	extensions, err := extensionsclientset.NewForConfig(cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("agent-sandbox extensions client: %w", err)
+	}
+	return sandboxes, extensions, nil
+}

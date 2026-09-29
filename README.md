@@ -118,6 +118,89 @@ gcloud application-default credentials already in place.
    run, or `benchmark-report reports/<run-id>` for a given one. A drop-down in
    the window switches between the run's jobs.
 
+## Benchmarking agent-sandbox (opt-in backend)
+
+The steps above drive **substrate**, the default backend. The same harness can
+instead drive [`sigs.k8s.io/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox),
+selected with `--backend agent-sandbox`. It measures the wall clock a client
+waits before a freshly provisioned sandbox accepts work, across two
+provisioning paths:
+
+- **ColdCreate** — a `Sandbox` created directly from a `SandboxTemplate`'s
+  blueprint, through to `Ready` and a first request served. A true cold boot:
+  image pull, scheduling and application start are all inside the window.
+- **PoolClaim** — a `SandboxClaim` adopting an already-running pod from a
+  `SandboxWarmPool`. Cheaper provisioning — a label flip onto a warm pod —
+  and the "warm" number ColdCreate is compared against.
+
+The workload run inside the sandbox is a minimal JSON-echo probe
+([`benchmarking/workloads/probe`](benchmarking/workloads/probe)), addressed at
+each Sandbox's own per-pod Service (agent-sandbox needs no atenet-style shared
+router). It is the agent-sandbox analog of substrate's `glutton`.
+
+### How it maps to substrate, and what does not carry over
+
+| substrate | agent-sandbox | notes |
+| --- | --- | --- |
+| ActorTemplate | SandboxTemplate | blueprint a workload is provisioned from |
+| WorkerPool (bin-packed actors per pod) | SandboxWarmPool (one Sandbox+Pod per replica) | density differs — see below |
+| CreateActor + FirstResume | ColdCreate | first activation |
+| WarmStart (live-memory snapshot restore) | PoolClaim | **not** the same latency class — see below |
+| atenet router + `ate-target-actor` header | per-pod Service DNS (`status.serviceFQDN`) | direct addressing |
+| ateapi mTLS pod identity | `benchmark-runner` ServiceAccount + RBAC | how the worker reaches the control plane |
+
+**These are different systems; their numbers are not directly comparable.**
+Two reasons in particular:
+
+- **PoolClaim is not a live-memory restore.** Substrate's WarmStart resumes an
+  actor's own prior in-memory snapshot (its ~100 ms activation target). A pool
+  claim adopts a pod that booted from its image and never held this workload's
+  state. A live-memory warm-start on agent-sandbox would need GKE Pod
+  Snapshots and is **not implemented here** — it is deliberately out of scope,
+  not conflated with WarmStart.
+- **Density differs.** A substrate WorkerPool hosts many actor sandboxes per
+  worker pod; a SandboxWarmPool replica is its own Sandbox and Pod.
+
+### Running it
+
+The boomer-worker binary supports `--backend agent-sandbox` end to end, and
+`workloads/deploy.sh` / `build_and_push.sh` stand up its workload infra with
+plain `kubectl` — no substrate submodule, `BUCKET_NAME`, `ko`, or `kubectl-ate`
+required. `PROBE_IMAGE` names the probe image (the agent-sandbox counterpart of
+`OPENCLAW_IMAGE`); export it or set it in `.env.sh`.
+
+```bash
+# 1. Build and push the locust image (boomer-worker baked in) and the probe.
+PROBE_IMAGE=<registry>/ping-probe:latest \
+  ./benchmarking/locust/build_and_push.sh --backend agent-sandbox
+
+# 2. Deploy the ping SandboxTemplate + SandboxWarmPool and the benchmark-runner
+#    RBAC into the `benchmarking` namespace. --worker-count sizes the warm pool;
+#    --runtime-class gvisor on GKE Sandbox (omit on kind for the default runtime).
+PROBE_IMAGE=<registry>/ping-probe:latest \
+  ./benchmarking/workloads/deploy.sh --backend agent-sandbox --deploy \
+    --worker-count 5 --runtime-class gvisor
+```
+
+The boomer-worker is then driven with `--backend=agent-sandbox`
+`--namespace=benchmarking` `--workload-name=ping` (see
+`cmd/benchmarking/boomer-worker --help` and
+[`internal/benchmarking/boomer/runworkload`](internal/benchmarking/boomer/runworkload)).
+
+> **Note:** the `run_locust_job.sh` job runner and its report generation
+> (`ttfi-vs-users.html`, keyed on substrate's TTFI series) still assume the
+> substrate WorkerPool and the ateapi mTLS job manifest, so they do not yet
+> drive `--backend agent-sandbox` unattended. Threading the backend through the
+> job runner, the `tests.yaml` cases, and a Prometheus report for the
+> ColdCreate/PoolClaim series is the remaining follow-up; the pieces above make
+> the backend runnable and its infra deployable today.
+
+Tear the workload infra down with:
+
+```bash
+./benchmarking/workloads/deploy.sh --backend agent-sandbox --delete
+```
+
 ## Cleanup
 
 The steps undo the deployment in reverse, and each one is independent — stop

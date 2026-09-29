@@ -54,6 +54,8 @@ type fakeWorkload struct {
 
 func (w *fakeWorkload) Name() string { return w.name }
 
+func (w *fakeWorkload) Backend() Backend { return BackendSubstrate }
+
 func (w *fakeWorkload) DefaultTemplate() string { return w.template }
 
 func (w *fakeWorkload) SendInstruction(_ context.Context, actor actorRef) (bool, error) {
@@ -102,7 +104,7 @@ func TestActorRefTarget(t *testing.T) {
 
 func TestResolveWorkload(t *testing.T) {
 	t.Run("unset selects the default", func(t *testing.T) {
-		w, err := resolveWorkload("")
+		w, err := resolveWorkload("", BackendSubstrate)
 		if err != nil {
 			t.Fatalf("resolveWorkload(\"\") failed: %v", err)
 		}
@@ -112,7 +114,7 @@ func TestResolveWorkload(t *testing.T) {
 	})
 
 	t.Run("names the registered workload", func(t *testing.T) {
-		w, err := resolveWorkload(gluttonWorkloadName)
+		w, err := resolveWorkload(gluttonWorkloadName, BackendSubstrate)
 		if err != nil {
 			t.Fatalf("resolveWorkload(%q) failed: %v", gluttonWorkloadName, err)
 		}
@@ -125,7 +127,7 @@ func TestResolveWorkload(t *testing.T) {
 	// while measuring a workload nobody asked for, so it has to be an error —
 	// and the message has to say what could have been asked for instead.
 	t.Run("unknown name is an error listing the known ones", func(t *testing.T) {
-		_, err := resolveWorkload("not-a-workload")
+		_, err := resolveWorkload("not-a-workload", BackendSubstrate)
 		if err == nil {
 			t.Fatal("resolveWorkload succeeded for an unregistered name, want error")
 		}

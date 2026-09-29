@@ -59,6 +59,8 @@ type openclawWorkload struct{}
 
 func (openclawWorkload) Name() string { return openclawWorkloadName }
 
+func (openclawWorkload) Backend() Backend { return BackendSubstrate }
+
 func (openclawWorkload) DefaultTemplate() string { return openclawTemplate }
 
 // SendInstruction POSTs the prompt to /invoke and verifies the

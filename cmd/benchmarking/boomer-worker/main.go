@@ -35,27 +35,36 @@ import (
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/myzhan/boomer"
 
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/internal/benchmarking/boomer/agentsandboxutil"
 	// Imported for the user class each registers via init(). runworkload is
 	// named rather than blank because its settings are declared here, as
-	// flags, and handed over with runworkload.SetOptions.
+	// flags, and handed over with runworkload.SetOptions/SetAgentSandboxDeps.
 	"github.com/agent-substrate/substrate/agent-infra-benchmarking/internal/benchmarking/boomer/runworkload"
 	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
 )
 
 func main() {
 	var (
-		apiEndpoint = flag.String("api-endpoint", "k8s:///api.ate-system.svc.cluster.local:443", "ateapi gRPC dial target.")
-		routerURL   = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "atenet HTTP router base URL (no trailing slash).")
-		atespace    = flag.String("atespace", "benchmark", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
-		promAddr    = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
-		userClass   = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
+		backend = flag.String("backend", string(runworkload.DefaultBackend),
+			fmt.Sprintf("runworkload only: which sandbox control plane to drive, %q or %q.", runworkload.BackendSubstrate, runworkload.BackendAgentSandbox))
+
+		// substrate backend settings.
+		apiEndpoint = flag.String("api-endpoint", "k8s:///api.ate-system.svc.cluster.local:443", "substrate backend only: ateapi gRPC dial target.")
+		routerURL   = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "substrate backend only: atenet HTTP router base URL (no trailing slash).")
+		atespace    = flag.String("atespace", "benchmark", "substrate backend only: atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
+
+		// agent-sandbox backend settings.
+		namespace = flag.String("namespace", "benchmarking", "agent-sandbox backend only: namespace every Sandbox/SandboxClaim this worker creates lives in.")
+
+		promAddr  = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
+		userClass = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
 
 		// Settings a run holds from start to end. They were fetched from the
 		// locust master's /boomer-config while the web UI could change them
 		// mid-run; nothing in this repo does, so they are flags.
 		minWait          = flag.Duration("min-wait", 0, "Lower bound on the think time between iterations.")
 		maxWait          = flag.Duration("max-wait", 500*time.Millisecond, "Upper bound on the think time between iterations. At or below --min-wait waits exactly that.")
-		resumeMode       = flag.String("resume-mode", runworkload.ResumeModeExplicit, fmt.Sprintf("How an actor is woken: %s issues ResumeActor before the instruction, %s leaves the wake to the router.", runworkload.ResumeModeExplicit, runworkload.ResumeModeImplicit))
+		resumeMode       = flag.String("resume-mode", runworkload.ResumeModeExplicit, fmt.Sprintf("substrate backend only: how an actor is woken: %s issues ResumeActor before the instruction, %s leaves the wake to the router.", runworkload.ResumeModeExplicit, runworkload.ResumeModeImplicit))
 		traceProbability = flag.Float64("trace-probability", 0, "Fraction of iterations to sample a trace for, 0 to 1.")
 
 		// runworkload settings. Declared here with every other flag, so
@@ -65,11 +74,15 @@ func main() {
 		// template's follows from the workload, which is the only place that
 		// knows what it can address.
 		workloadName = flag.String("workload-name", "",
-			fmt.Sprintf("runworkload only: the workload a RunWorkloadUser drives. Unset selects %s.", runworkload.DefaultWorkload))
+			"runworkload only: the workload a RunWorkloadUser drives. Unset selects the chosen --backend's own default (glutton for substrate, ping for agent-sandbox).")
 		workloadTemplate = flag.String("workload-template", "",
-			"runworkload only: the ActorTemplate the workload is measured on. Unset selects the workload's own.")
+			"runworkload only: the ActorTemplate (substrate) or SandboxTemplate (agent-sandbox) the workload is measured on. Unset selects the workload's own.")
+		workloadWarmPool = flag.String("workload-warmpool", "",
+			"runworkload, --backend agent-sandbox only: the SandboxWarmPool the pool-claim window adopts from. Unset selects \"<template>-warmpool\".")
 		workloadTimeout = flag.Duration("workload-timeout", 0,
 			fmt.Sprintf("runworkload only: ceiling on the instruction retry loop. Unset selects %s.", runworkload.DefaultTimeout))
+		workloadProvisionTimeout = flag.Duration("workload-provision-timeout", 0,
+			fmt.Sprintf("runworkload, --backend agent-sandbox only: ceiling on waiting for a Sandbox/SandboxClaim's Ready condition. Unset selects %s.", runworkload.DefaultProvisionTimeout))
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
@@ -78,6 +91,28 @@ func main() {
 	class := strings.ToLower(*userClass)
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
+	sandboxBackend := runworkload.Backend(*backend)
+	switch sandboxBackend {
+	case runworkload.BackendSubstrate, runworkload.BackendAgentSandbox:
+	default:
+		slog.Error("fatal: unknown --backend value",
+			slog.String("backend", *backend),
+			slog.String("known", fmt.Sprintf("%s,%s", runworkload.BackendSubstrate, runworkload.BackendAgentSandbox)))
+		os.Exit(1)
+	}
+
+	// runworkload is the only user class that supports --backend agent-sandbox.
+	// The other registered classes (glutton, durdir) are substrate-only and
+	// dereference cfg.APIStub unconditionally, which is only built for --backend
+	// substrate below. Reject the combination here rather than letting a
+	// substrate class panic on a nil APIStub deep in a measured iteration.
+	if sandboxBackend == runworkload.BackendAgentSandbox && class != "runworkload" {
+		slog.Error("fatal: --backend agent-sandbox is only supported with --user-class runworkload",
+			slog.String("user-class", class),
+			slog.String("backend", string(sandboxBackend)))
+		os.Exit(1)
+	}
 
 	switch *resumeMode {
 	case runworkload.ResumeModeExplicit, runworkload.ResumeModeImplicit:
@@ -101,22 +136,17 @@ func main() {
 		_ = tp.Shutdown(shutdownCtx)
 	}()
 
-	conn, apiStub, err := boomerutil.DialControl(*apiEndpoint)
-	if err != nil {
-		slog.Error("failed to dial ateapi", slog.String("err", err.Error()))
-		os.Exit(1)
-	}
-	defer conn.Close()
-
 	httpClient := &http.Client{Timeout: 5 * time.Minute}
 
+	// cfg is substrate's own userclass.Config type (this module cannot add
+	// fields to it). It is built and passed to every user class, but only the
+	// substrate backend's dependencies (APIStub, RouterURL, Atespace) are
+	// populated, and only when that backend is selected; runworkload's
+	// agent-sandbox dependencies travel separately via SetAgentSandboxDeps.
 	cfg := &userclass.Config{
-		APIStub:    apiStub,
 		HTTPClient: httpClient,
-		RouterURL:  *routerURL,
-		Atespace:   *atespace,
-		// runworkload reads the flags above through SetOptions; this is for
-		// the upstream user classes, which take the same values off the
+		// runworkload reads its flags through SetOptions; the Dyn holder is
+		// for the upstream user classes, which take the same values off the
 		// holder that userclass.Config requires.
 		Dyn: dynconfig.NewHolder(dynconfig.Config{
 			MinWait:          *minWait,
@@ -126,21 +156,52 @@ func main() {
 		}),
 	}
 
+	if sandboxBackend == runworkload.BackendSubstrate {
+		conn, apiStub, err := boomerutil.DialControl(*apiEndpoint)
+		if err != nil {
+			slog.Error("failed to dial ateapi", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+		defer conn.Close()
+		cfg.APIStub = apiStub
+		cfg.RouterURL = *routerURL
+		cfg.Atespace = *atespace
+	} else {
+		sandboxes, extensions, err := agentsandboxutil.Dial()
+		if err != nil {
+			slog.Error("failed to build agent-sandbox clients", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+		runworkload.SetAgentSandboxDeps(runworkload.AgentSandboxDeps{
+			Sandboxes:  sandboxes,
+			Extensions: extensions,
+			Namespace:  *namespace,
+		})
+	}
+
 	if *workloadTimeout < 0 {
 		slog.Error("fatal: --workload-timeout cannot be negative",
 			slog.Duration("workload_timeout", *workloadTimeout))
+		os.Exit(1)
+	}
+	if *workloadProvisionTimeout < 0 {
+		slog.Error("fatal: --workload-provision-timeout cannot be negative",
+			slog.Duration("workload_provision_timeout", *workloadProvisionTimeout))
 		os.Exit(1)
 	}
 	// Unconditional, and inert unless the lookup below selects runworkload:
 	// only that entry's Init reads these, so a run of another user class
 	// carries them without ever looking at them.
 	runworkload.SetOptions(runworkload.Options{
-		Workload:   *workloadName,
-		Template:   *workloadTemplate,
-		Timeout:    *workloadTimeout,
-		MinWait:    *minWait,
-		MaxWait:    *maxWait,
-		ResumeMode: *resumeMode,
+		Backend:          sandboxBackend,
+		Workload:         *workloadName,
+		Template:         *workloadTemplate,
+		WarmPool:         *workloadWarmPool,
+		Timeout:          *workloadTimeout,
+		ProvisionTimeout: *workloadProvisionTimeout,
+		MinWait:          *minWait,
+		MaxWait:          *maxWait,
+		ResumeMode:       *resumeMode,
 	})
 
 	entry, ok := userclass.Lookup(class)
@@ -155,6 +216,7 @@ func main() {
 	slog.Info("registered boomer task",
 		slog.String("user_class", entry.UserClass),
 		slog.String("user_class_flag", class),
+		slog.String("backend", string(sandboxBackend)),
 	)
 
 	metricsCtx, metricsCancel := context.WithCancel(context.Background())
@@ -166,7 +228,7 @@ func main() {
 	}()
 
 	boomer.Events.Subscribe("boomer:stop", func() {
-		slog.Info("boomer:stop event received; suspending+deleting actors")
+		slog.Info("boomer:stop event received; tearing down the run's sandboxes")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		shutdownFn(shutdownCtx)

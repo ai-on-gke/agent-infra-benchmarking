@@ -18,27 +18,33 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
-# The manifests below are ours, but the tooling they need is not: kubectl-ate
-# and the ko wrapper are substrate commands, and the ko:// references name
-# packages in substrate's module. Those steps therefore run inside the
-# submodule rather than against this repo.
+# The substrate manifests' tooling is not ours: kubectl-ate and the ko wrapper
+# are substrate commands, and the ko:// references name packages in
+# substrate's module. Those steps run inside the submodule rather than against
+# this repo. The agent-sandbox backend needs none of it (plain kubectl apply),
+# so require_substrate gates the checks that only that backend fails without.
 SUBSTRATE_DIR="${ROOT}/dependency-repos/substrate"
-if [[ ! -f "${SUBSTRATE_DIR}/go.mod" ]]; then
-  echo "Error: substrate submodule not initialized at ${SUBSTRATE_DIR}." >&2
-  echo "Run: git submodule update --init dependency-repos/substrate" >&2
-  exit 1
-fi
 
 # Source the environment variables if configured
 if [[ -f .env.sh ]]; then
   source .env.sh
 fi
 
-# Ensure BUCKET_NAME is set
-if [[ -z "${BUCKET_NAME:-}" ]]; then
-  echo "Error: BUCKET_NAME environment variable is not set." >&2
-  exit 1
-fi
+# require_substrate asserts the preconditions the substrate backend needs and
+# the agent-sandbox backend does not: the initialized submodule its ko://
+# references and kubectl-ate build against, and the bucket its golden
+# snapshots are written to.
+require_substrate() {
+  if [[ ! -f "${SUBSTRATE_DIR}/go.mod" ]]; then
+    echo "Error: substrate submodule not initialized at ${SUBSTRATE_DIR}." >&2
+    echo "Run: git submodule update --init dependency-repos/substrate" >&2
+    exit 1
+  fi
+  if [[ -z "${BUCKET_NAME:-}" ]]; then
+    echo "Error: BUCKET_NAME environment variable is not set." >&2
+    exit 1
+  fi
+}
 
 MANIFEST_DIR="benchmarking/workloads/manifests"
 POOL_MANIFEST="${MANIFEST_DIR}/workloads.yaml.tmpl"
@@ -53,8 +59,23 @@ if [[ ! -f "${POOL_MANIFEST}" ]]; then
   exit 1
 fi
 
+# Which control plane the workload infra targets. substrate provisions the
+# WorkerPool + ActorTemplates below; agent-sandbox provisions a ping
+# SandboxTemplate + SandboxWarmPool instead (see deploy_agent_sandbox).
+BACKEND="substrate"
 WORKER_COUNT=1
 SANDBOX_CLASS="gvisor"
+# agent-sandbox only: the ping probe image the SandboxTemplate runs (built and
+# pushed by benchmarking/locust/build_and_push.sh), the memory limit for it,
+# and the RuntimeClass its pods use. Empty RUNTIME_CLASS leaves the cluster
+# default (fine for kind); set --runtime-class gvisor on GKE Sandbox.
+PROBE_IMAGE="${PROBE_IMAGE:-}"
+PING_MEMORY="256Mi"
+RUNTIME_CLASS=""
+# agent-sandbox only: the namespace the ping SandboxTemplate/SandboxWarmPool
+# and the benchmark-runner RBAC live in. Matches deploy-benchmarking.sh and
+# the boomer-worker --namespace default.
+BENCHMARK_NAMESPACE="benchmarking"
 # Actor memory limit (ActorTemplate resources.limits.memory). The default
 # is the smallest size microvm admits (128Mi VMM reserve + 128Mi guest floor),
 # so benchmark actors do not inherit the 2 GiB kata default and drag its page
@@ -77,7 +98,13 @@ usage() {
   echo "Options:"
   echo "  --deploy                    Substitute env vars and deploy workloads to the cluster using ko apply"
   echo "  --delete                    Substitute env vars and delete workloads from the cluster"
-  echo "  --worker-count N            Number of WorkerPool replicas (default: 1)"
+  echo "  --backend BACKEND           Which control plane's workloads to deploy: substrate | agent-sandbox"
+  echo "                              (default: substrate). agent-sandbox applies a ping SandboxTemplate"
+  echo "                              and SandboxWarmPool with plain kubectl and needs no substrate submodule,"
+  echo "                              BUCKET_NAME, ko, or kubectl-ate; PROBE_IMAGE must name a pushed probe image."
+  echo "  --runtime-class CLASS       agent-sandbox only: RuntimeClass for the ping pods (default: cluster"
+  echo "                              default; set 'gvisor' on GKE Sandbox)."
+  echo "  --worker-count N            Number of WorkerPool replicas, or agent-sandbox SandboxWarmPool replicas (default: 1)"
   echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
   echo "                              microvm requires dependency-repos/substrate/hack/install-microvm-deps.sh --install to have run."
   echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi,"
@@ -336,6 +363,46 @@ wait_templates_ready() {
   echo "All ${total} golden snapshots ready."
 }
 
+# deploy_agent_sandbox stands up the agent-sandbox workload infra with plain
+# kubectl apply: the benchmark-runner RBAC, the ping SandboxTemplate, and the
+# ping SandboxWarmPool. None of substrate's tooling (submodule, ko, kubectl-ate,
+# atespace, golden snapshots) is involved — the Sandbox controller warms the
+# pool itself, so there is nothing here to wait on synchronously.
+deploy_agent_sandbox() {
+  if [[ -z "${PROBE_IMAGE}" ]]; then
+    echo "Error: PROBE_IMAGE must be set for --backend agent-sandbox. Build and push" >&2
+    echo "it with benchmarking/locust/build_and_push.sh --backend agent-sandbox," >&2
+    echo "or export PROBE_IMAGE to an already-pushed probe image." >&2
+    exit 1
+  fi
+  local runtime_class_line=""
+  if [[ -n "${RUNTIME_CLASS}" ]]; then
+    runtime_class_line="runtimeClassName: ${RUNTIME_CLASS}"
+  fi
+  echo "Deploying agent-sandbox workloads:"
+  echo "  namespace:      ${BENCHMARK_NAMESPACE}"
+  echo "  probe_image:    ${PROBE_IMAGE}"
+  echo "  warmpool_size:  ${WORKER_COUNT}"
+  echo "  runtime_class:  ${RUNTIME_CLASS:-(cluster default)}"
+  kubectl create namespace "${BENCHMARK_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+  kubectl apply -f "${MANIFEST_DIR}/agent-sandbox-rbac.yaml"
+  PROBE_IMAGE="${PROBE_IMAGE}" PING_MEMORY="${PING_MEMORY}" RUNTIME_CLASS_LINE="${runtime_class_line}" \
+    envsubst '${PROBE_IMAGE} ${PING_MEMORY} ${RUNTIME_CLASS_LINE}' \
+    <"${MANIFEST_DIR}/ping-template.yaml.tmpl" | kubectl apply -f -
+  WORKER_COUNT="${WORKER_COUNT}" envsubst '${WORKER_COUNT}' \
+    <"${MANIFEST_DIR}/ping-warmpool.yaml.tmpl" | kubectl apply -f -
+  echo "Applied the ping SandboxTemplate and SandboxWarmPool (replicas=${WORKER_COUNT})."
+  echo "The controller warms the pool asynchronously; watch it fill with:"
+  echo "  kubectl get sandboxwarmpool ping-warmpool -n ${BENCHMARK_NAMESPACE}"
+}
+
+delete_agent_sandbox() {
+  echo "Deleting agent-sandbox workloads from ${BENCHMARK_NAMESPACE}..."
+  kubectl delete --ignore-not-found -n "${BENCHMARK_NAMESPACE}" sandboxwarmpool ping-warmpool
+  kubectl delete --ignore-not-found -n "${BENCHMARK_NAMESPACE}" sandboxtemplate ping
+  kubectl delete --ignore-not-found -f "${MANIFEST_DIR}/agent-sandbox-rbac.yaml"
+}
+
 deploy() {
   resolve_otlp_endpoint
   # Echoed up front because every later failure is explained by one of these:
@@ -423,6 +490,20 @@ while [[ "$#" -gt 0 ]]; do
     --delete)
       action="delete"
       ;;
+    --backend)
+      shift
+      BACKEND="$1"
+      ;;
+    --backend=*)
+      BACKEND="${1#*=}"
+      ;;
+    --runtime-class)
+      shift
+      RUNTIME_CLASS="$1"
+      ;;
+    --runtime-class=*)
+      RUNTIME_CLASS="${1#*=}"
+      ;;
     --worker-count)
       shift
       WORKER_COUNT="$1"
@@ -471,6 +552,14 @@ while [[ "$#" -gt 0 ]]; do
   shift
 done
 
+case "${BACKEND}" in
+  substrate|agent-sandbox) ;;
+  *)
+    echo "Error: --backend must be substrate or agent-sandbox, got '${BACKEND}'" >&2
+    exit 1
+    ;;
+esac
+
 case "${SANDBOX_CLASS}" in
   gvisor|microvm) ;;
   *)
@@ -484,10 +573,23 @@ if ! [[ "${WAIT_TIMEOUT_SECS}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-if [[ "${action}" == "deploy" ]]; then
-  build_kubectl_ate
-  deploy
-elif [[ "${action}" == "delete" ]]; then
-  build_kubectl_ate
-  delete
+if [[ "${BACKEND}" == "agent-sandbox" ]]; then
+  if ! command -v envsubst &>/dev/null; then
+    echo "Error: envsubst (gettext) is required for --backend agent-sandbox." >&2
+    exit 1
+  fi
+  if [[ "${action}" == "deploy" ]]; then
+    deploy_agent_sandbox
+  elif [[ "${action}" == "delete" ]]; then
+    delete_agent_sandbox
+  fi
+else
+  require_substrate
+  if [[ "${action}" == "deploy" ]]; then
+    build_kubectl_ate
+    deploy
+  elif [[ "${action}" == "delete" ]]; then
+    build_kubectl_ate
+    delete
+  fi
 fi

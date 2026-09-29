@@ -12,20 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package runworkload drives a workload actor through substrate's actor
-// lifecycle: each VU creates one actor and then cycles it resume/suspend for
-// the rest of the run, removing it at teardown.
+// Package runworkload drives a sandbox through one of two provisioning
+// backends. --backend picks which:
 //
-// Every control-plane call reports its own row and span through tracedCall.
-// On top of them each cycle reports TTFI: the wait from having a suspended
-// actor to that actor taking work. See measureTTFI for what the window
-// includes. It also reports CycleTime, the whole cycle from the resume to the
-// suspend returning; see cycle.
+//   - substrate (default, for backward compatibility): each VU creates one
+//     actor and then cycles it suspend/resume for the rest of the run,
+//     removing it at teardown. Every control-plane call reports its own row
+//     and span through tracedCall; on top of them each cycle reports TTFI,
+//     the wait from having a suspended actor to that actor taking work (see
+//     measureTTFI), and CycleTime, the whole cycle from the resume to the
+//     suspend returning (see cycle). Actors are addressed through the atenet
+//     router.
+//   - agent-sandbox: sigs.k8s.io/agent-sandbox instead. ColdCreate creates a
+//     Sandbox directly from a SandboxTemplate's blueprint (a true cold boot);
+//     PoolClaim creates a SandboxClaim against a SandboxWarmPool, adopting an
+//     already-running pod. Each is addressed by its own per-pod Service DNS
+//     name, not a shared router. This is NOT a live-memory restore, so its
+//     PoolClaim number is not the same latency class as substrate's warm
+//     resume — see the README and agentsandbox.go.
 //
-// The workload the actor runs is a parameter: --workload-name selects an
-// implementation of the workload interface (see workload.go) and
-// --workload-template overrides the ActorTemplate it names. Both flags are
-// declared by cmd/benchmarking/boomer-worker and arrive through SetOptions.
+// The workload run inside the sandbox is a parameter: --workload-name selects
+// an implementation of the workload interface (see workload.go), and each
+// workload targets exactly one backend, so --backend also constrains which
+// --workload-name values are valid. --workload-template overrides the
+// ActorTemplate/SandboxTemplate it names. These flags are declared by
+// cmd/benchmarking/boomer-worker and arrive through SetOptions.
 package runworkload
 
 import (
@@ -54,8 +65,21 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// Backend selects which provisioning control plane runworkload drives.
+type Backend string
+
+const (
+	BackendSubstrate    Backend = "substrate"
+	BackendAgentSandbox Backend = "agent-sandbox"
+
+	// DefaultBackend preserves this benchmark's original behavior for a
+	// caller that never sets --backend.
+	DefaultBackend = BackendSubstrate
+)
+
 // The atespace workloads/deploy.sh creates its ActorTemplates in. Mirrored
-// from that script rather than imported.
+// from that script rather than imported. substrate-only; agent-sandbox's
+// SandboxTemplate lives in the namespace AgentSandboxDeps names instead.
 const templateAtespace = "benchmark-workloads"
 
 const (
@@ -104,18 +128,34 @@ const (
 // rather than parsed by it: every flag the worker accepts is declared in
 // cmd/benchmarking/boomer-worker. The zero value asks for the defaults.
 type Options struct {
+	// Backend selects the provisioning control plane. Empty selects
+	// DefaultBackend (substrate).
+	Backend Backend
+
 	// Workload names a registered workload (see workload.go). Empty selects
-	// DefaultWorkload.
+	// the chosen backend's own default.
 	Workload string
 
-	// Template overrides the ActorTemplate the workload would run on. Empty
-	// leaves that choice to the workload.
+	// Template overrides the ActorTemplate (substrate) or SandboxTemplate
+	// (agent-sandbox) the workload would run on. Empty leaves that choice to
+	// the workload, which is the only place that knows what it can address.
 	Template string
 
-	// Timeout is unread: the instruction is sent once, so there is no retry
-	// loop to bound. Kept because cmd/benchmarking/boomer-worker declares
+	// WarmPool overrides the SandboxWarmPool the agent-sandbox backend's
+	// pool-claim window adopts from. Empty selects "<template>-warmpool".
+	// Ignored by the substrate backend.
+	WarmPool string
+
+	// Timeout bounds the agent-sandbox instruction retry loop; zero selects
+	// DefaultTimeout. Unread by the substrate backend, whose instruction is
+	// sent once, but kept because cmd/benchmarking/boomer-worker declares
 	// --workload-timeout against it.
 	Timeout time.Duration
+
+	// ProvisionTimeout bounds the agent-sandbox backend's wait for a
+	// Sandbox/SandboxClaim's Ready condition. Zero selects
+	// DefaultProvisionTimeout. Ignored by the substrate backend.
+	ProvisionTimeout time.Duration
 
 	// MinWait and MaxWait bound the think time between iterations. An upper
 	// bound at or below the lower one waits MinWait exactly.
@@ -123,7 +163,7 @@ type Options struct {
 	MaxWait time.Duration
 
 	// ResumeMode is ResumeModeExplicit or ResumeModeImplicit; empty selects
-	// explicit.
+	// explicit. substrate only.
 	ResumeMode string
 }
 
@@ -167,25 +207,32 @@ func init() {
 // boomer-compatible task function plus a shutdown hook to run before exit.
 func initRunWorkload(cfg *userclass.Config) (taskFn func(), shutdown func(context.Context)) {
 	if cfg.Tracer == nil {
+		// Scope names the benchmark, not the backend or workload: the same
+		// spans are emitted whichever combination is measured.
 		cfg.Tracer = otel.Tracer("substrate-boomer/runworkload")
+	}
+	backend := configured.Backend
+	if backend == "" {
+		backend = DefaultBackend
 	}
 	// Resolved once at startup: an unselectable workload is a configuration
 	// mistake, and reporting it after producing rows has already wasted the
 	// run.
-	wl, err := resolveWorkload(configured.Workload)
+	wl, err := resolveWorkload(configured.Workload, backend)
 	if err != nil {
 		slog.Error("fatal: cannot select the workload", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	rt := &runWorkloadRuntime{cfg: cfg, opts: configured, workload: wl}
+	rt := &runWorkloadRuntime{cfg: cfg, opts: configured, backend: backend, workload: wl}
 	return rt.iterate, rt.shutdown
 }
 
 type runWorkloadRuntime struct {
 	cfg      *userclass.Config
 	opts     Options
+	backend  Backend
 	workload workload
-	users    sync.Map // goroutineID -> *runWorkloadUser
+	users    sync.Map // goroutineID -> sandboxUser
 
 	// Gates the task function so the teardown can wait for the iterations
 	// boomer leaves running when it returns. See inflight.go.
@@ -218,8 +265,22 @@ func (r *runWorkloadRuntime) iterate() {
 	defer r.inflight.leave()
 
 	ctx := context.Background()
-
 	gid := boomerutil.GoroutineID()
+
+	// The two backends settle into different steady states — substrate cycles
+	// one actor suspend/resume, agent-sandbox deletes and reprovisions each
+	// iteration — so the loop body is per-backend. The gate, the user map, the
+	// think time and the teardown around them are shared.
+	if r.backend == BackendAgentSandbox {
+		r.iterateAgentSandbox(ctx, gid)
+		return
+	}
+	r.iterateSubstrate(ctx, gid)
+}
+
+// iterateSubstrate is the substrate backend's iteration: the first call on a
+// goroutine creates the actor; every later one cycles it down and back up.
+func (r *runWorkloadRuntime) iterateSubstrate(ctx context.Context, gid int64) {
 	val, loaded := r.users.Load(gid)
 	if !loaded {
 		u, err := r.startUser(ctx, r.opts)
@@ -326,9 +387,9 @@ func (r *runWorkloadRuntime) shutdown(ctx context.Context) {
 
 	// Snapshotted before the teardown so nothing is walked while goroutines are
 	// being launched against it.
-	var users []*runWorkloadUser
+	var users []sandboxUser
 	r.users.Range(func(_, val any) bool {
-		users = append(users, val.(*runWorkloadUser))
+		users = append(users, val.(sandboxUser))
 		return true
 	})
 
@@ -342,18 +403,18 @@ func (r *runWorkloadRuntime) shutdown(ctx context.Context) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			err := u.suspendAndDelete(ctx)
+			err := u.teardown(ctx)
 			bmetrics.UpdateUsers(runWorkloadUserClass, -1)
 			if err != nil {
 				left.Add(1)
 				slog.Warn("teardown left an actor behind",
-					slog.String("actor", u.actorName),
-					slog.String("template", u.templateName),
+					slog.String("actor", u.logName()),
+					slog.String("template", u.logTemplate()),
 					slog.String("err", err.Error()))
 				return
 			}
 			removed.Add(1)
-			slog.Info("teardown removed an actor", slog.String("actor", u.actorName))
+			slog.Info("teardown removed an actor", slog.String("actor", u.logName()))
 		}()
 	}
 	wg.Wait()
@@ -361,6 +422,20 @@ func (r *runWorkloadRuntime) shutdown(ctx context.Context) {
 	slog.Info("teardown finished",
 		slog.Int64("removed", removed.Load()),
 		slog.Int64("left", left.Load()))
+}
+
+// sandboxUser is the per-VU handle the runtime tears down at discard and
+// shutdown, independent of which backend provisioned it. runWorkloadUser
+// (substrate) and agentSandboxBackend (agent-sandbox) both satisfy it; the
+// backend-specific provisioning and measurement live on those types and on
+// the per-backend iterate paths, not here.
+type sandboxUser interface {
+	// teardown releases everything the VU holds and reports whether it went;
+	// a non-nil error is the one signal that something was left behind.
+	teardown(ctx context.Context) error
+	// logName and logTemplate identify the object for teardown/discard logs.
+	logName() string
+	logTemplate() string
 }
 
 type runWorkloadUser struct {
@@ -375,6 +450,13 @@ type runWorkloadUser struct {
 	isActive  bool
 	isCreated bool
 }
+
+// teardown, logName and logTemplate make runWorkloadUser a sandboxUser. The
+// substrate teardown is suspendAndDelete; the accessors expose the actor's
+// identity for the shared teardown/discard logging.
+func (u *runWorkloadUser) teardown(ctx context.Context) error { return u.suspendAndDelete(ctx) }
+func (u *runWorkloadUser) logName() string                    { return u.actorName }
+func (u *runWorkloadUser) logTemplate() string                { return u.templateName }
 
 func (u *runWorkloadUser) ref() *ateapipb.ObjectRef {
 	return &ateapipb.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}

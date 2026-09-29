@@ -29,21 +29,29 @@ import (
 )
 
 // workload is the actor-side application a measurement window drives. It owns
-// the two things that differ per workload — which ActorTemplate deploys it,
-// and what counts as an instruction it has demonstrably run — and nothing
-// else. The windows, the retry loop, the spans and the rows belong to the
-// benchmark and are identical whichever workload is measured, which is what
-// keeps a measurement from one workload comparable to one from another.
+// the things that differ per workload — which backend it targets, which
+// ActorTemplate/SandboxTemplate deploys it, and what counts as an instruction
+// it has demonstrably run — and nothing else. The windows, the retry loop,
+// the spans and the rows belong to the benchmark and are identical whichever
+// workload is measured, which is what keeps a measurement from one workload
+// comparable to one from another (within the same backend — see the README
+// for why substrate and agent-sandbox numbers don't compare directly).
 //
-// glutton and openclaw are the implementations today. Another one is a file
-// that implements this interface and calls registerWorkload in its init.
+// glutton and openclaw target substrate; ping targets agent-sandbox. Another
+// one is a file that implements this interface and calls registerWorkload in
+// its init.
 type workload interface {
 	// Name is the --workload-name value that selects this workload.
 	Name() string
 
-	// DefaultTemplate is the ActorTemplate measured when
-	// --workload-template says nothing. It has to deploy something this
-	// workload can address.
+	// Backend is the backend this workload's target application speaks to.
+	// resolveWorkload rejects a name/--backend combination that disagrees
+	// with this rather than silently measuring the wrong thing.
+	Backend() Backend
+
+	// DefaultTemplate is the ActorTemplate (substrate) or SandboxTemplate
+	// (agent-sandbox) measured when --workload-template says nothing. It has
+	// to deploy something this workload can address.
 	DefaultTemplate() string
 
 	// SendInstruction issues exactly one instruction to actor. A nil error
@@ -57,19 +65,40 @@ type workload interface {
 	SendInstruction(ctx context.Context, actor actorRef) (retry bool, err error)
 }
 
-// actorRef is the handle a workload needs to reach one actor. It carries what
-// substrate requires to route a request and nothing about the measurement, so
-// an implementation cannot accidentally depend on benchmark state.
+// actorRef is the handle a workload needs to reach one sandbox, generalized
+// across backends. It carries what a backend requires to route a request and
+// nothing about the measurement, so an implementation cannot accidentally
+// depend on benchmark state. Exactly one addressing scheme is populated
+// depending on which backend built it:
+//   - substrate addresses a shared atenet router by an atespace/name header
+//     (RouterURL, Atespace, Name).
+//   - agent-sandbox addresses a sandbox's own per-pod Service directly, no
+//     router or header involved (ServiceFQDN, Port).
 type actorRef struct {
 	HTTPClient *http.Client
-	RouterURL  string
-	Atespace   string
-	Name       string
+
+	// substrate addressing.
+	RouterURL string
+	Atespace  string
+	Name      string
+
+	// agent-sandbox addressing.
+	ServiceFQDN string
+	Port        int32
 }
 
-// target is the value atenet resolves the actor from.
+// target is the value atenet resolves the actor from. substrate only.
 func (a actorRef) target() string {
 	return a.Atespace + "/" + a.Name
+}
+
+// baseURL is the request base sendHTTPInstruction issues against: the atenet
+// router for substrate, or the sandbox's own Service for agent-sandbox.
+func (a actorRef) baseURL() string {
+	if a.ServiceFQDN != "" {
+		return fmt.Sprintf("http://%s:%d", a.ServiceFQDN, a.Port)
+	}
+	return a.RouterURL
 }
 
 var workloads = map[string]workload{}
@@ -100,17 +129,46 @@ func workloadNames() []string {
 	return names
 }
 
-// resolveWorkload picks the workload a run drives. An unknown name is an error
-// rather than a fallback to DefaultWorkload: the operator asked for a
-// particular workload, and silently measuring a different one produces a row
-// that reads as valid while answering the wrong question.
-func resolveWorkload(name string) (workload, error) {
+// workloadNamesFor returns the registered names that target backend, sorted.
+func workloadNamesFor(backend Backend) []string {
+	var names []string
+	for name, w := range workloads {
+		if w.Backend() == backend {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+// defaultWorkloadFor is each backend's own default when --workload-name says
+// nothing: glutton for substrate (this benchmark's original default), ping
+// for agent-sandbox.
+func defaultWorkloadFor(backend Backend) string {
+	if backend == BackendAgentSandbox {
+		return pingWorkloadName
+	}
+	return gluttonWorkloadName
+}
+
+// resolveWorkload picks the workload a run drives. An unknown name, or one
+// that targets a different backend than the one selected, is an error rather
+// than a silent fallback: the operator asked for a particular workload, and
+// measuring a different one (or sending its instructions at a sandbox nothing
+// deployed) produces a row that reads as valid while answering the wrong
+// question.
+func resolveWorkload(name string, backend Backend) (workload, error) {
 	if name == "" {
-		name = DefaultWorkload
+		name = defaultWorkloadFor(backend)
 	}
 	w, ok := lookupWorkload(name)
 	if !ok {
-		return nil, fmt.Errorf("unknown --workload-name %q; known: %s", name, strings.Join(workloadNames(), ", "))
+		return nil, fmt.Errorf("unknown --workload-name %q for --backend %s; known: %s",
+			name, backend, strings.Join(workloadNamesFor(backend), ", "))
+	}
+	if w.Backend() != backend {
+		return nil, fmt.Errorf("--workload-name %q targets backend %q, not --backend %q; pick one of %s or switch --backend",
+			name, w.Backend(), backend, strings.Join(workloadNamesFor(backend), ", "))
 	}
 	return w, nil
 }
@@ -129,20 +187,24 @@ type httpInstruction struct {
 	Verify func(body []byte) error
 }
 
-// sendHTTPInstruction performs inst against actor through the router. The actor
-// addressing, the trace propagation and the retry classification live here
-// rather than in each workload because they describe substrate's ingress path,
-// not any one application: a workload that got them wrong would change what
-// the benchmark measures instead of what it drives.
+// sendHTTPInstruction performs inst against actor. The addressing, the trace
+// propagation and the retry classification live here rather than in each
+// workload because they describe the ingress path, not any one application: a
+// workload that got them wrong would change what the benchmark measures
+// instead of what it drives.
 func sendHTTPInstruction(ctx context.Context, actor actorRef, inst httpInstruction) (retry bool, err error) {
-	httpReq, err := http.NewRequestWithContext(ctx, inst.Method, actor.RouterURL+inst.Path, bytes.NewReader(inst.Body))
+	httpReq, err := http.NewRequestWithContext(ctx, inst.Method, actor.baseURL()+inst.Path, bytes.NewReader(inst.Body))
 	if err != nil {
 		return false, err
 	}
-	// The router resolves the actor from this header alone — atenet's ingress
-	// handler parses it and 404s with "invalid actor reference" when it is
-	// absent, regardless of the request's Host.
-	httpReq.Header.Set(atenet.TargetActorHeader, actor.target())
+	if actor.ServiceFQDN == "" {
+		// substrate: the router resolves the actor from this header alone —
+		// atenet's ingress handler parses it and 404s with "invalid actor
+		// reference" when it is absent, regardless of the request's Host.
+		// agent-sandbox needs no such header: actor.baseURL() already points
+		// straight at the target sandbox's own Service.
+		httpReq.Header.Set(atenet.TargetActorHeader, actor.target())
+	}
 	if inst.ContentType != "" {
 		httpReq.Header.Set("Content-Type", inst.ContentType)
 	}

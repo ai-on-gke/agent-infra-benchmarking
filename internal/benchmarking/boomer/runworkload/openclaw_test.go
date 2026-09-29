@@ -81,14 +81,14 @@ func (s *openclawServer) serve(w http.ResponseWriter, r *http.Request) {
 	// Anything outside the fast path runs the agent, which this fake does not
 	// model: an instruction that reached it would be a bug in the
 	// workload, and the empty reply below fails the verification that follows.
-	if strings.TrimSpace(string(body)) != openclawFastPathPrompt {
+	if strings.TrimSpace(string(body)) != openclawPrompt {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
 	reply := s.Reply
 	if reply == "" {
-		reply = openclawFastPathReply
+		reply = openclawExpectedReply
 	}
 	w.Header().Set("Content-Type", textContentType)
 	_, _ = io.WriteString(w, reply)
@@ -132,8 +132,8 @@ func TestOpenclawSendsTheFastPathInstruction(t *testing.T) {
 	}
 	// A body the actor does not recognize would fall through to a real agent
 	// turn, which measures the agent rather than the activation.
-	if reqs[0].body != openclawFastPathPrompt {
-		t.Errorf("body: got %q, want %q", reqs[0].body, openclawFastPathPrompt)
+	if reqs[0].body != openclawPrompt {
+		t.Errorf("body: got %q, want %q", reqs[0].body, openclawPrompt)
 	}
 }
 
@@ -169,7 +169,7 @@ func TestOpenclawRetriesWhileActivating(t *testing.T) {
 }
 
 func TestOpenclawIsSelectable(t *testing.T) {
-	w, err := resolveWorkload(openclawWorkloadName)
+	w, err := resolveWorkload(openclawWorkloadName, BackendSubstrate)
 	if err != nil {
 		t.Fatalf("resolveWorkload(%q) failed: %v", openclawWorkloadName, err)
 	}

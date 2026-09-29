@@ -50,6 +50,8 @@ type gluttonWorkload struct{}
 
 func (gluttonWorkload) Name() string { return gluttonWorkloadName }
 
+func (gluttonWorkload) Backend() Backend { return BackendSubstrate }
+
 func (gluttonWorkload) DefaultTemplate() string { return gluttonTemplate }
 
 // SendInstruction POSTs one Ping and verifies the echo. A wrong echo is a
