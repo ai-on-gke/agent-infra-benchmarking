@@ -4,7 +4,8 @@
 **/__pycache__/
 
 # Reports run_locust_job.sh downloads from the bucket.
-/reports/
+/reports/*
+!/reports/20260929t155627z/
 
 # What `pip install ./benchmark-charts` leaves behind.
 /benchmark-charts/build/
