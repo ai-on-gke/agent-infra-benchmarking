@@ -29,11 +29,10 @@ from typing import Callable, Union
 import matplotlib.pyplot as plt
 
 from . import panels
-from .dropdown import Dropdown
+from .dropdown import HEIGHT_IN, Dropdown
 
-# The strip above the panels that holds the drop-downs, and their height in it.
+# The strip above the panels that holds the drop-downs.
 STRIP_IN = 0.45
-SWITCH_HEIGHT_IN = 0.28
 # Figure fractions.
 JOB_SWITCH_WIDTH = 0.3
 DEFAULT_LEFT = 0.1
@@ -76,7 +75,7 @@ class Window:
             switch.remove()
         fig.clear()
         strip = STRIP_IN / fig.get_figheight()
-        height = SWITCH_HEIGHT_IN / fig.get_figheight()
+        height = HEIGHT_IN / fig.get_figheight()
         y = 1 - (strip + height) / 2
         switches = []
         # False when the job could not be read, and the window says why.
@@ -91,7 +90,7 @@ class Window:
             if self._main not in titles:
                 self._main = titles[0]
             has_switch = len(self._jobs) > 1 or len(titles) > 1
-            ax_main, show_main = panels.draw(
+            ax_main, show_main, switches = panels.draw(
                 fig,
                 job.mains,
                 job.rows,

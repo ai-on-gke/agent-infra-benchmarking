@@ -21,7 +21,9 @@ so all of them is locust's user count. Given several main panels, it shows one
 at a time, and swaps between them in place.
 
 CPU is drawn for the nodes the vitals mark Pool=worker, the ones the
-WorkerPool runs on, rather than for every node or the cluster as a whole.
+WorkerPool runs on, rather than for every node or the cluster as a whole. A
+pool can have many nodes, so a drop-down beside the panel picks them, all or
+one alone, rather than a legend listing each.
 Idle actors start hidden; the legend toggles them.
 """
 
@@ -34,6 +36,7 @@ import matplotlib.dates as mdates
 from matplotlib.ticker import MaxNLocator
 
 from . import data
+from .dropdown import HEIGHT_IN, Dropdown
 
 CPU_METRIC = "CPUUtilizationPercent"
 WORKER_POOL = "worker"
@@ -113,8 +116,9 @@ def draw(
     which there is no CPU panel; `custom` from custom_stats_history.csv,
     without which there are no actor lines.
 
-    Returns the main panel's axes, and a function that swaps it in place to
-    another of `mains`, by index.
+    Returns the main panel's axes, a function that swaps it in place to
+    another of `mains`, by index, and the panels' drop-downs, to remove() before
+    the figure is cleared.
     """
     cpu_series = cpu(vitals)
 
@@ -123,7 +127,7 @@ def draw(
     ax_main, ax_actors = axes[0], axes[-1]
 
     if cpu_series:
-        cpu_panel(fig, axes[1], cpu_series)
+        cpu_lines = cpu_panel(axes[1], cpu_series)
 
     actors_panel(fig, ax_actors, users(rows), actors(custom))
     ax_actors.set_xlabel("time (UTC)", color=INK_MUTED)
@@ -152,10 +156,12 @@ def draw(
 
     show(active)
     fig.tight_layout(rect=(0, 0, 1, top))
-    return ax_main, show
+    # Placed once the layout has settled where the panel is.
+    switches = [node_switch(fig, axes[1], cpu_lines)] if cpu_series else []
+    return ax_main, show, switches
 
 
-def cpu_panel(fig, ax, series: dict[str, tuple[list[datetime], list[float]]]) -> None:
+def cpu_panel(ax, series: dict[str, tuple[list[datetime], list[float]]]) -> list:
     node_colors = iter(NODE_COLORS)
     lines = [
         ax.plot(
@@ -163,14 +169,37 @@ def cpu_panel(fig, ax, series: dict[str, tuple[list[datetime], list[float]]]) ->
             values,
             color=next(node_colors, INK_MUTED),
             linewidth=1.5,
-            label=_short_name(node),
+            label=label,
         )[0]
-        for node, (times, values) in series.items()
+        for label, (times, values) in zip(_short_names(list(series)), series.values())
     ]
     ax.set_ylabel("pool CPU (%)", color=INK_MUTED)
-    legend = ax.legend(frameon=False, loc="upper left", bbox_to_anchor=(1, 1))
     # From 0, unlike latency: utilization is a share of capacity.
-    toggle_on_click(fig, ax, legend, lines, bottom=0)
+    fit_y(ax, bottom=0)
+    return lines
+
+
+def node_switch(fig, ax, lines) -> Dropdown:
+    """A drop-down over the legend column beside the CPU panel, that shows
+    every node's line or one node's alone."""
+    every = f"all nodes ({len(lines)})"
+    by_label = {line.get_label(): line for line in lines}
+
+    def on_select(option: str) -> None:
+        for line in lines:
+            line.set_visible(option in (every, line.get_label()))
+        fit_y(ax, bottom=0)
+
+    pos = ax.get_position()
+    height = HEIGHT_IN / fig.get_figheight()
+    x = pos.x1 + 0.01
+    return Dropdown(
+        fig,
+        (x, pos.y1 - height, 1 - x - 0.015, height),
+        [every, *by_label],
+        on_select=on_select,
+        colors={label: line.get_color() for label, line in by_label.items()},
+    )
 
 
 def actors_panel(fig, ax, user_series, actor_series) -> None:
@@ -213,12 +242,6 @@ def toggle_on_click(fig, ax, legend, lines, bottom: float | None = None) -> None
             artist.set_alpha(1.0 if line.get_visible() else 0.25)
             entries[artist] = (line, handle, text)
 
-    def fit_y() -> None:
-        ax.relim(visible_only=True)
-        ax.autoscale(axis="y")
-        if bottom is not None:
-            ax.set_ylim(bottom=bottom)
-
     def on_pick(event) -> None:
         if event.artist not in entries:
             return
@@ -226,11 +249,19 @@ def toggle_on_click(fig, ax, legend, lines, bottom: float | None = None) -> None
         line.set_visible(not line.get_visible())
         for artist in (handle, text):
             artist.set_alpha(1.0 if line.get_visible() else 0.25)
-        fit_y()
+        fit_y(ax, bottom)
         fig.canvas.draw_idle()
 
-    fit_y()
+    fit_y(ax, bottom)
     fig.canvas.mpl_connect("pick_event", on_pick)
+
+
+def fit_y(ax, bottom: float | None = None) -> None:
+    """Fit the y axis to the lines showing, from `bottom` if given."""
+    ax.relim(visible_only=True)
+    ax.autoscale(axis="y")
+    if bottom is not None:
+        ax.set_ylim(bottom=bottom)
 
 
 def to_time(timestamp: str | int) -> datetime:
@@ -247,9 +278,12 @@ def style(ax) -> None:
         ax.spines[side].set_color(INK_MUTED)
 
 
-def _short_name(node: str) -> str:
-    """A GKE node, gke-<cluster>-<pool>-<hash>-<id>, as <hash>-<id>: the
-    rest is the same for every node of the pool. Other names are kept."""
-    if not node.startswith("gke-"):
-        return node
-    return "-".join(node.split("-")[-2:])
+def _short_names(nodes: list[str]) -> list[str]:
+    """Each name without the leading dash-separated parts all of them share,
+    keeping at least the last: GKE's gke-<cluster>-<pool>-<hash>-<id> as <id>
+    when the pool is in one zone, and as <hash>-<id> when in several."""
+    parts = [node.split("-") for node in nodes]
+    shared = 0
+    while all(len(p) > shared + 1 and p[shared] == parts[0][shared] for p in parts):
+        shared += 1
+    return ["-".join(p[shared:]) for p in parts]
