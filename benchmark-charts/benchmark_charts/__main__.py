@@ -40,15 +40,30 @@ CHARTS = {
 }
 
 
-def latest_run(reports_dir: Path) -> Path:
-    """The newest run folder in `reports_dir`. Run ids are a UTC timestamp by
-    default, so the last by name is the latest."""
+def nth_run(reports_dir: Path, index: int = -1) -> Path:
+    """The run folder in `reports_dir` at `index` by name, as a list is
+    indexed: -1 the latest, -2 the one before it, 0 the oldest. Run ids are a
+    UTC timestamp by default, so by name is by time."""
     if not reports_dir.is_dir():
         raise FileNotFoundError(f"no {reports_dir}/ folder in {Path.cwd()}")
     runs = sorted(p for p in reports_dir.iterdir() if p.is_dir())
     if not runs:
         raise FileNotFoundError(f"no run folders in {reports_dir.resolve()}")
-    return runs[-1]
+    try:
+        return runs[index]
+    except IndexError:
+        raise FileNotFoundError(
+            f"no run {index} in {reports_dir.resolve()}, which has {len(runs)}: "
+            f"from {-len(runs)} to {len(runs) - 1}"
+        ) from None
+
+
+def run_arg(arg: str) -> int | Path:
+    """A run's index, or a path."""
+    try:
+        return int(arg)
+    except ValueError:
+        return Path(arg)
 
 
 def job_dirs(path: Path) -> list[Path]:
@@ -108,11 +123,15 @@ def load(job_dir: Path):
 def main() -> None:
     p = argparse.ArgumentParser(prog="benchmark-report", description=__doc__)
     p.add_argument(
-        "path",
+        "run",
         nargs="?",
-        type=Path,
-        help=f"A run's folder, {REPORTS_DIR}/<run-id>, or one job's, "
-        f"{REPORTS_DIR}/<run-id>/<test-case> (default: the latest run in ./{REPORTS_DIR}).",
+        type=run_arg,
+        default=-1,
+        metavar="RUN",
+        help=f"A run's index among the runs in ./{REPORTS_DIR} by name, as a "
+        "Python list is indexed: -1 the latest, -2 the one before it, 0 the "
+        f"oldest. Or a run's folder, {REPORTS_DIR}/<run-id>, or one job's, "
+        f"{REPORTS_DIR}/<run-id>/<test-case> (default: -1).",
     )
     p.add_argument(
         "--job",
@@ -130,7 +149,7 @@ def main() -> None:
     args = p.parse_args()
 
     try:
-        run_dir = args.path or latest_run(REPORTS_DIR)
+        run_dir = args.run if isinstance(args.run, Path) else nth_run(REPORTS_DIR, args.run)
         jobs = {d.name: d for d in job_dirs(run_dir)}
     except OSError as exc:
         sys.exit(f"benchmark-report: {exc}")
