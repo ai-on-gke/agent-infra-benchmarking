@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package runworkload drives a workload actor through substrate's actor
-// lifecycle: each VU creates one actor and then cycles it suspend/resume for
+// lifecycle: each VU creates one actor and then cycles it resume/suspend for
 // the rest of the run, removing it at teardown.
 //
 // Every control-plane call reports its own row and span through tracedCall.
@@ -199,8 +199,10 @@ func (r *runWorkloadRuntime) dynamicWait() time.Duration {
 }
 
 // iterate is the task function boomer calls in a loop on each VU goroutine.
-// The first call on a goroutine creates the actor; every later one cycles it
-// down and back up.
+// The first call on a goroutine creates the actor, which CreateActor leaves
+// SUSPENDED; every later one resumes it, sends it one instruction and suspends
+// it again. The actor therefore sits suspended through the think time between
+// iterations, and each iteration finds it that way.
 //
 // The gate is taken for the whole iteration, so the teardown can tell an
 // iteration that is still creating an actor from one that has finished. A
@@ -237,15 +239,13 @@ func (r *runWorkloadRuntime) iterate() {
 	}
 	user := val.(*runWorkloadUser)
 
-	if err := user.suspend(ctx); err != nil {
-		r.discard(ctx, gid, user, suspendMetric, err)
+	if err := user.measureTTFI(ctx, r.opts.ResumeMode); err != nil {
+		r.discard(ctx, gid, user, ttfiMetric, err)
 		time.Sleep(r.dynamicWait())
 		return
 	}
-	// Called with the actor just suspended, which is where the TTFI window
-	// opens.
-	if err := user.measureTTFI(ctx, r.opts.ResumeMode); err != nil {
-		r.discard(ctx, gid, user, ttfiMetric, err)
+	if err := user.suspend(ctx); err != nil {
+		r.discard(ctx, gid, user, suspendMetric, err)
 		time.Sleep(r.dynamicWait())
 		return
 	}
@@ -430,8 +430,8 @@ func (u *runWorkloadUser) create(ctx context.Context) error {
 }
 
 // measureTTFI brings the actor back up, sends it one instruction, and reports
-// the wait as TTFI. It must be called with the actor freshly suspended: the
-// window opens here, so the suspend that preceded it is outside.
+// the wait as TTFI. It must be called with the actor suspended, which is how
+// iterate leaves it between iterations: the window opens here.
 //
 // Only explicit mode issues ResumeActor. Implicit leaves the wake to the
 // router, which does it while holding the instruction — so under implicit
