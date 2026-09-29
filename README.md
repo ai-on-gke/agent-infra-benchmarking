@@ -49,17 +49,22 @@ gcloud application-default credentials already in place.
    ```
 
 ## Setting up the Agent Substrate
-
-
+2
 1. Configure the environment
 
    Copy the example and fill in the values for your project:
 
    ```bash
    cp env.sh.example .env.sh
-   source .env.sh
-   gcloud container clusters get-credentials $CLUSTER_NAME --location=$CLUSTER_LOCATION
    ```
+
+   > [!NOTE]
+   > Optional: if you want to use `kubectl` against this cluster, configure it with:
+   >
+   > ```bash
+   > source .env.sh
+   > gcloud container clusters get-credentials $CLUSTER_NAME --location=$CLUSTER_LOCATION
+   > ```
 
 2. Install substrate into the cluster
 
@@ -78,7 +83,7 @@ gcloud application-default credentials already in place.
 
 4. Pick the test case to run
 
-   A run is a named case in [`benchmarking/tests.yaml`](benchmarking/tests.yaml),
+   A test case is a named entry in [`benchmarking/tests.yaml`](benchmarking/tests.yaml),
    under `cases:`. The key is what the next step passes to `--test-case`.
 
 5. Run a benchmark job script.
@@ -87,18 +92,31 @@ gcloud application-default credentials already in place.
    ./benchmarking/run_locust_job.sh --test-case glutton-baseline --follow-logs
    ```
 
+   A run can hold several jobs, one per test case. To run every case in
+   `tests.yaml` one after another under a single run id:
+
+   ```bash
+   ./benchmarking/run_all_test_cases.sh
+   ```
+
 6. Collect the artifacts
 
-   When the run ends it uploads its files to `reports/<run-id>/` in the
-   deployment's bucket. The run id defaults to a UTC timestamp and is settable
-   with `--run-id`; 
+   When a job ends it uploads its files to `reports/<run-id>/<test-case>/` in
+   the deployment's bucket. The run id is a UTC timestamp, e.g.
+   `20260929t120951z`; `--run-id` sets it instead.
 
-   A run leaves four files:
+   Each job leaves:
 
-   - `locust_stats.csv`, `locust_stats_history.csv`, `locust_failures.csv` —
-     locust's own output, written as the run goes.
-   - `stats.csv` — the run's rows read back out of Prometheus.
-   - `ttfi-vs-users.html` — TTFI against concurrency, as a self-contained page.
+   - `locust_stats.csv`, `locust_stats_history.csv`, `locust_failures.csv`,
+     `locust_exceptions.csv` — locust's own output, written as the job goes.
+   - `stats.csv`, `custom_stats_history.csv`, `cluster_vitals_history.csv` —
+     the job's rows read back out of Prometheus.
+
+   The scripts download them to `reports/<run-id>/<test-case>/`, and
+   [`benchmark-charts`](benchmark-charts) charts them:
+   `pip install ./benchmark-charts`, then `benchmark-report` for the latest
+   run, or `benchmark-report reports/<run-id>` for a given one. A drop-down in
+   the window switches between the run's jobs.
 
 ## Cleanup
 

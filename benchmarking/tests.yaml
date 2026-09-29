@@ -36,29 +36,21 @@
 # pod label, and test_case the Prometheus label relabeled from it.
 
 cases:
-  glutton-baseline:
-    duration: 2m
-    users: 20
-    spawn-rate: 1
-    worker-count: 20
-    sandbox-class: gvisor
-    workload-name: glutton
-    workload-template: glutton
-    resume-mode: explicit
-  
   glutton:
     duration: 5m
-    users: 
-    worker-count: 15
+    users: 10
+    spawn-rate: 1
+    worker-count: 10
     sandbox-class: gvisor
     workload-name: glutton
     workload-template: glutton
-    resume-mode: explicit
+    resume-mode: explicit 
 
-  openclaw-baseline:
-    duration: 1m
-    users: 1
-    worker-count: 15
+  openclaw:
+    duration: 10m
+    users: 10
+    spawn-rate: 1
+    worker-count: 10
     sandbox-class: gvisor
     workload-name: openclaw
     workload-template: openclaw
