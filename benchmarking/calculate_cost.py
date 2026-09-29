@@ -133,8 +133,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--gcs_url",
         type=str,
-        default="gs://dima-ns/reports/20260928t124446z",
-        help="GCS URL of the benchmark reports (default: gs://dima-ns/reports/20260928t124446z)"
+        help="GCS URL of the benchmark reports"
     )
     parser.add_argument(
         "--terraform_vars_path",
@@ -169,16 +168,16 @@ if __name__ == "__main__":
     with open(args.output_csv, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(['Category', 'Metric', 'Value'])
-        
+
         # Resources
         for p in pools_info:
             writer.writerow(['Resource', f"Pool: {p['pool_name']} ({p['machine_type']})", f"{p['total_nodes']} nodes"])
             writer.writerow(['Cost', f"{p['machine_type']} cost/node", f"${p['cost_per_node']:.2f} / month"])
             writer.writerow(['Cost', f"Pool '{p['pool_name']}' total", f"${p['pool_total_cost']:.2f} / month"])
-        
+
         writer.writerow(['Cost', 'GKE Management Fee', '$73.00 / month'])
         writer.writerow(['Cost', 'Total Monthly Infra Cost', f"${monthly_cost:.2f} / month"])
-        
+
         # Benchmark & SLA
         writer.writerow(['Benchmark', 'Max Concurrent Users', max_users])
         if max_users > 0:
