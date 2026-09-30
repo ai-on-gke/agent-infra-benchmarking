@@ -26,13 +26,14 @@ import (
 
 // openclawServer is a stand-in for demos/openclaw/openclaw_actor.py. It
 // reproduces that script's routing decisions rather than its behavior: which
-// paths exist, and which request bodies take the fast path. If the actor's
+// paths exist, and which request body runs the agent turn the benchmark
+// measures. If the actor's
 // contract moves, this fake is what has to move with it.
 type openclawServer struct {
 	// Status fails every request with this HTTP status code, standing in for
 	// the router answering while the actor is still activating.
 	Status int
-	// Reply replaces the fast-path body.
+	// Reply replaces the agent's reply to the benchmark prompt.
 	Reply string
 
 	mu       sync.Mutex
@@ -78,17 +79,17 @@ func (s *openclawServer) serve(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// Anything outside the fast path runs the agent, which this fake does not
-	// model: an instruction that reached it would be a bug in the
-	// workload, and the empty reply below fails the verification that follows.
-	if strings.TrimSpace(string(body)) != openclawFastPathPrompt {
+	// Only the benchmark prompt is modeled: any other body would be a bug in
+	// the workload, and the empty reply below fails the verification that
+	// follows.
+	if strings.TrimSpace(string(body)) != openclawPrompt {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
 	reply := s.Reply
 	if reply == "" {
-		reply = openclawFastPathReply
+		reply = openclawExpectedReply
 	}
 	w.Header().Set("Content-Type", textContentType)
 	_, _ = io.WriteString(w, reply)
@@ -106,9 +107,9 @@ func newOpenclawActor(t *testing.T, srv *openclawServer) actorRef {
 	}
 }
 
-// The instruction has to reach the fast path, because that is the only route
-// that answers without booting the agent underneath it.
-func TestOpenclawSendsTheFastPathInstruction(t *testing.T) {
+// The instruction has to be the benchmark prompt, because that is the one the
+// mock LLM answers with the scripted agent loop the window measures.
+func TestOpenclawSendsTheBenchmarkPrompt(t *testing.T) {
 	srv := &openclawServer{}
 	actor := newOpenclawActor(t, srv)
 
@@ -130,17 +131,15 @@ func TestOpenclawSendsTheFastPathInstruction(t *testing.T) {
 	if reqs[0].path != openclawInvokePath {
 		t.Errorf("path: got %q, want %q", reqs[0].path, openclawInvokePath)
 	}
-	// A body the actor does not recognize would fall through to a real agent
-	// turn, which measures the agent rather than the activation.
-	if reqs[0].body != openclawFastPathPrompt {
-		t.Errorf("body: got %q, want %q", reqs[0].body, openclawFastPathPrompt)
+	if reqs[0].body != openclawPrompt {
+		t.Errorf("body: got %q, want %q", reqs[0].body, openclawPrompt)
 	}
 }
 
 func TestOpenclawRejectsAnUnexpectedReply(t *testing.T) {
 	// A 200 carrying someone else's body is what an interposed proxy or an
 	// error page looks like, and it must not close the window.
-	srv := &openclawServer{Reply: "not the fast path reply"}
+	srv := &openclawServer{Reply: "not the expected reply"}
 	actor := newOpenclawActor(t, srv)
 
 	retry, err := openclawWorkload{}.SendInstruction(context.Background(), actor)
