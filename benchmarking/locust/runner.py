@@ -495,11 +495,11 @@ def write_reports(args: argparse.Namespace, started: float, ended: float) -> boo
 
     # Locust's files are on disk already, whatever the Prometheus reports do.
     collected = locust_csvs(args)
+    for path in collected:
+        print(f"reports: locust wrote {path} ({path.stat().st_size} bytes)", flush=True)
     run_json = Path(args.report_dir) / RUN_JSON
     if run_json.exists():
         collected.append(run_json)
-    for path in collected:
-        print(f"reports: locust wrote {path} ({path.stat().st_size} bytes)", flush=True)
 
     if args.report:
         collected += generate_reports(args, started)
