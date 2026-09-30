@@ -1,13 +1,59 @@
 # agent-infra-benchmarking
 Backend for benchmarks and corresponding recipes for agent infra offerings.
 
+## Prerequisites
+
+- **Go 1.27+** — matches [`go.mod`](go.mod); also builds `kubectl-ate` below.
+- **`kubectl`**, recent enough to work with the ClusterTrustBundle/PodCertificateRequest
+  APIs substrate depends on (GKE 1.36+ serves them; kubectl 1.31 or newer is
+  what's been tested against this repo).
+- **`kubectl-ate`**, substrate's own kubectl plugin, on `PATH`. Built from the
+  submodule (see step 1 below):
+  ```bash
+  (cd dependency-repos/substrate && go install ./cmd/kubectl-ate)
+  ```
+- **`jq`** and **`envsubst`** (the `gettext` package) — used throughout
+  `benchmarking/*.sh` and `.terraform-env.sh`.
+- **Docker**, with `linux/amd64` emulation available if your machine isn't
+  already amd64. `benchmarking/locust/build_and_push.sh` always builds and
+  pushes `linux/amd64` images, to match the GKE nodes, regardless of the
+  build host's architecture.
+- **`gcloud`**, authenticated via `gcloud auth application-default login`,
+  plus the `gke-gcloud-auth-plugin` component
+  (`gcloud components install gke-gcloud-auth-plugin`) — required for
+  `kubectl`/`gcloud container clusters get-credentials` to authenticate
+  against the cluster.
+- A GCP project with these APIs enabled: `compute.googleapis.com`,
+  `container.googleapis.com`, `artifactregistry.googleapis.com`,
+  `storage.googleapis.com`, `iam.googleapis.com`,
+  `cloudresourcemanager.googleapis.com`.
+- An operator account able to create and manage VPC networks and firewall
+  rules, GKE clusters and node pools, Artifact Registry repositories, GCS
+  buckets, service accounts and project-level IAM bindings — `Owner` or
+  `Editor` covers all of it; see the `enable_atelet_iam`/
+  `enable_atelet_bucket_iam` comments in
+  [`infra/terraform-gke/variables.tf`](infra/terraform-gke/variables.tf) if
+  you're granting narrower roles instead.
+- **Cost**: this stands up billable resources — a GKE Standard cluster with
+  autoscaling node pools, a VPC, a GCS bucket and an Artifact Registry repo.
+  See [Cleanup](#cleanup) to tear it down.
+
 ## Setting up the infrastructure
 
 The cluster, the snapshot bucket and the Artifact Registry repository come from
 the Terraform config in `infra/terraform-gke`. Run from the repo root, with
 gcloud application-default credentials already in place.
 
-1. Copy the example — the real file is gitignored and per-developer:
+1. Initialize the `substrate` submodule. Terraform reads its build version
+   off this checkout (`infra/terraform-gke/substrate-version.sh`), and every
+   script under `scripts/substrate` shells out into it, so both fail without
+   it:
+
+   ```bash
+   git submodule update --init dependency-repos/substrate
+   ```
+
+2. Copy the example — the real file is gitignored and per-developer:
 
    ```bash
    cp infra/terraform-gke/terraform.tfvars.example infra/terraform-gke/terraform.tfvars
@@ -35,13 +81,13 @@ gcloud application-default credentials already in place.
    on a regional cluster like this one, so an unpinned pool is three times the
    nodes and three times the bill.
 
-2. Download the providers:
+3. Download the providers:
 
    ```bash
    terraform -chdir=infra/terraform-gke init
    ```
 
-3. Create everything, answering `yes` at the plan. A GKE cluster takes several
+4. Create everything, answering `yes` at the plan. A GKE cluster takes several
    minutes, and this is billable:
 
    ```bash

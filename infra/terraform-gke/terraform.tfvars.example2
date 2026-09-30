@@ -1,73 +1,79 @@
 project_id = "my-gcp-project"
 region     = "us-central1"
 
-# The name this deployment goes by: the bucket and the Artifact Registry
-# repository take it as-is, and every cluster below is named
-# "<default_resource_name>-<key>". Change it per deployment when two
-# deployments share one GCP project.
+# The name this deployment goes by: the bucket, the Artifact Registry
+# repository and the cluster all take it as-is, unless cluster.name below
+# overrides it. Change it per deployment when two deployments share one GCP
+# project.
 default_resource_name = "agent-infra-benchmarking"
 
-clusters = {
-  # Autopilot cluster, all defaults.
-  primary = {
-    autopilot = true
-  }
+# Standard cluster with three node pools. autopilot defaults to false, so it's
+# left out below; set it true instead for an Autopilot cluster (which ignores
+# node_pools entirely).
+cluster = {
+  # Pins the control plane alongside the node pools below, so it doesn't
+  # drift to whatever the release channel resolves to.
+  kubernetes_version = "1.35.8-gke.1225000"
 
-  # Standard cluster with two node pools.
-  standard-cluster = {
-    autopilot = false
+  # Substrate's podcertificate-controller watches these two beta APIs, and
+  # GKE serves them only when they are listed here. Leave them out and
+  # hack/install-ate.sh waits forever for ClusterTrustBundles that are never
+  # created. Verified on 1.35.7-gke.1222000, though pinning kubernetes_version
+  # above isn't required just for these APIs to be served.
+  k8s_beta_apis = [
+    "certificates.k8s.io/v1beta1/clustertrustbundles",
+    "certificates.k8s.io/v1beta1/podcertificaterequests",
+  ]
 
-    # Substrate's podcertificate-controller watches these two beta APIs, and
-    # GKE serves them only when they are listed here. Leave them out and
-    # hack/install-ate.sh waits forever for ClusterTrustBundles that are never
-    # created. Verified on 1.35.7-gke.1222000, so no kubernetes_version pin is
-    # needed for them.
-    k8s_beta_apis = [
-      "certificates.k8s.io/v1beta1/clustertrustbundles",
-      "certificates.k8s.io/v1beta1/podcertificaterequests",
-    ]
+  node_pools = {
+    default = {
+      # Substrate's bundled postgres requests 2 CPU in one container, so a
+      # node needs more than 2 allocatable: e2-medium has 940m and
+      # e2-standard-2 has 1930m, and on both the pod stays Pending forever.
+      machine_type = "e2-standard-4"
+      node_count   = 1
+      # Pin this pool to a single zone instead of spreading across the region.
+      node_locations = ["us-central1-a"]
+      # Pinned rather than auto-upgraded; bump it deliberately when needed.
+      version      = "1.35.8-gke.1225000"
+      auto_upgrade = false
+    }
+    spot-workers = {
+      machine_type   = "e2-standard-4"
+      spot           = true
+      min_node_count = 0
+      max_node_count = 5
+      # Left unset: defaults to all zones in the cluster's region.
 
-    node_pools = {
-      default = {
-        # Substrate's bundled postgres requests 2 CPU in one container, so a
-        # node needs more than 2 allocatable: e2-medium has 940m and
-        # e2-standard-2 has 1930m, and on both the pod stays Pending forever.
-        machine_type = "e2-standard-4"
-        node_count   = 1
-        # Pin this pool to a single zone instead of spreading across the region.
-        node_locations = ["us-central1-a"]
-      }
-      spot-workers = {
-        machine_type   = "e2-standard-4"
-        spot           = true
-        min_node_count = 0
-        max_node_count = 5
-        # Left unset: defaults to all zones in the cluster's region.
-
-        # Keeps regular pods off these nodes unless they explicitly
-        # tolerate spot interruption. effect is one of NO_SCHEDULE,
-        # PREFER_NO_SCHEDULE, NO_EXECUTE.
-        taints = [
-          {
-            key    = "cloud.google.com/gke-spot"
-            value  = "true"
-            effect = "NO_SCHEDULE"
-          }
-        ]
-      }
-      # Runs pods that request runtimeClassName: gvisor. Keep at least one
-      # non-sandboxed pool (above) for GKE-managed system workloads.
-      sandboxed = {
-        machine_type   = "e2-standard-4"
-        node_count     = 1
-        sandbox_gvisor = true
-      }
+      # Keeps regular pods off these nodes unless they explicitly
+      # tolerate spot interruption. effect is one of NO_SCHEDULE,
+      # PREFER_NO_SCHEDULE, NO_EXECUTE.
+      taints = [
+        {
+          key    = "cloud.google.com/gke-spot"
+          value  = "true"
+          effect = "NO_SCHEDULE"
+        }
+      ]
+      # Pinned rather than auto-upgraded; bump it deliberately when needed.
+      version      = "1.35.8-gke.1225000"
+      auto_upgrade = false
+    }
+    # Runs pods that request runtimeClassName: gvisor. Keep at least one
+    # non-sandboxed pool (above) for GKE-managed system workloads.
+    sandboxed = {
+      machine_type   = "e2-standard-4"
+      node_count     = 1
+      sandbox_gvisor = true
+      # Pinned rather than auto-upgraded; bump it deliberately when needed.
+      version      = "1.35.8-gke.1225000"
+      auto_upgrade = false
     }
   }
 }
 
-# Artifact Registry repo and bucket below are shared across all clusters above.
-# Both take default_resource_name unless named here.
+# Artifact Registry repo and bucket below default to default_resource_name
+# unless named here.
 
 artifact_repository_format = "DOCKER"
 

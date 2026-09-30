@@ -30,8 +30,15 @@
 # lookup happens once per shell that sources this file.
 
 # Derived from this file's own location, so the lookup finds the deployment
-# whatever directory the sourcing script runs from.
-_TF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/infra/terraform-gke"
+# whatever directory the sourcing script runs from. See env.sh.example for why
+# this isn't just BASH_SOURCE[0]: zsh's 1-indexed arrays leave it empty there.
+if [ -n "${ZSH_VERSION:-}" ]; then
+  _TF_SELF="$(eval 'print -r -- "${(%):-%x}"')"
+else
+  _TF_SELF="${BASH_SOURCE[0]}"
+fi
+_TF_DIR="$(cd "$(dirname "${_TF_SELF}")" && pwd)/infra/terraform-gke"
+unset _TF_SELF
 
 # One call, reused for every lookup below: terraform output is slow enough that
 # a call per variable is noticeable on every script that sources this file.

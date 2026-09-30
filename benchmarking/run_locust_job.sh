@@ -321,8 +321,20 @@ recreate_worker_pool() {
 
   kubectl wait --for=create "deployment/${POOL_NAME}" \
     --namespace="${POOL_NAMESPACE}" --timeout="${POOL_TIMEOUT_SECS}s"
-  kubectl rollout status "deployment/${POOL_NAME}" \
-    --namespace="${POOL_NAMESPACE}" --timeout="${POOL_TIMEOUT_SECS}s"
+  # A plain rollout-status timeout only says "waited N seconds", not why the
+  # pods never came up (wrong taint, no capacity, image pull failure, ...).
+  # Surface the scheduler's own reason before failing.
+  if ! kubectl rollout status "deployment/${POOL_NAME}" \
+      --namespace="${POOL_NAMESPACE}" --timeout="${POOL_TIMEOUT_SECS}s"; then
+    echo "Error: ${POOL_NAME} rollout did not complete within ${POOL_TIMEOUT_SECS}s." >&2
+    echo "Pending pods:" >&2
+    kubectl get pods --namespace="${POOL_NAMESPACE}" \
+      --field-selector=status.phase=Pending >&2 || true
+    echo "Recent scheduling events:" >&2
+    kubectl get events --namespace="${POOL_NAMESPACE}" \
+      --field-selector reason=FailedScheduling --sort-by=.lastTimestamp >&2 || true
+    return 1
+  fi
 }
 
 # submit_job renders the manifest and applies it, then returns; it does not

@@ -31,6 +31,16 @@ output "substrate_version" {
   value       = local.substrate_version
 }
 
+output "network_name" {
+  description = "Name of the dedicated VPC network created for this deployment."
+  value       = google_compute_network.this.name
+}
+
+output "subnetwork_name" {
+  description = "Name of the subnetwork nodes, Pods and Services were allocated from."
+  value       = google_compute_subnetwork.this.name
+}
+
 output "artifact_registry_repository" {
   description = "Full resource name of the Artifact Registry repository."
   value       = google_artifact_registry_repository.this.name
