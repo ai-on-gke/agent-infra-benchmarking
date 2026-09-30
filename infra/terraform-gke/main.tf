@@ -44,8 +44,10 @@ module "cluster" {
   cluster_name = local.cluster_name
 
   autopilot            = var.cluster.autopilot
-  network              = var.cluster.network
-  subnetwork           = var.cluster.subnetwork
+  network              = google_compute_network.this.self_link
+  subnetwork           = google_compute_subnetwork.this.self_link
+  pods_range_name      = "pods"
+  services_range_name  = "services"
   enable_dataplane_v2  = var.cluster.enable_dataplane_v2
   node_pools           = local.node_pools
   kubernetes_version   = var.cluster.kubernetes_version

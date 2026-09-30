@@ -23,6 +23,30 @@ variable "default_resource_name" {
   type        = string
 }
 
+variable "network_name" {
+  description = "Name of the dedicated VPC network (and its one subnetwork) created for this deployment. Defaults to var.default_resource_name when empty, the same way the bucket and the Artifact Registry repository do."
+  type        = string
+  default     = ""
+}
+
+variable "subnet_cidr" {
+  description = "Primary IP CIDR range of the deployment's subnetwork, allocated to nodes."
+  type        = string
+  default     = "10.0.0.0/20"
+}
+
+variable "pods_cidr" {
+  description = "Secondary IP CIDR range of the deployment's subnetwork, allocated to Pods."
+  type        = string
+  default     = "10.4.0.0/14"
+}
+
+variable "services_cidr" {
+  description = "Secondary IP CIDR range of the deployment's subnetwork, allocated to Services."
+  type        = string
+  default     = "10.8.0.0/20"
+}
+
 variable "cluster" {
   description = "The GKE cluster to deploy. Named var.default_resource_name unless `name` says otherwise."
   type = object({
@@ -31,9 +55,7 @@ variable "cluster" {
     name = optional(string, "")
 
     region              = optional(string)
-    autopilot           = optional(bool, true)
-    network             = optional(string, "default")
-    subnetwork          = optional(string, "default")
+    autopilot           = optional(bool, false)
     enable_dataplane_v2 = optional(bool, false)
 
     # Minimum control-plane version (GKE's min_master_version), e.g.
@@ -69,17 +91,17 @@ variable "cluster" {
     node_pools = optional(map(object({
       machine_type   = optional(string, "e2-medium")
       disk_size_gb   = optional(number, 100)
-      disk_type      = optional(string, "pd-standard")
+      disk_type      = optional(string, "pd-balanced")
       node_count     = optional(number, 1)
       min_node_count = optional(number, 1)
       max_node_count = optional(number, 3)
       spot           = optional(bool, false)
       labels         = optional(map(string), {})
-      # Node version. Unset follows the control plane.
-      version = optional(string)
+      # Node version, pinned rather than following the control plane.
+      version = optional(string, "1.35.8-gke.1225000")
       # auto_upgrade has to stay true on a cluster in a release channel, and
       # moves nodes off `version` when one is set.
-      auto_upgrade = optional(bool, true)
+      auto_upgrade = optional(bool, false)
       auto_repair  = optional(bool, true)
       # Zones the pool's nodes are created in, e.g. ["us-central1-a"] to pin
       # a pool to a single zone. Defaults to all zones in the cluster's

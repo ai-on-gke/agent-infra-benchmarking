@@ -24,7 +24,7 @@ requires-python = ">=3.9"
 dependencies = ["matplotlib"]
 
 [project.scripts]
-benchmark-charts = "benchmark_charts.__main__:main"
+benchmark-report = "benchmark_charts.__main__:main"
 
 [tool.setuptools]
 packages = ["benchmark_charts"]

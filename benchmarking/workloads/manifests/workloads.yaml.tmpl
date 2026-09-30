@@ -39,7 +39,7 @@ spec:
     nodeSelector:
       benchmarking-worker: "true"
     tolerations:
-    - key: sandbox.gke.io/runtime
+    - key: ate.dev/sandboxClass
       operator: Equal
-      value: gvisor
+      value: ${SANDBOX_CLASS}
       effect: NoSchedule

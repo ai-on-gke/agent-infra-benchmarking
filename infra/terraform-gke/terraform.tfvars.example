@@ -1,12 +1,14 @@
-project_id = <YOUR_PROJECT_ID>
+project_id = "<YOUR_PROJECT_ID>"
 region     = "us-central1"
 
 # The deafult name for all resources. The cluster takes it too, unless
 # cluster.name below overrides it.
-default_resource_name = <PICK_YOUR_NAME>
+default_resource_name = "<PICK_YOUR_NAME>"
 
 cluster = {
-  autopilot = false
+  # Pins the control plane alongside the node pools below, so it doesn't
+  # drift to whatever the release channel resolves to.
+  kubernetes_version = "1.35.8-gke.1225000"
 
   # Without these, substrate's podcertificate-controller never creates the
   # ClusterTrustBundles and hack/install-ate.sh waits for them forever.
@@ -20,10 +22,13 @@ cluster = {
       machine_type = "e2-standard-4"
       node_count   = 1
       node_locations = ["us-central1-a"]
+      # Pinned rather than auto-upgraded; bump it deliberately when needed.
+      version      = "1.35.8-gke.1225000"
+      auto_upgrade = false
     }
     sandboxed = {
       machine_type = "c2-standard-16"
-      # node_count     = 1
+      node_count     = 1
       node_locations = ["us-central1-a"]
       min_node_count = 1
       max_node_count = 1
@@ -32,6 +37,21 @@ cluster = {
       labels = {
         "benchmarking-worker" = "true",
       }
+      # workloads.yaml.tmpl's WorkerPool already tolerates this taint; without
+      # it actually applied to the nodes, nothing stops substrate's own
+      # control-plane pods (and anything else) from also landing here
+      # alongside the workers, which is how a 100-worker run blows past GKE's
+      # 110-pods-per-node cap on this single pinned node.
+      taints = [
+        {
+          key    = "ate.dev/sandboxClass"
+          value  = "gvisor"
+          effect = "NO_SCHEDULE"
+        }
+      ]
+      # Pinned rather than auto-upgraded; bump it deliberately when needed.
+      version      = "1.35.8-gke.1225000"
+      auto_upgrade = false
     }
   }
 }

@@ -16,19 +16,27 @@ variable "cluster_name" {
 variable "autopilot" {
   description = "If true, deploy a GKE Autopilot cluster. If false, deploy a Standard cluster with a managed node pool."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "network" {
-  description = "VPC network to deploy the cluster into."
+  description = "Self-link of the VPC network to deploy the cluster into."
   type        = string
-  default     = "default"
 }
 
 variable "subnetwork" {
-  description = "Subnetwork to deploy the cluster into."
+  description = "Self-link of the subnetwork to deploy the cluster into."
   type        = string
-  default     = "default"
+}
+
+variable "pods_range_name" {
+  description = "Name of the subnetwork's secondary IP range to allocate Pod IPs from."
+  type        = string
+}
+
+variable "services_range_name" {
+  description = "Name of the subnetwork's secondary IP range to allocate Service IPs from."
+  type        = string
 }
 
 variable "enable_dataplane_v2" {
@@ -105,17 +113,17 @@ variable "node_pools" {
   type = map(object({
     machine_type   = optional(string, "e2-medium")
     disk_size_gb   = optional(number, 100)
-    disk_type      = optional(string, "pd-standard")
+    disk_type      = optional(string, "pd-balanced")
     node_count     = optional(number, 1)
     min_node_count = optional(number, 1)
     max_node_count = optional(number, 3)
     spot           = optional(bool, false)
     labels         = optional(map(string), {})
-    # Node version. Unset follows the control plane.
-    version = optional(string)
+    # Node version, pinned rather than following the control plane.
+    version = optional(string, "1.35.8-gke.1225000")
     # auto_upgrade has to stay true on a cluster in a release channel, and
     # moves nodes off `version` when one is set.
-    auto_upgrade = optional(bool, true)
+    auto_upgrade = optional(bool, false)
     auto_repair  = optional(bool, true)
     # Zones the pool's nodes are created in, e.g. ["us-central1-a"] to pin a
     # pool to a single zone. Defaults to all zones in var.region when empty.

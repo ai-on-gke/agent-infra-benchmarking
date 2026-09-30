@@ -28,7 +28,10 @@ resource "google_container_cluster" "autopilot" {
     }
   }
 
-  ip_allocation_policy {}
+  ip_allocation_policy {
+    cluster_secondary_range_name  = var.pods_range_name
+    services_secondary_range_name = var.services_range_name
+  }
 
   workload_identity_config {
     workload_pool = "${var.project_id}.svc.id.goog"
@@ -95,7 +98,10 @@ resource "google_container_cluster" "standard" {
     }
   }
 
-  ip_allocation_policy {}
+  ip_allocation_policy {
+    cluster_secondary_range_name  = var.pods_range_name
+    services_secondary_range_name = var.services_range_name
+  }
 
   workload_identity_config {
     workload_pool = "${var.project_id}.svc.id.goog"
