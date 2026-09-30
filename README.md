@@ -181,8 +181,9 @@ after the first if the cluster is being kept for another run.
 Deletes the benchmark workloads, then Prometheus — the mirror of what
 `--deploy` put there, and as all-or-nothing as that is.
 
-**Prometheus goes with it, and so does every run it recorded.** Its storage
-does not outlive its pod. The reports every run uploads to
+**Prometheus goes with it, and so does every run it recorded.** Its data is on
+a volume that survives a restart of its pod, and is deleted here along with it.
+The reports every run uploads to
 `gs://${BUCKET_NAME}/reports/<run-id>/` are unaffected, and are the record that
 survives this.
 
