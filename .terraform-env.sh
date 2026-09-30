@@ -23,9 +23,8 @@
 # from env.sh.example.
 #
 # A cluster that did not come from infra/terraform-gke has no outputs to read.
-# There is nothing to configure here for that case; .env.sh stops sourcing this
-# file and spells the same variables out by hand instead (see the bottom of
-# env.sh.example).
+# For that case, replace the line in .env.sh that sources this file with exports
+# of the variables below.
 #
 # Requires terraform and jq, and a terraform apply that has already run. The
 # lookup happens once per shell that sources this file.
@@ -46,8 +45,9 @@ unset _TF_SELF
 if ! _TF_OUT="$(terraform -chdir="${_TF_DIR}" output -json 2>/dev/null)" ||
   [[ -z "${_TF_OUT}" || "${_TF_OUT}" == "{}" ]]; then
   echo "Error: no Terraform outputs in ${_TF_DIR}." >&2
-  echo "Run the steps in README.md (Setting up the infrastructure) first, or" >&2
-  echo "fill the values in by hand as env.sh.example describes." >&2
+  echo "Run the steps in README.md (Setting up the infrastructure) first. For a" >&2
+  echo "cluster Terraform did not create, export the variables this file sets in" >&2
+  echo ".env.sh instead of sourcing it." >&2
   return 1 2>/dev/null || exit 1
 fi
 
@@ -81,8 +81,7 @@ export PROJECT_NUMBER
 GCE_REGION="$(_tf_value '.region.value' 'region')" || return 1 2>/dev/null || exit 1
 export GCE_REGION
 # The cluster from this module is regional, so its location is the region. A
-# zone here (as in env.sh.example's hand-filled block) would describe a zonal
-# cluster instead.
+# zone here would describe a zonal cluster instead.
 export CLUSTER_LOCATION="${GCE_REGION}"
 
 CLUSTER_NAME="$(_tf_value '.cluster_name.value' 'cluster_name')" || return 1 2>/dev/null || exit 1
@@ -92,20 +91,18 @@ BUCKET_NAME="$(_tf_value '.bucket_name.value' 'bucket_name')" || return 1 2>/dev
 export BUCKET_NAME
 
 # The Artifact Registry repository Terraform created, as an image path prefix.
-# Note this is a different repository from the gcr.io compatibility one that
-# env.sh.example's hand-filled block pushes to: images built against this file
-# land in the repo this deployment owns, which is the one its cluster is
-# granted to pull from.
+# Images built against this file land in the repository this deployment owns,
+# which is the one its cluster is granted to pull from.
 DOCKER_REPO="$(_tf_value '.artifact_registry_docker_repo.value' 'artifact_registry_docker_repo')" || return 1 2>/dev/null || exit 1
 export DOCKER_REPO
 export KO_DOCKER_REPO="${DOCKER_REPO}"
 
-# The two images this repo builds, named here rather than in the scripts that
-# push them so that a build and a deployment cannot disagree about where the
-# image lives.
+# The images this repo builds, named here rather than in the scripts that push
+# them so that a build and a deployment cannot disagree about where the image
+# lives.
 export LOCUST_IMAGE="${DOCKER_REPO}/locust-test:latest"
 export OPENCLAW_IMAGE="${DOCKER_REPO}/openclaw-workload:latest"
+export MOCK_LLM_IMAGE="${DOCKER_REPO}/mock-llm:latest"
 
 unset -f _tf_value
 unset _TF_DIR _TF_OUT
-export MOCK_LLM_IMAGE="${DOCKER_REPO}/mock-llm:latest"

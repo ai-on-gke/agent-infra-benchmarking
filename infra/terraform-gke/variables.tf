@@ -85,7 +85,10 @@ variable "cluster" {
     enable_agent_sandbox = optional(bool, false)
 
     # One of "SCOPE_UNSPECIFIED", "NONE", "COLLECTION_AND_INSTRUMENTATION_COMPONENTS".
-    managed_otel_scope = optional(string, "SCOPE_UNSPECIFIED")
+    # On by default because substrate's install, the benchmark Job and the
+    # actors all export to the managed collector; without it every one of them
+    # logs a failed export. Substrate's own tools/setup-gcp enables it too.
+    managed_otel_scope = optional(string, "COLLECTION_AND_INSTRUMENTATION_COMPONENTS")
 
     # Only used when autopilot = false.
     node_pools = optional(map(object({

@@ -102,14 +102,16 @@ gcloud application-default credentials already in place.
    minutes, and this is billable:
 
    ```bash
-   terraform -chdir=infra/terraform-gke apply --var-file terraform.tfvars
+   terraform -chdir=infra/terraform-gke apply
    ```
 
 ## Setting up the Agent Substrate
-2
+
 1. Configure the environment
 
-   Copy the example and fill in the values for your project:
+   Copy the example. There is nothing to fill in for a cluster made by the
+   Terraform above: `.env.sh` reads the project, cluster, bucket and registry
+   from its state.
 
    ```bash
    cp env.sh.example .env.sh
@@ -219,5 +221,5 @@ Download any worth keeping first, or set it to `false`, in which case destroy
 stops at the bucket while it holds anything.
 
    ```bash
-   terraform -chdir=infra/terraform-gke destroy --var-file terraform.tfvars
+   terraform -chdir=infra/terraform-gke destroy
    ```
