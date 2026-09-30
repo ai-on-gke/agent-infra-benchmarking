@@ -335,6 +335,47 @@ check_template_class() {
   fi
 }
 
+# tag_image_with_run_id adds the run id as a tag on the pinned locust image, so
+# the image a run used can be found by the run's name, and a registry cleanup
+# that deletes untagged images cannot take it once the build tag moves on.
+tag_image_with_run_id() {
+  if ! command -v gcloud &>/dev/null; then
+    echo "Warning: gcloud is not installed, so ${LOCUST_IMAGE} is not tagged ${RUN_ID}." >&2
+    return 0
+  fi
+  if ! gcloud artifacts docker tags add "${LOCUST_IMAGE}" "${LOCUST_IMAGE%@*}:${RUN_ID}" --quiet; then
+    echo "Warning: could not tag ${LOCUST_IMAGE} as ${RUN_ID}; the run goes ahead untagged." >&2
+  fi
+}
+
+# run_info prints, as JSON, what the run was made of that its reports cannot
+# otherwise say: every image it ran by digest, and the commits it was built
+# from. runner.py writes it to run.json beside the reports.
+run_info() {
+  local templates='{}' deployments dirty=false
+  if [[ -n "${TEMPLATE}" ]]; then
+    templates="$(kubectl ate get actor-template "${TEMPLATE}" --atespace="${TEMPLATE_ATESPACE}" -o json |
+      jq --arg t "${TEMPLATE}" '{($t): [(.containers // [])[].image]}')"
+  fi
+  # The WorkerPool's workers and anything the workload depends on, such as
+  # mock-llm, run as Deployments in the pool's namespace.
+  deployments="$(kubectl get deployments --namespace="${POOL_NAMESPACE}" -o json |
+    jq '[.items[] | {(.metadata.name): [.spec.template.spec.containers[].image]}] | add // {}')"
+  if ! git diff --quiet HEAD --; then
+    dirty=true
+  fi
+  jq -n \
+    --arg locust_image "${LOCUST_IMAGE}" \
+    --argjson actor_templates "${templates}" \
+    --argjson deployments "${deployments}" \
+    --arg commit "$(git rev-parse HEAD)" \
+    --argjson commit_dirty "${dirty}" \
+    --arg substrate_commit "$(git -C "${SUBSTRATE_DIR}" rev-parse HEAD)" \
+    '{locust_image: $locust_image, actor_templates: $actor_templates,
+      deployments: $deployments, commit: $commit, commit_dirty: $commit_dirty,
+      substrate_commit: $substrate_commit}'
+}
+
 # recreate_worker_pool gives the run its own pool: the old one goes, a new one
 # is applied, and the wait is for its workers to be ready.
 #
@@ -608,7 +649,7 @@ export BENCHMARK_REPORTS BENCHMARK_REPORT_BUCKET
 if [[ "${DELETE}" -eq 1 ]]; then
   # The manifest renders with whatever is set, because delete matches on the
   # name and kind alone; the run-shaped values below are not needed for it.
-  export BENCHMARK_RUN_ID="" BENCHMARK_TEST_CASE="" BENCHMARK_ONLY_SUMMARY=false
+  export BENCHMARK_RUN_ID="" BENCHMARK_TEST_CASE="" BENCHMARK_ONLY_SUMMARY=false BENCHMARK_RUN_INFO=""
   echo "=== Deleting the locust Job ==="
   delete_job
   exit 0
@@ -688,6 +729,7 @@ fi
 # its case out of whatever image was left locally while running the registry's.
 LOCUST_IMAGE="$("${BENCHMARKING_DIR}/locust/pin_image.sh" "${LOCUST_IMAGE}")"
 export LOCUST_IMAGE
+tag_image_with_run_id
 
 echo
 echo "=== Resolving test case ==="
@@ -724,6 +766,10 @@ fi
 echo
 echo "=== Recreating the WorkerPool ==="
 recreate_worker_pool
+
+# After the pool, whose workers' image is part of what the run was made of.
+BENCHMARK_RUN_INFO="$(run_info | base64 | tr -d '\n')"
+export BENCHMARK_RUN_INFO
 
 echo
 echo "=== Running the benchmark Job ==="

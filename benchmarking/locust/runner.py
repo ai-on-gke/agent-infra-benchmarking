@@ -36,6 +36,10 @@ because this repo ships no shapes/ directory for the second path to name.
 """
 
 import argparse
+import base64
+import datetime
+import json
+import os
 import subprocess
 import signal
 import sys
@@ -81,6 +85,9 @@ REPORT_SETTLE_SECS = 15
 # Exit status of a run whose reports did not all upload. Distinct from locust's
 # and boomer's own, which say how the run itself went.
 UPLOAD_FAILED_EXIT = 3
+
+# What the run was made of and how it went, written beside the reports.
+RUN_JSON = "run.json"
 
 # How far back refuse_reused_run looks for an earlier run's series: past
 # Prometheus's retention, so anything it still holds is found.
@@ -443,6 +450,37 @@ def refuse_reused_run(args: argparse.Namespace) -> None:
         )
 
 
+def write_run_json(args: argparse.Namespace, started: float, ended: float, status: int) -> None:
+    """Write run.json into --report-dir: what run_locust_job.sh passed in
+    BENCHMARK_RUN_INFO (the images by digest and the commits), with the case
+    and how the run went. write_reports uploads it with the other files."""
+    info: dict = {}
+    raw = os.environ.get("BENCHMARK_RUN_INFO", "")
+    if raw:
+        try:
+            info = json.loads(base64.b64decode(raw))
+        except (ValueError, TypeError) as exc:
+            info = {"run_info_error": f"cannot decode BENCHMARK_RUN_INFO: {exc}"}
+
+    def iso(t: float) -> str:
+        return datetime.datetime.fromtimestamp(t, datetime.timezone.utc).isoformat()
+
+    info.update({
+        "run_id": args.run_id,
+        "test_case": args.test_case,
+        "users": args.users,
+        "spawn_rate": args.spawn_rate,
+        "duration": args.duration,
+        "worker_flags": args.worker_flags,
+        "started": iso(started),
+        "ended": iso(ended),
+        "status": status,
+    })
+    path = Path(args.report_dir) / RUN_JSON
+    path.write_text(json.dumps(info, indent=2) + "\n")
+    print(f"reports: wrote {path}", flush=True)
+
+
 def write_reports(args: argparse.Namespace, started: float, ended: float) -> bool:
     """Write the selected reports and upload them with locust's own CSVs, and
     say whether every file that should have uploaded did.
@@ -457,6 +495,9 @@ def write_reports(args: argparse.Namespace, started: float, ended: float) -> boo
 
     # Locust's files are on disk already, whatever the Prometheus reports do.
     collected = locust_csvs(args)
+    run_json = Path(args.report_dir) / RUN_JSON
+    if run_json.exists():
+        collected.append(run_json)
     for path in collected:
         print(f"reports: locust wrote {path} ({path.stat().st_size} bytes)", flush=True)
 
@@ -538,7 +579,9 @@ def main() -> None:
     refuse_reused_run(args)
     started = time.time()
     status = run(args)
-    if not write_reports(args, started, time.time()) and status == 0:
+    ended = time.time()
+    write_run_json(args, started, ended, status)
+    if not write_reports(args, started, ended) and status == 0:
         print("The reports did not all upload, so the run is failed.", flush=True)
         status = UPLOAD_FAILED_EXIT
     sys.exit(status)

@@ -157,6 +157,9 @@ gcloud application-default credentials already in place.
      `locust_exceptions.csv` — locust's own output, written as the job goes.
    - `stats.csv`, `custom_stats_history.csv`, `cluster_vitals_history.csv` —
      the job's rows read back out of Prometheus.
+   - `run.json` - the case, how the run went, every image it ran by digest,
+     and the commits they were built from. The locust image is also tagged
+     with the run id in the registry.
 
    The scripts download them to `reports/<run-id>/<test-case>/`, and
    [`benchmark-charts`](benchmark-charts) charts them:
