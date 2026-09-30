@@ -213,7 +213,8 @@ usage() {
   echo "reports are then downloaded as usual. To leave a run going, use --no-wait."
   echo ""
   echo "Other:"
-  echo "  --delete                Delete the Job and exit. The workloads are left alone;"
+  echo "  --delete                Stop and delete the Job, waiting while it deletes its actors"
+  echo "                          and uploads what it recorded. The workloads are left alone;"
   echo "                          deploy-benchmarking.sh --delete removes those."
   echo "  -h|--help               Show this help message"
   echo ""
@@ -474,8 +475,13 @@ submit_job() {
   envsubst < "${JOB_MANIFEST}" | kubectl apply -f -
 }
 
-delete_job() {
-  envsubst < "${JOB_MANIFEST}" | kubectl delete --ignore-not-found -f -
+# stop_job deletes the Job and waits for its pod to go. Only the Job: deleting
+# it sends the pod the SIGTERM runner.py winds the run down on, and the upload
+# at the end of that goes through the Job's ServiceAccount, so that and its
+# RoleBinding have to stay.
+stop_job() {
+  kubectl delete job "${JOB_NAME}" --namespace="${NAMESPACE}" --ignore-not-found \
+    --cascade=foreground --wait=true --timeout="${STOP_TIMEOUT_SECS}s"
 }
 
 # job_status prints the Job's succeeded and failed counts as one pipe-joined
@@ -602,8 +608,7 @@ stop_run() {
   fi
   echo
   echo "=== Interrupted: stopping the run ===" >&2
-  kubectl delete job "${JOB_NAME}" --namespace="${NAMESPACE}" \
-    --cascade=foreground --wait=true --timeout="${STOP_TIMEOUT_SECS}s" || true
+  stop_job || true
   echo
   echo "=== Deleting actors ==="
   delete_actors || true
@@ -679,11 +684,8 @@ export LOCUST_IMAGE BENCHMARK_USER_CLASS BENCHMARK_RUNNER_KSA
 export BENCHMARK_REPORTS BENCHMARK_REPORT_BUCKET
 
 if [[ "${DELETE}" -eq 1 ]]; then
-  # The manifest renders with whatever is set, because delete matches on the
-  # name and kind alone; the run-shaped values below are not needed for it.
-  export BENCHMARK_RUN_ID="" BENCHMARK_TEST_CASE="" BENCHMARK_ONLY_SUMMARY=false BENCHMARK_RUN_INFO=""
-  echo "=== Deleting the locust Job ==="
-  delete_job
+  echo "=== Stopping and deleting the locust Job ==="
+  stop_job
   exit 0
 fi
 
