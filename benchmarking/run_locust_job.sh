@@ -289,7 +289,8 @@ delete_actors() {
 
 # resolve_test_case prints the named case as JSON, by running the
 # testcase-helper binary that ships in the locust image beside the tests.yaml it
-# reads. Going through the image is what keeps a YAML parser off the host, which
+# reads. LOCUST_IMAGE is pinned to a digest by then, so the image read here is
+# the one the Job runs rather than whatever copy of the tag is local. Going through the image is what keeps a YAML parser off the host, which
 # has kubectl and docker and not necessarily PyYAML or yq.
 #
 # It also moves the "no such case" failure to before the pool is rebuilt and
@@ -655,8 +656,14 @@ if [[ "${NO_BUILD}" -eq 0 ]]; then
   "${BENCHMARKING_DIR}/locust/build_and_push.sh"
 fi
 
+# The Job's pod pulls the tag afresh, so without a digest a --no-build run read
+# its case out of whatever image was left locally while running the registry's.
+LOCUST_IMAGE="$("${BENCHMARKING_DIR}/locust/pin_image.sh" "${LOCUST_IMAGE}")"
+export LOCUST_IMAGE
+
 echo
 echo "=== Resolving test case ==="
+echo "  image: ${LOCUST_IMAGE}"
 TEST_CASE_JSON="$(resolve_test_case "${BENCHMARK_TEST_CASE}")"
 echo "  ${BENCHMARK_TEST_CASE}: ${TEST_CASE_JSON}"
 

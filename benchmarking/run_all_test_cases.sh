@@ -89,10 +89,12 @@ if [[ "${NO_BUILD}" -eq 0 ]]; then
   "${BENCHMARKING_DIR}/locust/build_and_push.sh"
 fi
 
-# Listed out of the image, which is where run_locust_job.sh resolves each case
-# from, so the list and the cases come from the same tests.yaml.
+# Listed out of the pushed image, which is where run_locust_job.sh resolves each
+# case from, so the list and the cases come from the same tests.yaml. By digest,
+# because a local copy of the tag can be older than the registry's.
+pinned_image="$("${BENCHMARKING_DIR}/locust/pin_image.sh" "${LOCUST_IMAGE}")"
 cases="$(docker run --rm --platform "${LOCUST_IMAGE_PLATFORM:-linux/amd64}" \
-  --entrypoint /app/testcase-helper "${LOCUST_IMAGE}" --list)"
+  --entrypoint /app/testcase-helper "${pinned_image}" --list)"
 CASES=()
 while IFS= read -r c; do
   if [[ -n "${c}" ]]; then
