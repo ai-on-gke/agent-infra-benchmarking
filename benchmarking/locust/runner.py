@@ -345,6 +345,23 @@ def run(args: argparse.Namespace) -> int:
         bufsize=1, text=True,
     )
 
+    # This is PID 1 in the pod, which ignores any signal it has no handler for:
+    # without one, deleting the Job left the pod to be killed at the end of its
+    # grace period, with the actors undeleted and nothing uploaded. Stopping
+    # locust instead lets the path below wind the run down as it would at the
+    # end of its duration.
+    stopped_by: list[int] = []
+
+    def stop(signum: int, _frame: object) -> None:
+        if not stopped_by:
+            print(f"Received {signal.Signals(signum).name}; stopping locust.", flush=True)
+            stopped_by.append(signum)
+        if locust_proc.poll() is None:
+            locust_proc.send_signal(signal.SIGTERM)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+
     boomer_cmd = build_boomer_cmd(args)
     print(f"Running: {' '.join(boomer_cmd)}", flush=True)
     boomer_proc = subprocess.Popen(
@@ -365,6 +382,11 @@ def run(args: argparse.Namespace) -> int:
 
     for t in pumps:
         t.join(timeout=5)
+
+    # A stopped run did not run its duration, so whatever locust concluded it
+    # is not a result.
+    if stopped_by:
+        return 128 + stopped_by[0]
 
     # Both statuses matter, because the exit code is the only result this
     # carries: locust reports whether the run met its own bar, and a worker

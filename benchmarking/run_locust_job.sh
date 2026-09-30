@@ -142,6 +142,17 @@ DEFAULT_WAIT_TIMEOUT_SECS=3600
 # scheduling rather than the run.
 DEFAULT_POD_START_TIMEOUT_SECS=300
 
+# follow_run's status when --wait-timeout is reached with the run still going,
+# which is what tells the cleanup after it to leave the run's actors alone.
+WAIT_TIMED_OUT=124
+# Status after Ctrl-C or a SIGTERM stopped the run. run_all_test_cases.sh reads
+# it as "stop here", where any other failure moves on to the next case.
+INTERRUPTED=130
+# Ceiling on the wait for the Job's pod to go once a run is stopped early. Longer
+# than the pod's terminationGracePeriodSeconds in manifests/job.yaml, which is
+# the time runner.py has to wind the run down and upload what it recorded.
+STOP_TIMEOUT_SECS=480
+
 DELETE=0
 
 usage() {
@@ -183,14 +194,18 @@ usage() {
   echo "                          reprints while the run goes. The aggregate it prints when"
   echo "                          the run ends is kept, so the result is unaffected."
   echo "  --wait-timeout SECONDS  Ceiling on the wait for the run (default: 3600). Reaching"
-  echo "                          it stops the waiting, not the Job, though the Job's"
-  echo "                          actors are deleted all the same."
+  echo "                          it stops the waiting, not the Job, and leaves the Job's"
+  echo "                          actors and reports to it."
   echo "  --pod-start-timeout SECONDS"
   echo "                          Ceiling on the wait for the pod to start, which covers the"
   echo "                          image pull and the scheduling (default: 300)"
   echo "  --reports-dir DIR       Where the run's reports are downloaded from the bucket,"
   echo "                          into DIR/<run-id>/<test-case>/ (default: ${ROOT}/reports)"
   echo "  --no-download           Leave the reports in the bucket."
+  echo ""
+  echo "Ctrl-C (or SIGTERM) while a run is going stops it: the Job is deleted, which"
+  echo "gives the run time to delete its actors and upload what it recorded, and the"
+  echo "reports are then downloaded as usual. To leave a run going, use --no-wait."
   echo ""
   echo "Other:"
   echo "  --delete                Delete the Job and exit. The workloads are left alone;"
@@ -424,8 +439,13 @@ follow_run() {
     echo
     echo "=== Run log ==="
     # Not fatal on its own: a dropped stream is a lost log, not a failed run,
-    # and the status below is what decides.
-    kubectl logs -f "job/${JOB_NAME}" --namespace="${NAMESPACE}" || true
+    # and the status below is what decides. In the background because bash runs
+    # a trap only between commands, and a foreground stream lasts the whole run;
+    # `wait` is interrupted by a trapped signal where the stream is not.
+    kubectl logs -f "job/${JOB_NAME}" --namespace="${NAMESPACE}" &
+    LOGS_PID=$!
+    wait "${LOGS_PID}" || true
+    LOGS_PID=""
     echo "=== End of run log ==="
     echo
   else
@@ -460,9 +480,34 @@ follow_run() {
   done
 
   echo "Error: timed out after ${WAIT_TIMEOUT_SECS}s waiting for ${JOB_NAME}." >&2
-  echo "It is still in the cluster; --wait-timeout raises the ceiling." >&2
+  echo "It is still running, so its actors and reports are left to it;" >&2
+  echo "--wait-timeout raises the ceiling. To follow it, or to stop it:" >&2
   echo "  kubectl logs -f job/${JOB_NAME} -n ${NAMESPACE}" >&2
-  return 1
+  echo "  ./benchmarking/run_locust_job.sh --delete" >&2
+  return "${WAIT_TIMED_OUT}"
+}
+
+# stop_run is the INT/TERM trap while a run is in flight. Deleting the Job sends
+# its pod the SIGTERM that runner.py winds the run down on: locust stops, the
+# worker deletes its actors, and what the run recorded is uploaded. Then the
+# leftover actors and the download are handled as for a run that ended on its
+# own.
+stop_run() {
+  trap - INT TERM
+  if [[ -n "${LOGS_PID:-}" ]]; then
+    kill "${LOGS_PID}" 2>/dev/null || true
+  fi
+  echo
+  echo "=== Interrupted: stopping the run ===" >&2
+  kubectl delete job "${JOB_NAME}" --namespace="${NAMESPACE}" \
+    --cascade=foreground --wait=true --timeout="${STOP_TIMEOUT_SECS}s" || true
+  echo
+  echo "=== Deleting actors ==="
+  delete_actors || true
+  if [[ "${NO_DOWNLOAD}" -eq 0 ]]; then
+    download_reports "${RUN_ID}" "${BENCHMARK_TEST_CASE}" || true
+  fi
+  exit "${INTERRUPTED}"
 }
 
 # download_reports copies what runner.py uploaded for one test case into
@@ -610,6 +655,11 @@ recreate_worker_pool
 
 echo
 echo "=== Running the benchmark Job ==="
+# Set before the submit, so an interrupt that lands while the Job is being
+# created still stops it.
+if [[ "${NO_WAIT}" -eq 0 ]]; then
+  trap stop_run INT TERM
+fi
 submit_job
 
 if [[ "${NO_WAIT}" -eq 1 ]]; then
@@ -621,8 +671,14 @@ fi
 # gets one: what it managed to record before it stopped is usually the point.
 run_status=0
 follow_run || run_status=$?
+# The run is over, or being left to itself: an interrupt from here on should
+# not delete the Job and its log.
+trap - INT TERM
 
-# Whether the run finished or --wait-timeout was reached with it still going.
+if [[ "${run_status}" -eq "${WAIT_TIMED_OUT}" ]]; then
+  exit "${run_status}"
+fi
+
 echo
 echo "=== Deleting actors ==="
 delete_actors || true

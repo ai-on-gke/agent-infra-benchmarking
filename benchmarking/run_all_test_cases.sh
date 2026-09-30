@@ -104,15 +104,26 @@ echo
 echo "=== Run ${RUN_ID}: ${#CASES[@]} test case(s) ==="
 printf '  %s\n' "${CASES[@]}"
 
+# run_locust_job.sh's status for a run stopped by Ctrl-C or SIGTERM. Stops the
+# series, where any other failure moves on to the next case.
+INTERRUPTED=130
+
 STATUS=()
+interrupted=0
 for c in "${CASES[@]}"; do
   echo
   echo "=== [${RUN_ID}] ${c} ==="
+  status=0
   # ${arr[@]+...} because bash 3.2, macOS's, treats an empty array as unset.
-  if "${BENCHMARKING_DIR}/run_locust_job.sh" --run-id "${RUN_ID}" --test-case "${c}" \
+  "${BENCHMARKING_DIR}/run_locust_job.sh" --run-id "${RUN_ID}" --test-case "${c}" \
     --no-build ${JOB_ARGS[@]+"${JOB_ARGS[@]}"} \
-    --follow-logs ; then
+    --follow-logs || status=$?
+  if [[ "${status}" -eq 0 ]]; then
     STATUS+=("ok      ${c}")
+  elif [[ "${status}" -eq "${INTERRUPTED}" ]]; then
+    STATUS+=("STOPPED ${c}")
+    interrupted=1
+    break
   else
     STATUS+=("FAILED  ${c}")
   fi
@@ -121,6 +132,9 @@ done
 echo
 echo "=== Run ${RUN_ID} ==="
 printf '  %s\n' "${STATUS[@]}"
+if [[ "${interrupted}" -eq 1 ]]; then
+  exit "${INTERRUPTED}"
+fi
 if printf '%s\n' "${STATUS[@]}" | grep -q '^FAILED'; then
   exit 1
 fi

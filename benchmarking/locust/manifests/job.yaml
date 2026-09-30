@@ -65,6 +65,11 @@ spec:
         benchmark-test-case: "${BENCHMARK_TEST_CASE}"
     spec:
       restartPolicy: Never
+      # Time for runner.py to wind a stopped run down: boomer's actor teardown
+      # (BOOMER_STOP_TIMEOUT_SECS, 300), the wait for the last scrape, and the
+      # reports and their upload. run_locust_job.sh's STOP_TIMEOUT_SECS waits
+      # a little longer than this.
+      terminationGracePeriodSeconds: 420
       # Created by infra/terraform-gke, which names the same account in the
       # bucket's objectCreator binding. Workload Identity gives the pod that
       # grant and nothing else, so a report uploads and nothing here can read
