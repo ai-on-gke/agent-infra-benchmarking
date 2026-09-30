@@ -28,7 +28,7 @@ cluster = {
     }
     sandboxed = {
       machine_type = "c2-standard-16"
-      # node_count     = 1
+      node_count     = 1
       node_locations = ["us-central1-a"]
       min_node_count = 1
       max_node_count = 1
@@ -44,7 +44,7 @@ cluster = {
       # 110-pods-per-node cap on this single pinned node.
       taints = [
         {
-          key    = "sandbox.gke.io/runtime"
+          key    = "ate.dev/sandboxClass"
           value  = "gvisor"
           effect = "NO_SCHEDULE"
         }
