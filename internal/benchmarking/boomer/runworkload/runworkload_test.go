@@ -20,17 +20,22 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // captureLogs points slog at a buffer for the duration of one test.
@@ -562,5 +567,129 @@ func TestDynamicWait(t *testing.T) {
 	rt := &runWorkloadRuntime{opts: Options{MinWait: 0, MaxWait: 0}}
 	if got := rt.dynamicWait(); got != 0 {
 		t.Errorf("dynamicWait with no bounds: got %v, want 0", got)
+	}
+}
+
+// The atespace is one per run, so it is created once however many users
+// start, rather than once per actor.
+func TestAtespaceIsCreatedOncePerRun(t *testing.T) {
+	ctrl := &fakeControlClient{}
+	rt := newTestRuntime(t, ctrl)
+
+	// Users are keyed by goroutine, so each start below is a new user.
+	for range 3 {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rt.iterate()
+		}()
+		wg.Wait()
+	}
+
+	if got := ctrl.countCalls("CreateActor"); got != 3 {
+		t.Fatalf("CreateActor: got %d, want 3", got)
+	}
+	if got := ctrl.countCalls("CreateAtespace"); got != 1 {
+		t.Errorf("CreateAtespace: got %d, want 1", got)
+	}
+}
+
+// gaugeValue reads a workload's value of one of the actor gauges as exported.
+// The gauges are package globals, so tests compare it before and after.
+func gaugeValue(t *testing.T, metric, workload string) float64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range families {
+		if mf.GetName() != metric {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "workload" && l.GetValue() == workload {
+					return m.GetGauge().GetValue()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// CreateActor leaves the actor SUSPENDED, so that is how it is counted until
+// the first resume.
+func TestCreatedActorCountsAsSuspended(t *testing.T) {
+	ctrl := &fakeControlClient{}
+	rt := newTestRuntime(t, ctrl)
+	name := rt.workload.Name()
+	active := gaugeValue(t, "boomer_active_actors", name)
+	suspended := gaugeValue(t, "boomer_suspended_actors", name)
+
+	rt.iterate()
+
+	if got := gaugeValue(t, "boomer_active_actors", name) - active; got != 0 {
+		t.Errorf("active actors after a create: changed by %v, want 0", got)
+	}
+	if got := gaugeValue(t, "boomer_suspended_actors", name) - suspended; got != 1 {
+		t.Errorf("suspended actors after a create: changed by %v, want 1", got)
+	}
+}
+
+// Aborted is a lost race with a concurrent update, which clears on its own,
+// so the call is made again rather than the actor thrown away.
+func TestAbortedCallIsRetried(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		abortTimes  int
+		wantResumes int
+		wantErr     bool
+	}{
+		{name: "clears", abortTimes: 2, wantResumes: 3, wantErr: false},
+		{name: "persists", abortTimes: 0, wantResumes: abortedAttempts, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := &fakeControlClient{
+				resumeErr:      status.Error(codes.Aborted, "concurrent update conflict, please retry"),
+				resumeErrTimes: tc.abortTimes,
+			}
+			u := newTestRunWorkloadUser(t, &pingServer{}, &userclass.Config{APIStub: ctrl})
+
+			err := u.resume(context.Background())
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("resume: got err %v, want error %v", err, tc.wantErr)
+			}
+			if got := ctrl.countCalls("ResumeActor"); got != tc.wantResumes {
+				t.Errorf("ResumeActor calls: got %d, want %d", got, tc.wantResumes)
+			}
+		})
+	}
+}
+
+// A 421 is a stale worker assignment that the next request routes around, so
+// the instruction is sent again; any other 4xx is not.
+func TestInstructionIsResentAfterAStaleAssignment(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		wantPings int
+		wantErr   bool
+	}{
+		{name: "421", status: http.StatusMisdirectedRequest, wantPings: 2, wantErr: false},
+		{name: "400", status: http.StatusBadRequest, wantPings: 1, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &pingServer{PingFailures: 1, PingFailStatus: tc.status}
+			u := newTestRunWorkloadUser(t, srv, nil)
+
+			err := u.executeInstruction(context.Background())
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("executeInstruction: got err %v, want error %v", err, tc.wantErr)
+			}
+			if got := srv.RecordedPings(); got != tc.wantPings {
+				t.Errorf("pings: got %d, want %d", got, tc.wantPings)
+			}
+		})
 	}
 }

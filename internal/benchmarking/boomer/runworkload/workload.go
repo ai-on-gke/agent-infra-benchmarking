@@ -17,6 +17,7 @@ package runworkload
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -115,6 +116,11 @@ func resolveWorkload(name string) (workload, error) {
 	return w, nil
 }
 
+// errStaleAssignment marks a 421 from the actor's worker: the router sent the
+// request to a worker the actor had already left. The next request is routed
+// afresh, so unlike other failures it is worth sending again at once.
+var errStaleAssignment = errors.New("stale worker assignment")
+
 // httpInstruction is one request a workload sends through the router, together
 // with the check that decides whether the answer proves the sandbox ran it.
 type httpInstruction struct {
@@ -158,10 +164,14 @@ func sendHTTPInstruction(ctx context.Context, actor actorRef, inst httpInstructi
 	if err != nil {
 		return true, err
 	}
-	// A 5xx or a 429 means the actor is still activating, while a 4xx is a
-	// misrouted or misconfigured request that waiting will not fix.
+	// A 5xx or a 429 means the actor is still activating, and a 421 that the
+	// request reached a worker the actor has left. Any other 4xx is a
+	// misconfigured request that waiting will not fix.
 	if resp.StatusCode >= 400 {
 		httpErr := fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		if resp.StatusCode == http.StatusMisdirectedRequest {
+			return true, fmt.Errorf("%w: %w", errStaleAssignment, httpErr)
+		}
 		return resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests, httpErr
 	}
 

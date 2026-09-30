@@ -44,6 +44,10 @@ type fakeControlClient struct {
 	resumeErr  error
 	suspendErr error
 	deleteErr  error
+	// resumeErrTimes, when set, limits resumeErr to the first that many
+	// ResumeActor calls, standing in for a conflict that clears.
+	resumeErrTimes int
+	resumeCalls    int
 	// serverElapsedUs, when set, is returned as the x-server-elapsed-us
 	// trailer the real ServerUnaryInterceptor emits.
 	serverElapsedUs string
@@ -106,7 +110,8 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "ResumeActor")
 	f.setTrailer(opts)
-	if f.resumeErr != nil {
+	f.resumeCalls++
+	if f.resumeErr != nil && (f.resumeErrTimes == 0 || f.resumeCalls <= f.resumeErrTimes) {
 		return nil, f.resumeErr
 	}
 	return &ateapipb.ResumeActorResponse{}, nil
