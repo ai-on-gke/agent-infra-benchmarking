@@ -42,8 +42,18 @@ unset _TF_SELF
 
 # One call, reused for every lookup below: terraform output is slow enough that
 # a call per variable is noticeable on every script that sources this file.
-if ! _TF_OUT="$(terraform -chdir="${_TF_DIR}" output -json 2>/dev/null)" ||
-  [[ -z "${_TF_OUT}" || "${_TF_OUT}" == "{}" ]]; then
+# The state is in GCS, so reading it needs application-default credentials and
+# a terraform init against the backend. Terraform's own error says which is
+# missing, where "no outputs" would not.
+_TF_ERR="$(mktemp)"
+if ! _TF_OUT="$(terraform -chdir="${_TF_DIR}" output -json -no-color 2>"${_TF_ERR}")"; then
+  echo "Error: terraform output failed in ${_TF_DIR}:" >&2
+  cat "${_TF_ERR}" >&2
+  rm -f "${_TF_ERR}"
+  return 1 2>/dev/null || exit 1
+fi
+rm -f "${_TF_ERR}"
+if [[ -z "${_TF_OUT}" || "${_TF_OUT}" == "{}" ]]; then
   echo "Error: no Terraform outputs in ${_TF_DIR}." >&2
   echo "Run the steps in README.md (Setting up the infrastructure) first. For a" >&2
   echo "cluster Terraform did not create, export the variables this file sets in" >&2
