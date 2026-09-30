@@ -166,7 +166,8 @@ usage() {
   echo "  --run-id NAME           The run this test case is part of (default: a UTC"
   echo "                          timestamp). run_all_test_cases.sh passes one to every"
   echo "                          case. The run_id label in Prometheus, beside test_case;"
-  echo "                          the reports go to reports/NAME/<test-case>/."
+  echo "                          the reports go to reports/NAME/<test-case>/. An id"
+  echo "                          whose reports for the case already exist is refused."
   echo "  --user-class NAME       Locust user class, lowercase; runs tests/NAME.py"
   echo "                          (default: runworkload)"
   echo "  --test-case NAME        The run, named as a case in benchmarking/tests.yaml"
@@ -510,6 +511,31 @@ stop_run() {
   exit "${INTERRUPTED}"
 }
 
+# refuse_existing_reports stops a run whose id and case already have reports in
+# the bucket. runner.py could not overwrite them, its grant being objectCreator;
+# the download would fetch the earlier run's files and pass them off as this
+# one's; and Prometheus would sum the two runs' series under the same labels.
+refuse_existing_reports() {
+  local prefix="gs://${BENCHMARK_REPORT_BUCKET}/${REPORT_PREFIX}/${RUN_ID}/${BENCHMARK_TEST_CASE}/"
+  local out
+  if [[ -z "${BENCHMARK_REPORT_BUCKET}" ]] || ! command -v gcloud &>/dev/null; then
+    return 0
+  fi
+  if out="$(gcloud storage ls "${prefix}" 2>&1)"; then
+    echo "Error: ${prefix} already holds reports: run ${RUN_ID} has run" >&2
+    echo "${BENCHMARK_TEST_CASE} before. Pick another --run-id, or leave it unset" >&2
+    echo "for a fresh timestamp." >&2
+    return 1
+  fi
+  # Any other failure, such as expired credentials, says nothing about whether
+  # the reports are there.
+  if [[ "${out}" != *"matched no objects"* ]]; then
+    echo "Error: could not check ${prefix} for an earlier run's reports:" >&2
+    echo "${out}" >&2
+    return 1
+  fi
+}
+
 # download_reports copies what runner.py uploaded for one test case into
 # REPORTS_DIR/<run-id>/<test-case>/. Best-effort: the reports stay in the bucket
 # either way, so a failed copy is only a command to rerun.
@@ -609,6 +635,9 @@ if ! [[ "${RUN_ID}" =~ ^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$ ]]; then
 fi
 
 export BENCHMARK_RUN_ID="${RUN_ID}"
+
+# Ahead of the build, which is the slow part, so a reused id fails in seconds.
+refuse_existing_reports
 # locust rejects an empty --only-summary rather than reading it as false, so
 # this is never blank.
 if [[ "${ONLY_SUMMARY}" -eq 1 ]]; then

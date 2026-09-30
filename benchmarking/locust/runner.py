@@ -78,6 +78,14 @@ BOOMER_STOP_TIMEOUT_SECS = 300
 # does. Reports wait this long before querying rather than missing the tail.
 REPORT_SETTLE_SECS = 15
 
+# Exit status of a run whose reports did not all upload. Distinct from locust's
+# and boomer's own, which say how the run itself went.
+UPLOAD_FAILED_EXIT = 3
+
+# How far back refuse_reused_run looks for an earlier run's series: past
+# Prometheus's retention, so anything it still holds is found.
+PRIOR_RUN_LOOKBACK = "30d"
+
 # Bucket subfolder the reports are uploaded under. Mirrors
 # reports.upload.DEFAULT_PREFIX, named here so --help states it without
 # importing a package that may be absent.
@@ -406,13 +414,46 @@ def locust_csvs(args: argparse.Namespace) -> list[Path]:
     return sorted(Path(args.report_dir).glob(f"{LOCUST_CSV_STEM}_*.csv"))
 
 
-def write_reports(args: argparse.Namespace, started: float, ended: float) -> None:
-    """Write the selected reports and upload them with locust's own CSVs.
-    Never raises: a report is a by-product of the run, so a broken one must
-    not change what the run concluded."""
+def refuse_reused_run(args: argparse.Namespace) -> None:
+    """Exit if Prometheus already holds series for this run id and case.
+
+    The report queries select on those two labels and sum across pods, so a
+    second run under them would be added to the first. run_locust_job.sh
+    refuses an id whose reports are in the bucket; this also catches an earlier
+    run that stopped before it uploaded. Runs before locust starts, so none of
+    the series can be this run's own."""
+    if not args.run_id:
+        return
+    query = (
+        "count(last_over_time(locust_requests_total"
+        f'{{run_id="{args.run_id}",test_case="{args.test_case}"}}[{PRIOR_RUN_LOOKBACK}]))'
+    )
+    try:
+        from reports import prometheus
+
+        found = prometheus.instant_query(args.prometheus_url, query)
+    except Exception as exc:
+        print(f"Warning: could not check Prometheus for an earlier run under this id: {exc}", flush=True)
+        return
+    if found:
+        sys.exit(
+            f"Prometheus already has series for run {args.run_id!r}, case "
+            f"{args.test_case!r}; their numbers would be added to this run's. "
+            "Use another --run-id."
+        )
+
+
+def write_reports(args: argparse.Namespace, started: float, ended: float) -> bool:
+    """Write the selected reports and upload them with locust's own CSVs, and
+    say whether every file that should have uploaded did.
+
+    A Prometheus report that cannot be produced does not change the result:
+    it is a by-product of the run. An upload that fails does, because the
+    bucket is the only record that outlives the pod, and run_locust_job.sh
+    would otherwise report success and download nothing."""
     if not args.run_id:
         print("reports: --run-id is unset, so there is nothing to query on; skipping", flush=True)
-        return
+        return True
 
     # Locust's files are on disk already, whatever the Prometheus reports do.
     collected = locust_csvs(args)
@@ -423,7 +464,8 @@ def write_reports(args: argparse.Namespace, started: float, ended: float) -> Non
         collected += generate_reports(args, started)
 
     if collected and args.report_bucket:
-        upload_reports(collected, args)
+        return upload_reports(collected, args)
+    return True
 
 
 def generate_reports(args: argparse.Namespace, started: float) -> list[Path]:
@@ -463,7 +505,7 @@ def generate_reports(args: argparse.Namespace, started: float) -> list[Path]:
     return written
 
 
-def upload_reports(paths: list[Path], args: argparse.Namespace) -> None:
+def upload_reports(paths: list[Path], args: argparse.Namespace) -> bool:
     try:
         import reports
 
@@ -475,24 +517,30 @@ def upload_reports(paths: list[Path], args: argparse.Namespace) -> None:
             args.report_prefix,
         )
     except ImportError as exc:
-        print(f"reports: upload skipped ({exc})", flush=True)
-        return
+        print(f"reports: upload failed ({exc})", flush=True)
+        return False
     except reports.UploadError as exc:
-        print(f"reports: upload skipped ({exc})", flush=True)
-        return
+        print(f"reports: upload failed ({exc})", flush=True)
+        return False
+    ok = True
     for path, uri, error in results:
         if error:
             print(f"reports: upload of {path.name} failed: {error}", flush=True)
+            ok = False
         else:
             print(f"reports: uploaded {uri}", flush=True)
+    return ok
 
 
 def main() -> None:
     args = parse_args()
     log_run_config(args)
+    refuse_reused_run(args)
     started = time.time()
     status = run(args)
-    write_reports(args, started, time.time())
+    if not write_reports(args, started, time.time()) and status == 0:
+        print("The reports did not all upload, so the run is failed.", flush=True)
+        status = UPLOAD_FAILED_EXIT
     sys.exit(status)
 
 
