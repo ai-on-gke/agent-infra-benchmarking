@@ -267,6 +267,10 @@ run_ko() {
   (cd "${SUBSTRATE_DIR}" && hack/run-tool.sh ko "$@")
 }
 
+# How long delete_actors waits for the actors it deleted to be gone, which is
+# normally a matter of seconds, before reporting the ones that are not.
+ACTOR_DELETE_WAIT_SECS=60
+
 # delete_actors deletes every actor in ACTOR_ATESPACE, whatever its state. The
 # worker deletes the actors it created when a run ends, but not ones it lost
 # track of, such as those that crashed, and those would otherwise carry into
@@ -287,6 +291,34 @@ delete_actors() {
   if ! xargs -P 8 -I{} kubectl ate delete actor {} \
     --atespace="${ACTOR_ATESPACE}" --any-state >/dev/null <<<"${names}"; then
     echo "Warning: not every actor in ${ACTOR_ATESPACE} was deleted; see above." >&2
+  fi
+  wait_for_actors_gone
+}
+
+# wait_for_actors_gone waits for ACTOR_ATESPACE to empty, and warns about the
+# actors still in it once ACTOR_DELETE_WAIT_SECS is up. A delete is accepted at
+# once but done in the background, and an actor whose sandbox failed to stop
+# can stay DELETING for good, which no further delete clears; it keeps a
+# worker the next run then cannot use.
+wait_for_actors_gone() {
+  local deadline=$((SECONDS + ACTOR_DELETE_WAIT_SECS))
+  local left=""
+  while true; do
+    if ! left="$(kubectl ate get actors --atespace="${ACTOR_ATESPACE}" -o json |
+      jq -r '(.actors // [])[] | "\(.metadata.name) \(.status.state // "ACTOR_STATE_UNKNOWN")"')"; then
+      echo "Warning: could not list the actors left in ${ACTOR_ATESPACE}." >&2
+      return 1
+    fi
+    if [[ -z "${left}" ]] || ((SECONDS >= deadline)); then
+      break
+    fi
+    sleep 5
+  done
+  if [[ -n "${left}" ]]; then
+    echo "Warning: $(wc -l <<<"${left}" | tr -d ' ') actor(s) in ${ACTOR_ATESPACE} were not gone ${ACTOR_DELETE_WAIT_SECS}s after being deleted:" >&2
+    sed 's/^/  /' <<<"${left}" >&2
+    echo "  Each holds a worker the next run cannot use. One stuck in ACTOR_STATE_DELETING" >&2
+    echo "  is a substrate fault that no delete from here clears." >&2
     return 1
   fi
 }
