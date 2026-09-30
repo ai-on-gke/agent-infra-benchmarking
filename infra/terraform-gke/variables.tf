@@ -69,7 +69,7 @@ variable "cluster" {
     node_pools = optional(map(object({
       machine_type   = optional(string, "e2-medium")
       disk_size_gb   = optional(number, 100)
-      disk_type      = optional(string, "pd-standard")
+      disk_type      = optional(string, "pd-ssd")
       node_count     = optional(number, 1)
       min_node_count = optional(number, 1)
       max_node_count = optional(number, 3)

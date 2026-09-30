@@ -44,6 +44,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -416,6 +417,27 @@ func (u *runWorkloadUser) create(ctx context.Context) error {
 				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: u.templateName},
 			},
 		}, grpc.Trailer(tr))
+
+		if err != nil {
+			return err
+		}
+
+		_, err = u.cfg.APIStub.CreateActorEgressPolicy(callCtx, &ateapipb.CreateActorEgressPolicyRequest{
+			Actor: &ateapipb.ObjectRef{
+				Atespace: u.cfg.Atespace,
+				Name:     u.actorName,
+			},
+			EgressPolicy: &ateapipb.EgressPolicy{
+				Metadata: &ateapipb.ResourceMetadata{
+					Atespace: u.cfg.Atespace,
+					Name:     "default",
+				},
+				Rules: []*ateapipb.EgressRule{
+					{All: &emptypb.Empty{}},
+				},
+			},
+		})
+
 		return err
 	})
 	if err == nil && !u.isActive {
