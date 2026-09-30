@@ -164,6 +164,12 @@ def parse_args() -> argparse.Namespace:
         default=REPORT_PREFIX,
         help="Subfolder under --report-bucket.",
     )
+    p.add_argument(
+        "--actor-egress-allow",
+        default="",
+        help="Comma-separated hosts every actor may connect to, passed to the "
+        "worker's flag of the same name. Empty leaves the case's own, if any.",
+    )
     args, extra = p.parse_known_args()
     case = load_test_case(args.tests_file, args.test_case)
     # Split before anything reads either half: what is left after the load
@@ -171,6 +177,10 @@ def parse_args() -> argparse.Namespace:
     args.duration, args.users, args.spawn_rate = take_load(case, args.test_case)
     for key in HOST_KEYS:
         case.pop(key, None)
+    if args.actor_egress_allow:
+        case["actor-egress-allow"] = ",".join(
+            h for h in (case.get("actor-egress-allow", ""), args.actor_egress_allow) if h
+        )
     args.worker_flags = case
     # The manifest passes --report unconditionally, so an unset one arrives as
     # an empty string rather than not at all.

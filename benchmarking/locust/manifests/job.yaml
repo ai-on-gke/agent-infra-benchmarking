@@ -90,6 +90,9 @@ spec:
         - "--report=${BENCHMARK_REPORTS}"
         # Empty leaves the reports on the pod, where the Job's TTL takes them.
         - "--report-bucket=${BENCHMARK_REPORT_BUCKET}"
+        # The hosts every actor may connect to, read off the deployed
+        # ActorTemplate by run_locust_job.sh and handed to the worker.
+        - "--actor-egress-allow=${BENCHMARK_ACTOR_EGRESS_ALLOW}"
         env:
         # locust's own --only-summary, which it reads from this name. An env
         # var rather than an argument because an unset argument would reach

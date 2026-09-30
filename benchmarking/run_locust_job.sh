@@ -344,21 +344,26 @@ resolve_test_case() {
   docker run --rm --platform "${LOCUST_IMAGE_PLATFORM:-linux/amd64}" --entrypoint /app/testcase-helper "${LOCUST_IMAGE}" --case "$1"
 }
 
+# read_template prints the deployed ActorTemplate as JSON.
+read_template() {
+  local template="$1"
+  if ! kubectl ate get actor-template "${template}" --atespace="${TEMPLATE_ATESPACE}" -o json; then
+    echo "Error: could not read ActorTemplate ${TEMPLATE_ATESPACE}/${template}; is it deployed?" >&2
+    echo "  ./benchmarking/deploy-benchmarking.sh --deploy" >&2
+    return 1
+  fi
+}
+
 # check_template_class stops a run whose case asks for a sandbox class other than
 # the one its ActorTemplate was deployed with. The two have to match, and a
 # mismatch otherwise surfaced as every request of the run failing rather than as
 # an error before it started.
 check_template_class() {
-  local template="$1" want json have
+  local template="$1" json="$2" want have
   case "${SANDBOX_CLASS}" in
     gvisor) want=SANDBOX_CLASS_GVISOR ;;
     microvm) want=SANDBOX_CLASS_MICROVM ;;
   esac
-  if ! json="$(kubectl ate get actor-template "${template}" --atespace="${TEMPLATE_ATESPACE}" -o json)"; then
-    echo "Error: could not read ActorTemplate ${TEMPLATE_ATESPACE}/${template}; is it deployed?" >&2
-    echo "  ./benchmarking/deploy-benchmarking.sh --deploy" >&2
-    return 1
-  fi
   have="$(jq -r '.sandboxConfig.sandboxClass // empty' <<<"${json}")"
   if [[ "${have}" != "${want}" ]]; then
     echo "Error: case ${BENCHMARK_TEST_CASE} runs sandbox-class ${SANDBOX_CLASS}, but ActorTemplate" >&2
@@ -793,9 +798,19 @@ esac
 # case that names no template leaves it to the worker's default, which there is
 # nothing here to check against.
 TEMPLATE="$(jq -r '."workload-template" // ."workload-name" // empty' <<<"${TEST_CASE_JSON}")"
+BENCHMARK_ACTOR_EGRESS_ALLOW=""
 if [[ -n "${TEMPLATE}" ]]; then
-  check_template_class "${TEMPLATE}"
+  TEMPLATE_JSON="$(read_template "${TEMPLATE}")"
+  check_template_class "${TEMPLATE}" "${TEMPLATE_JSON}"
+  # Substrate's egress gateway refuses every connection from an actor without
+  # an egress policy. The worker gives each actor one that allows the hosts of
+  # the URLs in its template's env: what the actor is configured to call, such
+  # as the OTLP collector and a workload's backend.
+  BENCHMARK_ACTOR_EGRESS_ALLOW="$(jq -r '[.containers[]?.env[]?.value // empty
+    | capture("^[a-z][a-z0-9+.-]*://(?<host>[^/:?#]+)").host] | unique | join(",")' <<<"${TEMPLATE_JSON}")"
+  echo "  actors may connect to: ${BENCHMARK_ACTOR_EGRESS_ALLOW:-(nothing)}"
 fi
+export BENCHMARK_ACTOR_EGRESS_ALLOW
 
 echo
 echo "=== Recreating the WorkerPool ==="

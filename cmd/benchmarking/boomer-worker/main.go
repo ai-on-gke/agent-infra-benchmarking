@@ -70,6 +70,8 @@ func main() {
 			"runworkload only: the ActorTemplate the workload is measured on. Unset selects the workload's own.")
 		workloadTimeout = flag.Duration("workload-timeout", 0,
 			fmt.Sprintf("runworkload only: ceiling on the instruction retry loop. Unset selects %s.", runworkload.DefaultTimeout))
+		actorEgressAllow = flag.String("actor-egress-allow", "",
+			"runworkload only: comma-separated hosts or IPv4 addresses every actor may connect to, resolved once at startup. Unset gives actors no egress policy, so they can reach nothing.")
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
@@ -135,12 +137,13 @@ func main() {
 	// only that entry's Init reads these, so a run of another user class
 	// carries them without ever looking at them.
 	runworkload.SetOptions(runworkload.Options{
-		Workload:   *workloadName,
-		Template:   *workloadTemplate,
-		Timeout:    *workloadTimeout,
-		MinWait:    *minWait,
-		MaxWait:    *maxWait,
-		ResumeMode: *resumeMode,
+		Workload:    *workloadName,
+		Template:    *workloadTemplate,
+		Timeout:     *workloadTimeout,
+		MinWait:     *minWait,
+		MaxWait:     *maxWait,
+		ResumeMode:  *resumeMode,
+		EgressAllow: splitList(*actorEgressAllow),
 	})
 
 	entry, ok := userclass.Lookup(class)
@@ -185,4 +188,15 @@ func main() {
 	})
 
 	slog.Info("boomer exited")
+}
+
+// splitList splits a comma-separated flag value, dropping empty entries.
+func splitList(v string) []string {
+	var out []string
+	for _, item := range strings.Split(v, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }

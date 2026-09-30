@@ -158,6 +158,11 @@ gcloud application-default credentials already in place.
    ./benchmarking/run_all_test_cases.sh
    ```
 
+   Substrate blocks all outbound traffic from an actor that has no egress
+   policy. The worker gives each actor one that allows only the hosts named by
+   URLs in its ActorTemplate's env, such as the OTLP collector and openclaw's
+   mock LLM. To let actors reach another service, add its URL to the template.
+
 6. Collect the artifacts
 
    When a job ends it uploads its files to `reports/<run-id>/<test-case>/` in

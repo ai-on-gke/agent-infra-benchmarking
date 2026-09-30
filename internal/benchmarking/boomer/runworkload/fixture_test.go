@@ -44,6 +44,7 @@ type fakeControlClient struct {
 	resumeErr  error
 	suspendErr error
 	deleteErr  error
+	egressErr  error
 	// resumeErrTimes, when set, limits resumeErr to the first that many
 	// ResumeActor calls, standing in for a conflict that clears.
 	resumeErrTimes int
@@ -67,6 +68,8 @@ type fakeControlClient struct {
 	calls          []string
 	// template is the ActorTemplate name from the last CreateActor.
 	template string
+	// egressPolicy is the policy from the last CreateActorEgressPolicy.
+	egressPolicy *ateapipb.EgressPolicy
 }
 
 // setTrailer fills the caller's grpc.Trailer destination so a faked call can
@@ -95,6 +98,25 @@ func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.Create
 	f.calls = append(f.calls, "CreateActor")
 	f.template = in.GetActor().GetActorTemplate().GetName()
 	return &ateapipb.Actor{}, nil
+}
+
+func (f *fakeControlClient) CreateActorEgressPolicy(ctx context.Context, in *ateapipb.CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "CreateActorEgressPolicy")
+	if f.egressErr != nil {
+		return nil, f.egressErr
+	}
+	f.egressPolicy = in.GetEgressPolicy()
+	return in.GetEgressPolicy(), nil
+}
+
+// recordedEgressPolicy returns the policy the most recent
+// CreateActorEgressPolicy carried.
+func (f *fakeControlClient) recordedEgressPolicy() *ateapipb.EgressPolicy {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.egressPolicy
 }
 
 // recordedTemplate returns the ActorTemplate the most recent CreateActor
