@@ -158,9 +158,27 @@ variable "bucket_storage_class" {
 }
 
 variable "bucket_force_destroy" {
-  description = "If true, allows Terraform to delete the bucket even if it contains objects."
+  description = "If true, terraform destroy deletes the bucket with everything in it, every run's reports included. If false, destroy fails while the bucket holds anything."
   type        = bool
   default     = false
+}
+
+variable "bucket_soft_delete_retention_seconds" {
+  description = "How long a deleted object stays recoverable, and billed. 0 disables soft delete; GCS's own default is 604800 (7 days)."
+  type        = number
+  default     = 0
+}
+
+variable "report_retention_days" {
+  description = "Delete run reports under reports/ this many days after they were written. 0 keeps them."
+  type        = number
+  default     = 0
+}
+
+variable "enable_apis" {
+  description = "Enable the GCP APIs the deployment needs. Set false where they are managed elsewhere."
+  type        = bool
+  default     = true
 }
 
 variable "enable_atelet_bucket_iam" {

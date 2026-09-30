@@ -73,7 +73,7 @@ gcloud application-default credentials already in place.
    Sizing a pool: `node_count` is the size it starts at, and
    `min_node_count` / `max_node_count` bound the autoscaler around it
    (defaulting to 1 and 3). Setting min and max equal pins the pool, which is
-   what the example does for `sandboxed` — a run that is being compared with
+   what the example does for both pools - a run that is being compared with
    another has to measure a fixed amount of hardware.
 
    `node_locations` pins a pool to the zones it lists. Leaving it empty spreads
@@ -81,10 +81,21 @@ gcloud application-default credentials already in place.
    on a regional cluster like this one, so an unpinned pool is three times the
    nodes and three times the bill.
 
-3. Download the providers:
+3. Point Terraform at its state and download the providers. The state lives
+   in a GCS bucket, so a deployment can be managed by anyone on the project and
+   not only from the machine that created it. The bucket is made once per
+   project and shared; the prefix keeps each deployment's state apart, so use
+   your `default_resource_name`:
 
    ```bash
-   terraform -chdir=infra/terraform-gke init
+   # Once per project, if it does not exist yet:
+   gcloud storage buckets create gs://<project-id>-tfstate --location=us-central1 \
+     --uniform-bucket-level-access
+   gcloud storage buckets update gs://<project-id>-tfstate --versioning
+
+   terraform -chdir=infra/terraform-gke init \
+     -backend-config=bucket=<project-id>-tfstate \
+     -backend-config=prefix=<default_resource_name>
    ```
 
 4. Create everything, answering `yes` at the plan. A GKE cluster takes several
@@ -202,7 +213,10 @@ system.
 
 ### 3. Delete the cluster
 
-Use terraform to destroy the cluster:
+Use terraform to destroy the cluster. **This also deletes the bucket and every
+run's reports in it**, since the example sets `bucket_force_destroy = true`.
+Download any worth keeping first, or set it to `false`, in which case destroy
+stops at the bucket while it holds anything.
 
    ```bash
    terraform -chdir=infra/terraform-gke destroy --var-file terraform.tfvars
