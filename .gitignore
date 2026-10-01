@@ -8,5 +8,6 @@
 !/reports/20260929t155627z/
 
 # What `pip install ./benchmark-charts` leaves behind.
+/.venv/
 /benchmark-charts/build/
 *.egg-info/

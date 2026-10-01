@@ -122,10 +122,10 @@ gcloud application-default credentials already in place.
       `init` offers to copy an existing local state into the bucket.
 
 4. Create everything, answering `yes` at the plan. A GKE cluster takes several
-   minutes, and this is billable:
+   minutes:
 
    ```bash
-   terraform -chdir=infra/terraform-gke apply
+   terraform -chdir=infra/terraform-gke apply -var-file=terraform.tfvars
    ```
 
 ## Setting up the Agent Substrate
@@ -205,11 +205,49 @@ gcloud application-default credentials already in place.
      and the commits they were built from. The locust image is also tagged
      with the run id in the registry.
 
-   The scripts download them to `reports/<run-id>/<test-case>/`, and
-   [`benchmark-charts`](benchmark-charts) charts them:
-   `pip install ./benchmark-charts`, then `benchmark-report` for the latest
-   run, or `benchmark-report reports/<run-id>` for a given one. A drop-down in
-   the window switches between the run's jobs.
+   The scripts download them to `reports/<run-id>/<test-case>/`. See
+   [Charting a run](#charting-a-run) to view them.
+
+## Charting a run
+
+[`benchmark-charts`](benchmark-charts) draws a downloaded run in a matplotlib
+window: a request's latency percentiles and throughput, the worker nodes' CPU
+and memory utilization, and the actor counts over time, with the run's
+steady-state window shaded. It needs Python 3.9+.
+
+1. Create a virtual environment and install the package into it:
+
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install ./benchmark-charts
+   ```
+
+   In a new shell, activate it again before the next step.
+
+2. Chart a run, from the repo root — runs are looked up in `./reports`:
+
+   ```bash
+   benchmark-report
+   ```
+
+   With no argument it charts the latest run. Pass an index to pick another,
+   counted as a Python list is (`-2` the one before the latest, `0` the
+   oldest), or a path:
+
+   ```bash
+   benchmark-report reports/<run-id>
+   ```
+
+   A job's folder, `reports/<run-id>/<test-case>`, charts that job alone.
+
+   Drop-downs in the window switch between the run's jobs, a job's repeats,
+   and the request the top panel charts. These pick what it opens on:
+
+   - `--job <test-case>` — default: the first by name.
+   - `--repeat <n>` — default: the first.
+   - `--chart ttfi|execution-time|cycle-time` — default: `ttfi`.
+
 
 ## Cleanup
 
