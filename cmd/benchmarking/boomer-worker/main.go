@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
@@ -40,6 +41,19 @@ import (
 	// flags, and handed over with runworkload.SetOptions.
 	"github.com/agent-substrate/substrate/agent-infra-benchmarking/internal/benchmarking/boomer/runworkload"
 	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
+)
+
+const (
+	// The stop handler blocks boomer's message loop, and boomer shuts itself
+	// down after 60s without a master heartbeat.
+	teardownTimeout = 45 * time.Second
+
+	// Boomer sends stats to the master every 3s.
+	statsReportWait = 4 * time.Second
+
+	// One monitoring/prometheus.yaml scrape interval (10s) plus margin, so the
+	// counters the teardown left are scraped before the pod goes.
+	finalScrapeWait = 15 * time.Second
 )
 
 func main() {
@@ -168,15 +182,19 @@ func main() {
 		}
 	}()
 
+	teardown := sync.OnceFunc(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), teardownTimeout)
+		defer cancel()
+		shutdownFn(ctx)
+	})
+
+	// The master sends this stop before it quits (tests/runworkload.py) and
+	// waits for it. Boomer reports stats only until the handler returns, so it
+	// holds on until the teardown's rows have gone out.
 	boomer.Events.Subscribe("boomer:stop", func() {
 		slog.Info("boomer:stop event received; suspending+deleting actors")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		shutdownFn(shutdownCtx)
-
-		slog.Info("forcing container restart to ensure clean state")
-
-		os.Exit(0)
+		teardown()
+		time.Sleep(statsReportWait)
 	})
 
 	// Blocks until SIGINT/SIGTERM or master quit. Boomer registers its own
@@ -187,7 +205,10 @@ func main() {
 		Fn:     taskFn,
 	})
 
-	slog.Info("boomer exited")
+	// A worker stopped by a signal rather than by the master got no stop.
+	teardown()
+	slog.Info("boomer exited; waiting for the final scrape", slog.Duration("wait", finalScrapeWait))
+	time.Sleep(finalScrapeWait)
 }
 
 // splitList splits a comma-separated flag value, dropping empty entries.

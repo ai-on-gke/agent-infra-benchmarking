@@ -93,6 +93,11 @@ const (
 	// teardown, so that the actors already created are still removed when an
 	// iteration is wedged rather than merely slow.
 	drainTimeout = 15 * time.Second
+
+	// How long a VU refused by the teardown waits before boomer calls it again.
+	// Boomer keeps the VUs looping until the teardown returns, and without a
+	// wait they spin against the teardown's own calls.
+	refusedWait = 100 * time.Millisecond
 )
 
 // A call the control plane refuses with Aborted lost a race with a
@@ -248,6 +253,7 @@ func (r *runWorkloadRuntime) dynamicWait() time.Duration {
 // map the teardown has already walked.
 func (r *runWorkloadRuntime) iterate() {
 	if !r.inflight.enter() {
+		time.Sleep(refusedWait)
 		return
 	}
 	defer r.inflight.leave()

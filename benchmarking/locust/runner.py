@@ -19,10 +19,12 @@ worker, both as children of this process, so a Job that runs this ends when
 the run ends rather than being stopped from outside. The ordering that makes
 that work:
 
-  * locust's -t stops the test and sends a "quit" to the worker.
-  * boomer returns from its run loop on that quit and suspends and deletes
-    every actor it created. The SIGTERM below is the fallback for a master
-    that died without sending one; boomer answers either the same way.
+  * at locust's -t the master sends the worker a "stop" and waits while it
+    suspends and deletes every actor it created (tests/runworkload.py), so
+    those calls are in locust's stats. Then it sends a "quit".
+  * boomer returns from its run loop on that quit and waits for a last
+    Prometheus scrape. The SIGTERM below is the fallback for a master that
+    died without sending one; boomer then deletes the actors itself.
   * this process exits once both have, and its status is the run's.
 
 Adapted from substrate's benchmarking/locust/runner.py, minus the two parts
@@ -81,8 +83,8 @@ FAILURE_RATIO_KEY = "max-failure-ratio"
 DEFAULT_MAX_FAILURE_RATIO = 0.01
 
 # How long boomer gets to suspend and delete its actors after the run. Longer
-# than the worker's own 60s shutdown budget, so the timeout here is reached
-# only by a worker that is not going to finish at all.
+# than the worker's own teardown and final scrape wait, so the timeout here is
+# reached only by a worker that is not going to finish at all.
 BOOMER_STOP_TIMEOUT_SECS = 300
 
 # Prometheus scrapes every 10s, so the run's last samples land after the run

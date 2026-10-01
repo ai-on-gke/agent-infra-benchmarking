@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Stub RunWorkloadUser declaration.
+"""Stub RunWorkloadUser declaration, and the master's stop at the end of a run.
 
 The real load implementation lives in the boomer-Go worker at
 internal/benchmarking/boomer/runworkload/; this Python class is declared only
@@ -28,7 +28,42 @@ counterpart, and its name is load-bearing twice over: the master loads
 the Go package registers with userclass.Add.
 """
 
+import logging
 import os
+import time
+
+import gevent
+from locust import events
+from locust.runners import MasterRunner
+
+# How long the master waits for the worker's teardown. Above boomer-worker's
+# teardownTimeout plus its final stats report.
+WORKER_STOP_TIMEOUT_SECS = 60
+
+
+@events.test_stop.add_listener
+def stop_workers(environment, **_kwargs) -> None:
+    """Have the worker delete its actors while the master still takes its stats.
+
+    A headless run ends by sending the worker "quit" and stops listening half a
+    second later, which lost the teardown's DeleteActor rows. test_stop fires
+    after the master has left the running state, so a worker that registers
+    again once stopped is not given users again.
+    """
+    runner = environment.runner
+    if not isinstance(runner, MasterRunner):
+        return
+    # Not a custom message: boomer reads it as the master's own stop.
+    runner.send_message("stop")
+    deadline = time.monotonic() + WORKER_STOP_TIMEOUT_SECS
+    while runner.user_count and time.monotonic() < deadline:
+        gevent.sleep(1)
+    if runner.user_count:
+        logging.getLogger(__name__).warning(
+            "Workers did not stop within %ss; their teardown may be missing from the stats.",
+            WORKER_STOP_TIMEOUT_SECS,
+        )
+
 
 if os.environ.get("LOCUST_NO_RUNWORKLOAD_USER") != "1":
     from locust import User, task
