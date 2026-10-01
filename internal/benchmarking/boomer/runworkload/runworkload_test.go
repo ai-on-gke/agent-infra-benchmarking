@@ -233,27 +233,27 @@ func TestTTFIExcludesTheSuspend(t *testing.T) {
 	}
 }
 
-// The window closes where the instruction is issued, so serving it is outside.
-// What it left out is not lost: the ExecutionTime span spans that round trip.
-func TestTTFIEndsBeforeTheInstruction(t *testing.T) {
+// The window closes on the served instruction in both modes, so implicit
+// resume, where the router wakes the actor, is not reported as near zero.
+func TestTTFIEndsWhenTheInstructionIsServed(t *testing.T) {
 	const service = 200 * time.Millisecond
-	rt, sr := newMeasuringUser(t, &pingServer{PingDelay: service}, &fakeControlClient{})
+	for _, mode := range []string{ResumeModeExplicit, ResumeModeImplicit} {
+		t.Run(mode, func(t *testing.T) {
+			rt, sr := newMeasuringUser(t, &pingServer{PingDelay: service}, &fakeControlClient{})
+			rt.opts.ResumeMode = mode
 
-	rt.iterate()
+			rt.iterate()
 
-	total := mustAttr(t, spanByName(t, sr, ttfiMetric), "total_ms").AsFloat64()
-	if want := boomerutil.MsFloat(service); total >= want {
-		t.Errorf("total_ms: got %v, want well under %v — the window kept the instruction's service time", total, want)
-	}
-	instruction := spanByName(t, sr, executionTimeMetric)
-	if got := instruction.EndTime().Sub(instruction.StartTime()); got < service {
-		t.Errorf("%s span duration: got %v, want >= %v", executionTimeMetric, got, service)
+			total := mustAttr(t, spanByName(t, sr, ttfiMetric), "total_ms").AsFloat64()
+			if want := boomerutil.MsFloat(service); total < want {
+				t.Errorf("total_ms: got %v, want >= %v — the window closed before the instruction was served", total, want)
+			}
+		})
 	}
 }
 
 // CycleTime runs from the resume to the suspend returning, so unlike TTFI it
-// holds both the instruction's service time and the suspend, and its span is
-// the one the suspend is traced under.
+// holds the suspend, and its span is the one the suspend is traced under.
 func TestCycleTimeSpansTheResumeThroughTheSuspend(t *testing.T) {
 	const service, suspend = 100 * time.Millisecond, 100 * time.Millisecond
 	rt, sr := newMeasuringUser(t, &pingServer{PingDelay: service}, &fakeControlClient{suspendDelay: suspend})

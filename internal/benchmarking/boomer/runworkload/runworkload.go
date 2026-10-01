@@ -18,9 +18,9 @@
 //
 // Every control-plane call reports its own row and span through tracedCall.
 // On top of them each cycle reports TTFI: the wait from having a suspended
-// actor to that actor taking work. See measureTTFI for what the window
-// includes. It also reports CycleTime, the whole cycle from the resume to the
-// suspend returning; see cycle.
+// actor to that actor serving an instruction. See measureTTFI for what the
+// window includes. It also reports CycleTime, the whole cycle from the resume
+// to the suspend returning; see cycle.
 //
 // The workload the actor runs is a parameter: --workload-name selects an
 // implementation of the workload interface (see workload.go) and
@@ -515,24 +515,15 @@ func (u *runWorkloadUser) cycle(ctx context.Context, mode string) (call string, 
 }
 
 // measureTTFI brings the actor back up, sends it one instruction, and reports
-// the wait as TTFI. It must be called with the actor suspended, which is how
-// iterate leaves it between iterations: the window opens here.
+// the wait until that instruction is served as TTFI. It must be called with the
+// actor suspended, which is how iterate leaves it between iterations.
 //
-// Only explicit mode issues ResumeActor. Implicit leaves the wake to the
-// router, which does it while holding the instruction — so under implicit
-// resume the window contains nothing and TTFI is near zero. The number to read
-// there is the ExecutionTime row.
+// Only explicit mode issues ResumeActor; implicit leaves the wake to the
+// router. Either way the window closes on the served instruction, so it
+// includes the instruction's service time, which ExecutionTime reports alone.
 //
-// The window closes at the moment the instruction was issued, not when it
-// answered: serving it is the application's cost and differs per workload.
-// Since the instruction is sent once and expected to be served, that instant
-// is right after the resume returned — so TTFI is the resume the client waited
-// through, and the instruction is what proves the actor was ready for it
-// rather than what dates the readiness.
-//
-// Either call failing reports the window as a failure over the wait it spent
-// and hands the error back for the actor to be discarded, so the cycle stops
-// there either way.
+// A failed call reports the window as a failure over the wait it spent and
+// hands the error back for the actor to be discarded.
 func (u *runWorkloadUser) measureTTFI(ctx context.Context, mode string) error {
 	if mode == "" {
 		mode = ResumeModeExplicit
@@ -554,18 +545,9 @@ func (u *runWorkloadUser) measureTTFI(ctx context.Context, mode string) error {
 		}
 	}
 
-	// The window closes here, with the instruction about to go out: serving it
-	// is the application's cost, not substrate's.
-	total := time.Since(start)
-	if err := u.executeInstruction(ctx); err != nil {
-		// Nothing was served, so there is no instant to close on; the row
-		// carries the whole wait the window did spend.
-		u.recordWindow(span, ttfiMetric, time.Since(start), err)
-		return err
-	}
-
-	u.recordWindow(span, ttfiMetric, total, nil)
-	return nil
+	err := u.executeInstruction(ctx)
+	u.recordWindow(span, ttfiMetric, time.Since(start), err)
+	return err
 }
 
 // recordWindow closes out the window reported as name, as a success or as a
@@ -587,10 +569,6 @@ func (u *runWorkloadUser) recordWindow(span trace.Span, name string, total time.
 // exception: a 421 says the router used a worker assignment that had just gone
 // stale, and the resend is routed afresh, so it is sent again up to
 // staleAssignmentAttempts times.
-//
-// The round trip it takes is this row's own latency and the ExecutionTime
-// span's duration, so a caller that closes a window before the instruction
-// only has to take its own timestamp first.
 //
 // A non-nil error leaves the actor in a state the run cannot reason about: it
 // is the signal to discard the actor, not merely a failed sample.
