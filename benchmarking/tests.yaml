@@ -69,5 +69,6 @@ cases:
     sandbox-class: gvisor
     workload-name: openclaw
     workload-template: openclaw
+    workload-timeout: 120s
     resume-mode: explicit
     max-failure-ratio: 0.01
