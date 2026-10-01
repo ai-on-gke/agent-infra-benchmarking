@@ -62,6 +62,10 @@ POOL_MANIFEST="${BENCHMARKING_DIR}/workloads/manifests/workloads.yaml.tmpl"
 POOL_NAME=benchmark-ateom
 POOL_NAMESPACE=benchmark-workloads
 
+# The atespace the ActorTemplates are deployed in. Has to match metadata.atespace
+# in workloads/manifests/*-template.yaml.tmpl.
+TEMPLATE_ATESPACE=benchmark-workloads
+
 # The atespace the run's actors are created in: boomer-worker's --atespace
 # default, which no case overrides. The ActorTemplates they are created from
 # are in benchmark-workloads, and are left alone.
@@ -142,6 +146,17 @@ DEFAULT_WAIT_TIMEOUT_SECS=3600
 # scheduling rather than the run.
 DEFAULT_POD_START_TIMEOUT_SECS=300
 
+# follow_run's status when --wait-timeout is reached with the run still going,
+# which is what tells the cleanup after it to leave the run's actors alone.
+WAIT_TIMED_OUT=124
+# Status after Ctrl-C or a SIGTERM stopped the run. run_all_test_cases.sh reads
+# it as "stop here", where any other failure moves on to the next case.
+INTERRUPTED=130
+# Ceiling on the wait for the Job's pod to go once a run is stopped early. Longer
+# than the pod's terminationGracePeriodSeconds in manifests/job.yaml, which is
+# the time runner.py has to wind the run down and upload what it recorded.
+STOP_TIMEOUT_SECS=480
+
 DELETE=0
 
 usage() {
@@ -155,7 +170,8 @@ usage() {
   echo "  --run-id NAME           The run this test case is part of (default: a UTC"
   echo "                          timestamp). run_all_test_cases.sh passes one to every"
   echo "                          case. The run_id label in Prometheus, beside test_case;"
-  echo "                          the reports go to reports/NAME/<test-case>/."
+  echo "                          the reports go to reports/NAME/<test-case>/. An id"
+  echo "                          whose reports for the case already exist is refused."
   echo "  --user-class NAME       Locust user class, lowercase; runs tests/NAME.py"
   echo "                          (default: runworkload)"
   echo "  --test-case NAME        The run, named as a case in benchmarking/tests.yaml"
@@ -183,8 +199,8 @@ usage() {
   echo "                          reprints while the run goes. The aggregate it prints when"
   echo "                          the run ends is kept, so the result is unaffected."
   echo "  --wait-timeout SECONDS  Ceiling on the wait for the run (default: 3600). Reaching"
-  echo "                          it stops the waiting, not the Job, though the Job's"
-  echo "                          actors are deleted all the same."
+  echo "                          it stops the waiting, not the Job, and leaves the Job's"
+  echo "                          actors and reports to it."
   echo "  --pod-start-timeout SECONDS"
   echo "                          Ceiling on the wait for the pod to start, which covers the"
   echo "                          image pull and the scheduling (default: 300)"
@@ -192,8 +208,13 @@ usage() {
   echo "                          into DIR/<run-id>/<test-case>/ (default: ${ROOT}/reports)"
   echo "  --no-download           Leave the reports in the bucket."
   echo ""
+  echo "Ctrl-C (or SIGTERM) while a run is going stops it: the Job is deleted, which"
+  echo "gives the run time to delete its actors and upload what it recorded, and the"
+  echo "reports are then downloaded as usual. To leave a run going, use --no-wait."
+  echo ""
   echo "Other:"
-  echo "  --delete                Delete the Job and exit. The workloads are left alone;"
+  echo "  --delete                Stop and delete the Job, waiting while it deletes its actors"
+  echo "                          and uploads what it recorded. The workloads are left alone;"
   echo "                          deploy-benchmarking.sh --delete removes those."
   echo "  -h|--help               Show this help message"
   echo ""
@@ -247,6 +268,10 @@ run_ko() {
   (cd "${SUBSTRATE_DIR}" && hack/run-tool.sh ko "$@")
 }
 
+# How long delete_actors waits for the actors it deleted to be gone, which is
+# normally a matter of seconds, before reporting the ones that are not.
+ACTOR_DELETE_WAIT_SECS=60
+
 # delete_actors deletes every actor in ACTOR_ATESPACE, whatever its state. The
 # worker deletes the actors it created when a run ends, but not ones it lost
 # track of, such as those that crashed, and those would otherwise carry into
@@ -267,13 +292,42 @@ delete_actors() {
   if ! xargs -P 8 -I{} kubectl ate delete actor {} \
     --atespace="${ACTOR_ATESPACE}" --any-state >/dev/null <<<"${names}"; then
     echo "Warning: not every actor in ${ACTOR_ATESPACE} was deleted; see above." >&2
+  fi
+  wait_for_actors_gone
+}
+
+# wait_for_actors_gone waits for ACTOR_ATESPACE to empty, and warns about the
+# actors still in it once ACTOR_DELETE_WAIT_SECS is up. A delete is accepted at
+# once but done in the background, and an actor whose sandbox failed to stop
+# can stay DELETING for good, which no further delete clears; it keeps a
+# worker the next run then cannot use.
+wait_for_actors_gone() {
+  local deadline=$((SECONDS + ACTOR_DELETE_WAIT_SECS))
+  local left=""
+  while true; do
+    if ! left="$(kubectl ate get actors --atespace="${ACTOR_ATESPACE}" -o json |
+      jq -r '(.actors // [])[] | "\(.metadata.name) \(.status.state // "ACTOR_STATE_UNKNOWN")"')"; then
+      echo "Warning: could not list the actors left in ${ACTOR_ATESPACE}." >&2
+      return 1
+    fi
+    if [[ -z "${left}" ]] || ((SECONDS >= deadline)); then
+      break
+    fi
+    sleep 5
+  done
+  if [[ -n "${left}" ]]; then
+    echo "Warning: $(wc -l <<<"${left}" | tr -d ' ') actor(s) in ${ACTOR_ATESPACE} were not gone ${ACTOR_DELETE_WAIT_SECS}s after being deleted:" >&2
+    sed 's/^/  /' <<<"${left}" >&2
+    echo "  Each holds a worker the next run cannot use. One stuck in ACTOR_STATE_DELETING" >&2
+    echo "  is a substrate fault that no delete from here clears." >&2
     return 1
   fi
 }
 
 # resolve_test_case prints the named case as JSON, by running the
 # testcase-helper binary that ships in the locust image beside the tests.yaml it
-# reads. Going through the image is what keeps a YAML parser off the host, which
+# reads. LOCUST_IMAGE is pinned to a digest by then, so the image read here is
+# the one the Job runs rather than whatever copy of the tag is local. Going through the image is what keeps a YAML parser off the host, which
 # has kubectl and docker and not necessarily PyYAML or yq.
 #
 # It also moves the "no such case" failure to before the pool is rebuilt and
@@ -288,6 +342,76 @@ resolve_test_case() {
   # --platform suppresses the Docker warning about host/image architecture mismatch
   # when resolving the case locally on an ARM Mac.
   docker run --rm --platform "${LOCUST_IMAGE_PLATFORM:-linux/amd64}" --entrypoint /app/testcase-helper "${LOCUST_IMAGE}" --case "$1"
+}
+
+# read_template prints the deployed ActorTemplate as JSON.
+read_template() {
+  local template="$1"
+  if ! kubectl ate get actor-template "${template}" --atespace="${TEMPLATE_ATESPACE}" -o json; then
+    echo "Error: could not read ActorTemplate ${TEMPLATE_ATESPACE}/${template}; is it deployed?" >&2
+    echo "  ./benchmarking/deploy-benchmarking.sh --deploy" >&2
+    return 1
+  fi
+}
+
+# check_template_class stops a run whose case asks for a sandbox class other than
+# the one its ActorTemplate was deployed with. The two have to match, and a
+# mismatch otherwise surfaced as every request of the run failing rather than as
+# an error before it started.
+check_template_class() {
+  local template="$1" json="$2" want have
+  case "${SANDBOX_CLASS}" in
+    gvisor) want=SANDBOX_CLASS_GVISOR ;;
+    microvm) want=SANDBOX_CLASS_MICROVM ;;
+  esac
+  have="$(jq -r '.sandboxConfig.sandboxClass // empty' <<<"${json}")"
+  if [[ "${have}" != "${want}" ]]; then
+    echo "Error: case ${BENCHMARK_TEST_CASE} runs sandbox-class ${SANDBOX_CLASS}, but ActorTemplate" >&2
+    echo "${template} was deployed with ${have:-no sandbox class}. Redeploy it with:" >&2
+    echo "  ./benchmarking/deploy-benchmarking.sh --deploy --sandbox-class ${SANDBOX_CLASS}" >&2
+    return 1
+  fi
+}
+
+# tag_image_with_run_id adds the run id as a tag on the pinned locust image, so
+# the image a run used can be found by the run's name, and a registry cleanup
+# that deletes untagged images cannot take it once the build tag moves on.
+tag_image_with_run_id() {
+  if ! command -v gcloud &>/dev/null; then
+    echo "Warning: gcloud is not installed, so ${LOCUST_IMAGE} is not tagged ${RUN_ID}." >&2
+    return 0
+  fi
+  if ! gcloud artifacts docker tags add "${LOCUST_IMAGE}" "${LOCUST_IMAGE%@*}:${RUN_ID}" --quiet; then
+    echo "Warning: could not tag ${LOCUST_IMAGE} as ${RUN_ID}; the run goes ahead untagged." >&2
+  fi
+}
+
+# run_info prints, as JSON, what the run was made of that its reports cannot
+# otherwise say: every image it ran by digest, and the commits it was built
+# from. runner.py writes it to run.json beside the reports.
+run_info() {
+  local templates='{}' deployments dirty=false
+  if [[ -n "${TEMPLATE}" ]]; then
+    templates="$(kubectl ate get actor-template "${TEMPLATE}" --atespace="${TEMPLATE_ATESPACE}" -o json |
+      jq --arg t "${TEMPLATE}" '{($t): [(.containers // [])[].image]}')"
+  fi
+  # The WorkerPool's workers and anything the workload depends on, such as
+  # mock-llm, run as Deployments in the pool's namespace.
+  deployments="$(kubectl get deployments --namespace="${POOL_NAMESPACE}" -o json |
+    jq '[.items[] | {(.metadata.name): [.spec.template.spec.containers[].image]}] | add // {}')"
+  if ! git diff --quiet HEAD --; then
+    dirty=true
+  fi
+  jq -n \
+    --arg locust_image "${LOCUST_IMAGE}" \
+    --argjson actor_templates "${templates}" \
+    --argjson deployments "${deployments}" \
+    --arg commit "$(git rev-parse HEAD)" \
+    --argjson commit_dirty "${dirty}" \
+    --arg substrate_commit "$(git -C "${SUBSTRATE_DIR}" rev-parse HEAD)" \
+    '{locust_image: $locust_image, actor_templates: $actor_templates,
+      deployments: $deployments, commit: $commit, commit_dirty: $commit_dirty,
+      substrate_commit: $substrate_commit}'
 }
 
 # recreate_worker_pool gives the run its own pool: the old one goes, a new one
@@ -356,8 +480,13 @@ submit_job() {
   envsubst < "${JOB_MANIFEST}" | kubectl apply -f -
 }
 
-delete_job() {
-  envsubst < "${JOB_MANIFEST}" | kubectl delete --ignore-not-found -f -
+# stop_job deletes the Job and waits for its pod to go. Only the Job: deleting
+# it sends the pod the SIGTERM runner.py winds the run down on, and the upload
+# at the end of that goes through the Job's ServiceAccount, so that and its
+# RoleBinding have to stay.
+stop_job() {
+  kubectl delete job "${JOB_NAME}" --namespace="${NAMESPACE}" --ignore-not-found \
+    --cascade=foreground --wait=true --timeout="${STOP_TIMEOUT_SECS}s"
 }
 
 # job_status prints the Job's succeeded and failed counts as one pipe-joined
@@ -424,8 +553,13 @@ follow_run() {
     echo
     echo "=== Run log ==="
     # Not fatal on its own: a dropped stream is a lost log, not a failed run,
-    # and the status below is what decides.
-    kubectl logs -f "job/${JOB_NAME}" --namespace="${NAMESPACE}" || true
+    # and the status below is what decides. In the background because bash runs
+    # a trap only between commands, and a foreground stream lasts the whole run;
+    # `wait` is interrupted by a trapped signal where the stream is not.
+    kubectl logs -f "job/${JOB_NAME}" --namespace="${NAMESPACE}" &
+    LOGS_PID=$!
+    wait "${LOGS_PID}" || true
+    LOGS_PID=""
     echo "=== End of run log ==="
     echo
   else
@@ -460,9 +594,58 @@ follow_run() {
   done
 
   echo "Error: timed out after ${WAIT_TIMEOUT_SECS}s waiting for ${JOB_NAME}." >&2
-  echo "It is still in the cluster; --wait-timeout raises the ceiling." >&2
+  echo "It is still running, so its actors and reports are left to it;" >&2
+  echo "--wait-timeout raises the ceiling. To follow it, or to stop it:" >&2
   echo "  kubectl logs -f job/${JOB_NAME} -n ${NAMESPACE}" >&2
-  return 1
+  echo "  ./benchmarking/run_locust_job.sh --delete" >&2
+  return "${WAIT_TIMED_OUT}"
+}
+
+# stop_run is the INT/TERM trap while a run is in flight. Deleting the Job sends
+# its pod the SIGTERM that runner.py winds the run down on: locust stops, the
+# worker deletes its actors, and what the run recorded is uploaded. Then the
+# leftover actors and the download are handled as for a run that ended on its
+# own.
+stop_run() {
+  trap - INT TERM
+  if [[ -n "${LOGS_PID:-}" ]]; then
+    kill "${LOGS_PID}" 2>/dev/null || true
+  fi
+  echo
+  echo "=== Interrupted: stopping the run ===" >&2
+  stop_job || true
+  echo
+  echo "=== Deleting actors ==="
+  delete_actors || true
+  if [[ "${NO_DOWNLOAD}" -eq 0 ]]; then
+    download_reports "${RUN_ID}" "${BENCHMARK_TEST_CASE}" || true
+  fi
+  exit "${INTERRUPTED}"
+}
+
+# refuse_existing_reports stops a run whose id and case already have reports in
+# the bucket. runner.py could not overwrite them, its grant being objectCreator;
+# the download would fetch the earlier run's files and pass them off as this
+# one's; and Prometheus would sum the two runs' series under the same labels.
+refuse_existing_reports() {
+  local prefix="gs://${BENCHMARK_REPORT_BUCKET}/${REPORT_PREFIX}/${RUN_ID}/${BENCHMARK_TEST_CASE}/"
+  local out
+  if [[ -z "${BENCHMARK_REPORT_BUCKET}" ]] || ! command -v gcloud &>/dev/null; then
+    return 0
+  fi
+  if out="$(gcloud storage ls "${prefix}" 2>&1)"; then
+    echo "Error: ${prefix} already holds reports: run ${RUN_ID} has run" >&2
+    echo "${BENCHMARK_TEST_CASE} before. Pick another --run-id, or leave it unset" >&2
+    echo "for a fresh timestamp." >&2
+    return 1
+  fi
+  # Any other failure, such as expired credentials, says nothing about whether
+  # the reports are there.
+  if [[ "${out}" != *"matched no objects"* ]]; then
+    echo "Error: could not check ${prefix} for an earlier run's reports:" >&2
+    echo "${out}" >&2
+    return 1
+  fi
 }
 
 # download_reports copies what runner.py uploaded for one test case into
@@ -506,11 +689,8 @@ export LOCUST_IMAGE BENCHMARK_USER_CLASS BENCHMARK_RUNNER_KSA
 export BENCHMARK_REPORTS BENCHMARK_REPORT_BUCKET
 
 if [[ "${DELETE}" -eq 1 ]]; then
-  # The manifest renders with whatever is set, because delete matches on the
-  # name and kind alone; the run-shaped values below are not needed for it.
-  export BENCHMARK_RUN_ID="" BENCHMARK_TEST_CASE="" BENCHMARK_ONLY_SUMMARY=false
-  echo "=== Deleting the locust Job ==="
-  delete_job
+  echo "=== Stopping and deleting the locust Job ==="
+  stop_job
   exit 0
 fi
 
@@ -564,6 +744,9 @@ if ! [[ "${RUN_ID}" =~ ^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$ ]]; then
 fi
 
 export BENCHMARK_RUN_ID="${RUN_ID}"
+
+# Ahead of the build, which is the slow part, so a reused id fails in seconds.
+refuse_existing_reports
 # locust rejects an empty --only-summary rather than reading it as false, so
 # this is never blank.
 if [[ "${ONLY_SUMMARY}" -eq 1 ]]; then
@@ -581,8 +764,15 @@ if [[ "${NO_BUILD}" -eq 0 ]]; then
   "${BENCHMARKING_DIR}/locust/build_and_push.sh"
 fi
 
+# The Job's pod pulls the tag afresh, so without a digest a --no-build run read
+# its case out of whatever image was left locally while running the registry's.
+LOCUST_IMAGE="$("${BENCHMARKING_DIR}/locust/pin_image.sh" "${LOCUST_IMAGE}")"
+export LOCUST_IMAGE
+tag_image_with_run_id
+
 echo
 echo "=== Resolving test case ==="
+echo "  image: ${LOCUST_IMAGE}"
 TEST_CASE_JSON="$(resolve_test_case "${BENCHMARK_TEST_CASE}")"
 echo "  ${BENCHMARK_TEST_CASE}: ${TEST_CASE_JSON}"
 
@@ -604,12 +794,39 @@ case "${SANDBOX_CLASS}" in
     ;;
 esac
 
+# Before the pool is rebuilt, since a mismatch means the rebuild is wasted. A
+# case that names no template leaves it to the worker's default, which there is
+# nothing here to check against.
+TEMPLATE="$(jq -r '."workload-template" // ."workload-name" // empty' <<<"${TEST_CASE_JSON}")"
+BENCHMARK_ACTOR_EGRESS_ALLOW=""
+if [[ -n "${TEMPLATE}" ]]; then
+  TEMPLATE_JSON="$(read_template "${TEMPLATE}")"
+  check_template_class "${TEMPLATE}" "${TEMPLATE_JSON}"
+  # Substrate's egress gateway refuses every connection from an actor without
+  # an egress policy. The worker gives each actor one that allows the hosts of
+  # the URLs in its template's env: what the actor is configured to call, such
+  # as the OTLP collector and a workload's backend.
+  BENCHMARK_ACTOR_EGRESS_ALLOW="$(jq -r '[.containers[]?.env[]?.value // empty
+    | capture("^[a-z][a-z0-9+.-]*://(?<host>[^/:?#]+)").host] | unique | join(",")' <<<"${TEMPLATE_JSON}")"
+  echo "  actors may connect to: ${BENCHMARK_ACTOR_EGRESS_ALLOW:-(nothing)}"
+fi
+export BENCHMARK_ACTOR_EGRESS_ALLOW
+
 echo
 echo "=== Recreating the WorkerPool ==="
 recreate_worker_pool
 
+# After the pool, whose workers' image is part of what the run was made of.
+BENCHMARK_RUN_INFO="$(run_info | base64 | tr -d '\n')"
+export BENCHMARK_RUN_INFO
+
 echo
 echo "=== Running the benchmark Job ==="
+# Set before the submit, so an interrupt that lands while the Job is being
+# created still stops it.
+if [[ "${NO_WAIT}" -eq 0 ]]; then
+  trap stop_run INT TERM
+fi
 submit_job
 
 if [[ "${NO_WAIT}" -eq 1 ]]; then
@@ -621,8 +838,14 @@ fi
 # gets one: what it managed to record before it stopped is usually the point.
 run_status=0
 follow_run || run_status=$?
+# The run is over, or being left to itself: an interrupt from here on should
+# not delete the Job and its log.
+trap - INT TERM
 
-# Whether the run finished or --wait-timeout was reached with it still going.
+if [[ "${run_status}" -eq "${WAIT_TIMED_OUT}" ]]; then
+  exit "${run_status}"
+fi
+
 echo
 echo "=== Deleting actors ==="
 delete_actors || true

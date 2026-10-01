@@ -28,8 +28,6 @@ BENCHMARKING_DIR="${ROOT}/benchmarking"
 
 NAMESPACE=benchmarking
 
-# Grafana is not deployed; it sits in monitoring/grafana.yaml for when it is
-# wanted.
 MONITORING_MANIFEST="${BENCHMARKING_DIR}/monitoring/prometheus.yaml"
 
 DEPLOY=0

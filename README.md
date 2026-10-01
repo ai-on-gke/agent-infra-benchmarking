@@ -73,7 +73,7 @@ gcloud application-default credentials already in place.
    Sizing a pool: `node_count` is the size it starts at, and
    `min_node_count` / `max_node_count` bound the autoscaler around it
    (defaulting to 1 and 3). Setting min and max equal pins the pool, which is
-   what the example does for `sandboxed` — a run that is being compared with
+   what the example does for both pools - a run that is being compared with
    another has to measure a fixed amount of hardware.
 
    `node_locations` pins a pool to the zones it lists. Leaving it empty spreads
@@ -81,24 +81,60 @@ gcloud application-default credentials already in place.
    on a regional cluster like this one, so an unpinned pool is three times the
    nodes and three times the bill.
 
-3. Download the providers:
+3. Initialize Terraform. The state can be kept in one of two places:
 
-   ```bash
-   terraform -chdir=infra/terraform-gke init
-   ```
+   - **Local** (default): nothing to set up. Only this machine can manage the
+     deployment, though, and losing the state file leaves its resources
+     orphaned.
+   - **GCS bucket**: anyone on the project can manage the deployment, and the
+     state is versioned and outlives the machine. The bucket has to be created
+     once per project first.
+
+   Follow one of:
+
+   1. **Local state**, in `infra/terraform-gke/terraform.tfstate`:
+
+      ```bash
+      terraform -chdir=infra/terraform-gke init
+      ```
+
+   2. **State in GCS.** The bucket is shared by the project's deployments; the
+      prefix keeps each one's state apart, so use your `default_resource_name`.
+      `backend_override.tf` is gitignored:
+
+      ```bash
+      # Once per project, if it does not exist yet:
+      gcloud storage buckets create gs://<project-id>-tfstate --location=us-central1 \
+        --uniform-bucket-level-access
+      gcloud storage buckets update gs://<project-id>-tfstate --versioning
+
+      cat > infra/terraform-gke/backend_override.tf <<'EOF'
+      terraform {
+        backend "gcs" {}
+      }
+      EOF
+
+      terraform -chdir=infra/terraform-gke init \
+        -backend-config=bucket=<project-id>-tfstate \
+        -backend-config=prefix=<default_resource_name>
+      ```
+
+      `init` offers to copy an existing local state into the bucket.
 
 4. Create everything, answering `yes` at the plan. A GKE cluster takes several
    minutes, and this is billable:
 
    ```bash
-   terraform -chdir=infra/terraform-gke apply --var-file terraform.tfvars
+   terraform -chdir=infra/terraform-gke apply
    ```
 
 ## Setting up the Agent Substrate
-2
+
 1. Configure the environment
 
-   Copy the example and fill in the values for your project:
+   Copy the example. There is nothing to fill in for a cluster made by the
+   Terraform above: `.env.sh` reads the project, cluster, bucket and registry
+   from its state.
 
    ```bash
    cp env.sh.example .env.sh
@@ -145,6 +181,11 @@ gcloud application-default credentials already in place.
    ./benchmarking/run_all_test_cases.sh
    ```
 
+   Substrate blocks all outbound traffic from an actor that has no egress
+   policy. The worker gives each actor one that allows only the hosts named by
+   URLs in its ActorTemplate's env, such as the OTLP collector and openclaw's
+   mock LLM. To let actors reach another service, add its URL to the template.
+
 6. Collect the artifacts
 
    When a job ends it uploads its files to `reports/<run-id>/<test-case>/` in
@@ -157,6 +198,9 @@ gcloud application-default credentials already in place.
      `locust_exceptions.csv` — locust's own output, written as the job goes.
    - `stats.csv`, `custom_stats_history.csv`, `cluster_vitals_history.csv` —
      the job's rows read back out of Prometheus.
+   - `run.json` - the case, how the run went, every image it ran by digest,
+     and the commits they were built from. The locust image is also tagged
+     with the run id in the registry.
 
    The scripts download them to `reports/<run-id>/<test-case>/`, and
    [`benchmark-charts`](benchmark-charts) charts them:
@@ -178,8 +222,9 @@ after the first if the cluster is being kept for another run.
 Deletes the benchmark workloads, then Prometheus — the mirror of what
 `--deploy` put there, and as all-or-nothing as that is.
 
-**Prometheus goes with it, and so does every run it recorded.** Its storage
-does not outlive its pod. The reports every run uploads to
+**Prometheus goes with it, and so does every run it recorded.** Its data is on
+a volume that survives a restart of its pod, and is deleted here along with it.
+The reports every run uploads to
 `gs://${BUCKET_NAME}/reports/<run-id>/` are unaffected, and are the record that
 survives this.
 
@@ -198,8 +243,11 @@ system.
 
 ### 3. Delete the cluster
 
-Use terraform to destroy the cluster:
+Use terraform to destroy the cluster. **This also deletes the bucket and every
+run's reports in it**, since the example sets `bucket_force_destroy = true`.
+Download any worth keeping first, or set it to `false`, in which case destroy
+stops at the bucket while it holds anything.
 
    ```bash
-   terraform -chdir=infra/terraform-gke destroy --var-file terraform.tfvars
+   terraform -chdir=infra/terraform-gke destroy
    ```

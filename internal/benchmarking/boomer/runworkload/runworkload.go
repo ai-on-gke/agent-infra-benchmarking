@@ -30,9 +30,11 @@ package runworkload
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -93,6 +95,18 @@ const (
 	drainTimeout = 15 * time.Second
 )
 
+// A call the control plane refuses with Aborted lost a race with a
+// concurrent update of the same actor, which clears once that update lands;
+// upstream's own router retries it the same way. tracedCall repeats it up to
+// abortedAttempts times, waiting abortedRetryDelay longer each time.
+const (
+	abortedAttempts   = 3
+	abortedRetryDelay = 25 * time.Millisecond
+)
+
+// How many times executeInstruction sends an instruction that came back 421.
+const staleAssignmentAttempts = 3
+
 // Resume modes. Explicit issues a ResumeActor before the instruction;
 // implicit leaves the wake to the router.
 const (
@@ -125,6 +139,11 @@ type Options struct {
 	// ResumeMode is ResumeModeExplicit or ResumeModeImplicit; empty selects
 	// explicit.
 	ResumeMode string
+
+	// EgressAllow names the hosts every actor may connect to. Empty gives the
+	// actors no egress policy, which substrate's egress gateway treats as
+	// deny-all.
+	EgressAllow []string
 }
 
 // configured is what SetOptions recorded, read once by initRunWorkload and
@@ -177,7 +196,15 @@ func initRunWorkload(cfg *userclass.Config) (taskFn func(), shutdown func(contex
 		slog.Error("fatal: cannot select the workload", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	rt := &runWorkloadRuntime{cfg: cfg, opts: configured, workload: wl}
+	egressCIDRs, err := resolveEgress(context.Background(), net.DefaultResolver, configured.EgressAllow)
+	if err != nil {
+		slog.Error("fatal: cannot resolve --actor-egress-allow", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	if len(egressCIDRs) > 0 {
+		slog.Info("actors may connect to", slog.Any("cidrs", egressCIDRs))
+	}
+	rt := &runWorkloadRuntime{cfg: cfg, opts: configured, workload: wl, egressCIDRs: egressCIDRs}
 	return rt.iterate, rt.shutdown
 }
 
@@ -187,9 +214,17 @@ type runWorkloadRuntime struct {
 	workload workload
 	users    sync.Map // goroutineID -> *runWorkloadUser
 
+	// The /32 prefixes of Options.EgressAllow; empty creates no egress policy.
+	egressCIDRs []string
+
 	// Gates the task function so the teardown can wait for the iterations
 	// boomer leaves running when it returns. See inflight.go.
 	inflight inflight
+
+	// The run's atespace is created by the first user to start, and by any
+	// later one only while that has not yet worked.
+	atespaceMu    sync.Mutex
+	atespaceReady bool
 }
 
 func (r *runWorkloadRuntime) dynamicWait() time.Duration {
@@ -288,13 +323,25 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, opts Options) (*runW
 		userClass:    runWorkloadUserClass,
 	}
 	bmetrics.UpdateUsers(runWorkloadUserClass, 1)
-	if err := u.ensureAtespace(ctx); err != nil {
+	if err := r.ensureAtespace(ctx, u); err != nil {
 		bmetrics.UpdateUsers(runWorkloadUserClass, -1)
 		return nil, err
 	}
 	if err := u.create(ctx); err != nil {
 		bmetrics.UpdateUsers(runWorkloadUserClass, -1)
 		return nil, err
+	}
+	if len(r.egressCIDRs) > 0 {
+		if err := u.allowEgress(ctx, r.egressCIDRs); err != nil {
+			// Not yet resumed, so still SUSPENDED and deletable as it is.
+			if delErr := u.delete(ctx, false); delErr != nil {
+				slog.Warn("actor without an egress policy was left behind",
+					slog.String("actor", u.actorName),
+					slog.String("err", delErr.Error()))
+			}
+			bmetrics.UpdateUsers(runWorkloadUserClass, -1)
+			return nil, err
+		}
 	}
 	return u, nil
 }
@@ -391,6 +438,22 @@ func (u *runWorkloadUser) actor() actorRef {
 	}
 }
 
+// ensureAtespace creates the run's atespace once, through the first user to
+// get here. Every user used to do it, which put a CreateAtespace row and call
+// in the run for each actor it created.
+func (r *runWorkloadRuntime) ensureAtespace(ctx context.Context, u *runWorkloadUser) error {
+	r.atespaceMu.Lock()
+	defer r.atespaceMu.Unlock()
+	if r.atespaceReady {
+		return nil
+	}
+	if err := u.ensureAtespace(ctx); err != nil {
+		return err
+	}
+	r.atespaceReady = true
+	return nil
+}
+
 func (u *runWorkloadUser) ensureAtespace(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateAtespace", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapipb.CreateAtespaceRequest{
@@ -418,9 +481,9 @@ func (u *runWorkloadUser) create(ctx context.Context) error {
 		}, grpc.Trailer(tr))
 		return err
 	})
-	if err == nil && !u.isActive {
-		activeActors.WithLabelValues(u.workload.Name()).Inc()
-		u.isActive = true
+	// CreateActor leaves the actor SUSPENDED; the first resume moves it over.
+	if err == nil && !u.isCreated {
+		suspendedActors.WithLabelValues(u.workload.Name()).Inc()
 		u.isCreated = true
 	}
 	return err
@@ -520,7 +583,10 @@ func (u *runWorkloadUser) recordWindow(span trace.Span, name string, total time.
 // executeInstruction sends one instruction and reports it as the ExecutionTime
 // row. There are no retries: the actor is resumed before this runs, so a
 // command it will not serve is a fault to surface rather than a state to wait
-// out. The workload's retryable verdict is therefore ignored.
+// out. The workload's retryable verdict is therefore ignored, with one
+// exception: a 421 says the router used a worker assignment that had just gone
+// stale, and the resend is routed afresh, so it is sent again up to
+// staleAssignmentAttempts times.
 //
 // The round trip it takes is this row's own latency and the ExecutionTime
 // span's duration, so a caller that closes a window before the instruction
@@ -533,7 +599,13 @@ func (u *runWorkloadUser) executeInstruction(ctx context.Context) error {
 	defer span.End()
 
 	start := time.Now()
-	_, err := u.workload.SendInstruction(ctx, u.actor())
+	var err error
+	for attempt := 1; ; attempt++ {
+		_, err = u.workload.SendInstruction(ctx, u.actor())
+		if !errors.Is(err, errStaleAssignment) || attempt == staleAssignmentAttempts {
+			break
+		}
+	}
 	service := time.Since(start)
 
 	boomerutil.LogSampledTrace(span, executionTimeMetric, service, boomerutil.SourceClient, err)
@@ -658,10 +730,24 @@ func (u *runWorkloadUser) tracedCall(ctx context.Context, name string, do func(c
 
 	start := time.Now()
 	var tr metadata.MD
-	err := do(ctx, &tr)
+	var err error
+	attempt := 1
+	for ; ; attempt++ {
+		tr = nil
+		err = do(ctx, &tr)
+		if status.Code(err) != codes.Aborted || attempt == abortedAttempts {
+			break
+		}
+		time.Sleep(time.Duration(attempt) * abortedRetryDelay)
+	}
 	clientLatency := time.Since(start)
 
 	latency, source := boomerutil.ElapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, clientLatency)
+	// The server's elapsed trailer is the last attempt's alone, and would hide
+	// the conflicts the client waited through before it.
+	if attempt > 1 {
+		latency, source = clientLatency, boomerutil.SourceClient
+	}
 	if source == boomerutil.SourceServer {
 		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(latency)))
 	}
