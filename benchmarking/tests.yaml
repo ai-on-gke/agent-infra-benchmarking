@@ -36,8 +36,7 @@
 # `repeats` is required: how many times run_locust_job.sh runs the case, each
 # on a new pool. Above 1, each repeat is recorded as <case>-<n>, and the ones
 # that passed are summarized in <run-id>/<case>-summary.csv: the min, median
-# and max of every stat in their locust_stats_steady.csv. <case>-summary.md is
-# the same as a README, with what the repeats ran on.
+# and max of every stat in their locust_stats_steady.csv.
 #
 # Every other key becomes a boomer-worker flag, `key: value` to `--key=value`,
 # and nothing here reads them — a flag the worker accepts works from a case the
@@ -50,9 +49,9 @@
 
 cases:
   glutton:
-    duration: 5m
+    duration: 3m
     users: 100
-    spawn-rate: 2
+    spawn-rate: 10
     repeats: 3
     worker-count: 100
     sandbox-class: gvisor
@@ -62,9 +61,9 @@ cases:
     max-failure-ratio: 0.01
 
   openclaw:
-    duration: 5m
+    duration: 3m
     users: 100
-    spawn-rate: 2
+    spawn-rate: 10
     repeats: 3
     worker-count: 100
     sandbox-class: gvisor
