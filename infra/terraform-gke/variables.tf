@@ -58,15 +58,16 @@ variable "cluster" {
     autopilot           = optional(bool, false)
     enable_dataplane_v2 = optional(bool, false)
 
-    # Minimum control-plane version (GKE's min_master_version), e.g.
-    # "1.36.3-gke.1767000". Empty takes the release channel's default, which
-    # is how a cluster ends up below what k8s_beta_apis below needs.
-    kubernetes_version = optional(string, "")
+    # Control-plane version (GKE's min_master_version), and the version of
+    # every node pool that sets none. A floor for the control plane: GKE
+    # upgrades it past this in any channel, and run.json records the version
+    # a run saw. Empty takes the release channel's default.
+    kubernetes_version = optional(string, "1.35.8-gke.1225000")
 
-    # UNSPECIFIED, RAPID, REGULAR, STABLE or EXTENDED. UNSPECIFIED means no
-    # channel, which is what holds kubernetes_version exactly; Autopilot
-    # clusters reject it. Empty leaves GKE's default.
-    release_channel = optional(string, "")
+    # RAPID, REGULAR, STABLE or EXTENDED. UNSPECIFIED (no channel) is
+    # deprecated by GKE and does not stop control-plane upgrades. Empty leaves
+    # the choice to GKE.
+    release_channel = optional(string, "STABLE")
 
     # Kubernetes beta APIs to enable, e.g.
     # ["certificates.k8s.io/v1beta1/clustertrustbundles", "certificates.k8s.io/v1beta1/podcertificaterequests"].
@@ -100,10 +101,10 @@ variable "cluster" {
       max_node_count = optional(number, 3)
       spot           = optional(bool, false)
       labels         = optional(map(string), {})
-      # Node version, pinned rather than following the control plane.
-      version = optional(string, "1.35.8-gke.1225000")
-      # auto_upgrade has to stay true on a cluster in a release channel, and
-      # moves nodes off `version` when one is set.
+      # Node version. Unset takes kubernetes_version above.
+      version = optional(string)
+      # Off because an upgrade drains the workers, which crashes the actors
+      # still awake on them; see substrate's tools/setup-gcp/README.md.
       auto_upgrade = optional(bool, false)
       auto_repair  = optional(bool, true)
       # Zones the pool's nodes are created in, e.g. ["us-central1-a"] to pin

@@ -18,9 +18,9 @@
 //
 // Every control-plane call reports its own row and span through tracedCall.
 // On top of them each cycle reports TTFI: the wait from having a suspended
-// actor to that actor taking work. See measureTTFI for what the window
-// includes. It also reports CycleTime, the whole cycle from the resume to the
-// suspend returning; see cycle.
+// actor to that actor serving an instruction. See measureTTFI for what the
+// window includes. It also reports CycleTime, the whole cycle from the resume
+// to the suspend returning; see cycle.
 //
 // The workload the actor runs is a parameter: --workload-name selects an
 // implementation of the workload interface (see workload.go) and
@@ -69,9 +69,9 @@ const (
 	// string states it.
 	DefaultWorkload = gluttonWorkloadName
 
-	// DefaultTimeout is unread here; exported for the worker's
-	// --workload-timeout usage string. See Options.Timeout.
-	DefaultTimeout = 60 * time.Second
+	// DefaultTimeout is the per-call deadline when Options sets none. Exported
+	// for the worker's --workload-timeout usage string.
+	DefaultTimeout = 30 * time.Second
 
 	ttfiMetric          = "TTFI"
 	cycleTimeMetric     = "CycleTime"
@@ -93,6 +93,11 @@ const (
 	// teardown, so that the actors already created are still removed when an
 	// iteration is wedged rather than merely slow.
 	drainTimeout = 15 * time.Second
+
+	// How long a VU refused by the teardown waits before boomer calls it again.
+	// Boomer keeps the VUs looping until the teardown returns, and without a
+	// wait they spin against the teardown's own calls.
+	refusedWait = 100 * time.Millisecond
 )
 
 // A call the control plane refuses with Aborted lost a race with a
@@ -126,9 +131,8 @@ type Options struct {
 	// leaves that choice to the workload.
 	Template string
 
-	// Timeout is unread: the instruction is sent once, so there is no retry
-	// loop to bound. Kept because cmd/benchmarking/boomer-worker declares
-	// --workload-timeout against it.
+	// Timeout is the deadline on each control-plane call and each instruction;
+	// one that runs past it fails. Zero selects DefaultTimeout.
 	Timeout time.Duration
 
 	// MinWait and MaxWait bound the think time between iterations. An upper
@@ -204,7 +208,11 @@ func initRunWorkload(cfg *userclass.Config) (taskFn func(), shutdown func(contex
 	if len(egressCIDRs) > 0 {
 		slog.Info("actors may connect to", slog.Any("cidrs", egressCIDRs))
 	}
-	rt := &runWorkloadRuntime{cfg: cfg, opts: configured, workload: wl, egressCIDRs: egressCIDRs}
+	opts := configured
+	if opts.Timeout == 0 {
+		opts.Timeout = DefaultTimeout
+	}
+	rt := &runWorkloadRuntime{cfg: cfg, opts: opts, workload: wl, egressCIDRs: egressCIDRs}
 	return rt.iterate, rt.shutdown
 }
 
@@ -248,6 +256,7 @@ func (r *runWorkloadRuntime) dynamicWait() time.Duration {
 // map the teardown has already walked.
 func (r *runWorkloadRuntime) iterate() {
 	if !r.inflight.enter() {
+		time.Sleep(refusedWait)
 		return
 	}
 	defer r.inflight.leave()
@@ -321,6 +330,7 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, opts Options) (*runW
 		actorName:    "sb-" + uuid.NewString(),
 		templateName: tmpl,
 		userClass:    runWorkloadUserClass,
+		timeout:      opts.Timeout,
 	}
 	bmetrics.UpdateUsers(runWorkloadUserClass, 1)
 	if err := r.ensureAtespace(ctx, u); err != nil {
@@ -416,6 +426,9 @@ type runWorkloadUser struct {
 	actorName    string
 	templateName string
 	userClass    string
+
+	// timeout bounds each call; zero leaves it unbounded.
+	timeout time.Duration
 
 	// Track the state of the actor so we don't double-count metrics if
 	// the benchmark calls Resume/Suspend idempotently or repeatedly.
@@ -515,24 +528,15 @@ func (u *runWorkloadUser) cycle(ctx context.Context, mode string) (call string, 
 }
 
 // measureTTFI brings the actor back up, sends it one instruction, and reports
-// the wait as TTFI. It must be called with the actor suspended, which is how
-// iterate leaves it between iterations: the window opens here.
+// the wait until that instruction is served as TTFI. It must be called with the
+// actor suspended, which is how iterate leaves it between iterations.
 //
-// Only explicit mode issues ResumeActor. Implicit leaves the wake to the
-// router, which does it while holding the instruction — so under implicit
-// resume the window contains nothing and TTFI is near zero. The number to read
-// there is the ExecutionTime row.
+// Only explicit mode issues ResumeActor; implicit leaves the wake to the
+// router. Either way the window closes on the served instruction, so it
+// includes the instruction's service time, which ExecutionTime reports alone.
 //
-// The window closes at the moment the instruction was issued, not when it
-// answered: serving it is the application's cost and differs per workload.
-// Since the instruction is sent once and expected to be served, that instant
-// is right after the resume returned — so TTFI is the resume the client waited
-// through, and the instruction is what proves the actor was ready for it
-// rather than what dates the readiness.
-//
-// Either call failing reports the window as a failure over the wait it spent
-// and hands the error back for the actor to be discarded, so the cycle stops
-// there either way.
+// A failed call reports the window as a failure over the wait it spent and
+// hands the error back for the actor to be discarded.
 func (u *runWorkloadUser) measureTTFI(ctx context.Context, mode string) error {
 	if mode == "" {
 		mode = ResumeModeExplicit
@@ -554,18 +558,9 @@ func (u *runWorkloadUser) measureTTFI(ctx context.Context, mode string) error {
 		}
 	}
 
-	// The window closes here, with the instruction about to go out: serving it
-	// is the application's cost, not substrate's.
-	total := time.Since(start)
-	if err := u.executeInstruction(ctx); err != nil {
-		// Nothing was served, so there is no instant to close on; the row
-		// carries the whole wait the window did spend.
-		u.recordWindow(span, ttfiMetric, time.Since(start), err)
-		return err
-	}
-
-	u.recordWindow(span, ttfiMetric, total, nil)
-	return nil
+	err := u.executeInstruction(ctx)
+	u.recordWindow(span, ttfiMetric, time.Since(start), err)
+	return err
 }
 
 // recordWindow closes out the window reported as name, as a success or as a
@@ -588,15 +583,13 @@ func (u *runWorkloadUser) recordWindow(span trace.Span, name string, total time.
 // stale, and the resend is routed afresh, so it is sent again up to
 // staleAssignmentAttempts times.
 //
-// The round trip it takes is this row's own latency and the ExecutionTime
-// span's duration, so a caller that closes a window before the instruction
-// only has to take its own timestamp first.
-//
 // A non-nil error leaves the actor in a state the run cannot reason about: it
 // is the signal to discard the actor, not merely a failed sample.
 func (u *runWorkloadUser) executeInstruction(ctx context.Context) error {
 	ctx, span := u.cfg.Tracer.Start(ctx, executionTimeMetric)
 	defer span.End()
+	ctx, cancel := u.callContext(ctx)
+	defer cancel()
 
 	start := time.Now()
 	var err error
@@ -670,9 +663,11 @@ func (u *runWorkloadUser) suspend(ctx context.Context) error {
 // suspend rides along as context: the two fail together when the actor is
 // still in a transitional state, and the pair is what names that cause.
 func (u *runWorkloadUser) suspendAndDelete(ctx context.Context) error {
-	_, suspendErr := u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+	suspendCtx, cancel := u.callContext(ctx)
+	_, suspendErr := u.cfg.APIStub.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{
 		Actor: u.ref(),
 	})
+	cancel()
 	if suspendErr == nil && u.isActive {
 		activeActors.WithLabelValues(u.workload.Name()).Dec()
 		suspendedActors.WithLabelValues(u.workload.Name()).Inc()
@@ -727,6 +722,8 @@ func (u *runWorkloadUser) delete(ctx context.Context, anyState bool) error {
 func (u *runWorkloadUser) tracedCall(ctx context.Context, name string, do func(context.Context, *metadata.MD) error) error {
 	ctx, span := u.cfg.Tracer.Start(ctx, name)
 	defer span.End()
+	ctx, cancel := u.callContext(ctx)
+	defer cancel()
 
 	start := time.Now()
 	var tr metadata.MD
@@ -758,4 +755,12 @@ func (u *runWorkloadUser) tracedCall(ctx context.Context, name string, do func(c
 	}
 	bmetrics.RecordSuccess("grpc", name, u.userClass, latency, 0)
 	return nil
+}
+
+// callContext bounds one call, retries included, by the user's timeout.
+func (u *runWorkloadUser) callContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if u.timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, u.timeout)
 }

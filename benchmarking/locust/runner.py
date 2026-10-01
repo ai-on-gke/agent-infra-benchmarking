@@ -19,10 +19,12 @@ worker, both as children of this process, so a Job that runs this ends when
 the run ends rather than being stopped from outside. The ordering that makes
 that work:
 
-  * locust's -t stops the test and sends a "quit" to the worker.
-  * boomer returns from its run loop on that quit and suspends and deletes
-    every actor it created. The SIGTERM below is the fallback for a master
-    that died without sending one; boomer answers either the same way.
+  * at locust's -t the master sends the worker a "stop" and waits while it
+    suspends and deletes every actor it created (tests/runworkload.py), so
+    those calls are in locust's stats. Then it sends a "quit".
+  * boomer returns from its run loop on that quit and waits for a last
+    Prometheus scrape. The SIGTERM below is the fallback for a master that
+    died without sending one; boomer then deletes the actors itself.
   * this process exits once both have, and its status is the run's.
 
 Adapted from substrate's benchmarking/locust/runner.py, minus the two parts
@@ -37,6 +39,7 @@ because this repo ships no shapes/ directory for the second path to name.
 
 import argparse
 import base64
+import csv
 import datetime
 import json
 import os
@@ -63,8 +66,8 @@ TESTS_FILE = "/app/tests.yaml"
 LOCUST_CSV_STEM = "locust"
 
 # The case keys that are the run's load rather than the worker's flags. Every
-# other key in a case goes to the worker verbatim, so this tuple is the whole
-# of what this wrapper claims from a case.
+# key in a case that is not one of these, HOST_KEYS, FAILURE_RATIO_KEY,
+# WARM_UP_KEY or REPEATS_KEY goes to the worker verbatim.
 LOAD_KEYS = ("duration", "users", "spawn-rate")
 
 # Case keys that shape the WorkerPool, which run_locust_job.sh deploys before
@@ -73,9 +76,27 @@ LOAD_KEYS = ("duration", "users", "spawn-rate")
 # fatal to it, so a case carrying these would never reach a first iteration.
 HOST_KEYS = ("worker-count", "sandbox-class")
 
+# Case key for the share of requests that may fail before the run counts as
+# failed, and its default. locust alone would fail it on the first one, out of
+# tens of thousands.
+FAILURE_RATIO_KEY = "max-failure-ratio"
+DEFAULT_MAX_FAILURE_RATIO = 0.01
+
+# Case key for how long after the last user starts the steady-state window
+# opens, and its default. Validated by the locustfile's --warm-up.
+WARM_UP_KEY = "warm-up"
+DEFAULT_WARM_UP = "30s"
+
+# Case key for how many times run_locust_job.sh runs the case. Dropped here,
+# like HOST_KEYS; --repeat says which of them this run is.
+REPEATS_KEY = "repeats"
+
+# Where the locustfile leaves the steady-state window's bounds for run.json.
+STEADY_WINDOW_JSON = f"{LOCUST_CSV_STEM}_steady_window.json"
+
 # How long boomer gets to suspend and delete its actors after the run. Longer
-# than the worker's own 60s shutdown budget, so the timeout here is reached
-# only by a worker that is not going to finish at all.
+# than the worker's own teardown and final scrape wait, so the timeout here is
+# reached only by a worker that is not going to finish at all.
 BOOMER_STOP_TIMEOUT_SECS = 300
 
 # Prometheus scrapes every 10s, so the run's last samples land after the run
@@ -86,8 +107,14 @@ REPORT_SETTLE_SECS = 15
 # and boomer's own, which say how the run itself went.
 UPLOAD_FAILED_EXIT = 3
 
-# What the run was made of and how it went, written beside the reports.
+# Exit status of a run over its max-failure-ratio, or one whose load generator
+# raised exceptions.
+TOO_MANY_FAILURES_EXIT = 4
+
+# What the run was made of and how it went, written beside the reports; the
+# README summarizes it for a reader.
 RUN_JSON = "run.json"
+README = "README.md"
 
 # How far back refuse_reused_run looks for an earlier run's series: past
 # Prometheus's retention, so anything it still holds is found.
@@ -120,7 +147,9 @@ def parse_args() -> argparse.Namespace:
         "--test-case",
         required=True,
         help=f"Name a case in --tests-file. {', '.join(LOAD_KEYS)} are the "
-        f"load; every other key is a worker flag.",
+        f"load, {FAILURE_RATIO_KEY} its pass mark, {WARM_UP_KEY} the start of its "
+        f"steady state, and {', '.join(HOST_KEYS)} the pool's; every other key is "
+        f"a worker flag.",
     )
     p.add_argument(
         "--tests-file",
@@ -133,6 +162,14 @@ def parse_args() -> argparse.Namespace:
         help="The run this test case is part of: the run_id label in Prometheus, "
         "and the <run-id> of the upload folder. Reports query on it with the "
         "test_case label, so without it they are skipped.",
+    )
+    p.add_argument(
+        "--repeat",
+        type=int,
+        default=0,
+        help="Which of the case's repeats this is, from 1. Recorded as "
+        "<test-case>-<repeat> in the test_case label and the upload folder; "
+        "0 records the case under its own name.",
     )
     p.add_argument(
         "--report",
@@ -175,8 +212,13 @@ def parse_args() -> argparse.Namespace:
     # Split before anything reads either half: what is left after the load
     # comes out is the worker's, whatever it is named.
     args.duration, args.users, args.spawn_rate = take_load(case, args.test_case)
-    for key in HOST_KEYS:
+    args.max_failure_ratio = take_failure_ratio(case, args.test_case)
+    args.warm_up = case.pop(WARM_UP_KEY, DEFAULT_WARM_UP)
+    for key in (*HOST_KEYS, REPEATS_KEY):
         case.pop(key, None)
+    # Must match run_locust_job.sh's BENCHMARK_RECORD_NAME, which the pod's
+    # test-case label carries.
+    args.record_name = f"{args.test_case}-{args.repeat}" if args.repeat else args.test_case
     if args.actor_egress_allow:
         case["actor-egress-allow"] = ",".join(
             h for h in (case.get("actor-egress-allow", ""), args.actor_egress_allow) if h
@@ -190,6 +232,21 @@ def parse_args() -> argparse.Namespace:
     # --stop-timeout, and so on).
     args.locust_extra = extra
     return args
+
+
+def take_failure_ratio(case: dict[str, str], name: str) -> float:
+    """Remove FAILURE_RATIO_KEY from `case` and return it validated, or the
+    default when the case does not state one."""
+    raw = case.pop(FAILURE_RATIO_KEY, None)
+    if raw is None:
+        return DEFAULT_MAX_FAILURE_RATIO
+    try:
+        ratio = float(raw)
+    except ValueError:
+        sys.exit(f"Test case {name!r}: `{FAILURE_RATIO_KEY}` must be a number.")
+    if not 0 <= ratio <= 1:
+        sys.exit(f"Test case {name!r}: `{FAILURE_RATIO_KEY}` must be between 0 and 1, got {ratio:g}.")
+    return ratio
 
 
 def take_load(case: dict[str, str], name: str) -> tuple[str, int, float]:
@@ -286,11 +343,14 @@ def log_run_config(args: argparse.Namespace) -> None:
         f"  users:        {args.users}",
         f"  spawn_rate:   {args.spawn_rate:g}/s"
         + (" (all at once)" if args.spawn_rate >= args.users else ""),
-        f"  test_case:    {args.test_case or '(none)'}",
+        f"  warm_up:      {args.warm_up}",
+        f"  test_case:    {args.test_case or '(none)'}"
+        + (f" (repeat {args.repeat})" if args.repeat else ""),
         f"  worker flags: {' '.join(f'--{k}={v}' for k, v in args.worker_flags.items()) or '(none)'}",
+        f"  max failures: {args.max_failure_ratio:.2%} of requests",
         f"  reports:      {', '.join(args.report) or '(none)'}",
         f"  run_id:       {args.run_id or '(none)'}",
-        f"  report dest:  {f'gs://{args.report_bucket}/{args.report_prefix}/{args.run_id}/{args.test_case}' if args.report_bucket else args.report_dir + ' (pod-local)'}",
+        f"  report dest:  {f'gs://{args.report_bucket}/{args.report_prefix}/{args.run_id}/{args.record_name}' if args.report_bucket else args.report_dir + ' (pod-local)'}",
         f"  extra flags:  {' '.join(args.locust_extra) or '(none)'}",
         "====================",
     ):
@@ -311,16 +371,18 @@ def build_locust_cmd(args: argparse.Namespace) -> list[str]:
         # seconds before a worker attaches would otherwise be counted as part
         # of the run rather than as part of its setup.
         "--master", "--expect-workers", "1",
-        # locust's own stats, at its own precision: it holds response times
-        # rounded to 1ms below 100ms, where the worker's Prometheus histogram
-        # buckets exponentially and cannot resolve better than the bucket a
-        # value lands in. These files are the run's numbers; the Prometheus
-        # reports beside them are what survives the pod.
+        # The run's latency percentiles. The worker's Prometheus histogram has
+        # power-of-two buckets, too coarse to report them from.
         "--csv", str(Path(args.report_dir) / LOCUST_CSV_STEM),
         # A row per second per request name, rather than one Aggregated row.
         # The user count is recorded in the row with the percentiles, so a
         # ramp needs nothing inferred to say what load a sample was taken at.
         "--csv-full-history",
+        # Failed requests are judged by within_limits against the case's
+        # max-failure-ratio instead.
+        "--exit-code-on-error", "0",
+        # Defined by the locustfile, which writes _stats_steady.csv from it.
+        "--warm-up", args.warm_up,
     ]
     return cmd + list(args.locust_extra)
 
@@ -414,14 +476,53 @@ def run(args: argparse.Namespace) -> int:
         return 128 + stopped_by[0]
 
     # Both statuses matter, because the exit code is the only result this
-    # carries: locust reports whether the run met its own bar, and a worker
-    # that died took the load generator with it whatever locust concluded.
-    # Locust's own is preferred when both failed, as the more specific of the
-    # two. --exit-code-on-error=0 is the way to say that failed requests are
-    # an expected part of a run.
+    # carries: a worker that died took the load generator with it whatever
+    # locust concluded. Locust's own is preferred when both failed, as the more
+    # specific of the two.
     if locust_exit != 0:
         return locust_exit
     return boomer_exit
+
+
+def count_failures(args: argparse.Namespace) -> dict | None:
+    """The run's requests, failed requests and load generator exceptions, from
+    the CSVs locust wrote on exit. None, and said why, if they cannot be read."""
+    stats = Path(args.report_dir) / f"{LOCUST_CSV_STEM}_stats.csv"
+    exceptions = Path(args.report_dir) / f"{LOCUST_CSV_STEM}_exceptions.csv"
+    try:
+        with stats.open(newline="") as f:
+            total = next(row for row in csv.DictReader(f) if row["Name"] == "Aggregated")
+        requests, failed = int(total["Request Count"]), int(total["Failure Count"])
+        with exceptions.open(newline="") as f:
+            raised = sum(int(row["Count"]) for row in csv.DictReader(f))
+    except (OSError, StopIteration, KeyError, ValueError) as exc:
+        print(f"Cannot count the run's failures: {type(exc).__name__}: {exc}", flush=True)
+        return None
+    return {
+        "requests": requests,
+        "failed": failed,
+        "ratio": failed / requests if requests else None,
+        "exceptions": raised,
+    }
+
+
+def within_limits(failures: dict | None, max_ratio: float) -> bool:
+    """Whether the run stayed within its max-failure-ratio and its load
+    generator raised no exceptions. --exit-code-on-error 0 keeps both out of
+    locust's own exit code, so this is what fails a run over them."""
+    if failures is None:
+        return False
+    if not failures["requests"]:
+        print("The run made no requests.", flush=True)
+        return False
+    print(
+        f"Failed requests: {failures['failed']} of {failures['requests']} ({failures['ratio']:.3%}); "
+        f"{FAILURE_RATIO_KEY} allows {max_ratio:.3%}.",
+        flush=True,
+    )
+    if failures["exceptions"]:
+        print(f"The load generator raised {failures['exceptions']} exception(s).", flush=True)
+    return failures["ratio"] <= max_ratio and not failures["exceptions"]
 
 
 def locust_csvs(args: argparse.Namespace) -> list[Path]:
@@ -443,7 +544,7 @@ def refuse_reused_run(args: argparse.Namespace) -> None:
         return
     query = (
         "count(last_over_time(locust_requests_total"
-        f'{{run_id="{args.run_id}",test_case="{args.test_case}"}}[{PRIOR_RUN_LOOKBACK}]))'
+        f'{{run_id="{args.run_id}",test_case="{args.record_name}"}}[{PRIOR_RUN_LOOKBACK}]))'
     )
     try:
         from reports import prometheus
@@ -455,39 +556,77 @@ def refuse_reused_run(args: argparse.Namespace) -> None:
     if found:
         sys.exit(
             f"Prometheus already has series for run {args.run_id!r}, case "
-            f"{args.test_case!r}; their numbers would be added to this run's. "
+            f"{args.record_name!r}; their numbers would be added to this run's. "
             "Use another --run-id."
         )
 
 
-def write_run_json(args: argparse.Namespace, started: float, ended: float, status: int) -> None:
-    """Write run.json into --report-dir: what run_locust_job.sh passed in
-    BENCHMARK_RUN_INFO (the images by digest and the commits), with the case
-    and how the run went. write_reports uploads it with the other files."""
-    info: dict = {}
+def read_steady_window(args: argparse.Namespace) -> dict | None:
+    """The steady-state window the locustfile wrote, or None if it opened no
+    window, as when the run ended within its ramp and warm-up."""
+    try:
+        return json.loads((Path(args.report_dir) / STEADY_WINDOW_JSON).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def write_run_json(
+    args: argparse.Namespace, started: float, ended: float, status: int, failures: dict | None
+) -> dict:
+    """Write run.json into --report-dir and return what it holds: how the run
+    went, followed by what run_locust_job.sh passed in BENCHMARK_RUN_INFO (the
+    resolved case, the cluster, the WorkerPool, the images by digest and the
+    commits). write_reports uploads it with the other files."""
+    passed: dict = {}
     raw = os.environ.get("BENCHMARK_RUN_INFO", "")
     if raw:
         try:
-            info = json.loads(base64.b64decode(raw))
+            passed = json.loads(base64.b64decode(raw))
         except (ValueError, TypeError) as exc:
-            info = {"run_info_error": f"cannot decode BENCHMARK_RUN_INFO: {exc}"}
+            passed = {"run_info_error": f"cannot decode BENCHMARK_RUN_INFO: {exc}"}
+    else:
+        passed = {"run_info_error": "BENCHMARK_RUN_INFO is unset"}
 
     def iso(t: float) -> str:
         return datetime.datetime.fromtimestamp(t, datetime.timezone.utc).isoformat()
 
-    info.update({
+    info = {
         "run_id": args.run_id,
         "test_case": args.test_case,
+        "repeat": args.repeat or None,
+        "status": status,
+        "started": iso(started),
+        "ended": iso(ended),
         "users": args.users,
         "spawn_rate": args.spawn_rate,
         "duration": args.duration,
+        "user_class": user_class(args.file),
+        "max_failure_ratio": args.max_failure_ratio,
+        "failures": failures,
+        "warm_up": args.warm_up,
+        "steady_window": read_steady_window(args),
         "worker_flags": args.worker_flags,
-        "started": iso(started),
-        "ended": iso(ended),
-        "status": status,
-    })
+        **passed,
+    }
     path = Path(args.report_dir) / RUN_JSON
     path.write_text(json.dumps(info, indent=2) + "\n")
+    print(f"reports: wrote {path}", flush=True)
+    return info
+
+
+def write_readme(args: argparse.Namespace, info: dict) -> None:
+    """Write README.md into --report-dir: run.json summarized for a reader,
+    and what each file beside it holds. Skipped, and said so, if it cannot be
+    rendered; run.json is the record either way."""
+    try:
+        from reports import readme
+
+        text = readme.render(info)
+    except Exception as exc:
+        print(f"reports: {README} skipped ({type(exc).__name__}: {exc})", flush=True)
+        return
+    path = Path(args.report_dir) / README
+    path.write_text(text)
     print(f"reports: wrote {path}", flush=True)
 
 
@@ -507,9 +646,10 @@ def write_reports(args: argparse.Namespace, started: float, ended: float) -> boo
     collected = locust_csvs(args)
     for path in collected:
         print(f"reports: locust wrote {path} ({path.stat().st_size} bytes)", flush=True)
-    run_json = Path(args.report_dir) / RUN_JSON
-    if run_json.exists():
-        collected.append(run_json)
+    for name in (RUN_JSON, README):
+        path = Path(args.report_dir) / name
+        if path.exists():
+            collected.append(path)
 
     if args.report:
         collected += generate_reports(args, started)
@@ -530,7 +670,7 @@ def generate_reports(args: argparse.Namespace, started: float) -> list[Path]:
 
         ctx = reports.RunContext(
             run_id=args.run_id,
-            test_case=args.test_case,
+            test_case=args.record_name,
             users=args.users,
             spawn_rate=args.spawn_rate,
             duration=args.duration,
@@ -563,7 +703,7 @@ def upload_reports(paths: list[Path], args: argparse.Namespace) -> bool:
         results = reports.upload(
             paths,
             args.report_bucket,
-            f"{args.run_id}/{args.test_case}",
+            f"{args.run_id}/{args.record_name}",
             Path(args.report_dir),
             args.report_prefix,
         )
@@ -590,7 +730,11 @@ def main() -> None:
     started = time.time()
     status = run(args)
     ended = time.time()
-    write_run_json(args, started, ended, status)
+    failures = count_failures(args)
+    if status == 0 and not within_limits(failures, args.max_failure_ratio):
+        status = TOO_MANY_FAILURES_EXIT
+    info = write_run_json(args, started, ended, status, failures)
+    write_readme(args, info)
     if not write_reports(args, started, ended) and status == 0:
         print("The reports did not all upload, so the run is failed.", flush=True)
         status = UPLOAD_FAILED_EXIT

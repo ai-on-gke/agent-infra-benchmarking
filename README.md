@@ -196,8 +196,11 @@ gcloud application-default credentials already in place.
 
    - `locust_stats.csv`, `locust_stats_history.csv`, `locust_failures.csv`,
      `locust_exceptions.csv` — locust's own output, written as the job goes.
-   - `stats.csv`, `custom_stats_history.csv`, `cluster_vitals_history.csv` —
-     the job's rows read back out of Prometheus.
+     These are the run's latency percentiles: failed requests included, and
+     rounded to 1 ms below 100 ms, 10 ms below 1 s, 100 ms below 10 s and 1 s
+     above.
+   - `custom_stats_history.csv`, `cluster_vitals_history.csv` — the job's rows
+     read back out of Prometheus.
    - `run.json` - the case, how the run went, every image it ran by digest,
      and the commits they were built from. The locust image is also tagged
      with the run id in the registry.

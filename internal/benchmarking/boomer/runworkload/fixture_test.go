@@ -27,6 +27,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -49,6 +50,8 @@ type fakeControlClient struct {
 	// ResumeActor calls, standing in for a conflict that clears.
 	resumeErrTimes int
 	resumeCalls    int
+	// resumeHang holds each ResumeActor until its context ends.
+	resumeHang bool
 	// serverElapsedUs, when set, is returned as the x-server-elapsed-us
 	// trailer the real ServerUnaryInterceptor emits.
 	serverElapsedUs string
@@ -128,6 +131,10 @@ func (f *fakeControlClient) recordedTemplate() string {
 }
 
 func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+	if f.resumeHang {
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "ResumeActor")

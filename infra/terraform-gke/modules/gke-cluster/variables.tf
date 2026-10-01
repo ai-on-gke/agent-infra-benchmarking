@@ -48,13 +48,13 @@ variable "enable_dataplane_v2" {
 # A floor, not a pin: GKE upgrades past it, never below. Raising it on an
 # existing cluster upgrades the control plane in place.
 variable "kubernetes_version" {
-  description = "Minimum Kubernetes version for the control plane (GKE's min_master_version). Empty takes the release channel's default."
+  description = "Minimum Kubernetes version for the control plane (GKE's min_master_version), and the version of node pools that set none. Empty takes the release channel's default."
   type        = string
   default     = ""
 }
 
-# UNSPECIFIED means no channel, which is what holds kubernetes_version exactly.
-# Autopilot clusters reject it - they must be in a channel.
+# UNSPECIFIED means no channel, which GKE has deprecated; control planes are
+# upgraded either way. Autopilot clusters reject it.
 variable "release_channel" {
   description = "GKE release channel: UNSPECIFIED, RAPID, REGULAR, STABLE or EXTENDED. Empty leaves GKE's default."
   type        = string
@@ -119,10 +119,8 @@ variable "node_pools" {
     max_node_count = optional(number, 3)
     spot           = optional(bool, false)
     labels         = optional(map(string), {})
-    # Node version, pinned rather than following the control plane.
-    version = optional(string, "1.35.8-gke.1225000")
-    # auto_upgrade has to stay true on a cluster in a release channel, and
-    # moves nodes off `version` when one is set.
+    # Node version. Unset takes var.kubernetes_version.
+    version      = optional(string)
     auto_upgrade = optional(bool, false)
     auto_repair  = optional(bool, true)
     # Zones the pool's nodes are created in, e.g. ["us-central1-a"] to pin a

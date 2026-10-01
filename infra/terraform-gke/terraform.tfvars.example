@@ -10,9 +10,11 @@ default_resource_name = "<PICK_YOUR_NAME>"
 bucket_force_destroy = true
 
 cluster = {
-  # Pins the control plane alongside the node pools below, so it doesn't
-  # drift to whatever the release channel resolves to.
+  # The control plane's version and every node pool's; bump it deliberately.
+  # GKE may still upgrade the control plane past it. The pools below stay put
+  # until the minor version's end of support.
   kubernetes_version = "1.35.8-gke.1225000"
+  release_channel    = "STABLE"
 
   # Without these, substrate's podcertificate-controller never creates the
   # ClusterTrustBundles and hack/install-ate.sh waits for them forever.
@@ -26,9 +28,7 @@ cluster = {
       machine_type   = "c2-standard-16"
       node_count     = 1
       node_locations = ["us-central1-a"]
-      # Pinned rather than auto-upgraded; bump it deliberately when needed.
-      version      = "1.35.8-gke.1225000"
-      auto_upgrade = false
+      auto_upgrade   = false
       min_node_count = 1
       max_node_count = 1
     }
@@ -55,8 +55,7 @@ cluster = {
           effect = "NO_SCHEDULE"
         }
       ]
-      # Pinned rather than auto-upgraded; bump it deliberately when needed.
-      version      = "1.35.8-gke.1225000"
+      # An upgrade drains the workers, crashing the actors awake on them.
       auto_upgrade = false
     }
   }

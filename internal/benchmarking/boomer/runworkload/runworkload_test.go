@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -233,27 +234,27 @@ func TestTTFIExcludesTheSuspend(t *testing.T) {
 	}
 }
 
-// The window closes where the instruction is issued, so serving it is outside.
-// What it left out is not lost: the ExecutionTime span spans that round trip.
-func TestTTFIEndsBeforeTheInstruction(t *testing.T) {
+// The window closes on the served instruction in both modes, so implicit
+// resume, where the router wakes the actor, is not reported as near zero.
+func TestTTFIEndsWhenTheInstructionIsServed(t *testing.T) {
 	const service = 200 * time.Millisecond
-	rt, sr := newMeasuringUser(t, &pingServer{PingDelay: service}, &fakeControlClient{})
+	for _, mode := range []string{ResumeModeExplicit, ResumeModeImplicit} {
+		t.Run(mode, func(t *testing.T) {
+			rt, sr := newMeasuringUser(t, &pingServer{PingDelay: service}, &fakeControlClient{})
+			rt.opts.ResumeMode = mode
 
-	rt.iterate()
+			rt.iterate()
 
-	total := mustAttr(t, spanByName(t, sr, ttfiMetric), "total_ms").AsFloat64()
-	if want := boomerutil.MsFloat(service); total >= want {
-		t.Errorf("total_ms: got %v, want well under %v — the window kept the instruction's service time", total, want)
-	}
-	instruction := spanByName(t, sr, executionTimeMetric)
-	if got := instruction.EndTime().Sub(instruction.StartTime()); got < service {
-		t.Errorf("%s span duration: got %v, want >= %v", executionTimeMetric, got, service)
+			total := mustAttr(t, spanByName(t, sr, ttfiMetric), "total_ms").AsFloat64()
+			if want := boomerutil.MsFloat(service); total < want {
+				t.Errorf("total_ms: got %v, want >= %v — the window closed before the instruction was served", total, want)
+			}
+		})
 	}
 }
 
 // CycleTime runs from the resume to the suspend returning, so unlike TTFI it
-// holds both the instruction's service time and the suspend, and its span is
-// the one the suspend is traced under.
+// holds the suspend, and its span is the one the suspend is traced under.
 func TestCycleTimeSpansTheResumeThroughTheSuspend(t *testing.T) {
 	const service, suspend = 100 * time.Millisecond, 100 * time.Millisecond
 	rt, sr := newMeasuringUser(t, &pingServer{PingDelay: service}, &fakeControlClient{suspendDelay: suspend})
@@ -692,4 +693,50 @@ func TestInstructionIsResentAfterAStaleAssignment(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A call that outlives the timeout is cut off at it and reported as a failure,
+// and the actor is discarded like after any other failed call.
+func TestACallPastTheDeadlineFails(t *testing.T) {
+	const deadline = 50 * time.Millisecond
+	for _, tc := range []struct {
+		name string
+		srv  *pingServer
+		ctrl *fakeControlClient
+	}{
+		{name: "resume", srv: &pingServer{}, ctrl: &fakeControlClient{resumeHang: true}},
+		{name: "instruction", srv: &pingServer{PingDelay: 10 * deadline}, ctrl: &fakeControlClient{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt, sr := newMeasuringUser(t, tc.srv, tc.ctrl)
+			val, _ := rt.users.Load(boomerutil.GoroutineID())
+			val.(*runWorkloadUser).timeout = deadline
+			buf := captureLogs(t)
+
+			rt.iterate()
+
+			if got := failedWindowErr(buf, ttfiMetric); !strings.Contains(got, "deadline exceeded") {
+				t.Errorf("TTFI failure: got %q, want a deadline exceeded; log:\n%s", got, buf.String())
+			}
+			total := mustAttr(t, spanByName(t, sr, ttfiMetric), "total_ms").AsFloat64()
+			if lo, hi := boomerutil.MsFloat(deadline), boomerutil.MsFloat(10*deadline); total < lo || total >= hi {
+				t.Errorf("total_ms: got %v, want about the deadline, in [%v, %v)", total, lo, hi)
+			}
+			if _, ok := rt.users.Load(boomerutil.GoroutineID()); ok {
+				t.Error("the user kept its slot after the call timed out")
+			}
+		})
+	}
+}
+
+// failedWindowErr is the error the sampled trace log gives for the window
+// reported as name, or empty when it was not reported as a failure.
+func failedWindowErr(buf *bytes.Buffer, name string) string {
+	for _, line := range strings.Split(buf.String(), "\n") {
+		var rec struct{ Msg, Name, Err string }
+		if json.Unmarshal([]byte(line), &rec) == nil && rec.Msg == "traced span (failed)" && rec.Name == name {
+			return rec.Err
+		}
+	}
+	return ""
 }

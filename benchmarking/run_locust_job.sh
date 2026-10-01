@@ -188,6 +188,12 @@ usage() {
   echo "                          ready (default: ${DEFAULT_POOL_TIMEOUT_SECS})"
   echo "  --no-build              Use the images already pushed rather than building them."
   echo ""
+  echo "A case runs as many times as its required \`repeats\` says, each on a new pool."
+  echo "Above 1, they are recorded as <test-case>-1 to <test-case>-N, and the ones that"
+  echo "passed are summarized, min, median and max per stat, in"
+  echo "<reports-dir>/<run-id>/<test-case>-summary.csv, and as a README beside it in"
+  echo "<test-case>-summary.md."
+  echo ""
   echo "Waiting:"
   echo "  --no-wait               Submit the Job and return, instead of following it."
   echo "                          The run continues in the cluster either way, and its"
@@ -386,32 +392,122 @@ tag_image_with_run_id() {
   fi
 }
 
+# cluster_info prints the cluster's GKE configuration as JSON: the hardware and
+# versions the run was measured on. Prints null, with a warning, when it cannot
+# be read, rather than stopping a run over its metadata.
+cluster_info() {
+  local json
+  if ! command -v gcloud &>/dev/null || [[ -z "${CLUSTER_NAME:-}" || -z "${CLUSTER_LOCATION:-}" || -z "${PROJECT_ID:-}" ]]; then
+    echo "Warning: gcloud or PROJECT_ID/CLUSTER_NAME/CLUSTER_LOCATION is missing, so run.json does not record the node pools' configuration." >&2
+    echo null
+    return 0
+  fi
+  if ! json="$(gcloud container clusters describe "${CLUSTER_NAME}" --location="${CLUSTER_LOCATION}" \
+      --project="${PROJECT_ID}" --format=json)"; then
+    echo "Warning: could not describe cluster ${CLUSTER_NAME}, so run.json does not record the node pools' configuration." >&2
+    echo null
+    return 0
+  fi
+  jq '{
+    name, location,
+    control_plane_version: .currentMasterVersion,
+    release_channel: (.releaseChannel.channel // "UNSPECIFIED"),
+    node_pools: ([.nodePools[]? | {(.name): {
+      version,
+      machine_type: .config.machineType,
+      disk_type: .config.diskType,
+      disk_size_gb: .config.diskSizeGb,
+      local_ssd_count: (.config.localSsdCount // 0),
+      ephemeral_local_ssd_count: (.config.ephemeralStorageLocalSsdConfig.localSsdCount // 0),
+      image_type: .config.imageType,
+      spot: (.config.spot // false),
+      locations,
+      autoscaling: (if .autoscaling.enabled then {min: .autoscaling.minNodeCount, max: .autoscaling.maxNodeCount} else null end),
+      auto_upgrade: (.management.autoUpgrade // false),
+      auto_repair: (.management.autoRepair // false)
+    }}] | add // {})
+  }' <<<"${json}"
+}
+
+# nodes_info prints the nodes the run ran on, grouped by pool. Each field lists
+# the distinct values across a pool's nodes, so a pool that drifted shows it.
+nodes_info() {
+  kubectl get nodes -o json | jq '
+    def distinct(f): map(f) | unique;
+    [.items[] | .metadata.labels as $l | {
+      pool: ($l["cloud.google.com/gke-nodepool"] // "unknown"),
+      ready: any(.status.conditions[]?; .type == "Ready" and .status == "True"),
+      machine_type: $l["node.kubernetes.io/instance-type"],
+      boot_disk: $l["cloud.google.com/gke-boot-disk"],
+      zone: $l["topology.kubernetes.io/zone"],
+      cpu: .status.capacity.cpu,
+      # In GiB: the exact capacity differs by a few KiB from node to node.
+      memory_gib: (.status.capacity.memory
+        | if endswith("Ki") then rtrimstr("Ki") | tonumber / 104857.6 | round / 10 else . end),
+      kubelet_version: .status.nodeInfo.kubeletVersion,
+      os_image: .status.nodeInfo.osImage,
+      kernel_version: .status.nodeInfo.kernelVersion,
+      container_runtime: .status.nodeInfo.containerRuntimeVersion
+    }]
+    | group_by(.pool)
+    | map({(.[0].pool): {
+        count: length,
+        ready: map(select(.ready)) | length,
+        machine_types: distinct(.machine_type),
+        boot_disks: distinct(.boot_disk),
+        zones: distinct(.zone),
+        cpu: distinct(.cpu),
+        memory_gib: distinct(.memory_gib),
+        kubelet_versions: distinct(.kubelet_version),
+        os_images: distinct(.os_image),
+        kernel_versions: distinct(.kernel_version),
+        container_runtimes: distinct(.container_runtime)
+      }})
+    | add // {}'
+}
+
 # run_info prints, as JSON, what the run was made of that its reports cannot
-# otherwise say: every image it ran by digest, and the commits it was built
-# from. runner.py writes it to run.json beside the reports.
+# otherwise say: the resolved case, the cluster and nodes, the WorkerPool, the
+# ActorTemplate and its SandboxConfig, every image by digest, and the commits.
+# runner.py writes it to run.json beside the reports.
 run_info() {
-  local templates='{}' deployments dirty=false
+  local cluster nodes pool deployments templates='{}' sandbox_configs='{}' config dirty=false
+  cluster="$(cluster_info)"
+  nodes="$(nodes_info)" || return 1
+  pool="$(kubectl get workerpool "${POOL_NAME}" --namespace="${POOL_NAMESPACE}" -o json |
+    jq '{spec, status}')" || return 1
   if [[ -n "${TEMPLATE}" ]]; then
-    templates="$(kubectl ate get actor-template "${TEMPLATE}" --atespace="${TEMPLATE_ATESPACE}" -o json |
-      jq --arg t "${TEMPLATE}" '{($t): [(.containers // [])[].image]}')"
+    templates="$(jq --arg t "${TEMPLATE}" '{($t): .}' <<<"${TEMPLATE_JSON}")"
+    config="$(jq -r '.sandboxConfig.configName // empty' <<<"${TEMPLATE_JSON}")"
+    if [[ -n "${config}" ]]; then
+      sandbox_configs="$(kubectl get sandboxconfig "${config}" -o json |
+        jq --arg c "${config}" '{($c): .spec}')" || return 1
+    fi
   fi
   # The WorkerPool's workers and anything the workload depends on, such as
   # mock-llm, run as Deployments in the pool's namespace.
   deployments="$(kubectl get deployments --namespace="${POOL_NAMESPACE}" -o json |
-    jq '[.items[] | {(.metadata.name): [.spec.template.spec.containers[].image]}] | add // {}')"
+    jq '[.items[] | {(.metadata.name): {replicas: .spec.replicas,
+      containers: [.spec.template.spec.containers[] | {name, image, resources}]}}] | add // {}')" || return 1
   if ! git diff --quiet HEAD --; then
     dirty=true
   fi
   jq -n \
-    --arg locust_image "${LOCUST_IMAGE}" \
+    --argjson case "${TEST_CASE_JSON}" \
+    --argjson cluster "${cluster}" \
+    --argjson nodes "${nodes}" \
+    --argjson worker_pool "${pool}" \
     --argjson actor_templates "${templates}" \
+    --argjson sandbox_configs "${sandbox_configs}" \
     --argjson deployments "${deployments}" \
+    --arg locust_image "${LOCUST_IMAGE}" \
     --arg commit "$(git rev-parse HEAD)" \
     --argjson commit_dirty "${dirty}" \
     --arg substrate_commit "$(git -C "${SUBSTRATE_DIR}" rev-parse HEAD)" \
-    '{locust_image: $locust_image, actor_templates: $actor_templates,
-      deployments: $deployments, commit: $commit, commit_dirty: $commit_dirty,
-      substrate_commit: $substrate_commit}'
+    '{case: $case, cluster: $cluster, nodes: $nodes, worker_pool: $worker_pool,
+      actor_templates: $actor_templates, sandbox_configs: $sandbox_configs,
+      deployments: $deployments, locust_image: $locust_image, commit: $commit,
+      commit_dirty: $commit_dirty, substrate_commit: $substrate_commit}'
 }
 
 # recreate_worker_pool gives the run its own pool: the old one goes, a new one
@@ -475,7 +571,7 @@ submit_job() {
   echo "Running Locust benchmark as a Job:"
   echo "  image:     ${LOCUST_IMAGE}"
   echo "  class:     ${BENCHMARK_USER_CLASS}"
-  echo "  case:      ${BENCHMARK_TEST_CASE}"
+  echo "  case:      ${BENCHMARK_RECORD_NAME}"
   echo "  run_id:    ${BENCHMARK_RUN_ID}"
   envsubst < "${JOB_MANIFEST}" | kubectl apply -f -
 }
@@ -618,7 +714,7 @@ stop_run() {
   echo "=== Deleting actors ==="
   delete_actors || true
   if [[ "${NO_DOWNLOAD}" -eq 0 ]]; then
-    download_reports "${RUN_ID}" "${BENCHMARK_TEST_CASE}" || true
+    download_reports "${RUN_ID}" "${BENCHMARK_RECORD_NAME}" || true
   fi
   exit "${INTERRUPTED}"
 }
@@ -627,25 +723,59 @@ stop_run() {
 # the bucket. runner.py could not overwrite them, its grant being objectCreator;
 # the download would fetch the earlier run's files and pass them off as this
 # one's; and Prometheus would sum the two runs' series under the same labels.
+#
+# Runs before the case is resolved, so it refuses the case's repeats' folders
+# too, whatever the case's repeats are now.
 refuse_existing_reports() {
-  local prefix="gs://${BENCHMARK_REPORT_BUCKET}/${REPORT_PREFIX}/${RUN_ID}/${BENCHMARK_TEST_CASE}/"
-  local out
+  local prefix="gs://${BENCHMARK_REPORT_BUCKET}/${REPORT_PREFIX}/${RUN_ID}/"
+  local out found
   if [[ -z "${BENCHMARK_REPORT_BUCKET}" ]] || ! command -v gcloud &>/dev/null; then
     return 0
   fi
-  if out="$(gcloud storage ls "${prefix}" 2>&1)"; then
-    echo "Error: ${prefix} already holds reports: run ${RUN_ID} has run" >&2
-    echo "${BENCHMARK_TEST_CASE} before. Pick another --run-id, or leave it unset" >&2
-    echo "for a fresh timestamp." >&2
-    return 1
-  fi
-  # Any other failure, such as expired credentials, says nothing about whether
-  # the reports are there.
-  if [[ "${out}" != *"matched no objects"* ]]; then
+  if ! out="$(gcloud storage ls "${prefix}" 2>&1)"; then
+    [[ "${out}" == *"matched no objects"* ]] && return 0
+    # Any other failure, such as expired credentials, says nothing about
+    # whether the reports are there.
     echo "Error: could not check ${prefix} for an earlier run's reports:" >&2
     echo "${out}" >&2
     return 1
   fi
+  found="$(grep -E "/${BENCHMARK_TEST_CASE//./\\.}(-[0-9]+)?/\$" <<<"${out}" || true)"
+  if [[ -n "${found}" ]]; then
+    echo "Error: run ${RUN_ID} has run ${BENCHMARK_TEST_CASE} before:" >&2
+    sed 's/^/  /' <<<"${found}" >&2
+    echo "Pick another --run-id, or leave it unset for a fresh timestamp." >&2
+    return 1
+  fi
+}
+
+# summarize_repeats writes the summary of the case's downloaded repeats, as CSV
+# and as a README, with reports/repeats.py run out of the locust image so the
+# host needs no Python.
+summarize_repeats() {
+  local dir out format status=0
+  if [[ -z "${BENCHMARK_REPORT_BUCKET}" || "${NO_DOWNLOAD}" -eq 1 ]]; then
+    echo "Skipping the summary of the repeats: none were downloaded."
+    return 0
+  fi
+  echo
+  echo "=== Summarizing ${REPEATS} repeats ==="
+  dir="$(cd "${REPORTS_DIR}/${RUN_ID}" && pwd)" || return 1
+  for format in csv md; do
+    out="${dir}/${BENCHMARK_TEST_CASE}-summary.${format}"
+    # The image's entrypoint is python.
+    if docker run --rm --platform "${LOCUST_IMAGE_PLATFORM:-linux/amd64}" -v "${dir}:/data:ro" \
+        "${LOCUST_IMAGE}" -m reports.repeats --format "${format}" /data "${BENCHMARK_TEST_CASE}" "${REPEATS}" \
+        >"${out}.tmp"; then
+      mv "${out}.tmp" "${out}"
+      echo "  ${out}"
+    else
+      rm -f "${out}.tmp"
+      echo "Warning: could not write ${out}." >&2
+      status=1
+    fi
+  done
+  return "${status}"
 }
 
 # download_reports copies what runner.py uploaded for one test case into
@@ -794,6 +924,21 @@ case "${SANDBOX_CLASS}" in
     ;;
 esac
 
+REPEATS="$(jq -r '.repeats // empty' <<<"${TEST_CASE_JSON}")"
+if [[ -z "${REPEATS}" ]]; then
+  echo "Error: case ${BENCHMARK_TEST_CASE} has no \`repeats\`; a case states how many times it runs." >&2
+  exit 1
+fi
+if ! [[ "${REPEATS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Error: case ${BENCHMARK_TEST_CASE}: \`repeats\` must be a whole number from 1, got '${REPEATS}'" >&2
+  exit 1
+fi
+if [[ "${REPEATS}" -gt 1 && "${NO_WAIT}" -eq 1 ]]; then
+  echo "Error: case ${BENCHMARK_TEST_CASE} has ${REPEATS} repeats, which run one after another;" >&2
+  echo "--no-wait would leave all but the first unrun." >&2
+  exit 1
+fi
+
 # Before the pool is rebuilt, since a mismatch means the rebuild is wasted. A
 # case that names no template leaves it to the worker's default, which there is
 # nothing here to check against.
@@ -812,46 +957,77 @@ if [[ -n "${TEMPLATE}" ]]; then
 fi
 export BENCHMARK_ACTOR_EGRESS_ALLOW
 
-echo
-echo "=== Recreating the WorkerPool ==="
-recreate_worker_pool
-
-# After the pool, whose workers' image is part of what the run was made of.
-BENCHMARK_RUN_INFO="$(run_info | base64 | tr -d '\n')"
-export BENCHMARK_RUN_INFO
-
-echo
-echo "=== Running the benchmark Job ==="
-# Set before the submit, so an interrupt that lands while the Job is being
-# created still stops it.
-if [[ "${NO_WAIT}" -eq 0 ]]; then
-  trap stop_run INT TERM
-fi
-submit_job
-
-if [[ "${NO_WAIT}" -eq 1 ]]; then
-  exit 0
-fi
-
-# The result of the run is decided by follow_run and by nothing after it, so
-# the download cannot turn a passing run into a failing one. A failed run still
-# gets one: what it managed to record before it stopped is usually the point.
+export BENCHMARK_REPEAT BENCHMARK_RECORD_NAME BENCHMARK_RUN_INFO
+STATUSES=()
 run_status=0
-follow_run || run_status=$?
-# The run is over, or being left to itself: an interrupt from here on should
-# not delete the Job and its log.
-trap - INT TERM
+# A failed repeat does not stop the ones after it; the exit status is the last
+# failure's.
+for ((repeat = 1; repeat <= REPEATS; repeat++)); do
+  # Must match runner.py's record_name.
+  if [[ "${REPEATS}" -gt 1 ]]; then
+    BENCHMARK_REPEAT="${repeat}"
+    BENCHMARK_RECORD_NAME="${BENCHMARK_TEST_CASE}-${repeat}"
+    echo
+    echo "=== Repeat ${repeat} of ${REPEATS}: ${BENCHMARK_RECORD_NAME} ==="
+  else
+    BENCHMARK_REPEAT=0
+    BENCHMARK_RECORD_NAME="${BENCHMARK_TEST_CASE}"
+  fi
 
-if [[ "${run_status}" -eq "${WAIT_TIMED_OUT}" ]]; then
-  exit "${run_status}"
-fi
+  echo
+  echo "=== Recreating the WorkerPool ==="
+  recreate_worker_pool
 
-echo
-echo "=== Deleting actors ==="
-delete_actors || true
+  # After the pool, whose workers' image is part of what the run was made of.
+  BENCHMARK_RUN_INFO="$(run_info | base64 | tr -d '\n')"
 
-if [[ "${NO_DOWNLOAD}" -eq 0 ]]; then
-  download_reports "${RUN_ID}" "${BENCHMARK_TEST_CASE}" || true
+  echo
+  echo "=== Running the benchmark Job ==="
+  # Set before the submit, so an interrupt that lands while the Job is being
+  # created still stops it.
+  if [[ "${NO_WAIT}" -eq 0 ]]; then
+    trap stop_run INT TERM
+  fi
+  submit_job
+
+  if [[ "${NO_WAIT}" -eq 1 ]]; then
+    exit 0
+  fi
+
+  # The result of the run is decided by follow_run and by nothing after it, so
+  # the download cannot turn a passing run into a failing one. A failed run still
+  # gets one: what it managed to record before it stopped is usually the point.
+  status=0
+  follow_run || status=$?
+  # The run is over, or being left to itself: an interrupt from here on should
+  # not delete the Job and its log.
+  trap - INT TERM
+
+  if [[ "${status}" -eq "${WAIT_TIMED_OUT}" ]]; then
+    exit "${status}"
+  fi
+
+  echo
+  echo "=== Deleting actors ==="
+  delete_actors || true
+
+  if [[ "${NO_DOWNLOAD}" -eq 0 ]]; then
+    download_reports "${RUN_ID}" "${BENCHMARK_RECORD_NAME}" || true
+  fi
+
+  if [[ "${status}" -eq 0 ]]; then
+    STATUSES+=("ok      ${BENCHMARK_RECORD_NAME}")
+  else
+    STATUSES+=("FAILED  ${BENCHMARK_RECORD_NAME}")
+    run_status="${status}"
+  fi
+done
+
+if [[ "${REPEATS}" -gt 1 ]]; then
+  summarize_repeats || true
+  echo
+  echo "=== ${BENCHMARK_TEST_CASE}: ${REPEATS} repeats ==="
+  printf '  %s\n' "${STATUSES[@]}"
 fi
 
 exit "${run_status}"

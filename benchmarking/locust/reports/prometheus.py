@@ -66,18 +66,6 @@ def instant_query(base_url: str, query: str, timeout: float = 15.0) -> list[dict
     return payload["data"]["result"]
 
 
-def labelled(result: list[dict], *labels: str) -> dict[tuple[str, ...], float]:
-    """Instant-query results keyed by the named labels. NaN is dropped: it
-    means the window held no observations, not that the value was zero."""
-    out: dict[tuple[str, ...], float] = {}
-    for item in result:
-        value = item["value"][1]
-        if value == "NaN":
-            continue
-        out[tuple(item["metric"].get(name, "") for name in labels)] = float(value)
-    return out
-
-
 def series(result: list[dict], index: int = 0) -> dict[int, float]:
     """One series as {unix_second: value}."""
     if not result:

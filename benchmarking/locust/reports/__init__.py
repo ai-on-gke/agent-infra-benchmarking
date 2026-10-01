@@ -23,13 +23,11 @@ from pathlib import Path
 from .base import Report, RunContext
 from .cluster_vitals import ClusterVitalsReport
 from .custom_history import CustomHistoryReport
-from .stats_csv import StatsCSVReport
 from .upload import DEFAULT_PREFIX, UploadError, upload
 
 _REPORTS: dict[str, Report] = {
     r.name: r
     for r in (
-        StatsCSVReport(),
         CustomHistoryReport(),
         ClusterVitalsReport(),
     )
