@@ -386,32 +386,122 @@ tag_image_with_run_id() {
   fi
 }
 
+# cluster_info prints the cluster's GKE configuration as JSON: the hardware and
+# versions the run was measured on. Prints null, with a warning, when it cannot
+# be read, rather than stopping a run over its metadata.
+cluster_info() {
+  local json
+  if ! command -v gcloud &>/dev/null || [[ -z "${CLUSTER_NAME:-}" || -z "${CLUSTER_LOCATION:-}" || -z "${PROJECT_ID:-}" ]]; then
+    echo "Warning: gcloud or PROJECT_ID/CLUSTER_NAME/CLUSTER_LOCATION is missing, so run.json does not record the node pools' configuration." >&2
+    echo null
+    return 0
+  fi
+  if ! json="$(gcloud container clusters describe "${CLUSTER_NAME}" --location="${CLUSTER_LOCATION}" \
+      --project="${PROJECT_ID}" --format=json)"; then
+    echo "Warning: could not describe cluster ${CLUSTER_NAME}, so run.json does not record the node pools' configuration." >&2
+    echo null
+    return 0
+  fi
+  jq '{
+    name, location,
+    control_plane_version: .currentMasterVersion,
+    release_channel: (.releaseChannel.channel // "UNSPECIFIED"),
+    node_pools: ([.nodePools[]? | {(.name): {
+      version,
+      machine_type: .config.machineType,
+      disk_type: .config.diskType,
+      disk_size_gb: .config.diskSizeGb,
+      local_ssd_count: (.config.localSsdCount // 0),
+      ephemeral_local_ssd_count: (.config.ephemeralStorageLocalSsdConfig.localSsdCount // 0),
+      image_type: .config.imageType,
+      spot: (.config.spot // false),
+      locations,
+      autoscaling: (if .autoscaling.enabled then {min: .autoscaling.minNodeCount, max: .autoscaling.maxNodeCount} else null end),
+      auto_upgrade: (.management.autoUpgrade // false),
+      auto_repair: (.management.autoRepair // false)
+    }}] | add // {})
+  }' <<<"${json}"
+}
+
+# nodes_info prints the nodes the run ran on, grouped by pool. Each field lists
+# the distinct values across a pool's nodes, so a pool that drifted shows it.
+nodes_info() {
+  kubectl get nodes -o json | jq '
+    def distinct(f): map(f) | unique;
+    [.items[] | .metadata.labels as $l | {
+      pool: ($l["cloud.google.com/gke-nodepool"] // "unknown"),
+      ready: any(.status.conditions[]?; .type == "Ready" and .status == "True"),
+      machine_type: $l["node.kubernetes.io/instance-type"],
+      boot_disk: $l["cloud.google.com/gke-boot-disk"],
+      zone: $l["topology.kubernetes.io/zone"],
+      cpu: .status.capacity.cpu,
+      # In GiB: the exact capacity differs by a few KiB from node to node.
+      memory_gib: (.status.capacity.memory
+        | if endswith("Ki") then rtrimstr("Ki") | tonumber / 104857.6 | round / 10 else . end),
+      kubelet_version: .status.nodeInfo.kubeletVersion,
+      os_image: .status.nodeInfo.osImage,
+      kernel_version: .status.nodeInfo.kernelVersion,
+      container_runtime: .status.nodeInfo.containerRuntimeVersion
+    }]
+    | group_by(.pool)
+    | map({(.[0].pool): {
+        count: length,
+        ready: map(select(.ready)) | length,
+        machine_types: distinct(.machine_type),
+        boot_disks: distinct(.boot_disk),
+        zones: distinct(.zone),
+        cpu: distinct(.cpu),
+        memory_gib: distinct(.memory_gib),
+        kubelet_versions: distinct(.kubelet_version),
+        os_images: distinct(.os_image),
+        kernel_versions: distinct(.kernel_version),
+        container_runtimes: distinct(.container_runtime)
+      }})
+    | add // {}'
+}
+
 # run_info prints, as JSON, what the run was made of that its reports cannot
-# otherwise say: every image it ran by digest, and the commits it was built
-# from. runner.py writes it to run.json beside the reports.
+# otherwise say: the resolved case, the cluster and nodes, the WorkerPool, the
+# ActorTemplate and its SandboxConfig, every image by digest, and the commits.
+# runner.py writes it to run.json beside the reports.
 run_info() {
-  local templates='{}' deployments dirty=false
+  local cluster nodes pool deployments templates='{}' sandbox_configs='{}' config dirty=false
+  cluster="$(cluster_info)"
+  nodes="$(nodes_info)" || return 1
+  pool="$(kubectl get workerpool "${POOL_NAME}" --namespace="${POOL_NAMESPACE}" -o json |
+    jq '{spec, status}')" || return 1
   if [[ -n "${TEMPLATE}" ]]; then
-    templates="$(kubectl ate get actor-template "${TEMPLATE}" --atespace="${TEMPLATE_ATESPACE}" -o json |
-      jq --arg t "${TEMPLATE}" '{($t): [(.containers // [])[].image]}')"
+    templates="$(jq --arg t "${TEMPLATE}" '{($t): .}' <<<"${TEMPLATE_JSON}")"
+    config="$(jq -r '.sandboxConfig.configName // empty' <<<"${TEMPLATE_JSON}")"
+    if [[ -n "${config}" ]]; then
+      sandbox_configs="$(kubectl get sandboxconfig "${config}" -o json |
+        jq --arg c "${config}" '{($c): .spec}')" || return 1
+    fi
   fi
   # The WorkerPool's workers and anything the workload depends on, such as
   # mock-llm, run as Deployments in the pool's namespace.
   deployments="$(kubectl get deployments --namespace="${POOL_NAMESPACE}" -o json |
-    jq '[.items[] | {(.metadata.name): [.spec.template.spec.containers[].image]}] | add // {}')"
+    jq '[.items[] | {(.metadata.name): {replicas: .spec.replicas,
+      containers: [.spec.template.spec.containers[] | {name, image, resources}]}}] | add // {}')" || return 1
   if ! git diff --quiet HEAD --; then
     dirty=true
   fi
   jq -n \
-    --arg locust_image "${LOCUST_IMAGE}" \
+    --argjson case "${TEST_CASE_JSON}" \
+    --argjson cluster "${cluster}" \
+    --argjson nodes "${nodes}" \
+    --argjson worker_pool "${pool}" \
     --argjson actor_templates "${templates}" \
+    --argjson sandbox_configs "${sandbox_configs}" \
     --argjson deployments "${deployments}" \
+    --arg locust_image "${LOCUST_IMAGE}" \
     --arg commit "$(git rev-parse HEAD)" \
     --argjson commit_dirty "${dirty}" \
     --arg substrate_commit "$(git -C "${SUBSTRATE_DIR}" rev-parse HEAD)" \
-    '{locust_image: $locust_image, actor_templates: $actor_templates,
-      deployments: $deployments, commit: $commit, commit_dirty: $commit_dirty,
-      substrate_commit: $substrate_commit}'
+    '{case: $case, cluster: $cluster, nodes: $nodes, worker_pool: $worker_pool,
+      actor_templates: $actor_templates, sandbox_configs: $sandbox_configs,
+      deployments: $deployments, locust_image: $locust_image, commit: $commit,
+      commit_dirty: $commit_dirty, substrate_commit: $substrate_commit}'
 }
 
 # recreate_worker_pool gives the run its own pool: the old one goes, a new one

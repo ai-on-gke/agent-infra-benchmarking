@@ -86,8 +86,10 @@ REPORT_SETTLE_SECS = 15
 # and boomer's own, which say how the run itself went.
 UPLOAD_FAILED_EXIT = 3
 
-# What the run was made of and how it went, written beside the reports.
+# What the run was made of and how it went, written beside the reports; the
+# README summarizes it for a reader.
 RUN_JSON = "run.json"
+README = "README.md"
 
 # How far back refuse_reused_run looks for an earlier run's series: past
 # Prometheus's retention, so anything it still holds is found.
@@ -460,34 +462,56 @@ def refuse_reused_run(args: argparse.Namespace) -> None:
         )
 
 
-def write_run_json(args: argparse.Namespace, started: float, ended: float, status: int) -> None:
-    """Write run.json into --report-dir: what run_locust_job.sh passed in
-    BENCHMARK_RUN_INFO (the images by digest and the commits), with the case
-    and how the run went. write_reports uploads it with the other files."""
-    info: dict = {}
+def write_run_json(args: argparse.Namespace, started: float, ended: float, status: int) -> dict:
+    """Write run.json into --report-dir and return what it holds: how the run
+    went, followed by what run_locust_job.sh passed in BENCHMARK_RUN_INFO (the
+    resolved case, the cluster, the WorkerPool, the images by digest and the
+    commits). write_reports uploads it with the other files."""
+    passed: dict = {}
     raw = os.environ.get("BENCHMARK_RUN_INFO", "")
     if raw:
         try:
-            info = json.loads(base64.b64decode(raw))
+            passed = json.loads(base64.b64decode(raw))
         except (ValueError, TypeError) as exc:
-            info = {"run_info_error": f"cannot decode BENCHMARK_RUN_INFO: {exc}"}
+            passed = {"run_info_error": f"cannot decode BENCHMARK_RUN_INFO: {exc}"}
+    else:
+        passed = {"run_info_error": "BENCHMARK_RUN_INFO is unset"}
 
     def iso(t: float) -> str:
         return datetime.datetime.fromtimestamp(t, datetime.timezone.utc).isoformat()
 
-    info.update({
+    info = {
         "run_id": args.run_id,
         "test_case": args.test_case,
+        "status": status,
+        "started": iso(started),
+        "ended": iso(ended),
         "users": args.users,
         "spawn_rate": args.spawn_rate,
         "duration": args.duration,
+        "user_class": user_class(args.file),
         "worker_flags": args.worker_flags,
-        "started": iso(started),
-        "ended": iso(ended),
-        "status": status,
-    })
+        **passed,
+    }
     path = Path(args.report_dir) / RUN_JSON
     path.write_text(json.dumps(info, indent=2) + "\n")
+    print(f"reports: wrote {path}", flush=True)
+    return info
+
+
+def write_readme(args: argparse.Namespace, info: dict) -> None:
+    """Write README.md into --report-dir: run.json summarized for a reader,
+    and what each file beside it holds. Skipped, and said so, if it cannot be
+    rendered; run.json is the record either way."""
+    try:
+        from reports import readme
+
+        text = readme.render(info)
+    except Exception as exc:
+        print(f"reports: {README} skipped ({type(exc).__name__}: {exc})", flush=True)
+        return
+    path = Path(args.report_dir) / README
+    path.write_text(text)
     print(f"reports: wrote {path}", flush=True)
 
 
@@ -507,9 +531,10 @@ def write_reports(args: argparse.Namespace, started: float, ended: float) -> boo
     collected = locust_csvs(args)
     for path in collected:
         print(f"reports: locust wrote {path} ({path.stat().st_size} bytes)", flush=True)
-    run_json = Path(args.report_dir) / RUN_JSON
-    if run_json.exists():
-        collected.append(run_json)
+    for name in (RUN_JSON, README):
+        path = Path(args.report_dir) / name
+        if path.exists():
+            collected.append(path)
 
     if args.report:
         collected += generate_reports(args, started)
@@ -590,7 +615,8 @@ def main() -> None:
     started = time.time()
     status = run(args)
     ended = time.time()
-    write_run_json(args, started, ended, status)
+    info = write_run_json(args, started, ended, status)
+    write_readme(args, info)
     if not write_reports(args, started, ended) and status == 0:
         print("The reports did not all upload, so the run is failed.", flush=True)
         status = UPLOAD_FAILED_EXIT

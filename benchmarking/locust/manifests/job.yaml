@@ -100,9 +100,6 @@ spec:
         # as locust rejects an empty value instead of reading it as unset.
         - name: LOCUST_ONLY_SUMMARY
           value: "${BENCHMARK_ONLY_SUMMARY}"
-        # What the run was made of, from run_locust_job.sh as base64 JSON: its
-        # images by digest and the commits they were built from. runner.py adds
-        # the case and how the run went, and uploads it as run.json.
         - name: BENCHMARK_RUN_INFO
           value: "${BENCHMARK_RUN_INFO}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
