@@ -23,7 +23,7 @@ cluster = {
 
   node_pools = {
     default = {
-      machine_type   = "e2-standard-4"
+      machine_type   = "c2-standard-16"
       node_count     = 1
       node_locations = ["us-central1-a"]
       # Pinned rather than auto-upgraded; bump it deliberately when needed.
@@ -34,10 +34,10 @@ cluster = {
     }
     sandboxed = {
       machine_type   = "c2-standard-16"
-      node_count     = 1
+      node_count     = 30
       node_locations = ["us-central1-a"]
-      min_node_count = 1
-      max_node_count = 1
+      min_node_count = 30
+      max_node_count = 30
       # ate.dev/substrate-version is not set here: Terraform reads it off the
       # substrate submodule and adds it to every pool. See main.tf.
       labels = {

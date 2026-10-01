@@ -81,22 +81,45 @@ gcloud application-default credentials already in place.
    on a regional cluster like this one, so an unpinned pool is three times the
    nodes and three times the bill.
 
-3. Point Terraform at its state and download the providers. The state lives
-   in a GCS bucket, so a deployment can be managed by anyone on the project and
-   not only from the machine that created it. The bucket is made once per
-   project and shared; the prefix keeps each deployment's state apart, so use
-   your `default_resource_name`:
+3. Initialize Terraform. The state can be kept in one of two places:
 
-   ```bash
-   # Once per project, if it does not exist yet:
-   gcloud storage buckets create gs://<project-id>-tfstate --location=us-central1 \
-     --uniform-bucket-level-access
-   gcloud storage buckets update gs://<project-id>-tfstate --versioning
+   - **Local** (default): nothing to set up. Only this machine can manage the
+     deployment, though, and losing the state file leaves its resources
+     orphaned.
+   - **GCS bucket**: anyone on the project can manage the deployment, and the
+     state is versioned and outlives the machine. The bucket has to be created
+     once per project first.
 
-   terraform -chdir=infra/terraform-gke init \
-     -backend-config=bucket=<project-id>-tfstate \
-     -backend-config=prefix=<default_resource_name>
-   ```
+   Follow one of:
+
+   1. **Local state**, in `infra/terraform-gke/terraform.tfstate`:
+
+      ```bash
+      terraform -chdir=infra/terraform-gke init
+      ```
+
+   2. **State in GCS.** The bucket is shared by the project's deployments; the
+      prefix keeps each one's state apart, so use your `default_resource_name`.
+      `backend_override.tf` is gitignored:
+
+      ```bash
+      # Once per project, if it does not exist yet:
+      gcloud storage buckets create gs://<project-id>-tfstate --location=us-central1 \
+        --uniform-bucket-level-access
+      gcloud storage buckets update gs://<project-id>-tfstate --versioning
+
+      cat > infra/terraform-gke/backend_override.tf <<'EOF'
+      terraform {
+        backend "gcs" {}
+      }
+      EOF
+
+      terraform -chdir=infra/terraform-gke init \
+        -backend-config=bucket=<project-id>-tfstate \
+        -backend-config=prefix=<default_resource_name>
+      ```
+
+      `init` offers to copy an existing local state into the bucket.
 
 4. Create everything, answering `yes` at the plan. A GKE cluster takes several
    minutes, and this is billable:

@@ -1,11 +1,8 @@
 terraform {
   required_version = ">= 1.5"
 
-  # State in a GCS bucket, so a deployment can be managed by anyone on the
-  # project rather than only from the laptop that created it. Partial: the
-  # bucket and prefix are given at init, since the bucket this config creates
-  # cannot also hold its state. See README.md.
-  backend "gcs" {}
+  # No backend here, so state is local by default. A backend_override.tf
+  # (gitignored) moves it to a GCS bucket instead; see README.md.
 
   required_providers {
     google = {

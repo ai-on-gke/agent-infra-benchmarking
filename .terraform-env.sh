@@ -42,9 +42,9 @@ unset _TF_SELF
 
 # One call, reused for every lookup below: terraform output is slow enough that
 # a call per variable is noticeable on every script that sources this file.
-# The state is in GCS, so reading it needs application-default credentials and
-# a terraform init against the backend. Terraform's own error says which is
-# missing, where "no outputs" would not.
+# State kept in GCS needs application-default credentials and a terraform init
+# against the backend to read. Terraform's own error says which is missing,
+# where "no outputs" would not.
 _TF_ERR="$(mktemp)"
 if ! _TF_OUT="$(terraform -chdir="${_TF_DIR}" output -json -no-color 2>"${_TF_ERR}")"; then
   echo "Error: terraform output failed in ${_TF_DIR}:" >&2
