@@ -15,7 +15,8 @@
 """Chart one benchmark run: request latency percentiles and throughput, worker
 nodes' CPU and memory utilization and the actor counts over time, read from
 each job's locust_stats_history.csv, cluster_vitals_history.csv and
-custom_stats_history.csv and shown in a matplotlib window. A job is one test
+custom_stats_history.csv, with the steady-state window from run.json shaded,
+and shown in a matplotlib window. A job is one test
 case of the run; drop-downs in the window switch between the run's jobs, and
 between the requests in CHARTS.
 """
@@ -120,7 +121,7 @@ def load(job_dir: Path):
     if not mains:
         names = " or ".join(name for name, _ in CHARTS.values())
         raise ValueError(f"no {names} samples in {data.STATS_HISTORY}")
-    return window.Job(title(job_dir), mains, rows, vitals, custom)
+    return window.Job(title(job_dir), mains, rows, vitals, custom, data.steady_window(job_dir))
 
 
 def main() -> None:

@@ -66,8 +66,8 @@ TESTS_FILE = "/app/tests.yaml"
 LOCUST_CSV_STEM = "locust"
 
 # The case keys that are the run's load rather than the worker's flags. Every
-# key in a case that is not one of these, HOST_KEYS or FAILURE_RATIO_KEY goes
-# to the worker verbatim.
+# key in a case that is not one of these, HOST_KEYS, FAILURE_RATIO_KEY or
+# WARM_UP_KEY goes to the worker verbatim.
 LOAD_KEYS = ("duration", "users", "spawn-rate")
 
 # Case keys that shape the WorkerPool, which run_locust_job.sh deploys before
@@ -81,6 +81,14 @@ HOST_KEYS = ("worker-count", "sandbox-class")
 # tens of thousands.
 FAILURE_RATIO_KEY = "max-failure-ratio"
 DEFAULT_MAX_FAILURE_RATIO = 0.01
+
+# Case key for how long after the last user starts the steady-state window
+# opens, and its default. Validated by the locustfile's --warm-up.
+WARM_UP_KEY = "warm-up"
+DEFAULT_WARM_UP = "30s"
+
+# Where the locustfile leaves the steady-state window's bounds for run.json.
+STEADY_WINDOW_JSON = f"{LOCUST_CSV_STEM}_steady_window.json"
 
 # How long boomer gets to suspend and delete its actors after the run. Longer
 # than the worker's own teardown and final scrape wait, so the timeout here is
@@ -135,8 +143,9 @@ def parse_args() -> argparse.Namespace:
         "--test-case",
         required=True,
         help=f"Name a case in --tests-file. {', '.join(LOAD_KEYS)} are the "
-        f"load, {FAILURE_RATIO_KEY} its pass mark, and {', '.join(HOST_KEYS)} "
-        f"the pool's; every other key is a worker flag.",
+        f"load, {FAILURE_RATIO_KEY} its pass mark, {WARM_UP_KEY} the start of its "
+        f"steady state, and {', '.join(HOST_KEYS)} the pool's; every other key is "
+        f"a worker flag.",
     )
     p.add_argument(
         "--tests-file",
@@ -192,6 +201,7 @@ def parse_args() -> argparse.Namespace:
     # comes out is the worker's, whatever it is named.
     args.duration, args.users, args.spawn_rate = take_load(case, args.test_case)
     args.max_failure_ratio = take_failure_ratio(case, args.test_case)
+    args.warm_up = case.pop(WARM_UP_KEY, DEFAULT_WARM_UP)
     for key in HOST_KEYS:
         case.pop(key, None)
     if args.actor_egress_allow:
@@ -318,6 +328,7 @@ def log_run_config(args: argparse.Namespace) -> None:
         f"  users:        {args.users}",
         f"  spawn_rate:   {args.spawn_rate:g}/s"
         + (" (all at once)" if args.spawn_rate >= args.users else ""),
+        f"  warm_up:      {args.warm_up}",
         f"  test_case:    {args.test_case or '(none)'}",
         f"  worker flags: {' '.join(f'--{k}={v}' for k, v in args.worker_flags.items()) or '(none)'}",
         f"  max failures: {args.max_failure_ratio:.2%} of requests",
@@ -354,6 +365,8 @@ def build_locust_cmd(args: argparse.Namespace) -> list[str]:
         # Failed requests are judged by within_limits against the case's
         # max-failure-ratio instead.
         "--exit-code-on-error", "0",
+        # Defined by the locustfile, which writes _stats_steady.csv from it.
+        "--warm-up", args.warm_up,
     ]
     return cmd + list(args.locust_extra)
 
@@ -532,6 +545,15 @@ def refuse_reused_run(args: argparse.Namespace) -> None:
         )
 
 
+def read_steady_window(args: argparse.Namespace) -> dict | None:
+    """The steady-state window the locustfile wrote, or None if it opened no
+    window, as when the run ended within its ramp and warm-up."""
+    try:
+        return json.loads((Path(args.report_dir) / STEADY_WINDOW_JSON).read_text())
+    except (OSError, ValueError):
+        return None
+
+
 def write_run_json(
     args: argparse.Namespace, started: float, ended: float, status: int, failures: dict | None
 ) -> dict:
@@ -564,6 +586,8 @@ def write_run_json(
         "user_class": user_class(args.file),
         "max_failure_ratio": args.max_failure_ratio,
         "failures": failures,
+        "warm_up": args.warm_up,
+        "steady_window": read_steady_window(args),
         "worker_flags": args.worker_flags,
         **passed,
     }

@@ -28,11 +28,12 @@ UNKNOWN = "—"
 # Every file a run's folder can hold, in the order a reader wants them.
 FILES = (
     (
-        "locust_stats.csv",
-        "locust's own totals per request name, over the whole run including the ramp. "
-        "The run's latency percentiles: failed requests included, rounded to 1 ms below 100 ms, "
-        "10 ms below 1 s, 100 ms below 10 s and 1 s above.",
+        "locust_stats_steady.csv",
+        "the run's latency percentiles: locust's own totals per request name over the steady-state "
+        "window only. Failed requests included, rounded to 1 ms below 100 ms, 10 ms below 1 s, "
+        "100 ms below 10 s and 1 s above.",
     ),
+    ("locust_stats.csv", "the same over the whole run, including the ramp, the warm-up and the teardown."),
     ("locust_stats_history.csv", "the same, one row per second per request name, with the user count at that second."),
     ("locust_failures.csv", "failed requests, grouped by error."),
     ("locust_exceptions.csv", "errors raised inside the load generator."),
@@ -65,6 +66,7 @@ def _header(info: dict) -> str:
     if isinstance(info.get("failures"), dict) and info["failures"].get("exceptions"):
         lines.append(f"- **Load generator exceptions:** {info['failures']['exceptions']}")
     lines.append(f"- **Window:** {_window(info.get('started'), info.get('ended'))}")
+    lines.append(f"- **Steady-state window:** {_steady_window(info.get('steady_window'), info.get('warm_up'))}")
     if info.get("run_info_error"):
         lines.append(f"- **Metadata missing:** {info['run_info_error']}")
     return "\n".join(lines)
@@ -242,6 +244,12 @@ def _window(started, ended) -> str:
         f"{start:%Y-%m-%d %H:%M:%S} to {end:%H:%M:%S} UTC "
         f"({seconds // 60}m {seconds % 60}s)"
     )
+
+
+def _steady_window(window, warm_up) -> str:
+    if not isinstance(window, dict):
+        return "none recorded"
+    return f"{_window(window.get('start'), window.get('end'))}, from {warm_up or UNKNOWN} after the last user started"
 
 
 def _sandbox_asset(config) -> str:

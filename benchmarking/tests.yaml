@@ -29,6 +29,10 @@
 # `max-failure-ratio` is the share of requests, 0 to 1, that may fail before
 # the run counts as failed. It defaults to 0.01.
 #
+# `warm-up` is how long after the last user starts the steady-state window
+# opens; locust_stats_steady.csv covers that window to the end of `duration`.
+# It takes locust's spelling of a time span and defaults to 30s.
+#
 # Every other key becomes a boomer-worker flag, `key: value` to `--key=value`,
 # and nothing here reads them — a flag the worker accepts works from a case the
 # day it is added, and one it does not is fatal in the worker, which lists the

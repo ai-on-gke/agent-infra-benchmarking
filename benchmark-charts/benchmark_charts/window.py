@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Union
 
@@ -48,6 +49,7 @@ class Job:
     rows: list[dict[str, str]]
     vitals: list[dict[str, str]]
     custom: list[dict[str, str]]
+    steady: tuple[datetime, datetime] | None = None
 
 
 class Window:
@@ -98,6 +100,7 @@ class Window:
                 job.title,
                 job.vitals,
                 job.custom,
+                job.steady,
                 active=titles.index(self._main),
                 top=1 - strip if has_switch else 1,
             )
