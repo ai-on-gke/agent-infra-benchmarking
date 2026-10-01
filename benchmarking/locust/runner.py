@@ -342,11 +342,8 @@ def build_locust_cmd(args: argparse.Namespace) -> list[str]:
         # seconds before a worker attaches would otherwise be counted as part
         # of the run rather than as part of its setup.
         "--master", "--expect-workers", "1",
-        # locust's own stats, at its own precision: it holds response times
-        # rounded to 1ms below 100ms, where the worker's Prometheus histogram
-        # buckets exponentially and cannot resolve better than the bucket a
-        # value lands in. These files are the run's numbers; the Prometheus
-        # reports beside them are what survives the pod.
+        # The run's latency percentiles. The worker's Prometheus histogram has
+        # power-of-two buckets, too coarse to report them from.
         "--csv", str(Path(args.report_dir) / LOCUST_CSV_STEM),
         # A row per second per request name, rather than one Aggregated row.
         # The user count is recorded in the row with the percentiles, so a

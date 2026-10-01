@@ -27,15 +27,15 @@ UNKNOWN = "—"
 
 # Every file a run's folder can hold, in the order a reader wants them.
 FILES = (
-    ("locust_stats.csv", "locust's own totals per request name, over the whole run including the ramp."),
+    (
+        "locust_stats.csv",
+        "locust's own totals per request name, over the whole run including the ramp. "
+        "The run's latency percentiles: failed requests included, rounded to 1 ms below 100 ms, "
+        "10 ms below 1 s, 100 ms below 10 s and 1 s above.",
+    ),
     ("locust_stats_history.csv", "the same, one row per second per request name, with the user count at that second."),
     ("locust_failures.csv", "failed requests, grouped by error."),
     ("locust_exceptions.csv", "errors raised inside the load generator."),
-    (
-        "stats.csv",
-        "the totals rebuilt from Prometheus. Its percentiles are estimated from histogram buckets "
-        "and cover successful requests only.",
-    ),
     ("custom_stats_history.csv", "active and idle actors over the run, from Prometheus."),
     ("cluster_vitals_history.csv", "CPU and memory of every node over the run; worker nodes have Pool=worker."),
     (
