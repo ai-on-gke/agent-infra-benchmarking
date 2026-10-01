@@ -119,6 +119,11 @@ variable "cluster" {
       # image_type = "COS_CONTAINERD". Keep at least one non-sandboxed
       # pool for GKE-managed system workloads.
       sandbox_gvisor = optional(bool, false)
+      # Exposes /dev/kvm on the pool's nodes, which the microvm (kata +
+      # cloud-hypervisor) sandbox class needs to boot a guest. Not supported on
+      # E2 machine types; pick n2/c2/c3 or similar. Independent of
+      # sandbox_gvisor - a microvm pool is not a gVisor pool.
+      enable_nested_virtualization = optional(bool, false)
     })), { default = {} })
   })
   default = {}

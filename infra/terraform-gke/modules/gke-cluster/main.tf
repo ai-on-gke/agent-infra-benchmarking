@@ -189,6 +189,20 @@ resource "google_container_node_pool" "this" {
       }
     }
 
+    # Nested virtualization is what exposes /dev/kvm on the node; without it
+    # the microvm (kata + cloud-hypervisor) sandbox class has no hypervisor to
+    # boot a guest on. GCE only offers it on non-E2 machine types, so a pool
+    # that sets this must also pick an n2/c2/c3 (etc.) machine_type above.
+    dynamic "advanced_machine_features" {
+      for_each = each.value.enable_nested_virtualization ? [1] : []
+      content {
+        enable_nested_virtualization = true
+        # 0 leaves SMT at the machine type's default; the block just needs it
+        # set, and nested virtualization is the only feature this pool is after.
+        threads_per_core = 0
+      }
+    }
+
     service_account = var.node_service_account
 
     # cloud-platform is the scope Google pairs with a dedicated service

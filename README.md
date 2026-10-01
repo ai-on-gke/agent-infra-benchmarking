@@ -157,6 +157,19 @@ gcloud application-default credentials already in place.
    ./scripts/substrate/upstream.sh hack/install-ate.sh --deploy-ate-system
    ```
 
+   That installer only lays down the default gVisor SandboxConfig. To also run
+   the `microvm` sandbox class (`--sandbox-class microvm`), install the micro-VM
+   dependencies: the cluster-wide `microvm` SandboxConfig and its kata +
+   cloud-hypervisor assets. This must run *after* the step above (it needs
+   substrate's CRDs), and the actor guests boot on `/dev/kvm`, so the worker
+   nodes need nested virtualization — a Terraform node pool with
+   `enable_nested_virtualization = true` on a non-E2 machine type (the `microvm`
+   pool in [`terraform.tfvars.example`](infra/terraform-gke/terraform.tfvars.example)).
+
+   ```bash
+   ./scripts/substrate/upstream.sh hack/install-microvm-deps.sh --install
+   ```
+
 3. Deploying the benchmarking
 
    ```bash

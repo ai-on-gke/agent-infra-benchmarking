@@ -46,6 +46,16 @@ cases:
     workload-template: glutton
     resume-mode: explicit 
 
+  glutton-microvm:
+    duration: 3m
+    users: 3
+    spawn-rate: 2
+    worker-count: 5
+    sandbox-class: microvm
+    workload-name: glutton
+    workload-template: glutton
+    resume-mode: explicit
+
   openclaw:
     duration: 5m
     users: 100

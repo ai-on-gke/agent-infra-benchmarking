@@ -59,5 +59,31 @@ cluster = {
       version      = "1.35.8-gke.1225000"
       auto_upgrade = false
     }
+    # A micro-VM (kata + cloud-hypervisor) worker pool. Nested virtualization
+    # exposes /dev/kvm, which the microvm sandbox class boots its guest on; c2
+    # supports it, E2 does not. The taint matches the WorkerPool's
+    # ate.dev/sandboxClass toleration, so only microvm workers land here. Drop
+    # this pool if you only run the gvisor class.
+    microvm = {
+      machine_type                 = "c2-standard-16"
+      node_count                   = 1
+      node_locations               = ["us-central1-a"]
+      min_node_count               = 1
+      max_node_count               = 1
+      enable_nested_virtualization = true
+      labels = {
+        "benchmarking-worker" = "true",
+      }
+      taints = [
+        {
+          key    = "ate.dev/sandboxClass"
+          value  = "microvm"
+          effect = "NO_SCHEDULE"
+        }
+      ]
+      # Pinned rather than auto-upgraded; bump it deliberately when needed.
+      version      = "1.35.8-gke.1225000"
+      auto_upgrade = false
+    }
   }
 }
