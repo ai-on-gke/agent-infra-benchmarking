@@ -5,8 +5,9 @@
 
 # Reports run_locust_job.sh downloads from the bucket.
 /reports/*
-!/reports/20260929t155627z/
+!/reports/20261001t184243z/
 
 # What `pip install ./benchmark-charts` leaves behind.
+/.venv/
 /benchmark-charts/build/
 *.egg-info/
