@@ -14,6 +14,7 @@ against it and destroys it afterwards.
 - gcloud
 - Go, kubectl and git
 - Docker, unless you pass `--cloud-build`
+- curl and a `tar` with zstd support, for `sandbox-class: microvm` cases
 
 ## Setup
 

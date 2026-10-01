@@ -32,6 +32,11 @@ output "substrate_version" {
   value       = var.substrate_version
 }
 
+output "sandbox_class" {
+  description = "Sandbox class of the sandboxed node pool's workers."
+  value       = var.sandbox_class
+}
+
 output "network_name" {
   description = "Name of the dedicated VPC network created for this deployment."
   value       = google_compute_network.this.name

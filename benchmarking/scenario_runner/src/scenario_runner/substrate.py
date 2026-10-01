@@ -13,8 +13,8 @@
 # limitations under the License.
 
 """Installs substrate on a case's cluster with the submodule's
-hack/install-ate.sh --deploy-ate-system, configured from the cluster's
-Terraform outputs."""
+hack/install-ate.sh --deploy-ate-system, and hack/install-microvm-deps.sh
+--install on a microvm one, configured from the cluster's Terraform outputs."""
 
 from __future__ import annotations
 
@@ -107,3 +107,8 @@ def install(cluster: Cluster) -> None:
     # provider, and the installer requires a choice either way.
     install_ate = [str(SUBSTRATE_DIR / "hack" / "install-ate.sh"), "--deploy-ate-system", '--credential-provider={"enabled":false}']
     stream(install_ate, env=env, cwd=SUBSTRATE_DIR)
+    # install-ate.sh lays down only the gVisor SandboxConfig. This one needs
+    # substrate's CRDs, so it comes after.
+    if cluster.sandbox_class == "microvm":
+        log(f"substrate: installing the microvm SandboxConfig and its assets on cluster {cluster.name}")
+        stream([str(SUBSTRATE_DIR / "hack" / "install-microvm-deps.sh"), "--install"], env=env, cwd=SUBSTRATE_DIR)

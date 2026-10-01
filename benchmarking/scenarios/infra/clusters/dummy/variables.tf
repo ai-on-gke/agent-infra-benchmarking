@@ -54,6 +54,12 @@ variable "sandboxed_machine_type" {
   default     = ""
 }
 
+variable "sandbox_class" {
+  description = "Unused; taken as common takes it."
+  type        = string
+  default     = "gvisor"
+}
+
 variable "sandboxed_node_count" {
   description = "Number of fake nodes in the sandboxed pool."
   type        = number

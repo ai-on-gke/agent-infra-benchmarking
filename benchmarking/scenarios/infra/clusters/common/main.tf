@@ -88,6 +88,8 @@ module "cluster" {
       max_node_count = var.sandboxed_max_node_count
       node_locations = [var.zone]
       labels         = merge(local.substrate_version_label, { "benchmarking-worker" = "true" })
+      # The microvm guests boot on /dev/kvm.
+      enable_nested_virtualization = var.sandbox_class == "microvm"
       # worker-pool.yaml.tmpl's WorkerPool already tolerates this taint; without
       # it actually applied to the nodes, nothing stops substrate's own
       # control-plane pods (and anything else) from also landing here
@@ -95,7 +97,7 @@ module "cluster" {
       # 110-pods-per-node cap on this single pinned node.
       taints = [{
         key    = "ate.dev/sandboxClass"
-        value  = "gvisor"
+        value  = var.sandbox_class
         effect = "NO_SCHEDULE"
       }]
     }
