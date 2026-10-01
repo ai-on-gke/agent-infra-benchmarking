@@ -1,7 +1,6 @@
 import sys
 import subprocess
 import json
-import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # MAIN ACTOR SERVER (Runs on port 80)
@@ -80,8 +79,8 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                 )
 
                 output = result.stdout + result.stderr
-                if result.returncode != 0 and not output.strip():
-                    output = f"OpenClaw exited with code {result.returncode} and no output (possibly OOM killed)."
+                if result.returncode != 0:
+                    output = f"OpenClaw exited with code {result.returncode}.\nOutput:\n{output}"
 
                 status_code = 200 if result.returncode == 0 else 500
 

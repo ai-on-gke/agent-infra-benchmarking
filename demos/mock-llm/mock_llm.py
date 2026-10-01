@@ -1,5 +1,5 @@
 import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 class MockLLMHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -28,14 +28,6 @@ class MockLLMHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length)
-
-        try:
-            req_data = json.loads(body.decode('utf-8'))
-            print("--- INCOMING REQUEST ---", flush=True)
-            print(json.dumps(req_data, indent=2), flush=True)
-            print("------------------------", flush=True)
-        except Exception as e:
-            print(f"Failed to parse body: {e}", flush=True)
 
         if self.path in ["/v1/chat/completions", "/v1/responses"]:
             try:
@@ -176,5 +168,5 @@ class MockLLMHandler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print("Starting Mock LLM Server on 0.0.0.0:8080...")
-    server = HTTPServer(("0.0.0.0", 8080), MockLLMHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", 8080), MockLLMHandler)
     server.serve_forever()
