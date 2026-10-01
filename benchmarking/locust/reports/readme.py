@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """README.md for a run's folder: run.json summarized for a reader, and what
-each file beside it holds.
+each file beside it holds. render_summary does the same for a case's repeats.
 
 Rendered from run.json's contents rather than from Prometheus, so it is not a
 registered report: it is written whichever reports were selected. Anything
@@ -59,8 +59,125 @@ def render(info: dict) -> str:
     return "\n\n".join(s for s in sections if s) + "\n"
 
 
+# The summary's results table: (stat in the summary CSV, column heading).
+SUMMARY_STATS = (
+    ("Requests/s", "Requests/s"),
+    ("Average Response Time", "Average"),
+    ("50%", "p50"),
+    ("90%", "p90"),
+    ("99%", "p99"),
+    ("99.9%", "p99.9"),
+    ("Max Response Time", "Max"),
+)
+
+
+def render_summary(case: str, jobs: list[tuple[str, dict | None, str | None]], rows: list[list[str]]) -> str:
+    """The README of a case's repeats. `jobs` is each repeat's folder name,
+    run.json and reason it was left out of the summary, if any; `rows` the
+    summary CSV's rows."""
+    infos = [(name, info) for name, info, _ in jobs if info]
+    sections = [
+        _summary_header(case, jobs),
+        _summary_results(case, jobs, rows),
+        *(_same_across(infos, section) for section in (_case, _hardware, _workers, _versions)),
+        _summary_files(case, jobs),
+    ]
+    return "\n\n".join(s for s in sections if s) + "\n"
+
+
+def _summary_header(case: str, jobs) -> str:
+    infos = [info for _, info, _ in jobs if info]
+    run_id = next((i["run_id"] for i in infos if i.get("run_id")), UNKNOWN)
+    used = sum(1 for _, _, reason in jobs if not reason)
+    lines = [f"# {case}, {len(jobs)} repeats — run {run_id}", ""]
+    lines.append(f"- **Summarized:** {used} of {len(jobs)} repeats, the ones that passed")
+
+    counted = [i["failures"] for i in infos if isinstance(i.get("failures"), dict) and "failed" in i["failures"]]
+    if counted:
+        requests = sum(f["requests"] for f in counted)
+        failed = sum(f["failed"] for f in counted)
+        total = {"requests": requests, "failed": failed, "ratio": failed / requests if requests else 0}
+        max_ratio = next((i.get("max_failure_ratio") for i in infos), None)
+        lines.append(f"- **Failed requests, all repeats:** {_failures(total, max_ratio)}")
+    lines.append("")
+
+    rows = []
+    for name, info, reason in jobs:
+        if not info:
+            rows.append([name, reason, UNKNOWN, UNKNOWN, UNKNOWN])
+            continue
+        steady = info.get("steady_window") if isinstance(info.get("steady_window"), dict) else {}
+        rows.append([
+            name,
+            _status(info.get("status")) + (f"; left out, {reason}" if reason and info.get("status") == 0 else ""),
+            _failures(info.get("failures"), None),
+            _window(info.get("started"), info.get("ended")),
+            _window(steady.get("start"), steady.get("end")) if steady else "none recorded",
+        ])
+    lines += _table(["Repeat", "Result", "Failed requests", "Window", "Steady-state window"], rows)
+    return "\n".join(lines)
+
+
+def _summary_results(case: str, jobs, rows: list[list[str]]) -> str:
+    lines = ["## Results", ""]
+    used = sum(1 for _, _, reason in jobs if not reason)
+    if not rows:
+        lines.append("No repeat passed with steady-state stats, so there is nothing to summarize.")
+        return "\n".join(lines)
+    lines.append(
+        "The median over the repeats that passed, with the lowest and highest in brackets, of each one's "
+        f"`locust_stats_steady.csv`; latencies in ms. `{case}-summary.csv` has every stat."
+    )
+    lines.append("")
+
+    stats: dict[str, dict[str, list[str]]] = {}
+    for _, name, stat, count, low, median, high in rows:
+        stats.setdefault(name, {})[stat] = [count, low, median, high]
+
+    def cell(value) -> str:
+        if not value:
+            return UNKNOWN
+        count, low, median, high = value
+        text = median if low == high else f"{median} ({low}–{high})"
+        return text if int(count) == used else f"{text}, in {count}"
+
+    table = [[name, *(cell(by_stat.get(stat)) for stat, _ in SUMMARY_STATS)] for name, by_stat in stats.items()]
+    lines += _table(["Request", *(heading for _, heading in SUMMARY_STATS)], table)
+    return "\n".join(lines)
+
+
+def _same_across(infos: list[tuple[str, dict]], section) -> str:
+    """`section` as each repeat's README has it: once if it reads the same in
+    all of them, otherwise once for each version, naming the repeats it is."""
+    versions: dict[str, list[str]] = {}
+    for name, info in infos:
+        versions.setdefault(section(info), []).append(name)
+    if len(versions) <= 1:
+        return next(iter(versions), "")
+    heading = next(text.partition("\n")[0] for text in versions if text)
+    lines = [heading, "", "Not the same in every repeat."]
+    for text, names in versions.items():
+        body = text.partition("\n\n")[2] if text else "Not recorded."
+        lines += ["", f"**{', '.join(names)}:**", "", body]
+    return "\n".join(lines)
+
+
+def _summary_files(case: str, jobs) -> str:
+    return "\n".join([
+        "## Files",
+        "",
+        f"- `{case}-summary.csv`: the min, median and max of every stat in the `locust_stats_steady.csv` "
+        "of the repeats that passed, with how many of them it was found in.",
+        *(f"- `{name}/`: the repeat's own files, and its README." for name, _, _ in jobs),
+    ])
+
+
 def _header(info: dict) -> str:
-    lines = [f"# {info.get('test_case') or UNKNOWN} — run {info.get('run_id') or UNKNOWN}", ""]
+    title = info.get("test_case") or UNKNOWN
+    if info.get("repeat"):
+        case = info.get("case") if isinstance(info.get("case"), dict) else {}
+        title += f", repeat {info['repeat']} of {case.get('repeats') or UNKNOWN}"
+    lines = [f"# {title} — run {info.get('run_id') or UNKNOWN}", ""]
     lines.append(f"- **Result:** {_status(info.get('status'))}")
     lines.append(f"- **Failed requests:** {_failures(info.get('failures'), info.get('max_failure_ratio'))}")
     if isinstance(info.get("failures"), dict) and info["failures"].get("exceptions"):

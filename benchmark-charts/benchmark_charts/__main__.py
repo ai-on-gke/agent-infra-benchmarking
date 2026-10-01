@@ -17,8 +17,8 @@ nodes' CPU and memory utilization and the actor counts over time, read from
 each job's locust_stats_history.csv, cluster_vitals_history.csv and
 custom_stats_history.csv, with the steady-state window from run.json shaded,
 and shown in a matplotlib window. A job is one test
-case of the run; drop-downs in the window switch between the run's jobs, and
-between the requests in CHARTS.
+case of the run; drop-downs in the window switch between the run's jobs, a
+job's repeats, and the requests in CHARTS.
 """
 
 from __future__ import annotations
@@ -78,6 +78,16 @@ def job_dirs(path: Path) -> list[Path]:
     if not jobs:
         raise FileNotFoundError(f"no {data.STATS_HISTORY} in {path} or in any folder in it")
     return jobs
+
+
+def by_case(dirs: list[Path]) -> dict[str, dict[int, Path]]:
+    """The job folders by test case, and each case's by repeat number. A job
+    that is not one of several repeats is its case's only one, numbered 0."""
+    cases: dict[str, dict[int, Path]] = {}
+    for d in dirs:
+        case, n = data.repeat(d) or (d.name, 0)
+        cases.setdefault(case, {})[n] = d
+    return {case: dict(sorted(repeats.items())) for case, repeats in cases.items()}
 
 
 def title(job_dir: Path) -> str:
@@ -144,6 +154,13 @@ def main() -> None:
         "drop-down above the chart switches to the others.",
     )
     p.add_argument(
+        "--repeat",
+        type=int,
+        metavar="N",
+        help="The job's repeat the window opens on (default: the first). The "
+        "drop-down beside the job's switches to the others.",
+    )
+    p.add_argument(
         "--chart",
         choices=list(CHARTS),
         default="ttfi",
@@ -154,11 +171,15 @@ def main() -> None:
 
     try:
         run_dir = args.run if isinstance(args.run, Path) else nth_run(REPORTS_DIR, args.run)
-        jobs = {d.name: d for d in job_dirs(run_dir)}
+        jobs = by_case(job_dirs(run_dir))
     except OSError as exc:
         sys.exit(f"benchmark-report: {exc}")
     if args.job and args.job not in jobs:
         sys.exit(f"benchmark-report: no job {args.job!r} in {run_dir}; it has {', '.join(jobs)}")
+    job = args.job or next(iter(jobs))
+    if args.repeat is not None and args.repeat not in jobs[job]:
+        repeats = ", ".join(str(n) for n in jobs[job] if n) or "none"
+        sys.exit(f"benchmark-report: no repeat {args.repeat} of {job}; it has {repeats}")
 
     try:
         import matplotlib.pyplot as plt
@@ -170,9 +191,9 @@ def main() -> None:
         sys.exit("benchmark-report needs matplotlib: pip install matplotlib")
 
     print(f"run: {run_dir.resolve()}")
-    win = window.Window(jobs, load, args.job or next(iter(jobs)), CHARTS[args.chart][1])
+    win = window.Window(jobs, load, job, args.repeat, CHARTS[args.chart][1])
     # With no other job to switch to, the error already printed is all there is.
-    if len(jobs) == 1 and not win.drawn:
+    if sum(len(repeats) for repeats in jobs.values()) == 1 and not win.drawn:
         sys.exit(1)
     plt.show()
 

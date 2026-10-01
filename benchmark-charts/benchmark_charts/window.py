@@ -14,9 +14,10 @@
 
 """A run's jobs in one matplotlib window.
 
-A drop-down above the panels switches job, redrawing every panel in place; the
-one over the legends switches the main panel, and its choice carries over to
-the next job that has it.
+A drop-down above the panels switches job, and the one beside it the job's
+repeat, redrawing every panel in place; the one over the legends switches the
+main panel. The repeat and the main panel chosen carry over to the next job
+that has them.
 """
 
 from __future__ import annotations
@@ -36,6 +37,9 @@ from .dropdown import HEIGHT_IN, Dropdown
 STRIP_IN = 0.45
 # Figure fractions.
 JOB_SWITCH_WIDTH = 0.3
+REPEAT_SWITCH_WIDTH = 0.08
+# Room left of a switch for its label.
+LABEL_WIDTH = 0.08
 MAIN_SWITCH_WIDTH = 0.25
 DEFAULT_LEFT = 0.1
 
@@ -53,26 +57,32 @@ class Job:
 
 
 class Window:
-    """`jobs` maps each job's name to its folder, and `load` reads one into a
-    Job, or raises OSError or ValueError when it cannot be drawn. A job is read
-    when it is first shown."""
+    """`jobs` maps each job's name to its repeats' folders by number, and
+    `load` reads one into a Job, or raises OSError or ValueError when it cannot
+    be drawn. A folder is read when it is first shown."""
 
     def __init__(
         self,
-        jobs: dict[str, Path],
+        jobs: dict[str, dict[int, Path]],
         load: Callable[[Path], Job],
         job: str,
+        repeat: int | None = None,
         main: str = "",
     ):
         self.fig = plt.figure(figsize=(10, 10))
         self._jobs = jobs
         self._load = load
-        self._loaded: dict[str, Union[Job, str]] = {}
+        self._loaded: dict[Path, Union[Job, str]] = {}
         self._main = main
+        self._repeat = repeat
         self.show(job)
 
     def show(self, name: str) -> None:
-        job = self._job(name)
+        repeats = self._jobs[name]
+        # The repeat chosen is kept for the next job that has it.
+        shown = self._repeat if self._repeat in repeats else next(iter(repeats))
+        folder = repeats[shown]
+        job = self._job(folder)
         fig = self.fig
         for switch in getattr(fig, "switches", []):
             switch.remove()
@@ -85,14 +95,14 @@ class Window:
         self.drawn = not isinstance(job, str)
 
         if not self.drawn:
-            fig.text(0.5, 0.5, f"{name}: {job}", ha="center", va="center", wrap=True)
-            fig.canvas.manager.set_window_title(name)
+            fig.text(0.5, 0.5, f"{folder.name}: {job}", ha="center", va="center", wrap=True)
+            fig.canvas.manager.set_window_title(folder.name)
             left = DEFAULT_LEFT
         else:
             titles = [m.title for m in job.mains]
             if self._main not in titles:
                 self._main = titles[0]
-            has_switch = len(self._jobs) > 1 or len(titles) > 1
+            has_switch = len(self._jobs) > 1 or len(repeats) > 1 or len(titles) > 1
             ax_main, show_main, switches = panels.draw(
                 fig,
                 job.mains,
@@ -124,22 +134,41 @@ class Window:
                     )
                 )
 
+        x = left
         if len(self._jobs) > 1:
             names = list(self._jobs)
-            fig.text(left - 0.01, y + height / 2, "job", ha="right", va="center", color=panels.INK_MUTED)
+            fig.text(x - 0.01, y + height / 2, "job", ha="right", va="center", color=panels.INK_MUTED)
             switches.append(
-                Dropdown(fig, (left, y, JOB_SWITCH_WIDTH, height), names, names.index(name), self.show)
+                Dropdown(fig, (x, y, JOB_SWITCH_WIDTH, height), names, names.index(name), self.show)
+            )
+            x += JOB_SWITCH_WIDTH + LABEL_WIDTH
+        if len(repeats) > 1:
+            numbers = [str(n) for n in repeats]
+
+            def on_repeat(number: str) -> None:
+                self._repeat = int(number)
+                self.show(name)
+
+            fig.text(x - 0.01, y + height / 2, "repeat", ha="right", va="center", color=panels.INK_MUTED)
+            switches.append(
+                Dropdown(
+                    fig,
+                    (x, y, REPEAT_SWITCH_WIDTH, height),
+                    numbers,
+                    numbers.index(str(shown)),
+                    on_repeat,
+                )
             )
         # Held by the figure, since the canvas holds widget handlers only weakly.
         fig.switches = switches
         fig.canvas.draw_idle()
 
-    def _job(self, name: str) -> Union[Job, str]:
+    def _job(self, folder: Path) -> Union[Job, str]:
         """The job, or why it cannot be drawn."""
-        if name not in self._loaded:
+        if folder not in self._loaded:
             try:
-                self._loaded[name] = self._load(self._jobs[name])
+                self._loaded[folder] = self._load(folder)
             except (OSError, ValueError) as exc:
-                print(f"benchmark-report: {name}: {exc}", file=sys.stderr)
-                self._loaded[name] = str(exc)
-        return self._loaded[name]
+                print(f"benchmark-report: {folder.name}: {exc}", file=sys.stderr)
+                self._loaded[folder] = str(exc)
+        return self._loaded[folder]

@@ -33,7 +33,8 @@ CUSTOM_HISTORY = "custom_stats_history.csv"
 # metric, for each node and for the cluster as a whole.
 CLUSTER_VITALS = "cluster_vitals_history.csv"
 
-# runner.py's record of the run, read here for its steady-state window.
+# runner.py's record of the run, read here for its steady-state window and
+# which repeat it was.
 RUN_JSON = "run.json"
 
 
@@ -53,6 +54,18 @@ def steady_window(data_dir: Path) -> tuple[datetime, datetime] | None:
         return datetime.fromisoformat(window["start"]), datetime.fromisoformat(window["end"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
+
+
+def repeat(data_dir: Path) -> tuple[str, int] | None:
+    """The test case and repeat number run.json records, or None for a job
+    that is not one of several repeats."""
+    try:
+        info = json.loads((data_dir / RUN_JSON).read_text())
+        if info.get("repeat"):
+            return str(info["test_case"]), int(info["repeat"])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return None
 
 
 def number(value: str | None) -> float | None:

@@ -56,9 +56,10 @@ spec:
         #
         # The run is a case, read inside the pod, so its name is what this
         # manifest can record — the load and the worker's flags are both in it,
-        # and the case is what a series of runs is grouped by.
+        # and the case is what a series of runs is grouped by. One of a case's
+        # several repeats is recorded as <case>-<n>.
         benchmark-run-id: "${BENCHMARK_RUN_ID}"
-        benchmark-test-case: "${BENCHMARK_TEST_CASE}"
+        benchmark-test-case: "${BENCHMARK_RECORD_NAME}"
     spec:
       restartPolicy: Never
       # Time for runner.py to wind a stopped run down: boomer's actor teardown
@@ -87,6 +88,7 @@ spec:
         # query on it, so the container needs it too. An empty --report is
         # dropped by runner.py rather than read as a report named "".
         - "--run-id=${BENCHMARK_RUN_ID}"
+        - "--repeat=${BENCHMARK_REPEAT}"
         - "--report=${BENCHMARK_REPORTS}"
         # Empty leaves the reports on the pod, where the Job's TTL takes them.
         - "--report-bucket=${BENCHMARK_REPORT_BUCKET}"

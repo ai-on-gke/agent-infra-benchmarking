@@ -66,8 +66,8 @@ TESTS_FILE = "/app/tests.yaml"
 LOCUST_CSV_STEM = "locust"
 
 # The case keys that are the run's load rather than the worker's flags. Every
-# key in a case that is not one of these, HOST_KEYS, FAILURE_RATIO_KEY or
-# WARM_UP_KEY goes to the worker verbatim.
+# key in a case that is not one of these, HOST_KEYS, FAILURE_RATIO_KEY,
+# WARM_UP_KEY or REPEATS_KEY goes to the worker verbatim.
 LOAD_KEYS = ("duration", "users", "spawn-rate")
 
 # Case keys that shape the WorkerPool, which run_locust_job.sh deploys before
@@ -86,6 +86,10 @@ DEFAULT_MAX_FAILURE_RATIO = 0.01
 # opens, and its default. Validated by the locustfile's --warm-up.
 WARM_UP_KEY = "warm-up"
 DEFAULT_WARM_UP = "30s"
+
+# Case key for how many times run_locust_job.sh runs the case. Dropped here,
+# like HOST_KEYS; --repeat says which of them this run is.
+REPEATS_KEY = "repeats"
 
 # Where the locustfile leaves the steady-state window's bounds for run.json.
 STEADY_WINDOW_JSON = f"{LOCUST_CSV_STEM}_steady_window.json"
@@ -160,6 +164,14 @@ def parse_args() -> argparse.Namespace:
         "test_case label, so without it they are skipped.",
     )
     p.add_argument(
+        "--repeat",
+        type=int,
+        default=0,
+        help="Which of the case's repeats this is, from 1. Recorded as "
+        "<test-case>-<repeat> in the test_case label and the upload folder; "
+        "0 records the case under its own name.",
+    )
+    p.add_argument(
         "--report",
         action="append",
         default=[],
@@ -202,8 +214,11 @@ def parse_args() -> argparse.Namespace:
     args.duration, args.users, args.spawn_rate = take_load(case, args.test_case)
     args.max_failure_ratio = take_failure_ratio(case, args.test_case)
     args.warm_up = case.pop(WARM_UP_KEY, DEFAULT_WARM_UP)
-    for key in HOST_KEYS:
+    for key in (*HOST_KEYS, REPEATS_KEY):
         case.pop(key, None)
+    # Must match run_locust_job.sh's BENCHMARK_RECORD_NAME, which the pod's
+    # test-case label carries.
+    args.record_name = f"{args.test_case}-{args.repeat}" if args.repeat else args.test_case
     if args.actor_egress_allow:
         case["actor-egress-allow"] = ",".join(
             h for h in (case.get("actor-egress-allow", ""), args.actor_egress_allow) if h
@@ -329,12 +344,13 @@ def log_run_config(args: argparse.Namespace) -> None:
         f"  spawn_rate:   {args.spawn_rate:g}/s"
         + (" (all at once)" if args.spawn_rate >= args.users else ""),
         f"  warm_up:      {args.warm_up}",
-        f"  test_case:    {args.test_case or '(none)'}",
+        f"  test_case:    {args.test_case or '(none)'}"
+        + (f" (repeat {args.repeat})" if args.repeat else ""),
         f"  worker flags: {' '.join(f'--{k}={v}' for k, v in args.worker_flags.items()) or '(none)'}",
         f"  max failures: {args.max_failure_ratio:.2%} of requests",
         f"  reports:      {', '.join(args.report) or '(none)'}",
         f"  run_id:       {args.run_id or '(none)'}",
-        f"  report dest:  {f'gs://{args.report_bucket}/{args.report_prefix}/{args.run_id}/{args.test_case}' if args.report_bucket else args.report_dir + ' (pod-local)'}",
+        f"  report dest:  {f'gs://{args.report_bucket}/{args.report_prefix}/{args.run_id}/{args.record_name}' if args.report_bucket else args.report_dir + ' (pod-local)'}",
         f"  extra flags:  {' '.join(args.locust_extra) or '(none)'}",
         "====================",
     ):
@@ -528,7 +544,7 @@ def refuse_reused_run(args: argparse.Namespace) -> None:
         return
     query = (
         "count(last_over_time(locust_requests_total"
-        f'{{run_id="{args.run_id}",test_case="{args.test_case}"}}[{PRIOR_RUN_LOOKBACK}]))'
+        f'{{run_id="{args.run_id}",test_case="{args.record_name}"}}[{PRIOR_RUN_LOOKBACK}]))'
     )
     try:
         from reports import prometheus
@@ -540,7 +556,7 @@ def refuse_reused_run(args: argparse.Namespace) -> None:
     if found:
         sys.exit(
             f"Prometheus already has series for run {args.run_id!r}, case "
-            f"{args.test_case!r}; their numbers would be added to this run's. "
+            f"{args.record_name!r}; their numbers would be added to this run's. "
             "Use another --run-id."
         )
 
@@ -577,6 +593,7 @@ def write_run_json(
     info = {
         "run_id": args.run_id,
         "test_case": args.test_case,
+        "repeat": args.repeat or None,
         "status": status,
         "started": iso(started),
         "ended": iso(ended),
@@ -653,7 +670,7 @@ def generate_reports(args: argparse.Namespace, started: float) -> list[Path]:
 
         ctx = reports.RunContext(
             run_id=args.run_id,
-            test_case=args.test_case,
+            test_case=args.record_name,
             users=args.users,
             spawn_rate=args.spawn_rate,
             duration=args.duration,
@@ -686,7 +703,7 @@ def upload_reports(paths: list[Path], args: argparse.Namespace) -> bool:
         results = reports.upload(
             paths,
             args.report_bucket,
-            f"{args.run_id}/{args.test_case}",
+            f"{args.run_id}/{args.record_name}",
             Path(args.report_dir),
             args.report_prefix,
         )
