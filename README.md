@@ -8,10 +8,8 @@ Backend for benchmarks and corresponding recipes for agent infra offerings.
   APIs substrate depends on (GKE 1.36+ serves them; kubectl 1.31 or newer is
   what's been tested against this repo).
 - **`kubectl-ate`**, substrate's own kubectl plugin, on `PATH`. Built from the
-  submodule (see step 1 below):
-  ```bash
-  (cd dependency-repos/substrate && go install ./cmd/kubectl-ate)
-  ```
+  submodule in step 3 of
+  [Setting up the Agent Substrate](#setting-up-the-agent-substrate).
 - **`jq`** and **`envsubst`** (the `gettext` package) — used throughout
   `benchmarking/*.sh` and `.terraform-env.sh`.
 - **Docker**, with `linux/amd64` emulation available if your machine isn't
@@ -157,18 +155,28 @@ gcloud application-default credentials already in place.
    ./scripts/substrate/upstream.sh hack/install-ate.sh --deploy-ate-system
    ```
 
-3. Deploying the benchmarking
+3. Build `kubectl-ate`
+
+   The benchmark job scripts use it to delete the actors around a run. It is
+   built from the submodule, and `go install` puts it in `$(go env GOPATH)/bin`,
+   which has to be on `PATH`:
+
+   ```bash
+   (cd dependency-repos/substrate && go install ./cmd/kubectl-ate)
+   ```
+
+4. Deploying the benchmarking
 
    ```bash
    ./benchmarking/deploy-benchmarking.sh --deploy
    ```
 
-4. Pick the test case to run
+5. Pick the test case to run
 
    A test case is a named entry in [`benchmarking/tests.yaml`](benchmarking/tests.yaml),
    under `cases:`. The key is what the next step passes to `--test-case`.
 
-5. Run a benchmark job script.
+6. Run a benchmark job script.
 
    ```bash
    ./benchmarking/run_locust_job.sh --test-case glutton --follow-logs
@@ -186,7 +194,7 @@ gcloud application-default credentials already in place.
    URLs in its ActorTemplate's env, such as the OTLP collector and openclaw's
    mock LLM. To let actors reach another service, add its URL to the template.
 
-6. Collect the artifacts
+7. Collect the artifacts
 
    When a job ends it uploads its files to `reports/<run-id>/<test-case>/` in
    the deployment's bucket. The run id is a UTC timestamp, e.g.
