@@ -18,19 +18,25 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // captureLogs points slog at a buffer for the duration of one test.
@@ -228,27 +234,27 @@ func TestTTFIExcludesTheSuspend(t *testing.T) {
 	}
 }
 
-// The window closes where the instruction is issued, so serving it is outside.
-// What it left out is not lost: the ExecutionTime span spans that round trip.
-func TestTTFIEndsBeforeTheInstruction(t *testing.T) {
+// The window closes on the served instruction in both modes, so implicit
+// resume, where the router wakes the actor, is not reported as near zero.
+func TestTTFIEndsWhenTheInstructionIsServed(t *testing.T) {
 	const service = 200 * time.Millisecond
-	rt, sr := newMeasuringUser(t, &pingServer{PingDelay: service}, &fakeControlClient{})
+	for _, mode := range []string{ResumeModeExplicit, ResumeModeImplicit} {
+		t.Run(mode, func(t *testing.T) {
+			rt, sr := newMeasuringUser(t, &pingServer{PingDelay: service}, &fakeControlClient{})
+			rt.opts.ResumeMode = mode
 
-	rt.iterate()
+			rt.iterate()
 
-	total := mustAttr(t, spanByName(t, sr, ttfiMetric), "total_ms").AsFloat64()
-	if want := boomerutil.MsFloat(service); total >= want {
-		t.Errorf("total_ms: got %v, want well under %v — the window kept the instruction's service time", total, want)
-	}
-	instruction := spanByName(t, sr, executionTimeMetric)
-	if got := instruction.EndTime().Sub(instruction.StartTime()); got < service {
-		t.Errorf("%s span duration: got %v, want >= %v", executionTimeMetric, got, service)
+			total := mustAttr(t, spanByName(t, sr, ttfiMetric), "total_ms").AsFloat64()
+			if want := boomerutil.MsFloat(service); total < want {
+				t.Errorf("total_ms: got %v, want >= %v — the window closed before the instruction was served", total, want)
+			}
+		})
 	}
 }
 
 // CycleTime runs from the resume to the suspend returning, so unlike TTFI it
-// holds both the instruction's service time and the suspend, and its span is
-// the one the suspend is traced under.
+// holds the suspend, and its span is the one the suspend is traced under.
 func TestCycleTimeSpansTheResumeThroughTheSuspend(t *testing.T) {
 	const service, suspend = 100 * time.Millisecond, 100 * time.Millisecond
 	rt, sr := newMeasuringUser(t, &pingServer{PingDelay: service}, &fakeControlClient{suspendDelay: suspend})
@@ -563,4 +569,174 @@ func TestDynamicWait(t *testing.T) {
 	if got := rt.dynamicWait(); got != 0 {
 		t.Errorf("dynamicWait with no bounds: got %v, want 0", got)
 	}
+}
+
+// The atespace is one per run, so it is created once however many users
+// start, rather than once per actor.
+func TestAtespaceIsCreatedOncePerRun(t *testing.T) {
+	ctrl := &fakeControlClient{}
+	rt := newTestRuntime(t, ctrl)
+
+	// Users are keyed by goroutine, so each start below is a new user.
+	for range 3 {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rt.iterate()
+		}()
+		wg.Wait()
+	}
+
+	if got := ctrl.countCalls("CreateActor"); got != 3 {
+		t.Fatalf("CreateActor: got %d, want 3", got)
+	}
+	if got := ctrl.countCalls("CreateAtespace"); got != 1 {
+		t.Errorf("CreateAtespace: got %d, want 1", got)
+	}
+}
+
+// gaugeValue reads a workload's value of one of the actor gauges as exported.
+// The gauges are package globals, so tests compare it before and after.
+func gaugeValue(t *testing.T, metric, workload string) float64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range families {
+		if mf.GetName() != metric {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "workload" && l.GetValue() == workload {
+					return m.GetGauge().GetValue()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// CreateActor leaves the actor SUSPENDED, so that is how it is counted until
+// the first resume.
+func TestCreatedActorCountsAsSuspended(t *testing.T) {
+	ctrl := &fakeControlClient{}
+	rt := newTestRuntime(t, ctrl)
+	name := rt.workload.Name()
+	active := gaugeValue(t, "boomer_active_actors", name)
+	suspended := gaugeValue(t, "boomer_suspended_actors", name)
+
+	rt.iterate()
+
+	if got := gaugeValue(t, "boomer_active_actors", name) - active; got != 0 {
+		t.Errorf("active actors after a create: changed by %v, want 0", got)
+	}
+	if got := gaugeValue(t, "boomer_suspended_actors", name) - suspended; got != 1 {
+		t.Errorf("suspended actors after a create: changed by %v, want 1", got)
+	}
+}
+
+// Aborted is a lost race with a concurrent update, which clears on its own,
+// so the call is made again rather than the actor thrown away.
+func TestAbortedCallIsRetried(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		abortTimes  int
+		wantResumes int
+		wantErr     bool
+	}{
+		{name: "clears", abortTimes: 2, wantResumes: 3, wantErr: false},
+		{name: "persists", abortTimes: 0, wantResumes: abortedAttempts, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := &fakeControlClient{
+				resumeErr:      status.Error(codes.Aborted, "concurrent update conflict, please retry"),
+				resumeErrTimes: tc.abortTimes,
+			}
+			u := newTestRunWorkloadUser(t, &pingServer{}, &userclass.Config{APIStub: ctrl})
+
+			err := u.resume(context.Background())
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("resume: got err %v, want error %v", err, tc.wantErr)
+			}
+			if got := ctrl.countCalls("ResumeActor"); got != tc.wantResumes {
+				t.Errorf("ResumeActor calls: got %d, want %d", got, tc.wantResumes)
+			}
+		})
+	}
+}
+
+// A 421 is a stale worker assignment that the next request routes around, so
+// the instruction is sent again; any other 4xx is not.
+func TestInstructionIsResentAfterAStaleAssignment(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		wantPings int
+		wantErr   bool
+	}{
+		{name: "421", status: http.StatusMisdirectedRequest, wantPings: 2, wantErr: false},
+		{name: "400", status: http.StatusBadRequest, wantPings: 1, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &pingServer{PingFailures: 1, PingFailStatus: tc.status}
+			u := newTestRunWorkloadUser(t, srv, nil)
+
+			err := u.executeInstruction(context.Background())
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("executeInstruction: got err %v, want error %v", err, tc.wantErr)
+			}
+			if got := srv.RecordedPings(); got != tc.wantPings {
+				t.Errorf("pings: got %d, want %d", got, tc.wantPings)
+			}
+		})
+	}
+}
+
+// A call that outlives the timeout is cut off at it and reported as a failure,
+// and the actor is discarded like after any other failed call.
+func TestACallPastTheDeadlineFails(t *testing.T) {
+	const deadline = 50 * time.Millisecond
+	for _, tc := range []struct {
+		name string
+		srv  *pingServer
+		ctrl *fakeControlClient
+	}{
+		{name: "resume", srv: &pingServer{}, ctrl: &fakeControlClient{resumeHang: true}},
+		{name: "instruction", srv: &pingServer{PingDelay: 10 * deadline}, ctrl: &fakeControlClient{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt, sr := newMeasuringUser(t, tc.srv, tc.ctrl)
+			val, _ := rt.users.Load(boomerutil.GoroutineID())
+			val.(*runWorkloadUser).timeout = deadline
+			buf := captureLogs(t)
+
+			rt.iterate()
+
+			if got := failedWindowErr(buf, ttfiMetric); !strings.Contains(got, "deadline exceeded") {
+				t.Errorf("TTFI failure: got %q, want a deadline exceeded; log:\n%s", got, buf.String())
+			}
+			total := mustAttr(t, spanByName(t, sr, ttfiMetric), "total_ms").AsFloat64()
+			if lo, hi := boomerutil.MsFloat(deadline), boomerutil.MsFloat(10*deadline); total < lo || total >= hi {
+				t.Errorf("total_ms: got %v, want about the deadline, in [%v, %v)", total, lo, hi)
+			}
+			if _, ok := rt.users.Load(boomerutil.GoroutineID()); ok {
+				t.Error("the user kept its slot after the call timed out")
+			}
+		})
+	}
+}
+
+// failedWindowErr is the error the sampled trace log gives for the window
+// reported as name, or empty when it was not reported as a failure.
+func failedWindowErr(buf *bytes.Buffer, name string) string {
+	for _, line := range strings.Split(buf.String(), "\n") {
+		var rec struct{ Msg, Name, Err string }
+		if json.Unmarshal([]byte(line), &rec) == nil && rec.Msg == "traced span (failed)" && rec.Name == name {
+			return rec.Err
+		}
+	}
+	return ""
 }

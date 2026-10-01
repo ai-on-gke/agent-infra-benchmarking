@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
@@ -40,6 +41,19 @@ import (
 	// flags, and handed over with runworkload.SetOptions.
 	"github.com/agent-substrate/substrate/agent-infra-benchmarking/internal/benchmarking/boomer/runworkload"
 	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
+)
+
+const (
+	// The stop handler blocks boomer's message loop, and boomer shuts itself
+	// down after 60s without a master heartbeat.
+	teardownTimeout = 45 * time.Second
+
+	// Boomer sends stats to the master every 3s.
+	statsReportWait = 4 * time.Second
+
+	// One monitoring/prometheus.yaml scrape interval (10s) plus margin, so the
+	// counters the teardown left are scraped before the pod goes.
+	finalScrapeWait = 15 * time.Second
 )
 
 func main() {
@@ -58,6 +72,8 @@ func main() {
 		resumeMode       = flag.String("resume-mode", runworkload.ResumeModeExplicit, fmt.Sprintf("How an actor is woken: %s issues ResumeActor before the instruction, %s leaves the wake to the router.", runworkload.ResumeModeExplicit, runworkload.ResumeModeImplicit))
 		traceProbability = flag.Float64("trace-probability", 0, "Fraction of iterations to sample a trace for, 0 to 1.")
 
+		httpMaxIdleConnsPerHost = flag.Int("http-max-idle-conns-per-host", 10000, "Idle HTTP connections the router client keeps per host. Set it to at least the number of users this worker runs, so each VU reuses its connection to the router across wakes instead of opening a new one per request.")
+
 		// runworkload settings. Declared here with every other flag, so
 		// --help is the whole command line rather than one list per user
 		// class, and read only when --user-class selects runworkload. The
@@ -69,7 +85,9 @@ func main() {
 		workloadTemplate = flag.String("workload-template", "",
 			"runworkload only: the ActorTemplate the workload is measured on. Unset selects the workload's own.")
 		workloadTimeout = flag.Duration("workload-timeout", 0,
-			fmt.Sprintf("runworkload only: ceiling on the instruction retry loop. Unset selects %s.", runworkload.DefaultTimeout))
+			fmt.Sprintf("runworkload only: deadline on each control-plane call and instruction; one that runs past it counts as a failure. Unset selects %s.", runworkload.DefaultTimeout))
+		actorEgressAllow = flag.String("actor-egress-allow", "",
+			"runworkload only: comma-separated hosts or IPv4 addresses every actor may connect to, resolved once at startup. Unset gives actors no egress policy, so they can reach nothing.")
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
@@ -108,7 +126,13 @@ func main() {
 	}
 	defer conn.Close()
 
-	httpClient := &http.Client{Timeout: 5 * time.Minute}
+	// Upstream's tuning. Every VU calls the one router host, and the default two
+	// idle connections per host would put a TCP connect in most ExecutionTime rows.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 0 // no total cap; the per-host cap governs
+	transport.MaxIdleConnsPerHost = *httpMaxIdleConnsPerHost
+	transport.IdleConnTimeout = 5 * time.Minute
+	httpClient := &http.Client{Timeout: 5 * time.Minute, Transport: transport}
 
 	cfg := &userclass.Config{
 		APIStub:    apiStub,
@@ -135,12 +159,13 @@ func main() {
 	// only that entry's Init reads these, so a run of another user class
 	// carries them without ever looking at them.
 	runworkload.SetOptions(runworkload.Options{
-		Workload:   *workloadName,
-		Template:   *workloadTemplate,
-		Timeout:    *workloadTimeout,
-		MinWait:    *minWait,
-		MaxWait:    *maxWait,
-		ResumeMode: *resumeMode,
+		Workload:    *workloadName,
+		Template:    *workloadTemplate,
+		Timeout:     *workloadTimeout,
+		MinWait:     *minWait,
+		MaxWait:     *maxWait,
+		ResumeMode:  *resumeMode,
+		EgressAllow: splitList(*actorEgressAllow),
 	})
 
 	entry, ok := userclass.Lookup(class)
@@ -165,15 +190,19 @@ func main() {
 		}
 	}()
 
+	teardown := sync.OnceFunc(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), teardownTimeout)
+		defer cancel()
+		shutdownFn(ctx)
+	})
+
+	// The master sends this stop before it quits (tests/runworkload.py) and
+	// waits for it. Boomer reports stats only until the handler returns, so it
+	// holds on until the teardown's rows have gone out.
 	boomer.Events.Subscribe("boomer:stop", func() {
 		slog.Info("boomer:stop event received; suspending+deleting actors")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		shutdownFn(shutdownCtx)
-
-		slog.Info("forcing container restart to ensure clean state")
-
-		os.Exit(0)
+		teardown()
+		time.Sleep(statsReportWait)
 	})
 
 	// Blocks until SIGINT/SIGTERM or master quit. Boomer registers its own
@@ -184,5 +213,19 @@ func main() {
 		Fn:     taskFn,
 	})
 
-	slog.Info("boomer exited")
+	// A worker stopped by a signal rather than by the master got no stop.
+	teardown()
+	slog.Info("boomer exited; waiting for the final scrape", slog.Duration("wait", finalScrapeWait))
+	time.Sleep(finalScrapeWait)
+}
+
+// splitList splits a comma-separated flag value, dropping empty entries.
+func splitList(v string) []string {
+	var out []string
+	for _, item := range strings.Split(v, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }

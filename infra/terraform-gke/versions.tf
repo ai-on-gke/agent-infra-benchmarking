@@ -1,6 +1,9 @@
 terraform {
   required_version = ">= 1.5"
 
+  # No backend here, so state is local by default. A backend_override.tf
+  # (gitignored) moves it to a GCS bucket instead; see README.md.
+
   required_providers {
     google = {
       source = "hashicorp/google"

@@ -58,9 +58,9 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                     env["OPENCLAW_MOCK_PROVIDER_API_KEY"] = "mock-key"
                     cmd = ["openclaw", "agent", "exec", "--config", "/tmp/mock-config.json", "--model", "mock-provider/mock-model", post_data]
                 else:
-                    # Substrate's ActorTemplate doesn't directly support Kubernetes Secret volume mounts,
-                    # so the deploy script injects the base64-encoded secret into the environment.
-                    # If present, we decode it and write it to disk so Vertex AI can authenticate!
+                    # Unused by the benchmark, whose template sets OPENCLAW_USE_MOCK_LLM: nothing
+                    # in this repo sets GCP_SA_KEY_B64. An ActorTemplate cannot mount a
+                    # Kubernetes Secret, so a key would have to arrive base64-encoded in the env.
                     if "GCP_SA_KEY_B64" in env and env["GCP_SA_KEY_B64"]:
                         key_path = "/tmp/gcp_key.json"
                         with open(key_path, "wb") as f:

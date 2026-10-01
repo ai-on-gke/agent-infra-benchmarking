@@ -39,13 +39,9 @@ spec:
   template:
     metadata:
       labels:
-        # Deliberately not `app: locust`, which is what wait_for_pod and the
-        # log lookups in run_locust_job.sh select on.
-        #
-        # Prometheus is told about both spellings, so this pod is scraped by
-        # the same job as the Deployment's. There are no prometheus.io
-        # annotations here for that reason: they would add a second scrape of
-        # the one endpoint this pod serves, under a second job name.
+        # What the boomer-worker job in monitoring/prometheus.yaml selects on.
+        # There are no prometheus.io annotations here: that job already
+        # scrapes the one endpoint this pod serves.
         app: locust-job
         # What the run was, carried as labels so Prometheus can relabel them
         # onto every series the run produces. The worker's own metric labels
@@ -55,16 +51,22 @@ spec:
         #
         # The values are constrained by what a label may hold — 63 characters
         # of alphanumerics, dashes, underscores and dots — which the run id is
-        # checked against in deploy.sh; the case name is safe by construction,
+        # checked against in run_locust_job.sh; the case name is safe by construction,
         # having to match a key in tests.yaml.
         #
         # The run is a case, read inside the pod, so its name is what this
         # manifest can record — the load and the worker's flags are both in it,
-        # and the case is what a series of runs is grouped by.
+        # and the case is what a series of runs is grouped by. One of a case's
+        # several repeats is recorded as <case>-<n>.
         benchmark-run-id: "${BENCHMARK_RUN_ID}"
-        benchmark-test-case: "${BENCHMARK_TEST_CASE}"
+        benchmark-test-case: "${BENCHMARK_RECORD_NAME}"
     spec:
       restartPolicy: Never
+      # Time for runner.py to wind a stopped run down: boomer's actor teardown
+      # (BOOMER_STOP_TIMEOUT_SECS, 300), the wait for the last scrape, and the
+      # reports and their upload. run_locust_job.sh's STOP_TIMEOUT_SECS waits
+      # a little longer than this.
+      terminationGracePeriodSeconds: 420
       # Created by infra/terraform-gke, which names the same account in the
       # bucket's objectCreator binding. Workload Identity gives the pod that
       # grant and nothing else, so a report uploads and nothing here can read
@@ -86,9 +88,13 @@ spec:
         # query on it, so the container needs it too. An empty --report is
         # dropped by runner.py rather than read as a report named "".
         - "--run-id=${BENCHMARK_RUN_ID}"
+        - "--repeat=${BENCHMARK_REPEAT}"
         - "--report=${BENCHMARK_REPORTS}"
         # Empty leaves the reports on the pod, where the Job's TTL takes them.
         - "--report-bucket=${BENCHMARK_REPORT_BUCKET}"
+        # The hosts every actor may connect to, read off the deployed
+        # ActorTemplate by run_locust_job.sh and handed to the worker.
+        - "--actor-egress-allow=${BENCHMARK_ACTOR_EGRESS_ALLOW}"
         env:
         # locust's own --only-summary, which it reads from this name. An env
         # var rather than an argument because an unset argument would reach
@@ -96,6 +102,8 @@ spec:
         # as locust rejects an empty value instead of reading it as unset.
         - name: LOCUST_ONLY_SUMMARY
           value: "${BENCHMARK_ONLY_SUMMARY}"
+        - name: BENCHMARK_RUN_INFO
+          value: "${BENCHMARK_RUN_INFO}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
         ports:

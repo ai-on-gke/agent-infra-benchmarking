@@ -1,45 +1,14 @@
-## Set up auth
+# openclaw actor
 
-```bash
-# Set project variables
-export PROJECT_ID="akvelon-gke-aieco"
-export GSA_NAME="openclaw-ksa"
+The actor the `openclaw` test case drives: a small HTTP wrapper,
+`openclaw_actor.py`, around a headless [openclaw](https://www.npmjs.com/package/openclaw)
+agent turn. `POST /invoke` runs one turn with the request body as the prompt.
 
-# Create the Google Service Account
-gcloud iam service-accounts create $GSA_NAME \
-  --project=$PROJECT_ID \
-  --display-name="OpenClaw Vertex AI Service Account"
+The benchmark runs it against `mock-llm` (`demos/mock-llm`), which the
+`openclaw` ActorTemplate selects with `OPENCLAW_USE_MOCK_LLM=true`. The mock
+answers with a scripted tool-calling loop, so a run measures substrate and the
+agent's own work rather than a model's latency, and it needs no Google Cloud
+credentials, no service account and no key.
 
-# Grant the Vertex AI User role to the service account
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:${GSA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/aiplatform.user"
-
-# Generate and download the JSON key file locally
-gcloud iam service-accounts keys create openclaw-sa.json \
-  --iam-account="${GSA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
-
-# Upload the JSON key to your GKE cluster as a Secret
-kubectl create secret generic openclaw-gcp-sa-key \
-  --from-file=credentials.json=openclaw-sa.json \
-  --namespace default
-
-# Clean up the local key file for security
-rm openclaw-sa.json
-```
-
-## Clean up
-
-```bash
-export PROJECT_ID="akvelon-gke-aieco"
-export GSA_NAME="openclaw-ksa"
-export GSA_EMAIL="${GSA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
-
-gcloud projects remove-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:${GSA_EMAIL}" \
-  --role="roles/aiplatform.user"
-
-gcloud iam service-accounts delete $GSA_EMAIL \
-  --project=$PROJECT_ID \
-  --quiet
-```
+`deploy-benchmarking.sh --deploy` builds and pushes the image and deploys the
+template and `mock-llm`; there is nothing to set up by hand.

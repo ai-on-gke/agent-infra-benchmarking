@@ -27,6 +27,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -44,6 +45,13 @@ type fakeControlClient struct {
 	resumeErr  error
 	suspendErr error
 	deleteErr  error
+	egressErr  error
+	// resumeErrTimes, when set, limits resumeErr to the first that many
+	// ResumeActor calls, standing in for a conflict that clears.
+	resumeErrTimes int
+	resumeCalls    int
+	// resumeHang holds each ResumeActor until its context ends.
+	resumeHang bool
 	// serverElapsedUs, when set, is returned as the x-server-elapsed-us
 	// trailer the real ServerUnaryInterceptor emits.
 	serverElapsedUs string
@@ -63,6 +71,8 @@ type fakeControlClient struct {
 	calls          []string
 	// template is the ActorTemplate name from the last CreateActor.
 	template string
+	// egressPolicy is the policy from the last CreateActorEgressPolicy.
+	egressPolicy *ateapipb.EgressPolicy
 }
 
 // setTrailer fills the caller's grpc.Trailer destination so a faked call can
@@ -93,6 +103,25 @@ func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.Create
 	return &ateapipb.Actor{}, nil
 }
 
+func (f *fakeControlClient) CreateActorEgressPolicy(ctx context.Context, in *ateapipb.CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "CreateActorEgressPolicy")
+	if f.egressErr != nil {
+		return nil, f.egressErr
+	}
+	f.egressPolicy = in.GetEgressPolicy()
+	return in.GetEgressPolicy(), nil
+}
+
+// recordedEgressPolicy returns the policy the most recent
+// CreateActorEgressPolicy carried.
+func (f *fakeControlClient) recordedEgressPolicy() *ateapipb.EgressPolicy {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.egressPolicy
+}
+
 // recordedTemplate returns the ActorTemplate the most recent CreateActor
 // named, which is where a template choice stops being a local variable.
 func (f *fakeControlClient) recordedTemplate() string {
@@ -102,11 +131,16 @@ func (f *fakeControlClient) recordedTemplate() string {
 }
 
 func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+	if f.resumeHang {
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "ResumeActor")
 	f.setTrailer(opts)
-	if f.resumeErr != nil {
+	f.resumeCalls++
+	if f.resumeErr != nil && (f.resumeErrTimes == 0 || f.resumeCalls <= f.resumeErrTimes) {
 		return nil, f.resumeErr
 	}
 	return &ateapipb.ResumeActorResponse{}, nil

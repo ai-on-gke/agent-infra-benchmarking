@@ -6,6 +6,28 @@ locals {
   cluster_name    = var.cluster.name != "" ? var.cluster.name : var.default_resource_name
 }
 
+# The APIs everything below needs. Never disabled on destroy: the project is
+# shared, and other deployments in it use the same APIs. Already-enabled APIs
+# only need listing, so this works without the permission to enable one.
+resource "google_project_service" "this" {
+  for_each = var.enable_apis ? toset([
+    "artifactregistry.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "cloudtrace.googleapis.com",
+    "compute.googleapis.com",
+    "container.googleapis.com",
+    "iam.googleapis.com",
+    "logging.googleapis.com",
+    "monitoring.googleapis.com",
+    "storage.googleapis.com",
+    "telemetry.googleapis.com",
+  ]) : toset([])
+
+  project            = var.project_id
+  service            = each.value
+  disable_on_destroy = false
+}
+
 # The build version of the substrate submodule, read from its git checkout by
 # substrate-version.sh rather than written into terraform.tfvars, so bumping
 # the submodule is the only step in moving to another version.
@@ -44,8 +66,10 @@ module "cluster" {
   cluster_name = local.cluster_name
 
   autopilot            = var.cluster.autopilot
-  network              = var.cluster.network
-  subnetwork           = var.cluster.subnetwork
+  network              = google_compute_network.this.self_link
+  subnetwork           = google_compute_subnetwork.this.self_link
+  pods_range_name      = "pods"
+  services_range_name  = "services"
   enable_dataplane_v2  = var.cluster.enable_dataplane_v2
   node_pools           = local.node_pools
   kubernetes_version   = var.cluster.kubernetes_version
@@ -56,6 +80,8 @@ module "cluster" {
   managed_otel_scope   = var.cluster.managed_otel_scope
 
   node_service_account = google_service_account.node.email
+
+  depends_on = [google_project_service.this]
 }
 
 # ---------------------------------------------------------------------------
@@ -67,6 +93,8 @@ resource "google_artifact_registry_repository" "this" {
   location      = var.artifact_repository_location
   repository_id = local.artifact_repository_id
   format        = var.artifact_repository_format
+
+  depends_on = [google_project_service.this]
 }
 
 # ---------------------------------------------------------------------------
@@ -78,11 +106,40 @@ resource "google_storage_bucket" "this" {
   name     = local.bucket_name
   location = local.bucket_location
 
-
-
   storage_class               = var.bucket_storage_class
-  force_destroy               = true
+  force_destroy               = var.bucket_force_destroy
   uniform_bucket_level_access = true
+
+  # Substrate writes a snapshot on every suspend and deletes the ones nothing
+  # refers to, so with GCS's default seven days of soft delete most of what
+  # the bucket bills for is snapshots already deleted.
+  soft_delete_policy {
+    retention_duration_seconds = var.bucket_soft_delete_retention_seconds
+  }
+
+  lifecycle_rule {
+    condition {
+      age = 1
+    }
+    action {
+      type = "AbortIncompleteMultipartUpload"
+    }
+  }
+
+  dynamic "lifecycle_rule" {
+    for_each = var.report_retention_days > 0 ? [var.report_retention_days] : []
+    content {
+      condition {
+        age            = lifecycle_rule.value
+        matches_prefix = ["reports/"]
+      }
+      action {
+        type = "Delete"
+      }
+    }
+  }
+
+  depends_on = [google_project_service.this]
 }
 
 # ---------------------------------------------------------------------------

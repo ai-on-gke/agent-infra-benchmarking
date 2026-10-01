@@ -28,7 +28,10 @@ resource "google_container_cluster" "autopilot" {
     }
   }
 
-  ip_allocation_policy {}
+  ip_allocation_policy {
+    cluster_secondary_range_name  = var.pods_range_name
+    services_secondary_range_name = var.services_range_name
+  }
 
   workload_identity_config {
     workload_pool = "${var.project_id}.svc.id.goog"
@@ -95,7 +98,10 @@ resource "google_container_cluster" "standard" {
     }
   }
 
-  ip_allocation_policy {}
+  ip_allocation_policy {
+    cluster_secondary_range_name  = var.pods_range_name
+    services_secondary_range_name = var.services_range_name
+  }
 
   workload_identity_config {
     workload_pool = "${var.project_id}.svc.id.goog"
@@ -146,7 +152,7 @@ resource "google_container_node_pool" "this" {
   location = var.region
   project  = var.project_id
   cluster  = local.cluster_name
-  version  = each.value.version
+  version  = try(coalesce(each.value.version, var.kubernetes_version), null)
 
   node_locations = length(each.value.node_locations) > 0 ? each.value.node_locations : null
 

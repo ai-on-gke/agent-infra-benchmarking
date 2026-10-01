@@ -13,10 +13,13 @@
 # limitations under the License.
 
 # Build context must be the monorepo root so the Go builder can pull in
-# cmd/, internal/, pkg/, and vendor/. build_and_push.sh sets this up.
+# cmd/, internal/ and the substrate submodule. build_and_push.sh sets this up.
+#
+# Every base image is pinned by digest, the tag beside it saying which one it
+# was taken from, so a rebuild of the same commit is the same image.
 
 # Stage 1: Python dependency builder
-FROM python:3.11-slim AS pydeps
+FROM python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e AS pydeps
 WORKDIR /app
 COPY benchmarking/locust/requirements.txt .
 RUN pip install --no-cache-dir --target=/app/deps -r requirements.txt
@@ -24,8 +27,10 @@ RUN pip install --no-cache-dir --target=/app/deps -r requirements.txt
 # Stage 2: Go build of the boomer-worker worker. Lives in the same image so
 # runner.py can spawn it as a subprocess during headless runs of glutton.
 # CGO_ENABLED=0 keeps us on boomer's pure-Go ZMQ (gomq), no libzmq needed.
-FROM golang:1.26-bookworm AS goboomer
-ENV GOTOOLCHAIN=auto
+FROM golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS goboomer
+# The image's own Go, which has to satisfy go.mod's go line. auto would
+# download a newer toolchain mid-build whenever go.mod asked for one.
+ENV GOTOOLCHAIN=local
 WORKDIR /src
 COPY dependency-repos/substrate ./dependency-repos/substrate
 COPY go.mod go.sum ./
@@ -39,7 +44,7 @@ RUN CGO_ENABLED=0 go build -o /out/boomer-worker ./cmd/benchmarking/boomer-worke
 
 # Stage 3: Distroless runner. Carries the locust install AND the boomer
 # binary; the manifest decides which to launch via the `args` field.
-FROM gcr.io/distroless/python3-debian12
+FROM gcr.io/distroless/python3-debian12:latest@sha256:2fdb05402a2cf21cf78fdb3ba4c5db167241e9e498140f5bf689d7efb773731f
 WORKDIR /app
 COPY --from=pydeps /app/deps /app/deps
 COPY --from=goboomer /out/testcase-helper /app/testcase-helper

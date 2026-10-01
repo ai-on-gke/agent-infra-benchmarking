@@ -23,6 +23,30 @@ variable "default_resource_name" {
   type        = string
 }
 
+variable "network_name" {
+  description = "Name of the dedicated VPC network (and its one subnetwork) created for this deployment. Defaults to var.default_resource_name when empty, the same way the bucket and the Artifact Registry repository do."
+  type        = string
+  default     = ""
+}
+
+variable "subnet_cidr" {
+  description = "Primary IP CIDR range of the deployment's subnetwork, allocated to nodes."
+  type        = string
+  default     = "10.0.0.0/20"
+}
+
+variable "pods_cidr" {
+  description = "Secondary IP CIDR range of the deployment's subnetwork, allocated to Pods."
+  type        = string
+  default     = "10.4.0.0/14"
+}
+
+variable "services_cidr" {
+  description = "Secondary IP CIDR range of the deployment's subnetwork, allocated to Services."
+  type        = string
+  default     = "10.8.0.0/20"
+}
+
 variable "cluster" {
   description = "The GKE cluster to deploy. Named var.default_resource_name unless `name` says otherwise."
   type = object({
@@ -31,20 +55,19 @@ variable "cluster" {
     name = optional(string, "")
 
     region              = optional(string)
-    autopilot           = optional(bool, true)
-    network             = optional(string, "default")
-    subnetwork          = optional(string, "default")
+    autopilot           = optional(bool, false)
     enable_dataplane_v2 = optional(bool, false)
 
-    # Minimum control-plane version (GKE's min_master_version), e.g.
-    # "1.36.3-gke.1767000". Empty takes the release channel's default, which
-    # is how a cluster ends up below what k8s_beta_apis below needs.
-    kubernetes_version = optional(string, "")
+    # Control-plane version (GKE's min_master_version), and the version of
+    # every node pool that sets none. A floor for the control plane: GKE
+    # upgrades it past this in any channel, and run.json records the version
+    # a run saw. Empty takes the release channel's default.
+    kubernetes_version = optional(string, "1.35.8-gke.1225000")
 
-    # UNSPECIFIED, RAPID, REGULAR, STABLE or EXTENDED. UNSPECIFIED means no
-    # channel, which is what holds kubernetes_version exactly; Autopilot
-    # clusters reject it. Empty leaves GKE's default.
-    release_channel = optional(string, "")
+    # RAPID, REGULAR, STABLE or EXTENDED. UNSPECIFIED (no channel) is
+    # deprecated by GKE and does not stop control-plane upgrades. Empty leaves
+    # the choice to GKE.
+    release_channel = optional(string, "STABLE")
 
     # Kubernetes beta APIs to enable, e.g.
     # ["certificates.k8s.io/v1beta1/clustertrustbundles", "certificates.k8s.io/v1beta1/podcertificaterequests"].
@@ -63,23 +86,26 @@ variable "cluster" {
     enable_agent_sandbox = optional(bool, false)
 
     # One of "SCOPE_UNSPECIFIED", "NONE", "COLLECTION_AND_INSTRUMENTATION_COMPONENTS".
-    managed_otel_scope = optional(string, "SCOPE_UNSPECIFIED")
+    # On by default because substrate's install, the benchmark Job and the
+    # actors all export to the managed collector; without it every one of them
+    # logs a failed export. Substrate's own tools/setup-gcp enables it too.
+    managed_otel_scope = optional(string, "COLLECTION_AND_INSTRUMENTATION_COMPONENTS")
 
     # Only used when autopilot = false.
     node_pools = optional(map(object({
       machine_type   = optional(string, "e2-medium")
       disk_size_gb   = optional(number, 100)
-      disk_type      = optional(string, "pd-ssd")
+      disk_type      = optional(string, "pd-balanced")
       node_count     = optional(number, 1)
       min_node_count = optional(number, 1)
       max_node_count = optional(number, 3)
       spot           = optional(bool, false)
       labels         = optional(map(string), {})
-      # Node version. Unset follows the control plane.
+      # Node version. Unset takes kubernetes_version above.
       version = optional(string)
-      # auto_upgrade has to stay true on a cluster in a release channel, and
-      # moves nodes off `version` when one is set.
-      auto_upgrade = optional(bool, true)
+      # Off because an upgrade drains the workers, which crashes the actors
+      # still awake on them; see substrate's tools/setup-gcp/README.md.
+      auto_upgrade = optional(bool, false)
       auto_repair  = optional(bool, true)
       # Zones the pool's nodes are created in, e.g. ["us-central1-a"] to pin
       # a pool to a single zone. Defaults to all zones in the cluster's
@@ -136,9 +162,27 @@ variable "bucket_storage_class" {
 }
 
 variable "bucket_force_destroy" {
-  description = "If true, allows Terraform to delete the bucket even if it contains objects."
+  description = "If true, terraform destroy deletes the bucket with everything in it, every run's reports included. If false, destroy fails while the bucket holds anything."
   type        = bool
   default     = false
+}
+
+variable "bucket_soft_delete_retention_seconds" {
+  description = "How long a deleted object stays recoverable, and billed. 0 disables soft delete; GCS's own default is 604800 (7 days)."
+  type        = number
+  default     = 0
+}
+
+variable "report_retention_days" {
+  description = "Delete run reports under reports/ this many days after they were written. 0 keeps them."
+  type        = number
+  default     = 0
+}
+
+variable "enable_apis" {
+  description = "Enable the GCP APIs the deployment needs. Set false where they are managed elsewhere."
+  type        = bool
+  default     = true
 }
 
 variable "enable_atelet_bucket_iam" {

@@ -26,6 +26,9 @@ the WorkerPool runs on, rather than for every node or the cluster as a whole.
 A pool can have many nodes, so a drop-down beside the panel picks them, all or
 one alone, rather than a legend listing each.
 Idle actors start hidden; the legend toggles them.
+
+The steady-state window, the span locust_stats_steady.csv covers, is shaded
+on every panel.
 """
 
 from __future__ import annotations
@@ -57,6 +60,8 @@ ACTORS = (
 ACTORS_DEFAULT_HIDDEN = {"IdleActors"}
 INK_MUTED = "#898781"
 GRIDLINE = "#e1e0d9"
+# A neutral wash behind the lines: the window is a reference, not a series.
+STEADY_ALPHA = 0.12
 
 
 class Panel(Protocol):
@@ -114,6 +119,7 @@ def draw(
     name: str = "",
     vitals=(),
     custom=(),
+    steady: tuple[datetime, datetime] | None = None,
     active: int = 0,
     top: float = 1.0,
 ):
@@ -121,7 +127,8 @@ def draw(
     (a figure fraction), which leaves the space above for widgets. `rows` from
     locust_stats_history.csv; `vitals` from cluster_vitals_history.csv, without
     which there is no CPU panel; `custom` from custom_stats_history.csv,
-    without which there are no actor lines.
+    without which there are no actor lines; `steady` the steady-state window
+    to shade, if any.
 
     Returns the main panel's axes, a function that swaps it in place to
     another of `mains`, by index, and the panels' drop-downs, to remove() before
@@ -140,23 +147,28 @@ def draw(
         pool_title = "pool CPU/memory" if memory_series else "pool CPU"
 
     actors_panel(fig, ax_actors, users(rows), actors(custom))
-    ax_actors.set_xlabel("time (UTC)", color=INK_MUTED)
+    xlabel = "time (UTC)" + ("; shaded: steady-state window" if steady else "")
+    ax_actors.set_xlabel(xlabel, color=INK_MUTED)
     locator = mdates.AutoDateLocator()
     ax_actors.xaxis.set_major_locator(locator)
     ax_actors.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
 
     for ax in axes:
         style(ax)
+    for ax in axes[2:]:
+        shade(ax, steady)
 
     def show(index: int) -> None:
         # What the last main panel drew goes, and the axes stay, so the shared
         # time axis keeps its range and format. The removed legend's click
         # handler stays connected, but nothing it knows can be clicked again.
+        # The shading is a patch and goes with it, so it is drawn again.
         for ax in (ax_main, ax_rate):
             for artist in [*ax.lines, *ax.collections, *ax.patches]:
                 artist.remove()
             if ax.get_legend():
                 ax.get_legend().remove()
+            shade(ax, steady)
         main = mains[index]
         main.draw(fig, ax_main, ax_rate)
         parts = [p for p in (main.title, "throughput", pool_title, "actors") if p]
@@ -322,6 +334,11 @@ def fit_y(ax, bottom: float | None = None) -> None:
     ax.autoscale(axis="y")
     if bottom is not None:
         ax.set_ylim(bottom=bottom)
+
+
+def shade(ax, steady: tuple[datetime, datetime] | None) -> None:
+    if steady:
+        ax.axvspan(*steady, color=INK_MUTED, alpha=STEADY_ALPHA, linewidth=0, zorder=0)
 
 
 def to_time(timestamp: str | int) -> datetime:

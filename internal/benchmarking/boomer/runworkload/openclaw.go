@@ -28,8 +28,7 @@ import (
 const (
 	openclawWorkloadName = "openclaw"
 
-	// The ActorTemplate in benchmarking/workloads/manifests. It is not in the
-	// default WORKLOAD_TEMPLATES set, so deploying it is opt-in.
+	// The ActorTemplate in benchmarking/workloads/manifests.
 	openclawTemplate = "openclaw"
 
 	openclawInvokePath = "/invoke"
@@ -48,7 +47,7 @@ func init() {
 }
 
 // openclawWorkload drives the openclaw actor from demos/openclaw. Its /invoke
-// route wraps a headless coding agent. We send a prompt that triggers a 
+// route wraps a headless coding agent. We send a prompt that triggers a
 // mock agent loop simulating a multi-turn LLM interaction.
 //
 // Unlike glutton's ping, the reply carries no per-request nonce, so it proves
@@ -62,9 +61,9 @@ func (openclawWorkload) Name() string { return openclawWorkloadName }
 func (openclawWorkload) DefaultTemplate() string { return openclawTemplate }
 
 // SendInstruction POSTs the prompt to /invoke and verifies the
-// reply contains the expected response. The actor answers 500 when an agent 
-// turn fails and 504 when one times out; neither is reachable from the fast 
-// path, so the shared retry classification treating 5xx as "still activating" 
+// reply contains the expected response. The actor answers 500 when an agent
+// turn fails and 504 when one times out; neither is reachable from the fast
+// path, so the shared retry classification treating 5xx as "still activating"
 // stays true here.
 func (openclawWorkload) SendInstruction(ctx context.Context, actor actorRef) (bool, error) {
 	return sendHTTPInstruction(ctx, actor, httpInstruction{

@@ -77,6 +77,33 @@ subjects:
   name: prometheus
   namespace: benchmarking
 ---
+# Substrate's control plane runs in ate-system, which the pod discovery of the
+# substrate job below has to list. A Role there rather than a cluster-wide
+# grant, since that is the one namespace it reads.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus-benchmarking
+  namespace: ate-system
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prometheus-benchmarking
+  namespace: ate-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prometheus-benchmarking
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: benchmarking
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -87,61 +114,8 @@ data:
     global:
       scrape_interval: 10s
     scrape_configs:
-      - job_name: 'kubernetes-pods'
-        kubernetes_sd_configs:
-          - role: pod
-            namespaces:
-              names:
-                - benchmarking
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
-            action: keep
-            regex: "true"
-          - source_labels: [__meta_kubernetes_pod_name]
-            action: replace
-            target_label: pod
-          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
-            action: replace
-            target_label: __metrics_path__
-            regex: (.+)
-          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
-            action: replace
-            regex: ([^:]+)(?::\d+)?;(\d+)
-            replacement: $1:$2
-            target_label: __address__
-
-      # The telemetry-meter gives its substrate_* counts on port 8889, which
-      # the annotation job above collects. It gives its own otelcol_* counters
-      # on port 8888. The annotation relabel can name only one port, thus
-      # scrape port 8888 here. When a service reports zero volume,
-      # otelcol_receiver_accepted_* shows the difference between "sent nothing"
-      # and "arrived nowhere".
-      - job_name: 'telemetry-meter-self'
-        kubernetes_sd_configs:
-          - role: pod
-            namespaces:
-              names:
-                - benchmarking
-        relabel_configs:
-          - source_labels:
-              - __meta_kubernetes_pod_label_app
-              - __meta_kubernetes_pod_container_port_number
-            action: keep
-            regex: telemetry-meter;8888
-          - source_labels: [__meta_kubernetes_pod_name]
-            action: replace
-            target_label: pod
-
-      # Port 8001 of whichever pod is running the benchmark, which is the
-      # boomer worker's own /metrics and the only live endpoint either pod
-      # has: the port 8000 the locust container declares is served by
-      # common/metrics.py, which this repo does not ship.
-      #
-      # Both spellings of the label are matched because the two ways to run
-      # the benchmark label their pods apart on purpose — `locust` for the
-      # Deployment, `locust-job` for the Job, so that the Deployment's
-      # Service cannot select a Job's pod. They are the same worker
-      # underneath and belong in the same job here.
+      # Port 8001 of the benchmark Job's pod: the boomer worker's /metrics,
+      # where every request row a report reads comes from.
       - job_name: 'boomer-worker'
         kubernetes_sd_configs:
           - role: pod
@@ -153,39 +127,70 @@ data:
               - __meta_kubernetes_pod_label_app
               - __meta_kubernetes_pod_container_port_number
             action: keep
-            regex: locust(-job)?;8001
+            regex: locust-job;8001
           - source_labels: [__meta_kubernetes_pod_name]
             action: replace
             target_label: pod
 
           # What the run was, off the pod's own labels. The worker's metric
           # labels are method/name/status/user_class and carry nothing about
-          # which run produced them, so these are what tell one session apart
+          # which run produced them, so these are what tell one run apart
           # from the next:
           #
           #   locust_request_duration_milliseconds_bucket{run_id="...", name="TTFI"}
-          #
-          # A Deployment pod carries none of them and simply has none of these
-          # labels, which is the honest answer for a session that was steered
-          # from the web UI and has no fixed shape to record.
           - source_labels: [__meta_kubernetes_pod_label_benchmark_run_id]
             action: replace
             target_label: run_id
-          # A Job run is a case, read inside the pod, so its name is the whole
-          # of what the pod carries: the load and the worker's flags are both
-          # in benchmarking/tests.yaml under it, and a series of runs is
-          # grouped by this rather than by users or workload.
+          # A run is a case, read inside the pod, so its name is the whole of
+          # what the pod carries: the load and the worker's flags are both in
+          # benchmarking/tests.yaml under it, and a series of runs is grouped
+          # by this rather than by users or workload.
           - source_labels: [__meta_kubernetes_pod_label_benchmark_test_case]
             action: replace
             target_label: test_case
-          # A Deployment pod labels the workload directly, having no case to
-          # read; a Job pod carries neither and simply has no such label.
-          - source_labels: [__meta_kubernetes_pod_label_benchmark_workload]
+
+      # Substrate's control plane: ate-api-server, atelet and atenet-router
+      # annotate their metrics port with prometheus.io/scrape. The same job as
+      # dependency-repos/substrate/manifests/ate-install/kind/prometheus.yaml,
+      # so the series have the names upstream's own dashboards expect.
+      - job_name: 'substrate'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - ate-system
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
             action: replace
-            target_label: workload
-          - source_labels: [__meta_kubernetes_pod_label_benchmark_template]
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port, __meta_kubernetes_pod_ip]
             action: replace
-            target_label: template
+            regex: (\d+);(([A-Fa-f0-9]{1,4}::?){1,7}[A-Fa-f0-9]{1,4})
+            replacement: '[$2]:$1'
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port, __meta_kubernetes_pod_ip]
+            action: replace
+            regex: (\d+);((([0-9]+?)(\.|$)){4})
+            replacement: $2:$1
+            target_label: __address__
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            action: replace
+            target_label: node
+          - source_labels: [__meta_kubernetes_pod_phase]
+            action: drop
+            regex: Pending|Succeeded|Failed
 
       # The container memory directly from the cAdvisor endpoint of the
       # kubelet. `kubectl top` reads metrics-server, which reports an average
@@ -197,7 +202,8 @@ data:
         tls_config:
           ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
           insecure_skip_verify: true
-        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        authorization:
+          credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
         kubernetes_sd_configs:
           - role: node
         relabel_configs:
@@ -235,6 +241,19 @@ data:
             action: drop
             regex: container_(memory_working_set_bytes|cpu_usage_seconds_total);$
 ---
+# Where the tsdb lives, so the runs it recorded survive a restart of its pod.
+# It goes with deploy-benchmarking.sh --delete, like everything else here.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data
+  namespace: benchmarking
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -244,6 +263,10 @@ metadata:
     app: prometheus
 spec:
   replicas: 1
+  # The volume is ReadWriteOnce, so the old pod has to let go of it before the
+  # new one can mount it.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: prometheus
@@ -253,28 +276,45 @@ spec:
         app: prometheus
     spec:
       serviceAccountName: prometheus
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        # The volume mounts owned by root; this makes it writable by the
+        # image's nobody user.
+        fsGroup: 65534
       containers:
       - name: prometheus
-        image: prom/prometheus:v2.45.0
+        # The version upstream substrate runs, in the same manifest named above.
+        image: prom/prometheus:v3.5.3@sha256:ddc2493835a1509976d5e4e0c94199c4f843ce1f42dd6bcfc8231ba734a93ff7
         args:
           - "--config.file=/etc/prometheus/prometheus.yml"
-          # Deliberately unmounted: the tsdb is written to the container's own
-          # filesystem and goes with the pod. Sessions accumulate for as long
-          # as one pod lives, which covers comparing a morning's runs and is
-          # not a record to keep — the log of each Job is the durable artifact.
-          # A PersistentVolumeClaim here changes that, and then this Deployment
-          # needs strategy: Recreate, since an RWO volume cannot be held by the
-          # old and new pods at once during a rolling update.
           - "--storage.tsdb.path=/prometheus/"
+          # At least runner.py's PRIOR_RUN_LOOKBACK, so an earlier run under a
+          # reused run id is still found. The size bound keeps a full volume
+          # from stopping ingestion mid-run.
+          - "--storage.tsdb.retention.time=30d"
+          - "--storage.tsdb.retention.size=18GB"
         ports:
         - containerPort: 9090
+        resources:
+          requests:
+            cpu: 500m
+            memory: 2Gi
+          limits:
+            memory: 4Gi
         volumeMounts:
         - name: config-volume
           mountPath: /etc/prometheus/
+        - name: data
+          mountPath: /prometheus/
       volumes:
       - name: config-volume
         configMap:
           name: prometheus-config
+      - name: data
+        persistentVolumeClaim:
+          claimName: prometheus-data
 ---
 apiVersion: v1
 kind: Service

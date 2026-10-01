@@ -1,4 +1,4 @@
-FROM node:26-slim
+FROM node:26.10.0-slim@sha256:ec7758ee051e457b468b32bde57b0879010b325bb9862718e9615225ce4aaae1
 
 # Install the real openclaw package from npm
 RUN npm install -g openclaw@2026.9.7 --allow-scripts=openclaw

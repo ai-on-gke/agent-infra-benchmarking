@@ -89,10 +89,12 @@ if [[ "${NO_BUILD}" -eq 0 ]]; then
   "${BENCHMARKING_DIR}/locust/build_and_push.sh"
 fi
 
-# Listed out of the image, which is where run_locust_job.sh resolves each case
-# from, so the list and the cases come from the same tests.yaml.
+# Listed out of the pushed image, which is where run_locust_job.sh resolves each
+# case from, so the list and the cases come from the same tests.yaml. By digest,
+# because a local copy of the tag can be older than the registry's.
+pinned_image="$("${BENCHMARKING_DIR}/locust/pin_image.sh" "${LOCUST_IMAGE}")"
 cases="$(docker run --rm --platform "${LOCUST_IMAGE_PLATFORM:-linux/amd64}" \
-  --entrypoint /app/testcase-helper "${LOCUST_IMAGE}" --list)"
+  --entrypoint /app/testcase-helper "${pinned_image}" --list)"
 CASES=()
 while IFS= read -r c; do
   if [[ -n "${c}" ]]; then
@@ -104,15 +106,26 @@ echo
 echo "=== Run ${RUN_ID}: ${#CASES[@]} test case(s) ==="
 printf '  %s\n' "${CASES[@]}"
 
+# run_locust_job.sh's status for a run stopped by Ctrl-C or SIGTERM. Stops the
+# series, where any other failure moves on to the next case.
+INTERRUPTED=130
+
 STATUS=()
+interrupted=0
 for c in "${CASES[@]}"; do
   echo
   echo "=== [${RUN_ID}] ${c} ==="
+  status=0
   # ${arr[@]+...} because bash 3.2, macOS's, treats an empty array as unset.
-  if "${BENCHMARKING_DIR}/run_locust_job.sh" --run-id "${RUN_ID}" --test-case "${c}" \
+  "${BENCHMARKING_DIR}/run_locust_job.sh" --run-id "${RUN_ID}" --test-case "${c}" \
     --no-build ${JOB_ARGS[@]+"${JOB_ARGS[@]}"} \
-    --follow-logs ; then
+    --follow-logs || status=$?
+  if [[ "${status}" -eq 0 ]]; then
     STATUS+=("ok      ${c}")
+  elif [[ "${status}" -eq "${INTERRUPTED}" ]]; then
+    STATUS+=("STOPPED ${c}")
+    interrupted=1
+    break
   else
     STATUS+=("FAILED  ${c}")
   fi
@@ -121,6 +134,9 @@ done
 echo
 echo "=== Run ${RUN_ID} ==="
 printf '  %s\n' "${STATUS[@]}"
+if [[ "${interrupted}" -eq 1 ]]; then
+  exit "${INTERRUPTED}"
+fi
 if printf '%s\n' "${STATUS[@]}" | grep -q '^FAILED'; then
   exit 1
 fi
