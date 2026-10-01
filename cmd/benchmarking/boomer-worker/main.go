@@ -72,6 +72,8 @@ func main() {
 		resumeMode       = flag.String("resume-mode", runworkload.ResumeModeExplicit, fmt.Sprintf("How an actor is woken: %s issues ResumeActor before the instruction, %s leaves the wake to the router.", runworkload.ResumeModeExplicit, runworkload.ResumeModeImplicit))
 		traceProbability = flag.Float64("trace-probability", 0, "Fraction of iterations to sample a trace for, 0 to 1.")
 
+		httpMaxIdleConnsPerHost = flag.Int("http-max-idle-conns-per-host", 10000, "Idle HTTP connections the router client keeps per host. Set it to at least the number of users this worker runs, so each VU reuses its connection to the router across wakes instead of opening a new one per request.")
+
 		// runworkload settings. Declared here with every other flag, so
 		// --help is the whole command line rather than one list per user
 		// class, and read only when --user-class selects runworkload. The
@@ -124,7 +126,13 @@ func main() {
 	}
 	defer conn.Close()
 
-	httpClient := &http.Client{Timeout: 5 * time.Minute}
+	// Upstream's tuning. Every VU calls the one router host, and the default two
+	// idle connections per host would put a TCP connect in most ExecutionTime rows.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 0 // no total cap; the per-host cap governs
+	transport.MaxIdleConnsPerHost = *httpMaxIdleConnsPerHost
+	transport.IdleConnTimeout = 5 * time.Minute
+	httpClient := &http.Client{Timeout: 5 * time.Minute, Transport: transport}
 
 	cfg := &userclass.Config{
 		APIStub:    apiStub,
