@@ -26,6 +26,9 @@
 # deployed with: a snapshot cannot be restored across runtimes, so actors never
 # schedule onto a pool of the other class.
 #
+# `max-failure-ratio` is the share of requests, 0 to 1, that may fail before
+# the run counts as failed. It defaults to 0.01.
+#
 # Every other key becomes a boomer-worker flag, `key: value` to `--key=value`,
 # and nothing here reads them — a flag the worker accepts works from a case the
 # day it is added, and one it does not is fatal in the worker, which lists the
@@ -45,6 +48,7 @@ cases:
     workload-name: glutton
     workload-template: glutton
     resume-mode: explicit 
+    max-failure-ratio: 0.01
 
   openclaw:
     duration: 5m
@@ -55,3 +59,4 @@ cases:
     workload-name: openclaw
     workload-template: openclaw
     resume-mode: explicit
+    max-failure-ratio: 0.01

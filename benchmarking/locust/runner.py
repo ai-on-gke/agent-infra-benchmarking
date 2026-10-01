@@ -37,6 +37,7 @@ because this repo ships no shapes/ directory for the second path to name.
 
 import argparse
 import base64
+import csv
 import datetime
 import json
 import os
@@ -63,8 +64,8 @@ TESTS_FILE = "/app/tests.yaml"
 LOCUST_CSV_STEM = "locust"
 
 # The case keys that are the run's load rather than the worker's flags. Every
-# other key in a case goes to the worker verbatim, so this tuple is the whole
-# of what this wrapper claims from a case.
+# key in a case that is not one of these, HOST_KEYS or FAILURE_RATIO_KEY goes
+# to the worker verbatim.
 LOAD_KEYS = ("duration", "users", "spawn-rate")
 
 # Case keys that shape the WorkerPool, which run_locust_job.sh deploys before
@@ -72,6 +73,12 @@ LOAD_KEYS = ("duration", "users", "spawn-rate")
 # the time this runs, and the worker has no such flags — an unknown one is
 # fatal to it, so a case carrying these would never reach a first iteration.
 HOST_KEYS = ("worker-count", "sandbox-class")
+
+# Case key for the share of requests that may fail before the run counts as
+# failed, and its default. locust alone would fail it on the first one, out of
+# tens of thousands.
+FAILURE_RATIO_KEY = "max-failure-ratio"
+DEFAULT_MAX_FAILURE_RATIO = 0.01
 
 # How long boomer gets to suspend and delete its actors after the run. Longer
 # than the worker's own 60s shutdown budget, so the timeout here is reached
@@ -85,6 +92,10 @@ REPORT_SETTLE_SECS = 15
 # Exit status of a run whose reports did not all upload. Distinct from locust's
 # and boomer's own, which say how the run itself went.
 UPLOAD_FAILED_EXIT = 3
+
+# Exit status of a run over its max-failure-ratio, or one whose load generator
+# raised exceptions.
+TOO_MANY_FAILURES_EXIT = 4
 
 # What the run was made of and how it went, written beside the reports; the
 # README summarizes it for a reader.
@@ -122,7 +133,8 @@ def parse_args() -> argparse.Namespace:
         "--test-case",
         required=True,
         help=f"Name a case in --tests-file. {', '.join(LOAD_KEYS)} are the "
-        f"load; every other key is a worker flag.",
+        f"load, {FAILURE_RATIO_KEY} its pass mark, and {', '.join(HOST_KEYS)} "
+        f"the pool's; every other key is a worker flag.",
     )
     p.add_argument(
         "--tests-file",
@@ -177,6 +189,7 @@ def parse_args() -> argparse.Namespace:
     # Split before anything reads either half: what is left after the load
     # comes out is the worker's, whatever it is named.
     args.duration, args.users, args.spawn_rate = take_load(case, args.test_case)
+    args.max_failure_ratio = take_failure_ratio(case, args.test_case)
     for key in HOST_KEYS:
         case.pop(key, None)
     if args.actor_egress_allow:
@@ -192,6 +205,21 @@ def parse_args() -> argparse.Namespace:
     # --stop-timeout, and so on).
     args.locust_extra = extra
     return args
+
+
+def take_failure_ratio(case: dict[str, str], name: str) -> float:
+    """Remove FAILURE_RATIO_KEY from `case` and return it validated, or the
+    default when the case does not state one."""
+    raw = case.pop(FAILURE_RATIO_KEY, None)
+    if raw is None:
+        return DEFAULT_MAX_FAILURE_RATIO
+    try:
+        ratio = float(raw)
+    except ValueError:
+        sys.exit(f"Test case {name!r}: `{FAILURE_RATIO_KEY}` must be a number.")
+    if not 0 <= ratio <= 1:
+        sys.exit(f"Test case {name!r}: `{FAILURE_RATIO_KEY}` must be between 0 and 1, got {ratio:g}.")
+    return ratio
 
 
 def take_load(case: dict[str, str], name: str) -> tuple[str, int, float]:
@@ -290,6 +318,7 @@ def log_run_config(args: argparse.Namespace) -> None:
         + (" (all at once)" if args.spawn_rate >= args.users else ""),
         f"  test_case:    {args.test_case or '(none)'}",
         f"  worker flags: {' '.join(f'--{k}={v}' for k, v in args.worker_flags.items()) or '(none)'}",
+        f"  max failures: {args.max_failure_ratio:.2%} of requests",
         f"  reports:      {', '.join(args.report) or '(none)'}",
         f"  run_id:       {args.run_id or '(none)'}",
         f"  report dest:  {f'gs://{args.report_bucket}/{args.report_prefix}/{args.run_id}/{args.test_case}' if args.report_bucket else args.report_dir + ' (pod-local)'}",
@@ -323,6 +352,9 @@ def build_locust_cmd(args: argparse.Namespace) -> list[str]:
         # The user count is recorded in the row with the percentiles, so a
         # ramp needs nothing inferred to say what load a sample was taken at.
         "--csv-full-history",
+        # Failed requests are judged by within_limits against the case's
+        # max-failure-ratio instead.
+        "--exit-code-on-error", "0",
     ]
     return cmd + list(args.locust_extra)
 
@@ -416,14 +448,53 @@ def run(args: argparse.Namespace) -> int:
         return 128 + stopped_by[0]
 
     # Both statuses matter, because the exit code is the only result this
-    # carries: locust reports whether the run met its own bar, and a worker
-    # that died took the load generator with it whatever locust concluded.
-    # Locust's own is preferred when both failed, as the more specific of the
-    # two. --exit-code-on-error=0 is the way to say that failed requests are
-    # an expected part of a run.
+    # carries: a worker that died took the load generator with it whatever
+    # locust concluded. Locust's own is preferred when both failed, as the more
+    # specific of the two.
     if locust_exit != 0:
         return locust_exit
     return boomer_exit
+
+
+def count_failures(args: argparse.Namespace) -> dict | None:
+    """The run's requests, failed requests and load generator exceptions, from
+    the CSVs locust wrote on exit. None, and said why, if they cannot be read."""
+    stats = Path(args.report_dir) / f"{LOCUST_CSV_STEM}_stats.csv"
+    exceptions = Path(args.report_dir) / f"{LOCUST_CSV_STEM}_exceptions.csv"
+    try:
+        with stats.open(newline="") as f:
+            total = next(row for row in csv.DictReader(f) if row["Name"] == "Aggregated")
+        requests, failed = int(total["Request Count"]), int(total["Failure Count"])
+        with exceptions.open(newline="") as f:
+            raised = sum(int(row["Count"]) for row in csv.DictReader(f))
+    except (OSError, StopIteration, KeyError, ValueError) as exc:
+        print(f"Cannot count the run's failures: {type(exc).__name__}: {exc}", flush=True)
+        return None
+    return {
+        "requests": requests,
+        "failed": failed,
+        "ratio": failed / requests if requests else None,
+        "exceptions": raised,
+    }
+
+
+def within_limits(failures: dict | None, max_ratio: float) -> bool:
+    """Whether the run stayed within its max-failure-ratio and its load
+    generator raised no exceptions. --exit-code-on-error 0 keeps both out of
+    locust's own exit code, so this is what fails a run over them."""
+    if failures is None:
+        return False
+    if not failures["requests"]:
+        print("The run made no requests.", flush=True)
+        return False
+    print(
+        f"Failed requests: {failures['failed']} of {failures['requests']} ({failures['ratio']:.3%}); "
+        f"{FAILURE_RATIO_KEY} allows {max_ratio:.3%}.",
+        flush=True,
+    )
+    if failures["exceptions"]:
+        print(f"The load generator raised {failures['exceptions']} exception(s).", flush=True)
+    return failures["ratio"] <= max_ratio and not failures["exceptions"]
 
 
 def locust_csvs(args: argparse.Namespace) -> list[Path]:
@@ -462,7 +533,9 @@ def refuse_reused_run(args: argparse.Namespace) -> None:
         )
 
 
-def write_run_json(args: argparse.Namespace, started: float, ended: float, status: int) -> dict:
+def write_run_json(
+    args: argparse.Namespace, started: float, ended: float, status: int, failures: dict | None
+) -> dict:
     """Write run.json into --report-dir and return what it holds: how the run
     went, followed by what run_locust_job.sh passed in BENCHMARK_RUN_INFO (the
     resolved case, the cluster, the WorkerPool, the images by digest and the
@@ -490,6 +563,8 @@ def write_run_json(args: argparse.Namespace, started: float, ended: float, statu
         "spawn_rate": args.spawn_rate,
         "duration": args.duration,
         "user_class": user_class(args.file),
+        "max_failure_ratio": args.max_failure_ratio,
+        "failures": failures,
         "worker_flags": args.worker_flags,
         **passed,
     }
@@ -615,7 +690,10 @@ def main() -> None:
     started = time.time()
     status = run(args)
     ended = time.time()
-    info = write_run_json(args, started, ended, status)
+    failures = count_failures(args)
+    if status == 0 and not within_limits(failures, args.max_failure_ratio):
+        status = TOO_MANY_FAILURES_EXIT
+    info = write_run_json(args, started, ended, status, failures)
     write_readme(args, info)
     if not write_reports(args, started, ended) and status == 0:
         print("The reports did not all upload, so the run is failed.", flush=True)

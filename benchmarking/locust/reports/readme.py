@@ -61,6 +61,9 @@ def render(info: dict) -> str:
 def _header(info: dict) -> str:
     lines = [f"# {info.get('test_case') or UNKNOWN} — run {info.get('run_id') or UNKNOWN}", ""]
     lines.append(f"- **Result:** {_status(info.get('status'))}")
+    lines.append(f"- **Failed requests:** {_failures(info.get('failures'), info.get('max_failure_ratio'))}")
+    if isinstance(info.get("failures"), dict) and info["failures"].get("exceptions"):
+        lines.append(f"- **Load generator exceptions:** {info['failures']['exceptions']}")
     lines.append(f"- **Window:** {_window(info.get('started'), info.get('ended'))}")
     if info.get("run_info_error"):
         lines.append(f"- **Metadata missing:** {info['run_info_error']}")
@@ -215,6 +218,17 @@ def _status(status) -> str:
         except ValueError:
             pass
     return f"failed (exit {status})"
+
+
+def _failures(failures, max_ratio) -> str:
+    if not isinstance(failures, dict):
+        return UNKNOWN
+    if failures.get("requests") == 0:
+        return "none; the run made no requests"
+    text = f"{failures['failed']:,} of {failures['requests']:,} ({failures['ratio']:.3%})"
+    if isinstance(max_ratio, (int, float)):
+        text += f", allowed {max_ratio * 100:g}%"
+    return text
 
 
 def _window(started, ended) -> str:
