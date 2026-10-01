@@ -83,7 +83,7 @@ func main() {
 		workloadTemplate = flag.String("workload-template", "",
 			"runworkload only: the ActorTemplate the workload is measured on. Unset selects the workload's own.")
 		workloadTimeout = flag.Duration("workload-timeout", 0,
-			fmt.Sprintf("runworkload only: ceiling on the instruction retry loop. Unset selects %s.", runworkload.DefaultTimeout))
+			fmt.Sprintf("runworkload only: deadline on each control-plane call and instruction; one that runs past it counts as a failure. Unset selects %s.", runworkload.DefaultTimeout))
 		actorEgressAllow = flag.String("actor-egress-allow", "",
 			"runworkload only: comma-separated hosts or IPv4 addresses every actor may connect to, resolved once at startup. Unset gives actors no egress policy, so they can reach nothing.")
 	)

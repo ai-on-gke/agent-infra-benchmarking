@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -692,4 +693,50 @@ func TestInstructionIsResentAfterAStaleAssignment(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A call that outlives the timeout is cut off at it and reported as a failure,
+// and the actor is discarded like after any other failed call.
+func TestACallPastTheDeadlineFails(t *testing.T) {
+	const deadline = 50 * time.Millisecond
+	for _, tc := range []struct {
+		name string
+		srv  *pingServer
+		ctrl *fakeControlClient
+	}{
+		{name: "resume", srv: &pingServer{}, ctrl: &fakeControlClient{resumeHang: true}},
+		{name: "instruction", srv: &pingServer{PingDelay: 10 * deadline}, ctrl: &fakeControlClient{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt, sr := newMeasuringUser(t, tc.srv, tc.ctrl)
+			val, _ := rt.users.Load(boomerutil.GoroutineID())
+			val.(*runWorkloadUser).timeout = deadline
+			buf := captureLogs(t)
+
+			rt.iterate()
+
+			if got := failedWindowErr(buf, ttfiMetric); !strings.Contains(got, "deadline exceeded") {
+				t.Errorf("TTFI failure: got %q, want a deadline exceeded; log:\n%s", got, buf.String())
+			}
+			total := mustAttr(t, spanByName(t, sr, ttfiMetric), "total_ms").AsFloat64()
+			if lo, hi := boomerutil.MsFloat(deadline), boomerutil.MsFloat(10*deadline); total < lo || total >= hi {
+				t.Errorf("total_ms: got %v, want about the deadline, in [%v, %v)", total, lo, hi)
+			}
+			if _, ok := rt.users.Load(boomerutil.GoroutineID()); ok {
+				t.Error("the user kept its slot after the call timed out")
+			}
+		})
+	}
+}
+
+// failedWindowErr is the error the sampled trace log gives for the window
+// reported as name, or empty when it was not reported as a failure.
+func failedWindowErr(buf *bytes.Buffer, name string) string {
+	for _, line := range strings.Split(buf.String(), "\n") {
+		var rec struct{ Msg, Name, Err string }
+		if json.Unmarshal([]byte(line), &rec) == nil && rec.Msg == "traced span (failed)" && rec.Name == name {
+			return rec.Err
+		}
+	}
+	return ""
 }
