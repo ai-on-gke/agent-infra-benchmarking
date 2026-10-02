@@ -86,6 +86,8 @@ func main() {
 			"runworkload only: the ActorTemplate the workload is measured on. Unset selects the workload's own.")
 		workloadTimeout = flag.Duration("workload-timeout", 0,
 			fmt.Sprintf("runworkload only: deadline on each control-plane call and instruction; one that runs past it counts as a failure. Unset selects %s.", runworkload.DefaultTimeout))
+		disableSuspend = flag.Bool("disable-suspend", false,
+			"runworkload only: do not suspend the actor after each instruction, leaving it active for the next iteration.")
 		actorEgressAllow = flag.String("actor-egress-allow", "",
 			"runworkload only: comma-separated hosts or IPv4 addresses every actor may connect to, resolved once at startup. Unset gives actors no egress policy, so they can reach nothing.")
 	)
@@ -159,13 +161,14 @@ func main() {
 	// only that entry's Init reads these, so a run of another user class
 	// carries them without ever looking at them.
 	runworkload.SetOptions(runworkload.Options{
-		Workload:    *workloadName,
-		Template:    *workloadTemplate,
-		Timeout:     *workloadTimeout,
-		MinWait:     *minWait,
-		MaxWait:     *maxWait,
-		ResumeMode:  *resumeMode,
-		EgressAllow: splitList(*actorEgressAllow),
+		Workload:       *workloadName,
+		Template:       *workloadTemplate,
+		Timeout:        *workloadTimeout,
+		MinWait:        *minWait,
+		MaxWait:        *maxWait,
+		ResumeMode:     *resumeMode,
+		DisableSuspend: *disableSuspend,
+		EgressAllow:    splitList(*actorEgressAllow),
 	})
 
 	entry, ok := userclass.Lookup(class)

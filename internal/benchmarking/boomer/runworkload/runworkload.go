@@ -144,6 +144,10 @@ type Options struct {
 	// explicit.
 	ResumeMode string
 
+	// DisableSuspend prevents the runner from suspending the actor at the end of
+	// each iteration, keeping it active for the next request.
+	DisableSuspend bool
+
 	// EgressAllow names the hosts every actor may connect to. Empty gives the
 	// actors no egress policy, which substrate's egress gateway treats as
 	// deny-all.
@@ -325,12 +329,13 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, opts Options) (*runW
 	}
 
 	u := &runWorkloadUser{
-		cfg:          r.cfg,
-		workload:     r.workload,
-		actorName:    "sb-" + uuid.NewString(),
-		templateName: tmpl,
-		userClass:    runWorkloadUserClass,
-		timeout:      opts.Timeout,
+		cfg:            r.cfg,
+		workload:       r.workload,
+		actorName:      "sb-" + uuid.NewString(),
+		templateName:   tmpl,
+		userClass:      runWorkloadUserClass,
+		timeout:        opts.Timeout,
+		disableSuspend: opts.DisableSuspend,
 	}
 	bmetrics.UpdateUsers(runWorkloadUserClass, 1)
 	if err := r.ensureAtespace(ctx, u); err != nil {
@@ -427,8 +432,10 @@ type runWorkloadUser struct {
 	templateName string
 	userClass    string
 
-	// timeout bounds each call; zero leaves it unbounded.
 	timeout time.Duration
+	
+	// disableSuspend skips the suspend step in the cycle.
+	disableSuspend bool
 
 	// Track the state of the actor so we don't double-count metrics if
 	// the benchmark calls Resume/Suspend idempotently or repeatedly.
@@ -521,8 +528,10 @@ func (u *runWorkloadUser) cycle(ctx context.Context, mode string) (call string, 
 	if err := u.measureTTFI(ctx, mode); err != nil {
 		return ttfiMetric, err
 	}
-	if err := u.suspend(ctx); err != nil {
-		return suspendMetric, err
+	if !u.disableSuspend {
+		if err := u.suspend(ctx); err != nil {
+			return suspendMetric, err
+		}
 	}
 	return "", nil
 }

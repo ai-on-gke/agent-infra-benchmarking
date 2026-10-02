@@ -60,7 +60,7 @@ cases:
     resume-mode: explicit 
     max-failure-ratio: 0.01
 
-  openclaw:
+  openclaw-baseline:
     duration: 3m
     users: 100
     spawn-rate: 10
@@ -70,5 +70,6 @@ cases:
     workload-name: openclaw
     workload-template: openclaw
     workload-timeout: 120s
-    resume-mode: explicit
+    resume-mode: implicit
+    disable-suspend: true
     max-failure-ratio: 0.01
