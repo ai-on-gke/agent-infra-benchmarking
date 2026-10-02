@@ -110,16 +110,18 @@ variable "sandboxed_node_count" {
   default     = 1
 }
 
+# Autoscaling bounds. Unset pins the pool at sandboxed_node_count, so runs
+# compare the same hardware.
 variable "sandboxed_min_node_count" {
-  description = "Autoscaling minimum of the sandboxed node pool."
+  description = "Autoscaling minimum of the sandboxed node pool. Defaults to var.sandboxed_node_count."
   type        = number
-  default     = 1
+  default     = null
 }
 
 variable "sandboxed_max_node_count" {
-  description = "Autoscaling maximum of the sandboxed node pool."
+  description = "Autoscaling maximum of the sandboxed node pool. Defaults to var.sandboxed_node_count."
   type        = number
-  default     = 1
+  default     = null
 }
 
 # Pinned to var.zone like the rest, and without the substrate version label the
@@ -128,13 +130,14 @@ variable "sandboxed_max_node_count" {
 variable "additional_node_pools" {
   description = "Node pools to create besides default, sandboxed and monitoring. name is the pool's name."
   type = list(object({
-    name           = string
-    machine_type   = optional(string, "e2-standard-4")
-    disk_size_gb   = optional(number, 100)
-    disk_type      = optional(string, "pd-balanced")
-    node_count     = optional(number, 1)
-    min_node_count = optional(number, 1)
-    max_node_count = optional(number, 1)
+    name         = string
+    machine_type = optional(string, "e2-standard-4")
+    disk_size_gb = optional(number, 100)
+    disk_type    = optional(string, "pd-balanced")
+    node_count   = optional(number, 1)
+    # Unset pins the pool at node_count.
+    min_node_count = optional(number)
+    max_node_count = optional(number)
     spot           = optional(bool, false)
     labels         = optional(map(string), {})
     taints = optional(list(object({

@@ -111,12 +111,13 @@ variable "managed_otel_scope" {
 variable "node_pools" {
   description = "Map of node pools to create (Standard mode only). Key is used as the pool name."
   type = map(object({
-    machine_type   = optional(string, "e2-medium")
-    disk_size_gb   = optional(number, 100)
-    disk_type      = optional(string, "pd-balanced")
-    node_count     = optional(number, 1)
-    min_node_count = optional(number, 1)
-    max_node_count = optional(number, 3)
+    machine_type = optional(string, "e2-medium")
+    disk_size_gb = optional(number, 100)
+    disk_type    = optional(string, "pd-balanced")
+    node_count   = optional(number, 1)
+    # Unset pins the pool at node_count.
+    min_node_count = optional(number)
+    max_node_count = optional(number)
     spot           = optional(bool, false)
     labels         = optional(map(string), {})
     # Node version. Unset takes var.kubernetes_version.

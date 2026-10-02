@@ -67,13 +67,13 @@ variable "sandboxed_node_count" {
 }
 
 variable "sandboxed_min_node_count" {
-  description = "Autoscaling minimum of the sandboxed pool, checked as GKE would."
+  description = "Autoscaling minimum of the sandboxed pool, checked as GKE would. Defaults to var.sandboxed_node_count."
   type        = number
-  default     = 1
+  default     = null
 }
 
 variable "sandboxed_max_node_count" {
-  description = "Autoscaling maximum of the sandboxed pool, checked as GKE would."
+  description = "Autoscaling maximum of the sandboxed pool, checked as GKE would. Defaults to var.sandboxed_node_count."
   type        = number
-  default     = 1
+  default     = null
 }

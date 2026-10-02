@@ -7,7 +7,7 @@ resource "terraform_data" "cluster" {
 
   lifecycle {
     precondition {
-      condition     = var.sandboxed_min_node_count <= var.sandboxed_node_count && var.sandboxed_node_count <= var.sandboxed_max_node_count
+      condition     = coalesce(var.sandboxed_min_node_count, var.sandboxed_node_count) <= var.sandboxed_node_count && var.sandboxed_node_count <= coalesce(var.sandboxed_max_node_count, var.sandboxed_node_count)
       error_message = "sandboxed_node_count must be between sandboxed_min_node_count and sandboxed_max_node_count."
     }
   }
