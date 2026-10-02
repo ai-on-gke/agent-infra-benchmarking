@@ -92,7 +92,7 @@ const (
 	// the teardown. Well under the budget the caller allows for the whole
 	// teardown, so that the actors already created are still removed when an
 	// iteration is wedged rather than merely slow.
-	drainTimeout = 15 * time.Second
+	drainTimeout = 35 * time.Second
 
 	// How long a VU refused by the teardown waits before boomer calls it again.
 	// Boomer keeps the VUs looping until the teardown returns, and without a
@@ -594,8 +594,25 @@ func (u *runWorkloadUser) executeInstruction(ctx context.Context) error {
 	start := time.Now()
 	var err error
 	for attempt := 1; ; attempt++ {
-		_, err = u.workload.SendInstruction(ctx, u.actor())
-		if !errors.Is(err, errStaleAssignment) || attempt == staleAssignmentAttempts {
+		retry, sendErr := u.workload.SendInstruction(ctx, u.actor())
+		err = sendErr
+		if !retry {
+			break
+		}
+		if errors.Is(err, errStaleAssignment) {
+			if attempt == staleAssignmentAttempts {
+				break
+			}
+			continue
+		}
+			
+		select {
+		case <-ctx.Done():
+			err = ctx.Err()
+			break
+		case <-time.After(100 * time.Millisecond):
+		}
+		if err == ctx.Err() {
 			break
 		}
 	}

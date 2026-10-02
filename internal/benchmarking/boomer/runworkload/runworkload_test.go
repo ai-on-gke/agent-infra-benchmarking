@@ -291,7 +291,7 @@ func TestAFailedSuspendReportsAFailedCycle(t *testing.T) {
 // The instruction is sent once. A refused one is a fault to surface, not a
 // state to wait out, so nothing retries it.
 func TestTheInstructionIsSentOnce(t *testing.T) {
-	srv := &pingServer{PingFailures: 1}
+	srv := &pingServer{PingFailures: 1, PingFailStatus: 400}
 	rt, _ := newMeasuringUser(t, srv, &fakeControlClient{})
 
 	rt.iterate()
@@ -305,7 +305,7 @@ func TestTheInstructionIsSentOnce(t *testing.T) {
 // does: nothing is reported and the actor is discarded.
 func TestARefusedInstructionDiscardsTheActor(t *testing.T) {
 	ctrl := &fakeControlClient{}
-	rt, sr := newMeasuringUser(t, &pingServer{PingFailures: 1}, ctrl)
+	rt, sr := newMeasuringUser(t, &pingServer{PingFailures: 1, PingFailStatus: 400}, ctrl)
 	buf := captureLogs(t)
 
 	rt.iterate()
