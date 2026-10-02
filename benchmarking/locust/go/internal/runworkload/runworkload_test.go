@@ -19,6 +19,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -641,14 +642,14 @@ func TestCreatedActorCountsAsSuspended(t *testing.T) {
 // Aborted is a lost race with a concurrent update, which clears on its own,
 // so the call is made again rather than the actor thrown away.
 func TestAbortedCallIsRetried(t *testing.T) {
+	shortenRetries(t)
 	for _, tc := range []struct {
-		name        string
-		abortTimes  int
-		wantResumes int
-		wantErr     bool
+		name       string
+		abortTimes int
+		wantErr    bool
 	}{
-		{name: "clears", abortTimes: 2, wantResumes: 3, wantErr: false},
-		{name: "persists", abortTimes: 0, wantResumes: abortedAttempts, wantErr: true},
+		{name: "clears", abortTimes: 4, wantErr: false},
+		{name: "persists", abortTimes: 0, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := &fakeControlClient{
@@ -657,31 +658,44 @@ func TestAbortedCallIsRetried(t *testing.T) {
 			}
 			u := newTestRunWorkloadUser(t, &pingServer{}, &userclass.Config{APIStub: ctrl})
 
+			start := time.Now()
 			err := u.resume(context.Background())
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("resume: got err %v, want error %v", err, tc.wantErr)
 			}
-			if got := ctrl.countCalls("ResumeActor"); got != tc.wantResumes {
-				t.Errorf("ResumeActor calls: got %d, want %d", got, tc.wantResumes)
+			got := ctrl.countCalls("ResumeActor")
+			if !tc.wantErr && got != tc.abortTimes+1 {
+				t.Errorf("ResumeActor calls: got %d, want %d", got, tc.abortTimes+1)
+			}
+			if tc.wantErr {
+				if got < 2 {
+					t.Errorf("ResumeActor calls: got %d, want it retried", got)
+				}
+				if elapsed := time.Since(start); elapsed > retryBudget+retryMaxDelay {
+					t.Errorf("gave up after %v, want within the %v budget", elapsed, retryBudget)
+				}
 			}
 		})
 	}
 }
 
-// A 421 is a stale worker assignment that the next request routes around, so
-// the instruction is sent again; any other 4xx is not.
+// A 421 is a worker assignment that was stale or not live yet, which the
+// router gets right once the actor's operation lands, so the instruction is
+// sent again; any other 4xx is not.
 func TestInstructionIsResentAfterAStaleAssignment(t *testing.T) {
+	shortenRetries(t)
 	for _, tc := range []struct {
 		name      string
 		status    int
+		failures  int
 		wantPings int
 		wantErr   bool
 	}{
-		{name: "421", status: http.StatusMisdirectedRequest, wantPings: 2, wantErr: false},
-		{name: "400", status: http.StatusBadRequest, wantPings: 1, wantErr: true},
+		{name: "421", status: http.StatusMisdirectedRequest, failures: 3, wantPings: 4, wantErr: false},
+		{name: "400", status: http.StatusBadRequest, failures: 1, wantPings: 1, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := &pingServer{PingFailures: 1, PingFailStatus: tc.status}
+			srv := &pingServer{PingFailures: tc.failures, PingFailStatus: tc.status}
 			u := newTestRunWorkloadUser(t, srv, nil)
 
 			err := u.executeInstruction(context.Background())
@@ -692,6 +706,38 @@ func TestInstructionIsResentAfterAStaleAssignment(t *testing.T) {
 				t.Errorf("pings: got %d, want %d", got, tc.wantPings)
 			}
 		})
+	}
+}
+
+// The waits between retries are not what these tests are about.
+func shortenRetries(t *testing.T) {
+	t.Helper()
+	initial, maxDelay, budget := retryInitialDelay, retryMaxDelay, retryBudget
+	retryInitialDelay, retryMaxDelay, retryBudget = time.Millisecond, 4*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() {
+		retryInitialDelay, retryMaxDelay, retryBudget = initial, maxDelay, budget
+	})
+}
+
+func TestRetryBacksOffAndStopsAtTheBudget(t *testing.T) {
+	shortenRetries(t)
+	var calls []time.Time
+	busy := errors.New("busy")
+	attempts, err := retry(context.Background(), func(error) bool { return true }, func() error {
+		calls = append(calls, time.Now())
+		return busy
+	})
+	if !errors.Is(err, busy) || attempts != len(calls) {
+		t.Fatalf("retry: got (%d, %v) after %d calls", attempts, err, len(calls))
+	}
+	if attempts < 4 {
+		t.Fatalf("calls: got %d, want several within the budget", attempts)
+	}
+	if total := calls[len(calls)-1].Sub(calls[0]); total > retryBudget+retryMaxDelay {
+		t.Errorf("retried for %v, past the %v budget", total, retryBudget)
+	}
+	if first, later := calls[1].Sub(calls[0]), calls[3].Sub(calls[2]); later < first {
+		t.Errorf("waits did not grow: first %v, third %v", first, later)
 	}
 }
 
@@ -739,4 +785,15 @@ func failedWindowErr(buf *bytes.Buffer, name string) string {
 		}
 	}
 	return ""
+}
+
+// The teardown and a VU discarding the same actor can both delete it, and the
+// second finds it gone; that is the outcome the delete wanted, not a failure.
+func TestDeletingAnActorAlreadyGoneSucceeds(t *testing.T) {
+	ctrl := &fakeControlClient{deleteErr: status.Error(codes.NotFound, "Actor benchmark/x not found")}
+	u := newTestRunWorkloadUser(t, &pingServer{}, &userclass.Config{APIStub: ctrl})
+
+	if err := u.delete(context.Background(), false); err != nil {
+		t.Fatalf("delete: got %v, want nil", err)
+	}
 }
