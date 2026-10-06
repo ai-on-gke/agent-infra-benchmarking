@@ -1,7 +1,7 @@
 project_id = "<YOUR_PROJECT_ID>"
 region     = "us-central1"
 
-# The deafult name for all resources. The cluster takes it too, unless
+# The default name for all resources. The cluster takes it too, unless
 # cluster.name below overrides it.
 default_resource_name = "<PICK_YOUR_NAME>"
 
@@ -10,8 +10,21 @@ default_resource_name = "<PICK_YOUR_NAME>"
 bucket_force_destroy = true
 
 cluster = {
-  # Pins the control plane alongside the node pools below, so it doesn't
-  # drift to whatever the release channel resolves to.
+  # UNSPECIFIED is "no release channel": GKE holds the control plane at
+  # kubernetes_version below instead of auto-upgrading it on a channel's
+  # schedule, which is what keeps a run comparable with an earlier one. A
+  # named channel (RAPID/REGULAR/STABLE) would both refuse a version it does
+  # not currently offer and move the control plane off it afterwards; without
+  # this line GKE picks a channel for you and does both.
+  release_channel = "UNSPECIFIED"
+
+  # The exact control-plane version, held because release_channel above is
+  # UNSPECIFIED. It still has to be a version GKE currently serves: a specific
+  # patch is retired over time, so a stale pin fails `terraform apply` with
+  # "unsupported master version". List what is on offer with
+  #   gcloud container get-server-config --region=us-central1 \
+  #     --format='value(validMasterVersions)'
+  # and set this and the node pools' `version` below to one of them.
   kubernetes_version = "1.35.8-gke.1225000"
 
   # Without these, substrate's podcertificate-controller never creates the

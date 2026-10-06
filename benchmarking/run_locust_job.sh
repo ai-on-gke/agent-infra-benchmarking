@@ -387,8 +387,9 @@ tag_image_with_run_id() {
 }
 
 # run_info prints, as JSON, what the run was made of that its reports cannot
-# otherwise say: every image it ran by digest, and the commits it was built
-# from. runner.py writes it to run.json beside the reports.
+# otherwise say: every image it ran by digest, the commits it was built from,
+# the bucket the reports went to, and the terraform.tfvars that describes the
+# hardware the run measured. runner.py writes it to run.json beside the reports.
 run_info() {
   local templates='{}' deployments dirty=false
   if [[ -n "${TEMPLATE}" ]]; then
@@ -402,6 +403,14 @@ run_info() {
   if ! git diff --quiet HEAD --; then
     dirty=true
   fi
+  # The hardware the run ran on is the node pools in terraform.tfvars, recorded
+  # verbatim so a published run says what it measured. Absent for a cluster this
+  # repo's Terraform did not create, which is left as null rather than guessed.
+  local tfvars=""
+  local tfvars_file="${ROOT}/infra/terraform-gke/terraform.tfvars"
+  if [[ -f "${tfvars_file}" ]]; then
+    tfvars="$(cat "${tfvars_file}")"
+  fi
   jq -n \
     --arg locust_image "${LOCUST_IMAGE}" \
     --argjson actor_templates "${templates}" \
@@ -409,9 +418,13 @@ run_info() {
     --arg commit "$(git rev-parse HEAD)" \
     --argjson commit_dirty "${dirty}" \
     --arg substrate_commit "$(git -C "${SUBSTRATE_DIR}" rev-parse HEAD)" \
+    --arg bucket "${BENCHMARK_REPORT_BUCKET}" \
+    --arg tfvars "${tfvars}" \
     '{locust_image: $locust_image, actor_templates: $actor_templates,
       deployments: $deployments, commit: $commit, commit_dirty: $commit_dirty,
-      substrate_commit: $substrate_commit}'
+      substrate_commit: $substrate_commit,
+      bucket: (if $bucket == "" then null else $bucket end),
+      tfvars: (if $tfvars == "" then null else $tfvars end)}'
 }
 
 # recreate_worker_pool gives the run its own pool: the old one goes, a new one

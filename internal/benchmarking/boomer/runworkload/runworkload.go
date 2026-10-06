@@ -89,10 +89,14 @@ const (
 	teardownConcurrency = 16
 
 	// drainTimeout bounds the wait for in-flight iterations at the start of
-	// the teardown. Well under the budget the caller allows for the whole
-	// teardown, so that the actors already created are still removed when an
-	// iteration is wedged rather than merely slow.
-	drainTimeout = 15 * time.Second
+	// the teardown. It has to clear the longest a single iteration legitimately
+	// runs — an openclaw instruction is tens of seconds (≈50s observed), so the
+	// earlier 15s cut those off and tore down with the actor still working,
+	// which is exactly the leak the drain exists to prevent. Still well under
+	// the budget the caller allows for the whole teardown (see
+	// cmd/benchmarking/boomer-worker), so that a genuinely wedged iteration
+	// cannot spend every second the suspend and delete calls need.
+	drainTimeout = 90 * time.Second
 )
 
 // A call the control plane refuses with Aborted lost a race with a

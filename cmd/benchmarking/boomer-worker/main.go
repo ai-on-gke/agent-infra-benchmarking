@@ -42,6 +42,10 @@ import (
 	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
 )
 
+// teardownBudget caps the shutdown hook: the in-flight drain plus the suspend
+// and delete of every actor the run created. See the boomer:stop handler.
+const teardownBudget = 240 * time.Second
+
 func main() {
 	var (
 		apiEndpoint = flag.String("api-endpoint", "k8s:///api.ate-system.svc.cluster.local:443", "ateapi gRPC dial target.")
@@ -170,7 +174,12 @@ func main() {
 
 	boomer.Events.Subscribe("boomer:stop", func() {
 		slog.Info("boomer:stop event received; suspending+deleting actors")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		// Covers the teardown's in-flight drain (which alone can take tens of
+		// seconds for a workload like openclaw, see runworkload.drainTimeout)
+		// plus the suspend and delete of every actor. Kept under runner.py's
+		// BOOMER_STOP_TIMEOUT_SECS (300s), the point at which it stops waiting
+		// and kills this process, leaving actors behind.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), teardownBudget)
 		defer cancel()
 		shutdownFn(shutdownCtx)
 

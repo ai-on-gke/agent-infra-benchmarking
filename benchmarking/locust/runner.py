@@ -462,8 +462,9 @@ def refuse_reused_run(args: argparse.Namespace) -> None:
 
 def write_run_json(args: argparse.Namespace, started: float, ended: float, status: int) -> None:
     """Write run.json into --report-dir: what run_locust_job.sh passed in
-    BENCHMARK_RUN_INFO (the images by digest and the commits), with the case
-    and how the run went. write_reports uploads it with the other files."""
+    BENCHMARK_RUN_INFO (the images by digest, the commits, the report bucket,
+    and the terraform.tfvars describing the hardware), with the case and how
+    the run went. write_reports uploads it with the other files."""
     info: dict = {}
     raw = os.environ.get("BENCHMARK_RUN_INFO", "")
     if raw:
