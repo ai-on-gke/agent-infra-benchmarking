@@ -4,27 +4,34 @@ Backend for benchmarks and corresponding recipes for agent infra offerings.
 ## Prerequisites
 
 - **Go 1.27+** — matches [`go.mod`](go.mod); also builds `kubectl-ate` below.
+- **Terraform 1.5+** — creates the cluster, the bucket and the registry, and
+  `.terraform-env.sh` reads its outputs.
+- **`git`** — for the substrate submodule, and the scripts find the repo root
+  with it.
 - **`kubectl`**, recent enough to work with the ClusterTrustBundle/PodCertificateRequest
-  APIs substrate depends on (GKE 1.36+ serves them; kubectl 1.31 or newer is
-  what's been tested against this repo).
+  APIs substrate depends on (GKE 1.36+ serves them; the example's cluster runs
+  1.35 and turns them on through `cluster.k8s_beta_apis`, which has to stay set
+  there; kubectl 1.31 or newer is what's been tested against this repo).
 - **`kubectl-ate`**, substrate's own kubectl plugin, on `PATH`. Built from the
   submodule in step 3 of
   [Setting up the Agent Substrate](#setting-up-the-agent-substrate).
 - **`jq`** and **`envsubst`** (the `gettext` package) — used throughout
   `benchmarking/*.sh` and `.terraform-env.sh`.
 - **Docker**, with `linux/amd64` emulation available if your machine isn't
-  already amd64. `benchmarking/locust/build_and_push.sh` always builds and
-  pushes `linux/amd64` images, to match the GKE nodes, regardless of the
-  build host's architecture.
+  already amd64. `benchmarking/locust/build_and_push.sh` builds and pushes
+  `linux/amd64` images, to match the GKE nodes, regardless of the build host's
+  architecture; `LOCUST_IMAGE_PLATFORM` overrides it.
 - **`gcloud`**, authenticated via `gcloud auth application-default login`,
   plus the `gke-gcloud-auth-plugin` component
   (`gcloud components install gke-gcloud-auth-plugin`) — required for
   `kubectl`/`gcloud container clusters get-credentials` to authenticate
   against the cluster.
-- A GCP project with these APIs enabled: `compute.googleapis.com`,
-  `container.googleapis.com`, `artifactregistry.googleapis.com`,
-  `storage.googleapis.com`, `iam.googleapis.com`,
-  `cloudresourcemanager.googleapis.com`.
+- A GCP project. Terraform enables the APIs the deployment needs
+  (`enable_apis`, on by default): `artifactregistry`, `cloudresourcemanager`,
+  `cloudtrace`, `compute`, `container`, `iam`, `logging`, `monitoring`,
+  `storage` and `telemetry`, each `<name>.googleapis.com`. An API that is already
+  enabled needs no permission to enable it. Set `enable_apis = false` where they
+  are managed elsewhere, and have all ten enabled before `terraform apply`.
 - An operator account able to create and manage VPC networks and firewall
   rules, GKE clusters and node pools, Artifact Registry repositories, GCS
   buckets, service accounts and project-level IAM bindings — `Owner` or
@@ -76,8 +83,8 @@ gcloud application-default credentials already in place.
 
    `node_locations` pins a pool to the zones it lists. Leaving it empty spreads
    the pool across every zone in the region, and `node_count` is **per zone**
-   on a regional cluster like this one, so an unpinned pool is three times the
-   nodes and three times the bill.
+   on a regional cluster like this one, so an unpinned pool is as many times the
+   nodes and the bill as the region has zones (four in `us-central1`).
 
 3. Initialize Terraform. The state can be kept in one of two places:
 
@@ -171,16 +178,55 @@ gcloud application-default credentials already in place.
    ./benchmarking/deploy-benchmarking.sh --deploy
    ```
 
+   It builds and pushes the locust, openclaw and mock-LLM images, deploys
+   Prometheus, then the WorkerPool and the benchmark ActorTemplates, and waits
+   for their golden snapshots. Options, all forwarded to
+   `benchmarking/workloads/deploy.sh`:
+
+   - `--worker-count N` — the WorkerPool's replicas (default 1). Each run
+     recreates the pool from its case's `worker-count`, so this sizes only the
+     pool the golden snapshots are taken on.
+   - `--sandbox-class gvisor|microvm` — the class the ActorTemplates and the
+     pool are deployed for (default `gvisor`). `microvm` needs
+     `hack/install-microvm-deps.sh --install` to have run in the substrate
+     submodule. A case's `sandbox-class` has to match the class deployed here.
+   - `--actor-memory SIZE` — the ActorTemplates' memory limit (default `256Mi`,
+     the smallest size `microvm` admits).
+   - `--otlp-endpoint URL` — where an instrumented actor sends telemetry
+     (default: the one in the `ate-otel-config` ConfigMap).
+   - `--wait-timeout SECONDS` — the wait for the workers to be ready (default
+     300).
+
 5. Pick the test case to run
 
    A test case is a named entry in [`benchmarking/tests.yaml`](benchmarking/tests.yaml),
    under `cases:`. The key is what the next step passes to `--test-case`.
+
+   A case is the whole run: the load (`duration`, `users`, `spawn-rate`), how
+   many times it runs (`repeats`, required), the WorkerPool it runs on
+   (`worker-count`, `sandbox-class`) and the workload. The comments at the top
+   of the file say what each key does.
 
 6. Run a benchmark job script.
 
    ```bash
    ./benchmarking/run_locust_job.sh --test-case glutton --follow-logs
    ```
+
+   The script builds and pushes the images, recreates the WorkerPool, runs the
+   case as a Job, waits for it, and downloads its reports. A case with `repeats`
+   above 1 runs that many times in a row, each on a new pool. Common options
+   (`--help` lists the rest):
+
+   - `--run-id NAME` — name the run, instead of a UTC timestamp.
+   - `--no-build` — use the images already pushed.
+   - `--no-download` — leave the reports in the bucket.
+   - `--reports-dir DIR` — download to `DIR/<run-id>/` (default `./reports`).
+   - `--no-wait` — submit the Job and return; refused for a case with more than
+     one repeat.
+   - `--wait-timeout SECONDS` — the ceiling on the wait for the run (default
+     3600).
+   - `--delete` — stop and delete the Job.
 
    A run can hold several jobs, one per test case. To run every case in
    `tests.yaml` one after another under a single run id:
@@ -197,8 +243,9 @@ gcloud application-default credentials already in place.
 7. Collect the artifacts
 
    When a job ends it uploads its files to `reports/<run-id>/<test-case>/` in
-   the deployment's bucket. The run id is a UTC timestamp, e.g.
-   `20260929t120951z`; `--run-id` sets it instead.
+   the deployment's bucket. For a case that runs more than once, each repeat
+   uploads to its own folder, `reports/<run-id>/<test-case>-<n>/`. The run id is a
+   UTC timestamp, e.g. `20260929t120951z`; `--run-id` sets it instead.
 
    Each job leaves:
 
@@ -207,14 +254,24 @@ gcloud application-default credentials already in place.
      These are the run's latency percentiles: failed requests included, and
      rounded to 1 ms below 100 ms, 10 ms below 1 s, 100 ms below 10 s and 1 s
      above.
+   - `locust_stats_steady.csv` — the same totals over the steady-state window
+     alone: from `warm-up` (default 30 s) after the last user starts, to the end
+     of `duration`.
    - `custom_stats_history.csv`, `cluster_vitals_history.csv` — the job's rows
      read back out of Prometheus.
    - `run.json` - the case, how the run went, every image it ran by digest,
      and the commits they were built from. The locust image is also tagged
      with the run id in the registry.
+   - `README.md` — `run.json` summarized for a reader, and what each file beside
+     it holds.
 
-   The scripts download them to `reports/<run-id>/<test-case>/`. See
-   [Charting a run](#charting-a-run) to view them.
+   The scripts download them to `reports/<run-id>/<test-case>/`, or
+   `<test-case>-<n>/` for each repeat. For a case with more than one repeat they
+   then also write, in `reports/<run-id>/`, `<test-case>-summary.csv` and
+   `<test-case>-summary.md`: the min, median and max of every stat in the
+   passing repeats' `locust_stats_steady.csv`. These are made locally, not
+   uploaded, and not made with `--no-download`. See
+   [Charting a run](#charting-a-run) to view the reports.
 
 ## Charting a run
 
@@ -247,7 +304,8 @@ steady-state window shaded. It needs Python 3.9+.
    benchmark-report reports/<run-id>
    ```
 
-   A job's folder, `reports/<run-id>/<test-case>`, charts that job alone.
+   A job's folder, `reports/<run-id>/<test-case>` (`<test-case>-<n>` for one of
+   several repeats), charts that job alone.
 
    Drop-downs in the window switch between the run's jobs, a job's repeats,
    and the request the top panel charts. These pick what it opens on:
