@@ -148,6 +148,12 @@ type Options struct {
 	// actors no egress policy, which substrate's egress gateway treats as
 	// deny-all.
 	EgressAllow []string
+
+	// ActiveIdleTime is how long the actor persists active after the task before suspending.
+	ActiveIdleTime time.Duration
+
+	// TaskDuration is the simulated time a task takes.
+	TaskDuration time.Duration
 }
 
 // configured is what SetOptions recorded, read once by initRunWorkload and
@@ -326,6 +332,7 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, opts Options) (*runW
 
 	u := &runWorkloadUser{
 		cfg:          r.cfg,
+		opts:         opts,
 		workload:     r.workload,
 		actorName:    "sb-" + uuid.NewString(),
 		templateName: tmpl,
@@ -422,6 +429,7 @@ func (r *runWorkloadRuntime) shutdown(ctx context.Context) {
 
 type runWorkloadUser struct {
 	cfg          *userclass.Config
+	opts         Options
 	workload     workload
 	actorName    string
 	templateName string
@@ -521,6 +529,15 @@ func (u *runWorkloadUser) cycle(ctx context.Context, mode string) (call string, 
 	if err := u.measureTTFI(ctx, mode); err != nil {
 		return ttfiMetric, err
 	}
+
+	if u.opts.TaskDuration > 0 {
+		time.Sleep(u.opts.TaskDuration)
+	}
+
+	if u.opts.ActiveIdleTime > 0 {
+		time.Sleep(u.opts.ActiveIdleTime)
+	}
+
 	if err := u.suspend(ctx); err != nil {
 		return suspendMetric, err
 	}

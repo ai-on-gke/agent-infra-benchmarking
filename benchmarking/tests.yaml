@@ -72,3 +72,35 @@ cases:
     workload-timeout: 120s
     resume-mode: explicit
     max-failure-ratio: 0.01
+
+  duty-cycle-100:
+    duration: 3m
+    users: 100
+    spawn-rate: 10
+    repeats: 3
+    worker-count: 100
+    sandbox-class: gvisor
+    workload-name: glutton
+    workload-template: glutton
+    resume-mode: explicit
+    max-failure-ratio: 0.01
+    task-duration: 10s
+    # 100% persistence: The actor stays active for 100 seconds (10s task + 90s idle),
+    # severely limiting throughput as the user loop is blocked.
+    active-idle-time: 90s
+
+  duty-cycle-10:
+    duration: 3m
+    users: 100
+    spawn-rate: 10
+    repeats: 3
+    worker-count: 100
+    sandbox-class: gvisor
+    workload-name: glutton
+    workload-template: glutton
+    resume-mode: explicit
+    max-failure-ratio: 0.01
+    task-duration: 10s
+    # 10% persistence: The actor suspends immediately after its 10s work (0s idle wait), 
+    # freeing up the client loop to start another task/iteration right away.
+    active-idle-time: 0s
