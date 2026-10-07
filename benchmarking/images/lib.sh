@@ -14,9 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Sourced for build_and_push, by the per-folder build_and_push.sh scripts such
-# as benchmarking/locust/build_and_push.sh, and for pin_image. Paths given to
-# build_and_push are relative to the repo root, which the caller has to be in.
+# Sourced for build_and_push, by the per-folder build_and_push_images.sh
+# scripts such as benchmarking/locust/build_and_push_images.sh, and for
+# pin_image. Paths given to build_and_push are relative to the repo root, which
+# the caller has to be in.
 #
 # USE_CLOUD_BUILD=1 builds and pushes on Cloud Build, for a host without a
 # Docker daemon. SKIP_DOCKER_LOGIN=1 leaves the registry credentials of a local
@@ -153,8 +154,8 @@ pin_image() {
     --format='value(image_summary.digest)' 2>/dev/null || true)"
   if [[ "${digest}" != sha256:* ]]; then
     echo "Error: cannot resolve ${image} to a digest. Push it first with its folder's" >&2
-    echo "build_and_push.sh, and check that the active gcloud account can read the" >&2
-    echo "repository." >&2
+    echo "build_and_push_images.sh, and check that the active gcloud account can read" >&2
+    echo "the repository." >&2
     return 1
   fi
   # The configured path rather than the registry's spelling of it. Only the

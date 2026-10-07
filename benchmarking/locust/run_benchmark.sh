@@ -234,11 +234,11 @@ wait_for_jobs() {
 
 if [[ "${NO_BUILD}" -eq 0 ]]; then
   echo "=== Building and pushing images ==="
-  benchmarking/locust/build_and_push.sh
+  benchmarking/locust/build_and_push_images.sh
   # The workload images are only read when the workloads are deployed.
   if [[ "${NO_DEPLOY_WORKLOADS}" -eq 0 ]]; then
     echo
-    benchmarking/workloads/build_and_push.sh
+    benchmarking/workloads/build_and_push_images.sh
   fi
   echo
 fi
