@@ -78,6 +78,59 @@ resource "google_artifact_registry_repository" "images" {
   depends_on = [google_project_service.services]
 }
 
+# Runs the image's builds, rather than the project's default Cloud Build
+# account, which an org policy may have left without the roles to push.
+resource "google_service_account" "build" {
+  project = var.project_id
+  # account_id is capped at 30 characters, the same as var.default_resource_name.
+  account_id   = "${substr(var.default_resource_name, 0, 24)}-build"
+  display_name = "Cloud Build of ${var.default_resource_name}'s image"
+}
+
+resource "google_artifact_registry_repository_iam_member" "build_writer" {
+  project    = var.project_id
+  location   = google_artifact_registry_repository.images.location
+  repository = google_artifact_registry_repository.images.name
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.build.email}"
+}
+
+resource "google_project_iam_member" "build_log_writer" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.build.email}"
+}
+
+# Where gcloud builds submit uploads the build's source, in place of the
+# project's <project>_cloudbuild bucket.
+resource "google_storage_bucket" "build_source" {
+  project  = var.project_id
+  name     = "${var.default_resource_name}-build-source"
+  location = var.region
+
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  force_destroy               = true
+
+  # A build reads its source once, as it starts.
+  lifecycle_rule {
+    condition {
+      age = 1
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  depends_on = [google_project_service.services]
+}
+
+resource "google_storage_bucket_iam_member" "build_source_reader" {
+  bucket = google_storage_bucket.build_source.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.build.email}"
+}
+
 # Builds and pushes the runner image on Cloud Build, so apply needs gcloud but
 # no Docker. Replaced, and so run again, whenever the commit or runner_hash
 # changes.
@@ -86,14 +139,22 @@ resource "terraform_data" "runner_image" {
   triggers_replace = [local.runner_image, local.runner_hash]
 
   provisioner "local-exec" {
-    command = "gcloud builds submit \"$CONTEXT\" --project=\"$PROJECT\" --config=\"$CONFIG\" --ignore-file=.dockerignore --substitutions=_IMAGE=\"$IMAGE\""
+    command = "gcloud builds submit \"$CONTEXT\" --project=\"$PROJECT\" --config=\"$CONFIG\" --ignore-file=.dockerignore --substitutions=_IMAGE=\"$IMAGE\" --service-account=\"$SERVICE_ACCOUNT\" --gcs-source-staging-dir=\"$SOURCE_DIR\""
     environment = {
-      CONTEXT = local.runner_context
-      PROJECT = var.project_id
-      CONFIG  = abspath("${path.module}/cloudbuild.yaml")
-      IMAGE   = local.runner_image
+      CONTEXT         = local.runner_context
+      PROJECT         = var.project_id
+      CONFIG          = abspath("${path.module}/cloudbuild.yaml")
+      IMAGE           = local.runner_image
+      SERVICE_ACCOUNT = google_service_account.build.name
+      SOURCE_DIR      = "gs://${google_storage_bucket.build_source.name}/source"
     }
   }
+
+  depends_on = [
+    google_artifact_registry_repository_iam_member.build_writer,
+    google_project_iam_member.build_log_writer,
+    google_storage_bucket_iam_member.build_source_reader,
+  ]
 }
 
 # The image just pushed, by digest: a rebuild of the same commit keeps the tag

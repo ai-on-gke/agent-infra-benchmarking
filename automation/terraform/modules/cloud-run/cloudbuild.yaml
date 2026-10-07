@@ -1,7 +1,8 @@
 # Builds and pushes the runner image, from automation/ as the source:
 #
 #   gcloud builds submit automation --config=automation/terraform/modules/cloud-run/cloudbuild.yaml \
-#     --ignore-file=.dockerignore --substitutions=_IMAGE=IMAGE
+#     --ignore-file=.dockerignore --substitutions=_IMAGE=IMAGE \
+#     --service-account=SERVICE_ACCOUNT --gcs-source-staging-dir=SOURCE_DIR
 #
 # main.tf runs it whenever the image's sources change.
 
@@ -10,3 +11,7 @@ steps:
     args: ["build", "--platform=linux/amd64", "-f", "runner/Dockerfile", "-t", "${_IMAGE}", "."]
 
 images: ["${_IMAGE}"]
+
+# A build run as a service account of its own has no default logs bucket.
+options:
+  logging: CLOUD_LOGGING_ONLY

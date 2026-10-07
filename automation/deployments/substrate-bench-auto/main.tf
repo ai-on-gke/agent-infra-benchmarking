@@ -2,8 +2,8 @@ terraform {
   required_version = ">= 1.5"
 
   backend "gcs" {
-    bucket = "agent-substrate-bench-nightly-tfstate"
-    prefix = "automation/cloud-run/agent-substrate-bench-nightly"
+    bucket = "substrate-bench-auto-tfstate"
+    prefix = "automation/cloud-run/substrate-bench-auto"
   }
 }
 
@@ -12,7 +12,7 @@ module "cloud_run" {
 
   project_id            = "akvelon-gke-aieco"
   region                = "us-central1"
-  default_resource_name = "agent-substrate-bench-nightly"
+  default_resource_name = "substrate-bench-auto"
 }
 
 output "cloud_run" {
