@@ -66,6 +66,12 @@ variable "release_channel" {
   }
 }
 
+variable "block_upgrades" {
+  description = "Standard clusters only: add a maintenance exclusion that stops GKE's minor-version and node upgrades until the cluster's minor version reaches end of support. Needs a release channel."
+  type        = bool
+  default     = false
+}
+
 # Opt-in Kubernetes beta API groups (e.g. "certificates.k8s.io/v1beta1/clustertrustbundles").
 # GKE only serves beta API groups that are both present in the cluster's
 # Kubernetes minor version and explicitly listed here, so the cluster must

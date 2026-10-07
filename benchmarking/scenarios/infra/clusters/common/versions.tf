@@ -16,6 +16,11 @@ terraform {
       # google-beta only for now; not yet in the GA "google" provider.
       version = ">= 7.33.0, < 8.0.0"
     }
+    # The fixed start of the cluster's upgrade exclusion.
+    time = {
+      source  = "hashicorp/time"
+      version = ">= 0.9.0, < 1.0.0"
+    }
   }
 }
 

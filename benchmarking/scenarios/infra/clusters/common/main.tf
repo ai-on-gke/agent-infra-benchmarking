@@ -55,7 +55,8 @@ module "cluster" {
   pods_range_name     = "pods"
   services_range_name = "services"
   kubernetes_version  = var.kubernetes_version
-  release_channel     = "STABLE"
+  release_channel     = "REGULAR"
+  block_upgrades      = true
 
   # Without these, substrate's podcertificate-controller never creates the
   # ClusterTrustBundles and hack/install-ate.sh waits for them forever.
