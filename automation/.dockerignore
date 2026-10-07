@@ -1,4 +1,4 @@
-# Also what infra/cloud-run's gcloud builds submit leaves out of the upload,
+# Also what the cloud-run module's gcloud builds submit leaves out of the upload,
 # so the patterns are ones both docker and gcloud read alike.
 
 # A local terraform init's providers and state, which would otherwise end up
@@ -8,5 +8,6 @@
 **/*.tfstate.*
 **/*.tfvars
 **/__pycache__/
-# The infra that builds the image, not part of it.
-/infra/
+# The Terraform that builds and deploys the image, not part of it.
+/terraform/
+/deployments/
