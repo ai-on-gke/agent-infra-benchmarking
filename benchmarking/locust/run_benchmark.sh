@@ -146,10 +146,11 @@ worker_args() {
     ["--master-host=\($master)", "--user-class=\($class)"] + (.worker | flags)' <<<"${TEST_CASE_JSON}"
 }
 
-# Prints a Job's succeeded and failed counts as "succeeded|failed".
+# Prints a Job's succeeded and failed counts as "succeeded|failed". The newline
+# matters: read fails on input without one, which errexit turns into an exit.
 job_status() {
   kubectl get job "$1" --namespace="${NAMESPACE}" \
-    -o jsonpath='{.status.succeeded}|{.status.failed}' 2>/dev/null || echo '|'
+    -o jsonpath='{.status.succeeded}|{.status.failed}{"\n"}' 2>/dev/null || echo '|'
 }
 
 # Boomer tries the master once at startup and does not retry, so the worker is
