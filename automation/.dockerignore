@@ -1,0 +1,7 @@
+# A local terraform init's providers and state, which would otherwise end up
+# in the runner image.
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+**/__pycache__/

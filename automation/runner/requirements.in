@@ -1,0 +1,22 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# run_tests.py's Python: PyYAML to read tests.yaml. requirements.txt is
+# compiled from this with every dependency pinned and hashed, for the image's
+# Python 3.11 on linux/amd64:
+#
+#   uv pip compile requirements.in --python-version 3.11 \
+#     --python-platform x86_64-manylinux_2_28 --generate-hashes -o requirements.txt
+
+pyyaml==6.0.3
