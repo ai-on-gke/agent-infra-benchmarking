@@ -41,7 +41,7 @@ if [[ -z "${BUCKET_NAME:-}" ]]; then
 fi
 
 MANIFEST_DIR="benchmarking/workloads/manifests"
-POOL_MANIFEST="${MANIFEST_DIR}/workloads.yaml.tmpl"
+POOL_MANIFEST="${MANIFEST_DIR}/worker-pool.yaml.tmpl"
 # The benchmark ActorTemplates: <name>-template.yaml.tmpl each, created
 # through the ate API in the benchmark-workloads atespace. WORKLOAD_TEMPLATES
 # overrides the default set — the usermem and kernelmem templates (for the

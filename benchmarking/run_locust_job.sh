@@ -70,7 +70,7 @@ NON_WORKER_KEYS='["duration","users","spawn-rate","worker-count","sandbox-class"
 
 # The WorkerPool, recreated per run so every run starts on cold workers rather
 # than on whatever the last one left warm. Names have to match the manifest.
-POOL_MANIFEST="${BENCHMARKING_DIR}/workloads/manifests/workloads.yaml.tmpl"
+POOL_MANIFEST="${BENCHMARKING_DIR}/workloads/manifests/worker-pool.yaml.tmpl"
 POOL_NAME=benchmark-ateom
 POOL_NAMESPACE=benchmark-workloads
 

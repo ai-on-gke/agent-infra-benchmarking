@@ -43,7 +43,7 @@ cluster = {
       labels = {
         "benchmarking-worker" = "true",
       }
-      # workloads.yaml.tmpl's WorkerPool already tolerates this taint; without
+      # worker-pool.yaml.tmpl's WorkerPool already tolerates this taint; without
       # it actually applied to the nodes, nothing stops substrate's own
       # control-plane pods (and anything else) from also landing here
       # alongside the workers, which is how a 100-worker run blows past GKE's
