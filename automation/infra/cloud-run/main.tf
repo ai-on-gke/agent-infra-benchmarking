@@ -1,10 +1,25 @@
 locals {
   runner_state_bucket = var.runner_state_bucket != "" ? var.runner_state_bucket : "${var.project_id}-${var.name}"
+
+  # automation/, the runner image's build context.
+  runner_context = abspath("${path.module}/../..")
+  # The files the image is built from, less what .dockerignore leaves out.
+  runner_sources = concat(["tests.yaml", ".dockerignore"], [
+    for f in fileset(local.runner_context, "runner/**") : f
+    if !can(regex("(^|/)(\\.terraform|__pycache__)/|\\.tfstate|\\.tfvars$", f))
+  ])
+  # Tags the image, so that a change to any of its sources or to the build
+  # rebuilds it on apply, and nothing else does.
+  runner_hash = sha1(join("\n", concat(
+    [for f in local.runner_sources : "${f} ${filesha1("${local.runner_context}/${f}")}"],
+    [filesha1("${path.module}/cloudbuild.yaml")],
+  )))
+  runner_image = "${google_artifact_registry_repository.images.registry_uri}/test-runner:${local.runner_hash}"
 }
 
 resource "google_project_service" "services" {
   for_each = toset(concat(
-    ["run.googleapis.com", "storage.googleapis.com"],
+    ["run.googleapis.com", "storage.googleapis.com", "artifactregistry.googleapis.com", "cloudbuild.googleapis.com"],
     var.schedule == null ? [] : ["cloudscheduler.googleapis.com"],
   ))
 
@@ -44,6 +59,31 @@ resource "google_storage_bucket_iam_member" "job_runner_state" {
   member = "serviceAccount:${google_service_account.job.email}"
 }
 
+resource "google_artifact_registry_repository" "images" {
+  location      = var.region
+  repository_id = var.name
+  format        = "DOCKER"
+
+  depends_on = [google_project_service.services]
+}
+
+# Builds and pushes the runner image on Cloud Build, so apply needs gcloud but
+# no Docker. Replaced, and so run again, whenever runner_hash changes.
+resource "terraform_data" "runner_image" {
+  input            = local.runner_image
+  triggers_replace = local.runner_image
+
+  provisioner "local-exec" {
+    command = "gcloud builds submit \"$CONTEXT\" --project=\"$PROJECT\" --config=\"$CONFIG\" --ignore-file=.dockerignore --substitutions=_IMAGE=\"$IMAGE\""
+    environment = {
+      CONTEXT = local.runner_context
+      PROJECT = var.project_id
+      CONFIG  = abspath("${path.module}/cloudbuild.yaml")
+      IMAGE   = local.runner_image
+    }
+  }
+}
+
 resource "google_cloud_run_v2_job" "job" {
   name     = var.name
   location = var.region
@@ -62,7 +102,7 @@ resource "google_cloud_run_v2_job" "job" {
       max_retries     = var.max_retries
 
       containers {
-        image   = var.image
+        image   = terraform_data.runner_image.output
         command = var.command
         args    = var.args
 

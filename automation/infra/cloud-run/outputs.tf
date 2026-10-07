@@ -22,3 +22,8 @@ output "runner_state_bucket" {
   description = "Bucket holding runner/infra's Terraform state: run_tests.py's --state-bucket."
   value       = google_storage_bucket.runner_state.name
 }
+
+output "runner_image" {
+  description = "The runner image the job runs, tagged by the hash of its sources."
+  value       = terraform_data.runner_image.output
+}

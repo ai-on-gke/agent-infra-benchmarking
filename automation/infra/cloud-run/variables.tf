@@ -20,11 +20,6 @@ variable "name" {
   }
 }
 
-variable "image" {
-  description = "Container image the job runs."
-  type        = string
-}
-
 variable "command" {
   description = "Overrides the image's entrypoint. Empty keeps it."
   type        = list(string)

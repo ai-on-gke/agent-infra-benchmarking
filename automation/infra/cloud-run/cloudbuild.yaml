@@ -1,0 +1,12 @@
+# Builds and pushes the runner image, from automation/ as the source:
+#
+#   gcloud builds submit automation --config=automation/infra/cloud-run/cloudbuild.yaml \
+#     --ignore-file=.dockerignore --substitutions=_IMAGE=IMAGE
+#
+# main.tf runs it whenever the image's sources change.
+
+steps:
+  - name: gcr.io/cloud-builders/docker@sha256:40c2fb4fcd0ad51376eef166c2e7b2b40a3508d5776e2bf33db3783ab39d0f2e
+    args: ["build", "--platform=linux/amd64", "-f", "runner/Dockerfile", "-t", "${_IMAGE}", "."]
+
+images: ["${_IMAGE}"]
