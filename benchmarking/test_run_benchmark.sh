@@ -26,7 +26,7 @@ cd "${ROOT}"
 
 TEST_CASE='{
   "type": "locust",
-  "worker-count": 1,
+  "worker-count": 10,
   "sandbox-class": "gvisor",
   "master": {
     "run-time": "1m",
