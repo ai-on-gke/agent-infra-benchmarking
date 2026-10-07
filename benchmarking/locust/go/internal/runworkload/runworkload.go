@@ -233,6 +233,7 @@ func initRunWorkload(cfg *userclass.Config) (taskFn func(), shutdown func(contex
 		opts.Timeout = DefaultTimeout
 	}
 	rt := &runWorkloadRuntime{cfg: cfg, opts: opts, workload: wl, egressHosts: hosts}
+	rt.run, rt.endRun = context.WithCancelCause(context.Background())
 	return rt.iterate, rt.shutdown
 }
 
@@ -253,6 +254,23 @@ type runWorkloadRuntime struct {
 	// later one only while that has not yet worked.
 	atespaceMu    sync.Mutex
 	atespaceReady bool
+
+	// The context every iteration's calls run under, cancelled with
+	// errRunEnded when the teardown starts. Nil (as in tests that build the
+	// runtime by hand) runs them under context.Background().
+	run    context.Context
+	endRun context.CancelCauseFunc
+}
+
+// errRunEnded is the cause the run's context is cancelled with when the
+// teardown starts.
+var errRunEnded = errors.New("the run ended")
+
+// cutOff reports whether err is a call the end of the run cut off rather than
+// a result. locust records nothing for a user it stops mid-request either; an
+// instruction the run's last seconds interrupt says nothing about the system.
+func cutOff(ctx context.Context, err error) bool {
+	return err != nil && errors.Is(context.Cause(ctx), errRunEnded)
 }
 
 func (r *runWorkloadRuntime) dynamicWait() time.Duration {
@@ -281,7 +299,10 @@ func (r *runWorkloadRuntime) iterate() {
 	}
 	defer r.inflight.leave()
 
-	ctx := context.Background()
+	ctx := r.run
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
@@ -306,6 +327,10 @@ func (r *runWorkloadRuntime) iterate() {
 	user := val.(*runWorkloadUser)
 
 	if call, err := user.cycle(ctx, r.opts.ResumeMode); err != nil {
+		// The teardown, which cut it off, removes the actor itself.
+		if cutOff(ctx, err) {
+			return
+		}
 		r.discard(ctx, gid, user, call, err)
 		time.Sleep(r.dynamicWait())
 		return
@@ -387,6 +412,13 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, opts Options) (*runW
 // iterations are still in flight (see inflight.go) and the walk below has to
 // happen after the last actor has been recorded, not during it.
 func (r *runWorkloadRuntime) shutdown(ctx context.Context) {
+	// In-flight calls are cut off first, so the drain waits seconds rather than
+	// the rest of an instruction: an openclaw turn takes far longer than the
+	// teardown has. What they were doing is not recorded; see cutOff.
+	if r.endRun != nil {
+		r.endRun(errRunEnded)
+	}
+
 	// The drain takes a slice of the caller's budget rather than all of it, so
 	// that one wedged iteration cannot spend every second the suspend and
 	// delete calls need — turning a drain meant to prevent leaked actors into
@@ -536,7 +568,7 @@ func (u *runWorkloadUser) cycle(ctx context.Context, mode string) (call string, 
 	defer span.End()
 
 	start := time.Now()
-	defer func() { u.recordWindow(span, cycleTimeMetric, time.Since(start), err) }()
+	defer func() { u.recordWindow(ctx, span, cycleTimeMetric, time.Since(start), err) }()
 
 	if err := u.measureTTFI(ctx, mode); err != nil {
 		return ttfiMetric, err
@@ -573,19 +605,22 @@ func (u *runWorkloadUser) measureTTFI(ctx context.Context, mode string) error {
 	start := time.Now()
 	if mode == ResumeModeExplicit {
 		if err := u.resume(ctx); err != nil {
-			u.recordWindow(span, ttfiMetric, time.Since(start), err)
+			u.recordWindow(ctx, span, ttfiMetric, time.Since(start), err)
 			return err
 		}
 	}
 
 	err := u.executeInstruction(ctx)
-	u.recordWindow(span, ttfiMetric, time.Since(start), err)
+	u.recordWindow(ctx, span, ttfiMetric, time.Since(start), err)
 	return err
 }
 
 // recordWindow closes out the window reported as name, as a success or as a
 // failure over the wait it spent.
-func (u *runWorkloadUser) recordWindow(span trace.Span, name string, total time.Duration, err error) {
+func (u *runWorkloadUser) recordWindow(ctx context.Context, span trace.Span, name string, total time.Duration, err error) {
+	if cutOff(ctx, err) {
+		return
+	}
 	span.SetAttributes(attribute.Float64("total_ms", boomerutil.MsFloat(total)))
 	boomerutil.LogSampledTrace(span, name, total, boomerutil.SourceClient, err)
 	if err != nil {
@@ -617,6 +652,9 @@ func (u *runWorkloadUser) executeInstruction(ctx context.Context) error {
 	})
 	service := time.Since(start)
 
+	if cutOff(ctx, err) {
+		return err
+	}
 	boomerutil.LogSampledTrace(span, executionTimeMetric, service, boomerutil.SourceClient, err)
 	if err != nil {
 		bmetrics.RecordFailure("http", executionTimeMetric, u.userClass, service, err.Error())
@@ -762,6 +800,9 @@ func (u *runWorkloadUser) tracedCall(ctx context.Context, name string, do func(c
 	}
 	if source == boomerutil.SourceServer {
 		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(latency)))
+	}
+	if cutOff(ctx, err) {
+		return err
 	}
 	boomerutil.LogSampledTrace(span, name, latency, source, err)
 	if err != nil {

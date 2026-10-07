@@ -797,3 +797,74 @@ func TestDeletingAnActorAlreadyGoneSucceeds(t *testing.T) {
 		t.Fatalf("delete: got %v, want nil", err)
 	}
 }
+
+// failureCount is how many failures of the named request have been recorded,
+// summed over every user class. The counter is a package global.
+func failureCount(t *testing.T, name string) float64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	var total float64
+	for _, mf := range families {
+		if mf.GetName() != "locust_requests_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+			if labels["name"] == name && labels["status"] == "failure" {
+				total += m.GetCounter().GetValue()
+			}
+		}
+	}
+	return total
+}
+
+// An instruction still in flight when the run ends is cut off, not waited for,
+// and is neither a failure nor a reason to discard the actor: the teardown
+// removes it.
+func TestTheEndOfTheRunCutsOffAnInstructionWithoutAFailure(t *testing.T) {
+	ctrl := &fakeControlClient{}
+	cfg := newTestConfig(t, &pingServer{PingDelay: 5 * time.Second}, &userclass.Config{APIStub: ctrl})
+	rt := &runWorkloadRuntime{cfg: cfg, workload: gluttonWorkload{}}
+	rt.run, rt.endRun = context.WithCancelCause(context.Background())
+
+	before := map[string]float64{}
+	for _, name := range []string{ttfiMetric, cycleTimeMetric, executionTimeMetric} {
+		before[name] = failureCount(t, name)
+	}
+
+	// Users are keyed by goroutine, so both iterations run on this one: the
+	// first creates the actor, the second resumes it and sends the slow
+	// instruction.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.iterate()
+		rt.iterate()
+	}()
+	for ctrl.countCalls("ResumeActor") == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	start := time.Now()
+	rt.shutdown(context.Background())
+	<-done
+
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("teardown took %v; the instruction should have been cut off", elapsed)
+	}
+	for name, n := range before {
+		if got := failureCount(t, name) - n; got != 0 {
+			t.Errorf("%s failures: got %v more, want none", name, got)
+		}
+	}
+	if got := ctrl.countCalls("DeleteActor"); got != 1 {
+		t.Errorf("DeleteActor calls: got %d, want the teardown's one", got)
+	}
+}
