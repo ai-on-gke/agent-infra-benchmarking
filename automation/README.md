@@ -20,11 +20,12 @@ builds its image; the Cloud Run job runs
 
 ## Preparing
 
-1. Set the values the steps below use: the GCP project, the region, and the
-   bucket that will hold `infra/cloud-run`'s Terraform state:
+1. Set the values the steps below use: the GCP project, the region, the
+   bucket that will hold `infra/cloud-run`'s Terraform state, and the name of
+   the resources `infra/cloud-run` creates:
 
    ```bash
-   export PROJECT_ID=<YOUR_PROJECT> REGION=us-central1 STATE_BUCKET=agent-substrate-auto-benchmarking-state
+   export PROJECT_ID='<YOUR_PROJECT>' REGION=us-central1 STATE_BUCKET=agent-substrate-auto-benchmarking-state DEFAULT_RESOURCE_NAME=bench-automation
    ```
 
 2. Log in to `gcloud`:
@@ -69,13 +70,47 @@ builds its image; the Cloud Run job runs
    gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$PROJECT_NUMBER-compute@developer.gserviceaccount.com" --role=roles/cloudbuild.builds.builder --condition=None
    ```
 
-### Running `run_tests.py` locally
+## Deploying
 
-Install PyYAML, e.g. in a virtualenv:
+With the variables from [Preparing](#preparing) still exported:
 
-```bash
-pip install -r automation/runner/requirements.txt
-```
+1. Initialize `infra/cloud-run` with its state in the bucket:
+
+   ```bash
+   terraform -chdir=automation/infra/cloud-run init -backend-config=bucket="$STATE_BUCKET" -backend-config=prefix=automation/cloud-run
+   ```
+
+2. Pass its variables through the environment, including the arguments the
+   Cloud Run job gives `run_tests.py`. The runner state bucket is the one
+   `infra/cloud-run` creates, named `<project>-<default_resource_name>`:
+
+   ```bash
+   export TF_VAR_project_id="$PROJECT_ID" TF_VAR_region="$REGION" TF_VAR_default_resource_name="$DEFAULT_RESOURCE_NAME"
+   ```
+
+   ```bash
+   export TF_VAR_args="[\"--project-id=$PROJECT_ID\", \"--region=$REGION\", \"--state-bucket=$PROJECT_ID-$DEFAULT_RESOURCE_NAME\"]"
+   ```
+
+   To run it on a schedule, also set a cron schedule, e.g. every day at 3am
+   UTC. Without one it only runs when started by hand:
+
+   ```bash
+   export TF_VAR_schedule='0 3 * * *'
+   ```
+
+3. Apply. This also builds the runner image on Cloud Build, which takes a few
+   minutes, and again whenever the commit or the image's files change:
+
+   ```bash
+   terraform -chdir=automation/infra/cloud-run apply
+   ```
+
+4. Run it once, now, and wait for it to finish:
+
+   ```bash
+   gcloud run jobs execute "$DEFAULT_RESOURCE_NAME" --project="$PROJECT_ID" --region="$REGION" --wait
+   ```
 
 ## Cleanup
 
