@@ -287,8 +287,9 @@ times the pieces. The request names in the CSVs are:
 ### Which file is authoritative
 
 `locust_stats.csv` / `locust_stats_history.csv` are the numbers to quote.
-locust records response times at 1 ms resolution and counts failures, so its
-percentiles are exact.
+locust records response times at 1 ms resolution, so its percentiles are exact
+rather than snapped to a bucket bound, and they include failed requests, not
+just successes.
 
 `stats.csv` is the **Prometheus mirror** — the same run read back out of the
 worker's histogram so a record survives the pod. That histogram uses
@@ -311,8 +312,8 @@ in the example run:
   scattered seconds and push p99.9/max up with them; across repeats the same
   stall shows at ~6–9 s. That is what a ~1 s p99 is made of — not a uniformly
   slower run. **Attribute the stall before publishing a p99.** The leading
-  suspect is node-level I/O pressure (see the disk notes in the review); a p50
-  headline plus a named, understood tail is honest, a bare p99 is not.
+  suspect is node-level I/O pressure on the worker nodes; a p50 headline plus a
+  named, understood tail is honest, a bare p99 is not.
 
 ### Repeats
 

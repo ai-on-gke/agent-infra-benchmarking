@@ -16,6 +16,9 @@ showed.
   it: ~30 `c2-standard-16` gVisor worker nodes in `us-central1-a` (the shipped
   `sandboxed` pool) plus the `default` node. Future runs capture this in
   `run.json` instead of a sentence here.
+- **Age:** it also predates the harness fix that creates the atespace once per
+  run, so its `CreateAtespace` count in the CSVs is one per actor (~102), not
+  the single call a current run makes. The latency rows below are unaffected.
 - **Sample size:** one. Not a repeated measurement — see
   [Repeats](../../README.md#repeats) before comparing it to anything.
 
@@ -26,16 +29,18 @@ Prometheus mirror). Milliseconds.
 
 | Row | count | fail | p50 | p90 | p99 | p99.9 | max | req/s |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `TTFI` | 24894 | 1 | 250 | 380 | 1000 | 3300 | ~13000 | 83.3 |
+| `TTFI` | 24894 | 1 | 250 | 380 | 1000 | 3300 | 13378 | 83.3 |
 | `CycleTime` | 24827 | 2 | 760 | 1100 | 2400 | 4900 | 13958 | 83.0 |
 | `Resume` | 24894 | 0 | 250 | 380 | 1000 | 3300 | 13378 | 83.3 |
 | `Suspend` | 24826 | 1 | 480 | 690 | 1700 | 3200 | 12238 | 83.0 |
 | `ExecutionTime` | 24894 | 1 | 4 | 5 | 7 | 8 | 24 | 83.3 |
 
-Throughput saturates at ~83 resume/s. Five requests failed over the run
-(`locust_failures.csv`): four are one `HTTP 421: misdirected request` cycle
-(the router used a worker assignment that had just gone stale), and one is a
-`Suspend` that came back `Unavailable`.
+Throughput saturates at ~83 resume/s. The five failure rows in
+`locust_failures.csv` trace to just two underlying events: one
+`HTTP 421: misdirected request` (the router used a worker assignment that had
+just gone stale), counted under `TTFI`, `ExecutionTime` and the `CycleTime`
+around them; and one `SuspendActor` that came back `Unavailable`, counted under
+`Suspend` and its `CycleTime`.
 
 ## The p99 is a handful of stalls, not a slow run
 
