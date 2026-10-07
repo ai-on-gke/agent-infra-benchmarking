@@ -1,4 +1,4 @@
 project_id = "<YOUR_PROJECT_ID>"
 region     = "us-central1"
 
-name = "<PICK_YOUR_NAME>"
+default_resource_name = "<PICK_YOUR_NAME>"

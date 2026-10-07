@@ -7,7 +7,7 @@ resource "google_project_service" "artifactregistry" {
 # Destroying it deletes the images in it too.
 resource "google_artifact_registry_repository" "images" {
   location      = var.region
-  repository_id = var.name
+  repository_id = var.default_resource_name
   format        = "DOCKER"
 
   depends_on = [google_project_service.artifactregistry]

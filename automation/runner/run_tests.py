@@ -96,7 +96,11 @@ def main() -> None:
     # on it, rather than dying, still destroys the infra.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit("run_tests: stopped by SIGTERM"))
 
-    tf_vars = [f"-var=project_id={args.project_id}", f"-var=region={args.region}", f"-var=name={args.name}"]
+    tf_vars = [
+        f"-var=project_id={args.project_id}",
+        f"-var=region={args.region}",
+        f"-var=default_resource_name={args.name}",
+    ]
     try:
         # -reconfigure, as the .terraform/ left by the last execution names its prefix.
         terraform(
