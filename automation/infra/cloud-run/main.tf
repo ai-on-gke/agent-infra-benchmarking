@@ -1,5 +1,5 @@
 locals {
-  runner_state_bucket = var.runner_state_bucket != "" ? var.runner_state_bucket : "${var.project_id}-${var.name}"
+  runner_state_bucket = var.runner_state_bucket != "" ? var.runner_state_bucket : "${var.project_id}-${var.default_resource_name}"
 
   # automation/, the runner image's build context.
   runner_context = abspath("${path.module}/../..")
@@ -38,8 +38,8 @@ resource "google_project_service" "services" {
 # Holds only the runner state bucket here: grant it whatever else the job's
 # container needs.
 resource "google_service_account" "job" {
-  account_id   = var.name
-  display_name = "Cloud Run job ${var.name}"
+  account_id   = var.default_resource_name
+  display_name = "Cloud Run job ${var.default_resource_name}"
 }
 
 # Holds the Terraform state of runner/infra, one prefix per execution.
@@ -68,7 +68,7 @@ resource "google_storage_bucket_iam_member" "job_runner_state" {
 
 resource "google_artifact_registry_repository" "images" {
   location      = var.region
-  repository_id = var.name
+  repository_id = var.default_resource_name
   format        = "DOCKER"
 
   depends_on = [google_project_service.services]
@@ -103,7 +103,7 @@ data "google_artifact_registry_docker_image" "runner" {
 }
 
 resource "google_cloud_run_v2_job" "job" {
-  name     = var.name
+  name     = var.default_resource_name
   location = var.region
   # Lets terraform destroy delete the job.
   deletion_protection = false
@@ -148,9 +148,9 @@ resource "google_cloud_run_v2_job" "job" {
 resource "google_service_account" "scheduler" {
   count = var.schedule == null ? 0 : 1
 
-  # account_id is capped at 30 characters, the same as var.name.
-  account_id   = "${substr(var.name, 0, 24)}-sched"
-  display_name = "Cloud Scheduler trigger of ${var.name}"
+  # account_id is capped at 30 characters, the same as var.default_resource_name.
+  account_id   = "${substr(var.default_resource_name, 0, 24)}-sched"
+  display_name = "Cloud Scheduler trigger of ${var.default_resource_name}"
 }
 
 resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
@@ -165,7 +165,7 @@ resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
 resource "google_cloud_scheduler_job" "trigger" {
   count = var.schedule == null ? 0 : 1
 
-  name      = var.name
+  name      = var.default_resource_name
   region    = var.region
   schedule  = var.schedule
   time_zone = var.time_zone

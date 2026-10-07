@@ -9,14 +9,13 @@ variable "region" {
   default     = "us-central1"
 }
 
-# The service account's account_id is the strictest of the names this takes.
-variable "name" {
-  description = "Name of the Cloud Run job, its service account and the Cloud Scheduler job."
+variable "default_resource_name" {
+  description = "Name of every resource this config creates, unless a more specific variable sets one."
   type        = string
 
   validation {
-    condition     = can(regex("^[a-z][-a-z0-9]{4,28}[a-z0-9]$", var.name))
-    error_message = "name must be 6-30 characters of lowercase letters, digits and hyphens, starting with a letter and not ending with a hyphen."
+    condition     = can(regex("^[a-z][-a-z0-9]{4,28}[a-z0-9]$", var.default_resource_name))
+    error_message = "default_resource_name must be 6-30 characters of lowercase letters, digits and hyphens, starting with a letter and not ending with a hyphen."
   }
 }
 
@@ -76,7 +75,7 @@ variable "time_zone" {
 
 # Bucket names are global, hence the project ID in the default.
 variable "runner_state_bucket" {
-  description = "Name of the bucket holding runner/infra's Terraform state. Empty takes <project_id>-<name>."
+  description = "Name of the bucket holding runner/infra's Terraform state. Empty takes <project_id>-<default_resource_name>."
   type        = string
   default     = ""
 }
