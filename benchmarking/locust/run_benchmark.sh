@@ -52,7 +52,6 @@ TEMPLATES_DIR=benchmarking/workloads/manifests
 
 POD_START_TIMEOUT_SECS=300
 WAIT_TIMEOUT_SECS=3600
-PROGRESS_EVERY_SECS=30
 
 TEST_CASE_NAME=""
 TEST_CASE_JSON=""
@@ -175,11 +174,31 @@ wait_for_master_ready() {
   return 1
 }
 
+MASTER_LOGS_PID=""
+
+follow_master_logs() {
+  kubectl logs --follow "job/${MASTER_JOB}" --namespace="${NAMESPACE}" &
+  MASTER_LOGS_PID=$!
+}
+
+# Gives the stream up to $1 seconds to print the master's last lines on its
+# own, which it ends with once the master exits.
+stop_master_logs() {
+  [[ -n "${MASTER_LOGS_PID}" ]] || return 0
+  local deadline=$((SECONDS + ${1:-0}))
+  while kill -0 "${MASTER_LOGS_PID}" 2>/dev/null && ((SECONDS < deadline)); do
+    sleep 1
+  done
+  kill "${MASTER_LOGS_PID}" 2>/dev/null || true
+  wait "${MASTER_LOGS_PID}" 2>/dev/null || true
+  MASTER_LOGS_PID=""
+}
+trap stop_master_logs EXIT
+
 # Waits for both Jobs to end rather than the first to fail: each one's log is
 # part of the run.
 wait_for_jobs() {
-  local deadline=$((SECONDS + WAIT_TIMEOUT_SECS)) started=${SECONDS}
-  local next_report=$((SECONDS + PROGRESS_EVERY_SECS))
+  local deadline=$((SECONDS + WAIT_TIMEOUT_SECS))
   local job succeeded failed done_count failed_jobs
   echo "Waiting for the run to finish..."
   while ((SECONDS < deadline)); do
@@ -195,6 +214,7 @@ wait_for_jobs() {
       fi
     done
     if [[ "${done_count}" -eq 2 ]]; then
+      stop_master_logs 10
       if [[ "${#failed_jobs[@]}" -eq 0 ]]; then
         echo "${MASTER_JOB} and ${WORKER_JOB} completed."
         echo "  kubectl logs job/${MASTER_JOB} -n ${NAMESPACE}"
@@ -205,10 +225,6 @@ wait_for_jobs() {
         echo "  kubectl logs job/${job} -n ${NAMESPACE}" >&2
       done
       return 1
-    fi
-    if ((SECONDS >= next_report)); then
-      echo "  $((SECONDS - started))s/${WAIT_TIMEOUT_SECS}s — still running"
-      next_report=$((SECONDS + PROGRESS_EVERY_SECS))
     fi
     sleep 5
   done
@@ -262,6 +278,7 @@ echo "  master: ${LOCUST_IMAGE} ${LOCUST_MASTER_ARGS}"
 echo "  worker: ${BOOMER_IMAGE} ${BOOMER_WORKER_ARGS}"
 envsubst <"${MANIFESTS_DIR}/master-job.yaml" | kubectl apply -f -
 wait_for_master_ready
+follow_master_logs
 envsubst <"${MANIFESTS_DIR}/worker-job.yaml" | kubectl apply -f -
 
 wait_for_jobs
