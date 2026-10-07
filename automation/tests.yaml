@@ -1,0 +1,61 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Named benchmark runs. Each case is the --test-case JSON of
+# benchmarking/run_benchmark.sh, and its name the --test-case-name:
+#
+#   ./benchmarking/run_benchmark.sh --test-case-name glutton \
+#     --test-case "$(yq -c '.cases.glutton' automation/tests.yaml)"
+#
+# `type` picks benchmarking/<type>/run_benchmark.sh, which documents the rest.
+# For locust: `worker-count` and `sandbox-class` shape the WorkerPool, and
+# every key in `master` and `worker` becomes `--key=value` on that process.
+#
+# `repeats` is how many times the case runs. Nothing reads it yet.
+#
+# Varying the load or the pool means another case, so that every run is
+# reproducible from the name it is recorded under: benchmark-test-case is the
+# pod label, and test_case the Prometheus label relabeled from it.
+
+cases:
+  glutton:
+    type: locust
+    repeats: 3
+    worker-count: 100
+    sandbox-class: gvisor
+    master:
+      run-time: 3m
+      users: 100
+      spawn-rate: 10
+      warm-up: 30s
+    worker:
+      workload-name: glutton
+      workload-template: glutton
+      resume-mode: explicit
+
+  openclaw:
+    type: locust
+    repeats: 3
+    worker-count: 100
+    sandbox-class: gvisor
+    master:
+      run-time: 3m
+      users: 100
+      spawn-rate: 10
+      warm-up: 30s
+    worker:
+      workload-name: openclaw
+      workload-template: openclaw
+      workload-timeout: 120s
+      resume-mode: explicit
