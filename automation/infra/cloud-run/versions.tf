@@ -1,8 +1,9 @@
 terraform {
   required_version = ">= 1.5"
 
-  # No backend here, so state is local by default. A backend_override.tf
-  # (gitignored) moves it to a GCS bucket instead.
+  # The bucket and prefix are given to terraform init:
+  #   terraform init -backend-config=bucket=BUCKET -backend-config=prefix=automation/cloud-run
+  backend "gcs" {}
 
   required_providers {
     google = {
