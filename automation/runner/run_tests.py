@@ -14,15 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Applies the runner's infra/, then runs the cases in tests.yaml one after
-another: every case in the order listed, or the ones --test-case-name names in
-the order given."""
+"""Applies the runner's infra/, runs the cases in tests.yaml one after another
+(every case in the order listed, or the ones --test-case-name names in the
+order given), and destroys the infra again."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import shutil
+import signal
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -48,31 +49,14 @@ def load_cases(tests_file: Path) -> dict[str, dict]:
     return cases
 
 
-def apply_infra(project_id: str, region: str, name: str, state_bucket: str) -> None:
-    def terraform(*args: str) -> None:
-        subprocess.run(["terraform", f"-chdir={INFRA_DIR}", *args], check=True)
-
-    # -reconfigure, as the .terraform/ left by the last execution names its prefix.
-    terraform(
-        "init",
-        "-input=false",
-        "-reconfigure",
-        f"-backend-config=bucket={state_bucket}",
-        f"-backend-config=prefix={STATE_PREFIX}/{name}",
-    )
-    terraform(
-        "apply",
-        "-input=false",
-        "-auto-approve",
-        f"-var=project_id={project_id}",
-        f"-var=region={region}",
-        f"-var=name={name}",
-    )
+def terraform(*args: str) -> None:
+    subprocess.run(["terraform", f"-chdir={INFRA_DIR}", *args], check=True)
 
 
 def run_case(name: str, case: dict) -> None:
     # A no-op for now.
-    print(f"{name}: {json.dumps(case)}")
+    # Flushed to keep it in order with terraform's output when piped.
+    print(f"{name}: {json.dumps(case)}", flush=True)
 
 
 def main() -> None:
@@ -107,13 +91,30 @@ def main() -> None:
 
     if not shutil.which("terraform"):
         sys.exit("run_tests: terraform is required to apply the infra")
+
+    # Cloud Run stops a task that outlives its timeout with SIGTERM; exiting
+    # on it, rather than dying, still destroys the infra.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit("run_tests: stopped by SIGTERM"))
+
+    tf_vars = [f"-var=project_id={args.project_id}", f"-var=region={args.region}", f"-var=name={args.name}"]
     try:
-        apply_infra(args.project_id, args.region, args.name, args.state_bucket)
+        # -reconfigure, as the .terraform/ left by the last execution names its prefix.
+        terraform(
+            "init",
+            "-input=false",
+            "-reconfigure",
+            f"-backend-config=bucket={args.state_bucket}",
+            f"-backend-config=prefix={STATE_PREFIX}/{args.name}",
+        )
+        try:
+            terraform("apply", "-input=false", "-auto-approve", *tf_vars)
+            for name in names:
+                run_case(name, cases[name])
+        finally:
+            # Also after a failed apply, which may have created part of the infra.
+            terraform("destroy", "-input=false", "-auto-approve", *tf_vars)
     except subprocess.CalledProcessError as exc:
         sys.exit(f"run_tests: terraform {exc.cmd[2]} failed in {INFRA_DIR}")
-
-    for name in names:
-        run_case(name, cases[name])
 
 
 if __name__ == "__main__":
