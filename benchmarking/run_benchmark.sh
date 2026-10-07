@@ -126,10 +126,12 @@ SANDBOX_CLASS="$(jq -r '."sandbox-class" // "gvisor"' <<<"${TEST_CASE_JSON}")"
 [[ "${WORKER_COUNT}" =~ ^[0-9]+$ ]] || die "\`worker-count\` must be a whole number, got '${WORKER_COUNT}'."
 [[ "${SANDBOX_CLASS}" == gvisor || "${SANDBOX_CLASS}" == microvm ]] ||
   die "\`sandbox-class\` must be gvisor or microvm, got '${SANDBOX_CLASS}'."
-# Empty deploys workloads/deploy.sh's default set of templates.
 TEMPLATE="$(jq -r '."workload-template" // ."workload-name" // empty' <<<"${TEST_CASE_JSON}")"
-if [[ "${NO_DEPLOY}" -eq 0 && -n "${TEMPLATE}" && ! -f "${TEMPLATES_DIR}/${TEMPLATE}-template.yaml.tmpl" ]]; then
-  die "no ${TEMPLATES_DIR}/${TEMPLATE}-template.yaml.tmpl to deploy the case's workload from."
+if [[ "${NO_DEPLOY}" -eq 0 ]]; then
+  [[ -n "${TEMPLATE}" ]] ||
+    die "the test case names no \`workload-template\` or \`workload-name\` to deploy; --no-deploy runs on what is deployed."
+  [[ -f "${TEMPLATES_DIR}/${TEMPLATE}-template.yaml.tmpl" ]] ||
+    die "no ${TEMPLATES_DIR}/${TEMPLATE}-template.yaml.tmpl to deploy the case's workload from."
 fi
 [[ -f "${SUBSTRATE_DIR}/go.mod" ]] ||
   die "the substrate submodule is not checked out: git submodule update --init dependency-repos/substrate"
@@ -281,7 +283,7 @@ kubectl delete job "${MASTER_JOB}" "${WORKER_JOB}" --namespace="${NAMESPACE}" \
 if [[ "${NO_DEPLOY}" -eq 0 ]]; then
   echo
   echo "=== Deploying workloads ==="
-  WORKLOAD_TEMPLATES="${TEMPLATE}" benchmarking/workloads/deploy.sh --deploy --sandbox-class "${SANDBOX_CLASS}"
+  benchmarking/workloads/deploy.sh --deploy --workload-template "${TEMPLATE}" --sandbox-class "${SANDBOX_CLASS}"
   echo
 fi
 

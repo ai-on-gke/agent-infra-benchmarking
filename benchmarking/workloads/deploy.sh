@@ -43,11 +43,10 @@ fi
 
 MANIFEST_DIR="benchmarking/workloads/manifests"
 POOL_MANIFEST="${MANIFEST_DIR}/worker-pool.yaml.tmpl"
-# The benchmark ActorTemplates: <name>-template.yaml.tmpl each, created
-# through the ate API in the benchmark-workloads atespace. WORKLOAD_TEMPLATES
-# overrides the default set — the usermem and kernelmem templates (for the
-# matching locust tests) are not deployed by default.
-read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-glutton openclaw}"
+# The benchmark ActorTemplates named by --workload-template: a
+# <name>-template.yaml.tmpl each, created through the ate API in the
+# benchmark-workloads atespace.
+TEMPLATES=()
 
 if [[ ! -f "${POOL_MANIFEST}" ]]; then
   echo "Error: ${POOL_MANIFEST} not found in $(pwd)" >&2
@@ -78,6 +77,9 @@ usage() {
   echo "Options:"
   echo "  --deploy                    Substitute env vars and deploy workloads to the cluster using ko apply"
   echo "  --delete                    Substitute env vars and delete workloads from the cluster"
+  echo "  --workload-template NAME    ActorTemplate to deploy, from manifests/NAME-template.yaml.tmpl."
+  echo "                              Required with --deploy, and may be given more than once. With"
+  echo "                              --delete it narrows the delete; without it every template goes."
   echo "  --worker-count N            Number of WorkerPool replicas (default: 1)"
   echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
   echo "                              microvm requires dependency-repos/substrate/hack/install-microvm-deps.sh --install to have run."
@@ -377,6 +379,13 @@ while [[ "$#" -gt 0 ]]; do
     --delete)
       action="delete"
       ;;
+    --workload-template)
+      shift
+      TEMPLATES+=("$1")
+      ;;
+    --workload-template=*)
+      TEMPLATES+=("${1#*=}")
+      ;;
     --worker-count)
       shift
       WORKER_COUNT="$1"
@@ -437,6 +446,23 @@ if ! [[ "${WAIT_TIMEOUT_SECS}" =~ ^[0-9]+$ ]]; then
   echo "Error: --wait-timeout must be a whole number of seconds like 300, got '${WAIT_TIMEOUT_SECS}'" >&2
   exit 1
 fi
+
+if [[ "${#TEMPLATES[@]}" -eq 0 ]]; then
+  if [[ "${action}" == "deploy" ]]; then
+    echo "Error: --deploy needs at least one --workload-template." >&2
+    exit 1
+  fi
+  for manifest in "${MANIFEST_DIR}"/*-template.yaml.tmpl; do
+    manifest="${manifest##*/}"
+    TEMPLATES+=("${manifest%-template.yaml.tmpl}")
+  done
+fi
+for template in "${TEMPLATES[@]}"; do
+  if [[ ! -f "${MANIFEST_DIR}/${template}-template.yaml.tmpl" ]]; then
+    echo "Error: no ${MANIFEST_DIR}/${template}-template.yaml.tmpl for --workload-template ${template}." >&2
+    exit 1
+  fi
+done
 
 if [[ "${action}" == "deploy" ]]; then
   build_kubectl_ate
