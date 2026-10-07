@@ -44,6 +44,14 @@ BENCHMARK_RUNNER_KSA="${BENCHMARK_RUNNER_KSA:-benchmark-runner}"
 # Case keys that are not worker flags; every other key becomes `--key=value`.
 NON_WORKER_KEYS='["duration","users","spawn-rate","worker-count","sandbox-class","max-failure-ratio","warm-up","repeats"]'
 
+# Have to match the WorkerPool in the manifest.
+POOL_MANIFEST=benchmarking/workloads/manifests/worker-pool.yaml.tmpl
+POOL_NAME=benchmark-ateom
+POOL_NAMESPACE=benchmark-workloads
+# ko resolves the pool's ko:// workerImage, and only works inside the submodule.
+SUBSTRATE_DIR="${ROOT}/dependency-repos/substrate"
+
+POOL_TIMEOUT_SECS=300
 POD_START_TIMEOUT_SECS=300
 WAIT_TIMEOUT_SECS=3600
 PROGRESS_EVERY_SECS=30
@@ -108,6 +116,14 @@ jq -e 'has("duration") and has("users")' <<<"${TEST_CASE_JSON}" >/dev/null ||
 # spawn-rate defaults to the user count, putting the whole load on at once.
 TEST_CASE_JSON="$(jq -c '."spawn-rate" //= .users' <<<"${TEST_CASE_JSON}")"
 
+WORKER_COUNT="$(jq -r '."worker-count" // 1' <<<"${TEST_CASE_JSON}")"
+SANDBOX_CLASS="$(jq -r '."sandbox-class" // "gvisor"' <<<"${TEST_CASE_JSON}")"
+[[ "${WORKER_COUNT}" =~ ^[0-9]+$ ]] || die "\`worker-count\` must be a whole number, got '${WORKER_COUNT}'."
+[[ "${SANDBOX_CLASS}" == gvisor || "${SANDBOX_CLASS}" == microvm ]] ||
+  die "\`sandbox-class\` must be gvisor or microvm, got '${SANDBOX_CLASS}'."
+[[ -f "${SUBSTRATE_DIR}/go.mod" ]] ||
+  die "the substrate submodule is not checked out: git submodule update --init dependency-repos/substrate"
+
 master_args() {
   jq -c --arg file "/app/tests/${USER_CLASS}.py" --arg max_wait "${POD_START_TIMEOUT_SECS}" '
     ["-f", $file, "--headless", "-t", .duration, "-u", .users, "-r", ."spawn-rate",
@@ -120,6 +136,36 @@ worker_args() {
     ["--master-host=\($master)", "--user-class=\($class)"]
     + [to_entries[] | select(.key as $k | $skip | index($k) | not) | "--\(.key)=\(.value)"]' \
     <<<"${TEST_CASE_JSON}"
+}
+
+# Gives every run a new pool, so none starts on workers the last one warmed.
+# Deleted by name rather than through the manifest, which also carries the
+# namespace.
+recreate_worker_pool() {
+  echo "Deleting any previous ${POOL_NAME} WorkerPool..."
+  kubectl delete workerpool "${POOL_NAME}" --namespace="${POOL_NAMESPACE}" \
+    --ignore-not-found --wait=true
+  # The Deployment is garbage-collected after the pool; a new one of the same
+  # name would race it.
+  kubectl wait --for=delete "deployment/${POOL_NAME}" \
+    --namespace="${POOL_NAMESPACE}" --timeout="${POOL_TIMEOUT_SECS}s" 2>/dev/null || true
+
+  echo "Deploying ${POOL_NAME} WorkerPool (replicas=${WORKER_COUNT}, sandbox_class=${SANDBOX_CLASS})..."
+  sed -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
+      -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
+      "${POOL_MANIFEST}" | (cd "${SUBSTRATE_DIR}" && hack/run-tool.sh ko apply -f -)
+
+  kubectl wait --for=create "deployment/${POOL_NAME}" \
+    --namespace="${POOL_NAMESPACE}" --timeout="${POOL_TIMEOUT_SECS}s"
+  if ! kubectl rollout status "deployment/${POOL_NAME}" \
+      --namespace="${POOL_NAMESPACE}" --timeout="${POOL_TIMEOUT_SECS}s"; then
+    echo "Error: ${POOL_NAME} was not ready within ${POOL_TIMEOUT_SECS}s. Pending pods:" >&2
+    kubectl get pods --namespace="${POOL_NAMESPACE}" --field-selector=status.phase=Pending >&2 || true
+    echo "Scheduling events:" >&2
+    kubectl get events --namespace="${POOL_NAMESPACE}" \
+      --field-selector reason=FailedScheduling --sort-by=.lastTimestamp >&2 || true
+    return 1
+  fi
 }
 
 # Prints a Job's succeeded and failed counts as "succeeded|failed".
@@ -214,6 +260,9 @@ kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply
 echo "Deleting any previous ${MASTER_JOB} and ${WORKER_JOB}..."
 kubectl delete job "${MASTER_JOB}" "${WORKER_JOB}" --namespace="${NAMESPACE}" \
   --ignore-not-found --cascade=foreground --wait=true
+
+recreate_worker_pool
+echo
 
 echo "Running ${TEST_CASE_NAME} (run ${RUN_ID}):"
 echo "  master: ${LOCUST_IMAGE} ${LOCUST_MASTER_ARGS}"
