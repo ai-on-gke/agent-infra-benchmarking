@@ -104,7 +104,7 @@ die() {
 
 command -v jq &>/dev/null || die "jq is required to turn the test case into the Jobs' arguments."
 # The images the manifests name, with or without a build.
-LOCUST_IMAGE="$(image_ref benchmarking/locust/images.json locust-test)"
+LOCUST_IMAGE="$(image_ref benchmarking/locust/images.json locust-master)"
 BOOMER_IMAGE="$(image_ref benchmarking/locust/images.json boomer-worker)"
 
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dt%H%M%Sz)}"

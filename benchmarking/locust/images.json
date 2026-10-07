@@ -1,5 +1,5 @@
 {
-  "locust-test": {
+  "locust-master": {
     "description": "The locust master.",
     "dockerfile": "benchmarking/locust/master-image/Dockerfile",
     "context": "benchmarking/locust/master-image"
