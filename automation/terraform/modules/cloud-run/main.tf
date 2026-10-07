@@ -30,6 +30,7 @@ resource "google_project_service" "services" {
     var.schedule == null ? [] : ["cloudscheduler.googleapis.com"],
   ))
 
+  project = var.project_id
   service = each.value
   # Other deployments in the project may rely on these APIs.
   disable_on_destroy = false
@@ -38,12 +39,14 @@ resource "google_project_service" "services" {
 # Holds only the runner state bucket here: grant it whatever else the job's
 # container needs.
 resource "google_service_account" "job" {
+  project      = var.project_id
   account_id   = var.default_resource_name
   display_name = "Cloud Run job ${var.default_resource_name}"
 }
 
 # Holds the Terraform state of runner/infra, one prefix per execution.
 resource "google_storage_bucket" "runner_state" {
+  project  = var.project_id
   name     = local.runner_state_bucket
   location = var.region
 
@@ -67,6 +70,7 @@ resource "google_storage_bucket_iam_member" "job_runner_state" {
 }
 
 resource "google_artifact_registry_repository" "images" {
+  project       = var.project_id
   location      = var.region
   repository_id = var.default_resource_name
   format        = "DOCKER"
@@ -95,6 +99,7 @@ resource "terraform_data" "runner_image" {
 # The image just pushed, by digest: a rebuild of the same commit keeps the tag
 # but still changes the job's image.
 data "google_artifact_registry_docker_image" "runner" {
+  project       = var.project_id
   location      = google_artifact_registry_repository.images.location
   repository_id = google_artifact_registry_repository.images.repository_id
   image_name    = local.runner_image_name
@@ -103,6 +108,7 @@ data "google_artifact_registry_docker_image" "runner" {
 }
 
 resource "google_cloud_run_v2_job" "job" {
+  project  = var.project_id
   name     = var.default_resource_name
   location = var.region
   # Lets terraform destroy delete the job.
@@ -148,6 +154,7 @@ resource "google_cloud_run_v2_job" "job" {
 resource "google_service_account" "scheduler" {
   count = var.schedule == null ? 0 : 1
 
+  project = var.project_id
   # account_id is capped at 30 characters, the same as var.default_resource_name.
   account_id   = "${substr(var.default_resource_name, 0, 24)}-sched"
   display_name = "Cloud Scheduler trigger of ${var.default_resource_name}"
@@ -156,6 +163,7 @@ resource "google_service_account" "scheduler" {
 resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
   count = var.schedule == null ? 0 : 1
 
+  project  = var.project_id
   name     = google_cloud_run_v2_job.job.name
   location = google_cloud_run_v2_job.job.location
   role     = "roles/run.invoker"
@@ -165,6 +173,7 @@ resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
 resource "google_cloud_scheduler_job" "trigger" {
   count = var.schedule == null ? 0 : 1
 
+  project   = var.project_id
   name      = var.default_resource_name
   region    = var.region
   schedule  = var.schedule
