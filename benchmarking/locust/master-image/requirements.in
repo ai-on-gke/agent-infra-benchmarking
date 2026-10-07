@@ -13,10 +13,12 @@
 # limitations under the License.
 
 # The locust master image's Python: locust, which the locustfile in tests/ is
-# all it imports. requirements.txt is compiled from this with every transitive
-# dependency pinned and hashed, for the image's Python 3.11 on linux/amd64:
+# all it imports, and google-cloud-storage for upload.py. requirements.txt is
+# compiled from this with every transitive dependency pinned and hashed, for
+# the image's Python 3.11 on linux/amd64:
 #
 #   uv pip compile requirements.in --python-version 3.11 \
 #     --python-platform x86_64-manylinux_2_28 --generate-hashes -o requirements.txt
 
+google-cloud-storage==3.16.0
 locust==2.32.7

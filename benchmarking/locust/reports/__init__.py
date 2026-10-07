@@ -23,7 +23,6 @@ from pathlib import Path
 from .base import Report, RunContext
 from .cluster_vitals import ClusterVitalsReport
 from .custom_history import CustomHistoryReport
-from .upload import DEFAULT_PREFIX, UploadError, upload
 
 _REPORTS: dict[str, Report] = {
     r.name: r
@@ -34,12 +33,9 @@ _REPORTS: dict[str, Report] = {
 }
 
 __all__ = [
-    "DEFAULT_PREFIX",
     "RunContext",
-    "UploadError",
     "generate",
     "names",
-    "upload",
 ]
 
 

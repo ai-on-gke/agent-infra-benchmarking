@@ -93,16 +93,6 @@ spec:
               keyType: ECDSAP256
               credentialBundlePath: credential-bundle.pem
 ---
-# The account the pod runs as. infra/terraform-gke grants this exact
-# namespace/name pair objectCreator on the bucket through a principal://
-# subject, so no iam.gke.io annotation is needed here — but the two spellings
-# have to agree or the grant lands on nothing.
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: ${BENCHMARK_RUNNER_KSA}
-  namespace: benchmarking
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:

@@ -23,6 +23,8 @@ the repo README.
 import mimetypes
 from pathlib import Path
 
+from google.cloud import storage
+
 # Default subfolder under the bucket root. Beneath it, <run-id>/<test-case>/,
 # so a run's files stay together and two runs cannot collide.
 DEFAULT_PREFIX = "reports"
@@ -46,15 +48,10 @@ def upload(
     """Upload each path to <prefix>/<folder>/, under its location relative to
     `root`. Returns (path, gs_uri, error) per file.
 
-    The runner grants this objectCreator and nothing more, so an object that
-    already exists is a failure rather than an overwrite. A run runs each test
-    case once, which is what keeps that from happening.
+    The benchmark-runner account has objectCreator and nothing more, so an
+    object that already exists is a failure rather than an overwrite. A run
+    runs each test case once, which is what keeps that from happening.
     """
-    try:
-        from google.cloud import storage
-    except ImportError as exc:
-        raise UploadError(f"google-cloud-storage is not installed: {exc}") from exc
-
     try:
         bucket = storage.Client().bucket(bucket_name)
     except Exception as exc:

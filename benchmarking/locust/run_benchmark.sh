@@ -248,6 +248,8 @@ export LOCUST_IMAGE BOOMER_IMAGE BENCHMARK_RUNNER_KSA
 export BENCHMARK_RUN_ID="${RUN_ID}"
 export BENCHMARK_RECORD_NAME="${TEST_CASE_NAME}"
 export BENCHMARK_ONLY_SUMMARY=false
+# Where the master uploads its CSVs once it exits. Unset leaves them on the pod.
+export BENCHMARK_REPORT_BUCKET="${BUCKET_NAME:-}"
 LOCUST_MASTER_ARGS="$(master_args)"
 BOOMER_WORKER_ARGS="$(worker_args)"
 export LOCUST_MASTER_ARGS BOOMER_WORKER_ARGS
@@ -276,6 +278,11 @@ fi
 echo "Running ${TEST_CASE_NAME} (run ${RUN_ID}):"
 echo "  master: ${LOCUST_IMAGE} ${LOCUST_MASTER_ARGS}"
 echo "  worker: ${BOOMER_IMAGE} ${BOOMER_WORKER_ARGS}"
+if [[ -n "${BENCHMARK_REPORT_BUCKET}" ]]; then
+  echo "  reports: gs://${BENCHMARK_REPORT_BUCKET}/reports/${RUN_ID}/${TEST_CASE_NAME}/"
+else
+  echo "  reports: BUCKET_NAME is unset, so they stay on the master pod."
+fi
 envsubst <"${MANIFESTS_DIR}/master-job.yaml" | kubectl apply -f -
 wait_for_master_ready
 follow_master_logs

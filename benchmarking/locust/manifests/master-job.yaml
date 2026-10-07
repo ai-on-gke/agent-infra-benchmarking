@@ -14,7 +14,7 @@
 
 # The locust master of one benchmark run, ended by its own clock. Rendered and
 # submitted by run_locust_job.sh, which starts worker-job.yaml once this pod is
-# ready. The run's results are this pod's log.
+# ready. The run's results are this pod's log and the CSVs it uploads.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -35,6 +35,8 @@ spec:
         benchmark-test-case: "${BENCHMARK_RECORD_NAME}"
     spec:
       restartPolicy: Never
+      # The account the bucket's objectCreator grant names, for the upload.
+      serviceAccountName: ${BENCHMARK_RUNNER_KSA}
       # The master needs no Kubernetes API.
       automountServiceAccountToken: false
       # Time for the locustfile's stop_workers to wait out the worker's actor
@@ -44,9 +46,16 @@ spec:
       - name: locust
         image: ${LOCUST_IMAGE}
         imagePullPolicy: Always
-        # The load, from the test case; the image's entrypoint is locust.
+        # The load, from the test case; the image's entrypoint runs locust.
         args: ${LOCUST_MASTER_ARGS}
         env:
+        # Where run_master.py uploads locust's CSVs; empty keeps them here.
+        - name: REPORT_BUCKET
+          value: "${BENCHMARK_REPORT_BUCKET}"
+        - name: BENCHMARK_RUN_ID
+          value: "${BENCHMARK_RUN_ID}"
+        - name: BENCHMARK_TEST_CASE
+          value: "${BENCHMARK_RECORD_NAME}"
         # locust's own --only-summary. "false" is spelled out because locust
         # rejects an empty value instead of reading it as unset.
         - name: LOCUST_ONLY_SUMMARY
@@ -65,6 +74,17 @@ spec:
           requests:
             cpu: "1"
             memory: "512Mi"
+---
+# The account both Jobs run as. Here rather than in worker-job.yaml because
+# this Job is applied first. infra/terraform-gke grants this exact
+# namespace/name pair objectCreator on the bucket through a principal://
+# subject, so no iam.gke.io annotation is needed here — but the two spellings
+# have to agree or the grant lands on nothing.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${BENCHMARK_RUNNER_KSA}
+  namespace: benchmarking
 ---
 # Where the worker Job finds the master.
 apiVersion: v1

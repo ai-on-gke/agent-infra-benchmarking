@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The locust master: locust and the locustfile, nothing else. Its build
-# context is this directory.
+# The locust master: locust, the locustfile and run_master.py, which uploads
+# locust's CSVs once it exits. Its build context is this directory.
 #
 # Every base image is pinned by digest, the tag beside it saying which one it
 # was taken from, so a rebuild of the same commit is the same image.
@@ -27,9 +27,14 @@ FROM gcr.io/distroless/python3-debian12:latest@sha256:2fdb05402a2cf21cf78fdb3ba4
 WORKDIR /app
 COPY --from=pydeps /app/deps /app/deps
 COPY tests/ /app/tests/
+COPY run_master.py upload.py /app/
 
 ENV PYTHONPATH=/app/deps
 ENV PYTHONUNBUFFERED=1
 # locust's own -f, read from the environment so the arguments are only the run's.
 ENV LOCUST_LOCUSTFILE=/app/tests/runworkload.py
-ENTRYPOINT ["python3", "-m", "locust"]
+# locust's own --csv and --csv-full-history. run_master.py uploads this folder.
+ENV LOCUST_CSV=/app/reports/locust
+ENV LOCUST_CSV_FULL_HISTORY=true
+# Takes locust's arguments.
+ENTRYPOINT ["python3", "/app/run_master.py"]
