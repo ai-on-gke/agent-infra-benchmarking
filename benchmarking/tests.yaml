@@ -57,7 +57,65 @@ cases:
     sandbox-class: gvisor
     workload-name: glutton
     workload-template: glutton
-    resume-mode: explicit 
+    resume-mode: explicit
+    max-failure-ratio: 0.01
+
+  glutton-baseline:
+    suspend-disabled: true
+    repeats: 1
+    worker-count: 100
+    users: 100
+    spawn-rate: 10
+    duration: 3m
+    sandbox-class: gvisor
+    workload-name: glutton
+    workload-template: glutton
+    resume-mode: explicit
+    max-failure-ratio: 0.01
+
+  glutton-utilization-10:
+    suspend-disabled: false
+    repeats: 1
+    min-wait: 6000ms
+    max-wait: 6000ms
+    worker-count: 100
+    users: 100
+    spawn-rate: 10
+    duration: 3m
+    sandbox-class: gvisor
+    workload-name: glutton
+    workload-template: glutton
+    resume-mode: explicit
+    max-failure-ratio: 0.01
+
+  glutton-utilization-25:
+    suspend-disabled: false
+    repeats: 1
+    min-wait: 6000ms
+    max-wait: 6000ms
+    worker-count: 100
+    users: 250
+    spawn-rate: 10
+    duration: 3m
+    sandbox-class: gvisor
+    workload-name: glutton
+    workload-template: glutton
+    resume-mode: explicit
+    max-failure-ratio: 0.01
+
+  glutton-utilization-50:
+    suspend-disabled: false
+    repeats: 1
+    min-wait: 6000ms
+    max-wait: 6000ms
+    worker-count: 100
+    users: 500
+    spawn-rate: 10
+    duration: 3m
+    sandbox-class: gvisor
+    workload-name: glutton
+    workload-template: glutton
+    resume-mode: explicit
     max-failure-ratio: 0.01
 
   openclaw:

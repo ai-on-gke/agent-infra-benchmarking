@@ -88,6 +88,8 @@ func main() {
 			fmt.Sprintf("runworkload only: deadline on each control-plane call and instruction; one that runs past it counts as a failure. Unset selects %s.", runworkload.DefaultTimeout))
 		actorEgressAllow = flag.String("actor-egress-allow", "",
 			"runworkload only: comma-separated hosts or IPv4 addresses every actor may connect to, resolved once at startup. Unset gives actors no egress policy, so they can reach nothing.")
+		suspendDisabled = flag.Bool("suspend-disabled", false,
+			"runworkload only: whether to skip the suspend phase during the benchmark.")
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
@@ -159,13 +161,14 @@ func main() {
 	// only that entry's Init reads these, so a run of another user class
 	// carries them without ever looking at them.
 	runworkload.SetOptions(runworkload.Options{
-		Workload:    *workloadName,
-		Template:    *workloadTemplate,
-		Timeout:     *workloadTimeout,
-		MinWait:     *minWait,
-		MaxWait:     *maxWait,
-		ResumeMode:  *resumeMode,
-		EgressAllow: splitList(*actorEgressAllow),
+		Workload:        *workloadName,
+		Template:        *workloadTemplate,
+		Timeout:         *workloadTimeout,
+		MinWait:         *minWait,
+		MaxWait:         *maxWait,
+		ResumeMode:      *resumeMode,
+		EgressAllow:     splitList(*actorEgressAllow),
+		SuspendDisabled: *suspendDisabled,
 	})
 
 	entry, ok := userclass.Lookup(class)
