@@ -35,18 +35,16 @@ which deploys the Cloud Run job and builds its image. The Cloud Run job runs
    ```
 
 3. Set the values the steps below use: the GCP project and the deployment's
-   name, which you fill in, the region, and the ones derived from them: the
-   bucket that will hold the deployment's Terraform state, named after it, and
-   the project's number. The deployment's name is also the name of the
-   resources it creates: 6-30 lowercase letters, digits and hyphens, starting
-   with a letter.
+   name, which you fill in, the region, and the bucket that will hold the
+   deployment's Terraform state, named after it. The deployment's name is also
+   the name of the resources it creates: 6-30 lowercase letters, digits and
+   hyphens, starting with a letter.
 
    ```bash
    PROJECT_ID='<YOUR_PROJECT>' \
    DEPLOYMENT='<DEPLOYMENT_NAME>' \
    REGION=us-central1 \
-   STATE_BUCKET="$DEPLOYMENT-tfstate" \
-   PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+   STATE_BUCKET="$DEPLOYMENT-tfstate"
    ```
 
 4. Enable the APIs Terraform needs before it can enable the rest:
@@ -64,14 +62,6 @@ which deploys the Cloud Run job and builds its image. The Cloud Run job runs
 
    ```bash
    gcloud storage buckets update "gs://$STATE_BUCKET" --versioning
-   ```
-
-6. Let Cloud Build push the image. It builds as the Compute Engine default
-   service account, which can unless an org policy took its default roles
-   away. In that case:
-
-   ```bash
-   gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$PROJECT_NUMBER-compute@developer.gserviceaccount.com" --role=roles/cloudbuild.builds.builder --condition=None
    ```
 
 ## Creating a deployment
@@ -140,12 +130,3 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
    ```bash
    gcloud run jobs execute "$DEPLOYMENT" --project="$PROJECT_ID" --region="$REGION" --wait
    ```
-
-## Cleanup
-
-If you granted Cloud Build's service account a role while preparing, revoke it,
-in the same shell, with the variables from [Preparing](#preparing) still set:
-
-```bash
-gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$PROJECT_NUMBER-compute@developer.gserviceaccount.com" --role=roles/cloudbuild.builds.builder --condition=None
-```
