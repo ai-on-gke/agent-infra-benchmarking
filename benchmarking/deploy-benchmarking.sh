@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Stands the benchmarking stack up, and runs nothing. run_locust_job.sh is the
+# Stands the benchmarking stack up, and runs nothing. run_benchmark.sh is the
 # counterpart that measures what this deployed.
 #
 # The split matters for a series of runs: redeploying the workloads retakes
@@ -43,7 +43,7 @@ WAIT_TIMEOUT_SECS=""
 usage() {
   echo "Usage: $0 --deploy [options] | --delete"
   echo ""
-  echo "Deploys the benchmarking stack. Runs no benchmark; run_locust_job.sh does that."
+  echo "Deploys the benchmarking stack. Runs no benchmark; run_benchmark.sh does that."
   echo ""
   echo "  --deploy                Build and push the locust and openclaw images, deploy"
   echo "                          Prometheus into the ${NAMESPACE} namespace, then deploy"
@@ -66,8 +66,8 @@ usage() {
   echo "  --delete                Undo all of it: the workloads, then Prometheus — and"
   echo "                          with Prometheus every run it recorded, so save anything"
   echo "                          worth keeping first. A Job is left alone, so a finished"
-  echo "                          run keeps its log; run_locust_job.sh --delete removes"
-  echo "                          one, and a run still in flight should go first."
+  echo "                          run keeps its log until the Job's TTL; a run still in"
+  echo "                          flight should go first."
   echo "  -h|--help               Show this help message"
   echo ""
   echo "Environment:"
@@ -186,4 +186,4 @@ workload_args=(--deploy)
 
 echo
 echo "Done. Start a run with:"
-echo "  ${BENCHMARKING_DIR#"${ROOT}/"}/run_locust_job.sh --test-case glutton"
+echo "  ${BENCHMARKING_DIR#"${ROOT}/"}/test_run_benchmark.sh"

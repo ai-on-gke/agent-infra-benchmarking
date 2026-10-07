@@ -290,9 +290,7 @@ spec:
         args:
           - "--config.file=/etc/prometheus/prometheus.yml"
           - "--storage.tsdb.path=/prometheus/"
-          # At least runner.py's PRIOR_RUN_LOOKBACK, so an earlier run under a
-          # reused run id is still found. The size bound keeps a full volume
-          # from stopping ingestion mid-run.
+          # The size bound keeps a full volume from stopping ingestion mid-run.
           - "--storage.tsdb.retention.time=30d"
           - "--storage.tsdb.retention.size=18GB"
         ports:

@@ -3,7 +3,7 @@
 
 **/__pycache__/
 
-# Reports run_locust_job.sh downloads from the bucket.
+# Reports downloaded from the bucket.
 /reports/*
 !/reports/20261001t184243z/
 

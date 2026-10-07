@@ -77,7 +77,7 @@ class SteadyState:
     counted marks its end.
 
     Writes <csv-prefix>_stats_steady.csv, and the window's bounds to
-    <csv-prefix>_steady_window.json for runner.py's run.json.
+    <csv-prefix>_steady_window.json.
     """
 
     def __init__(self, environment, warm_up: int, csv_prefix: str) -> None:

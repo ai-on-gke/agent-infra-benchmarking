@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # The locust master of one benchmark run, ended by its own clock. Rendered and
-# submitted by run_locust_job.sh, which starts worker-job.yaml once this pod is
+# submitted by run_benchmark.sh, which starts worker-job.yaml once this pod is
 # ready. The run's results are this pod's log and the CSVs it uploads.
 apiVersion: batch/v1
 kind: Job
@@ -64,7 +64,7 @@ spec:
         - name: locust-master
           containerPort: 5557
           protocol: TCP
-        # Ready once locust listens, which is when run_locust_job.sh starts the
+        # Ready once locust listens, which is when run_benchmark.sh starts the
         # worker: boomer tries the master once and does not retry.
         readinessProbe:
           tcpSocket:
