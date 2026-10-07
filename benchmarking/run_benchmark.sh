@@ -51,16 +51,19 @@ PROGRESS_EVERY_SECS=30
 TEST_CASE_NAME=""
 TEST_CASE_JSON=""
 RUN_ID=""
+NO_BUILD=0
 
 usage() {
-  echo "Usage: $0 --test-case-name NAME --test-case JSON [--run-id ID]"
+  echo "Usage: $0 --test-case-name NAME --test-case JSON [--run-id ID] [--no-build]"
   echo ""
   echo "  --test-case-name NAME  What the run is recorded under: the benchmark-test-case"
   echo "                         label and the test_case label in Prometheus."
   echo "  --test-case JSON       The case's keys as a JSON object, as in tests.yaml."
   echo "  --run-id ID            The run this case is part of (default: a UTC timestamp)."
+  echo "  --no-build             Use the images already pushed rather than building them."
   echo ""
   echo "LOCUST_IMAGE and BOOMER_IMAGE must be set; .env.sh is sourced if present."
+  echo "USE_CLOUD_BUILD=1 builds the images on Cloud Build instead of local Docker."
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -71,6 +74,7 @@ while [[ "$#" -gt 0 ]]; do
     --test-case=*) TEST_CASE_JSON="${1#*=}" ;;
     --run-id) shift; RUN_ID="$1" ;;
     --run-id=*) RUN_ID="${1#*=}" ;;
+    --no-build) NO_BUILD=1 ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "Error: Unknown option: $1" >&2
@@ -186,6 +190,12 @@ wait_for_jobs() {
   echo "Error: timed out after ${WAIT_TIMEOUT_SECS}s; the Jobs are left running." >&2
   return 1
 }
+
+if [[ "${NO_BUILD}" -eq 0 ]]; then
+  echo "=== Building and pushing images ==="
+  benchmarking/locust/build_and_push.sh
+  echo
+fi
 
 # Read by envsubst from the environment.
 export LOCUST_IMAGE BOOMER_IMAGE BENCHMARK_RUNNER_KSA

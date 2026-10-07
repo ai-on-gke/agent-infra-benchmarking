@@ -68,12 +68,20 @@ docker_login() {
   done
 }
 
-if [[ "${SKIP_DOCKER_LOGIN:-0}" != "1" ]]; then
+# USE_CLOUD_BUILD=1 builds and pushes on Cloud Build, for a host without a
+# Docker daemon. Cloud Build pushes with its own service account, so there is
+# no docker login.
+USE_CLOUD_BUILD="${USE_CLOUD_BUILD:-0}"
+
+if [[ "${USE_CLOUD_BUILD}" == "1" ]]; then
+  CLOUD_BUILD_DIR="$(mktemp -d)"
+  trap 'rm -rf "${CLOUD_BUILD_DIR}"' EXIT
+elif [[ "${SKIP_DOCKER_LOGIN:-0}" != "1" ]]; then
   docker_login
 fi
 
 # Arguments after the context go to docker build as they are.
-build_and_push() {
+docker_build_and_push() {
   local image="$1" dockerfile="$2" context="$3"
   shift 3
 
@@ -82,6 +90,49 @@ build_and_push() {
 
   echo "Pushing ${image}..."
   docker push "${image}"
+}
+
+# Runs the same docker build on Cloud Build. The source uploaded is only the
+# context, the Dockerfile and any --build-context paths, at their repo-relative
+# paths, so the build's arguments are the local ones unchanged.
+cloud_build_and_push() {
+  local image="$1" dockerfile="$2" context="$3"
+  shift 3
+  local paths=("${context}") prev="" arg
+  if [[ "${dockerfile}" != "${context}"/* ]]; then
+    paths+=("${dockerfile}")
+  fi
+  for arg in "$@"; do
+    if [[ "${prev}" == --build-context ]]; then
+      paths+=("${arg#*=}")
+    fi
+    prev="${arg}"
+  done
+
+  local source="${CLOUD_BUILD_DIR}/source.tgz" config="${CLOUD_BUILD_DIR}/cloudbuild.json" args
+  tar -czf "${source}" --exclude-vcs "${paths[@]}"
+  args="$(printf '%s\n' build --platform "${PLATFORM}" -t "${image}" -f "${dockerfile}" "$@" "${context}" |
+    jq -Rn '[inputs]')"
+  # --build-context needs BuildKit, which docker 24 does not default to.
+  jq -n --arg image "${image}" --argjson args "${args}" '{
+    steps: [{name: "gcr.io/cloud-builders/docker:24.0.9", env: ["DOCKER_BUILDKIT=1"], args: $args}],
+    images: [$image],
+    timeout: "3600s",
+    options: {machineType: "E2_HIGHCPU_8"}
+  }' >"${config}"
+
+  echo "Building ${image} on Cloud Build (platform: ${PLATFORM})"
+  # gcloud streams the build log, but Python holds it back until the build ends
+  # when stdout is not a terminal.
+  PYTHONUNBUFFERED=1 gcloud builds submit "${source}" --config="${config}" --project="${PROJECT_ID}"
+}
+
+build_and_push() {
+  if [[ "${USE_CLOUD_BUILD}" == "1" ]]; then
+    cloud_build_and_push "$@"
+  else
+    docker_build_and_push "$@"
+  fi
 }
 
 build_and_push "${LOCUST_IMAGE}" benchmarking/locust/master-image/Dockerfile benchmarking/locust/master-image
