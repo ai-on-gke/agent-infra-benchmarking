@@ -1,8 +1,9 @@
 # Automation
 
 Runs the cases in [`tests.yaml`](tests.yaml) as a Cloud Run job, on a schedule
-or by hand. [`infra/cloud-run`](infra/cloud-run) deploys the Cloud Run job and
-builds its image; the Cloud Run job runs
+or by hand. A deployment is a folder under [`deployments/`](deployments) that
+calls the [`terraform/modules/cloud-run`](terraform/modules/cloud-run) module,
+which deploys the Cloud Run job and builds its image. The Cloud Run job runs
 [`runner/run_tests.py`](runner/run_tests.py), which creates
 [`runner/infra`](runner/infra) for each execution and destroys it afterwards.
 
@@ -20,25 +21,32 @@ builds its image; the Cloud Run job runs
 
 ## Preparing
 
-1. Set the values the steps below use: the GCP project, the region, the
-   bucket that will hold `infra/cloud-run`'s Terraform state, and the name of
-   the resources `infra/cloud-run` creates:
-
-   ```bash
-   export PROJECT_ID='<YOUR_PROJECT>' REGION=us-central1 STATE_BUCKET=agent-substrate-auto-benchmarking-state DEFAULT_RESOURCE_NAME=bench-automation
-   ```
-
-2. Log in to `gcloud`:
+1. Log in to `gcloud`:
 
    ```bash
    gcloud auth login
    ```
 
-3. Log in once more for Terraform, which reads the application-default
+2. Log in once more for Terraform, which reads the application-default
    credentials:
 
    ```bash
    gcloud auth application-default login
+   ```
+
+3. Set the values the steps below use: the GCP project and the deployment's
+   name, which you fill in, the region, and the ones derived from them: the
+   bucket that will hold the deployment's Terraform state, named after it, and
+   the project's number. The deployment's name is also the name of the
+   resources it creates: 6-30 lowercase letters, digits and hyphens, starting
+   with a letter.
+
+   ```bash
+   PROJECT_ID='<YOUR_PROJECT>' \
+   DEPLOYMENT='<DEPLOYMENT_NAME>' \
+   REGION=us-central1 \
+   STATE_BUCKET="$DEPLOYMENT-tfstate" \
+   PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
    ```
 
 4. Enable the APIs Terraform needs before it can enable the rest:
@@ -47,7 +55,7 @@ builds its image; the Cloud Run job runs
    gcloud services enable serviceusage.googleapis.com iam.googleapis.com --project="$PROJECT_ID"
    ```
 
-5. Create the bucket for `infra/cloud-run`'s state, with versioning to recover
+5. Create the bucket for the deployment's state, with versioning to recover
    an overwritten state:
 
    ```bash
@@ -63,59 +71,80 @@ builds its image; the Cloud Run job runs
    away. In that case:
 
    ```bash
-   export PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
-   ```
-
-   ```bash
    gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$PROJECT_NUMBER-compute@developer.gserviceaccount.com" --role=roles/cloudbuild.builds.builder --condition=None
    ```
 
-## Deploying
+## Creating a deployment
 
-With the variables from [Preparing](#preparing) still exported:
+In the same shell, with the variables from [Preparing](#preparing) still set:
 
-1. Initialize `infra/cloud-run` with its state in the bucket:
-
-   ```bash
-   terraform -chdir=automation/infra/cloud-run init -backend-config=bucket="$STATE_BUCKET" -backend-config=prefix=automation/cloud-run
-   ```
-
-2. Pass its variables through the environment, including the arguments the
-   Cloud Run job gives `run_tests.py`. The runner state bucket is the one
-   `infra/cloud-run` creates, named `<project>-<default_resource_name>`:
+1. Create the deployment's folder, with its state in the bucket under its own
+   prefix. Any other variable of the module, see its
+   [`variables.tf`](terraform/modules/cloud-run/variables.tf), goes in the
+   `module` block, e.g. `schedule = "0 3 * * *"` to run every day at 3am UTC:
 
    ```bash
-   export TF_VAR_project_id="$PROJECT_ID" TF_VAR_region="$REGION" TF_VAR_default_resource_name="$DEFAULT_RESOURCE_NAME"
+   mkdir -p "automation/deployments/$DEPLOYMENT"
    ```
 
    ```bash
-   export TF_VAR_args="[\"--project-id=$PROJECT_ID\", \"--region=$REGION\", \"--state-bucket=$PROJECT_ID-$DEFAULT_RESOURCE_NAME\"]"
+   cat > "automation/deployments/$DEPLOYMENT/main.tf" <<EOF
+   terraform {
+     required_version = ">= 1.5"
+
+     backend "gcs" {
+       bucket = "$STATE_BUCKET"
+       prefix = "automation/cloud-run/$DEPLOYMENT"
+     }
+   }
+
+   module "cloud_run" {
+     source = "../../terraform/modules/cloud-run"
+
+     project_id            = "$PROJECT_ID"
+     region                = "$REGION"
+     default_resource_name = "$DEPLOYMENT"
+   }
+
+   output "cloud_run" {
+     value = module.cloud_run
+   }
+   EOF
    ```
 
-   To run it on a schedule, also set a cron schedule, e.g. every day at 3am
-   UTC. Without one it only runs when started by hand:
+   ```bash
+   printf '.terraform/\n' > "automation/deployments/$DEPLOYMENT/.gitignore"
+   ```
+
+2. Initialize it, which also writes the lock file that pins the providers:
 
    ```bash
-   export TF_VAR_schedule='0 3 * * *'
+   terraform -chdir="automation/deployments/$DEPLOYMENT" init
    ```
 
 3. Apply. This also builds the runner image on Cloud Build, which takes a few
    minutes, and again whenever the commit or the image's files change:
 
    ```bash
-   terraform -chdir=automation/infra/cloud-run apply
+   terraform -chdir="automation/deployments/$DEPLOYMENT" apply
    ```
 
-4. Run it once, now, and wait for it to finish:
+4. Commit the folder: `main.tf`, `.gitignore` and `.terraform.lock.hcl`.
 
    ```bash
-   gcloud run jobs execute "$DEFAULT_RESOURCE_NAME" --project="$PROJECT_ID" --region="$REGION" --wait
+   git add "automation/deployments/$DEPLOYMENT"
+   ```
+
+5. Run it once, now, and wait for it to finish:
+
+   ```bash
+   gcloud run jobs execute "$DEPLOYMENT" --project="$PROJECT_ID" --region="$REGION" --wait
    ```
 
 ## Cleanup
 
 If you granted Cloud Build's service account a role while preparing, revoke it,
-with the variables from [Preparing](#preparing) still exported:
+in the same shell, with the variables from [Preparing](#preparing) still set:
 
 ```bash
 gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$PROJECT_NUMBER-compute@developer.gserviceaccount.com" --role=roles/cloudbuild.builds.builder --condition=None
