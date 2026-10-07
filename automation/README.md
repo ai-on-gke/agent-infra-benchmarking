@@ -24,7 +24,7 @@ builds its image; the Cloud Run job runs
    bucket that will hold `infra/cloud-run`'s Terraform state:
 
    ```bash
-   export PROJECT_ID=my-project REGION=us-central1 STATE_BUCKET=my-project-tfstate
+   export PROJECT_ID=<YOUR_PROJECT> REGION=us-central1 STATE_BUCKET=agent-substrate-auto-benchmarking-state
    ```
 
 2. Log in to `gcloud`:
@@ -66,7 +66,7 @@ builds its image; the Cloud Run job runs
    ```
 
    ```bash
-   gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$PROJECT_NUMBER-compute@developer.gserviceaccount.com" --role=roles/cloudbuild.builds.builder
+   gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$PROJECT_NUMBER-compute@developer.gserviceaccount.com" --role=roles/cloudbuild.builds.builder --condition=None
    ```
 
 ### Running `run_tests.py` locally
@@ -83,5 +83,5 @@ If you granted Cloud Build's service account a role while preparing, revoke it,
 with the variables from [Preparing](#preparing) still exported:
 
 ```bash
-gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$PROJECT_NUMBER-compute@developer.gserviceaccount.com" --role=roles/cloudbuild.builds.builder
+gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$PROJECT_NUMBER-compute@developer.gserviceaccount.com" --role=roles/cloudbuild.builds.builder --condition=None
 ```
