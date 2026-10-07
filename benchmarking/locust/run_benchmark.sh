@@ -67,7 +67,8 @@ usage() {
   echo "  --test-case-name NAME  What the run is recorded under: the benchmark-test-case"
   echo "                         label and the test_case label in Prometheus."
   echo "  --test-case JSON       The case's keys as a JSON object, as in tests.yaml."
-  echo "  --run-id ID            The run this case is part of (default: a UTC timestamp)."
+  echo "  --run-id ID            The run this case is part of (default: a UTC timestamp and"
+  echo "                         the repo's commit)."
   echo "  --no-build             Use the images already pushed rather than building them."
   echo "  --no-deploy-workloads  Use the mock-llm and ActorTemplates already deployed rather than"
   echo "                         deploying the case's ActorTemplate and taking its golden snapshot."
@@ -107,7 +108,8 @@ command -v jq &>/dev/null || die "jq is required to turn the test case into the 
 LOCUST_IMAGE="$(image_ref benchmarking/locust/images.json locust-master)"
 BOOMER_IMAGE="$(image_ref benchmarking/locust/images.json boomer-worker)"
 
-RUN_ID="${RUN_ID:-$(date -u +%Y%m%dt%H%M%Sz)}"
+# The commit is the one the images are tagged with.
+RUN_ID="${RUN_ID:-$(date -u +%Y%m%dt%H%M%Sz)-$(image_tag)}"
 # Both end up as label values, which the API server would reject less clearly.
 LABEL_RE='^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$'
 [[ "${RUN_ID}" =~ ${LABEL_RE} ]] || die "--run-id '${RUN_ID}' is not a valid label value."
