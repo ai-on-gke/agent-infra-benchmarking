@@ -31,7 +31,7 @@ import (
 const (
 	gluttonWorkloadName = "glutton"
 
-	// The ActorTemplate workloads/deploy.sh creates for glutton.
+	// The ActorTemplate workloads/deploy_workloads.sh creates for glutton.
 	gluttonTemplate = "glutton"
 
 	pingPath         = "/ping"

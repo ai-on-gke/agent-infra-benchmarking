@@ -56,7 +56,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// The atespace workloads/deploy.sh creates its ActorTemplates in. Mirrored
+// The atespace workloads/deploy_workloads.sh creates its ActorTemplates in. Mirrored
 // from that script rather than imported.
 const templateAtespace = "benchmark-workloads"
 

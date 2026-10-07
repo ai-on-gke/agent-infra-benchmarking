@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Builds and pushes the images deploy.sh puts in the workloads' ActorTemplates
+# Builds and pushes the images deploy_workloads.sh puts in the workloads' ActorTemplates
 # and beside them: the openclaw actor and mock-llm.
 
 set -o errexit -o nounset -o pipefail

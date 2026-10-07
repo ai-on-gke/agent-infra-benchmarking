@@ -42,18 +42,14 @@ if [[ -z "${BUCKET_NAME:-}" ]]; then
 fi
 
 MANIFEST_DIR="benchmarking/workloads/manifests"
-POOL_MANIFEST="${MANIFEST_DIR}/worker-pool.yaml.tmpl"
 # The benchmark ActorTemplates named by --workload-template: a
 # <name>-template.yaml.tmpl each, created through the ate API in the
 # benchmark-workloads atespace.
 TEMPLATES=()
 
-if [[ ! -f "${POOL_MANIFEST}" ]]; then
-  echo "Error: ${POOL_MANIFEST} not found in $(pwd)" >&2
-  exit 1
-fi
+# Created by deploy_worker_pool.sh; it takes the golden snapshots.
+POOL_NAME=benchmark-ateom
 
-WORKER_COUNT=1
 SANDBOX_CLASS="gvisor"
 # Actor memory limit (ActorTemplate resources.limits.memory). The default
 # is the smallest size microvm admits (128Mi VMM reserve + 128Mi guest floor),
@@ -64,8 +60,8 @@ ACTOR_MEMORY="256Mi"
 # --otlp-endpoint sets it. Without the flag, resolve_otlp_endpoint reads the
 # address that the control plane uses.
 OTLP_ENDPOINT=""
-# The timeout, in whole seconds, for waiting for the ateom worker pods to be
-# ready.
+# The timeout, in whole seconds, for waiting for mock-llm and each golden
+# snapshot.
 WAIT_TIMEOUT_SECS=300
 # How often the golden-snapshot wait reports that it is still waiting. Only
 # affects output, not the 5s poll interval.
@@ -74,21 +70,23 @@ PROGRESS_EVERY_SECS=30
 usage() {
   echo "Usage: $0 [options]"
   echo ""
+  echo "Deploys mock-llm and the benchmark ActorTemplates onto the WorkerPool that"
+  echo "deploy_worker_pool.sh created, and waits for their golden snapshots."
+  echo ""
   echo "Options:"
-  echo "  --deploy                    Substitute env vars and deploy workloads to the cluster using ko apply"
-  echo "  --delete                    Substitute env vars and delete workloads from the cluster"
+  echo "  --deploy                    Substitute env vars and deploy workloads to the cluster"
+  echo "  --delete                    Delete workloads from the cluster"
   echo "  --workload-template NAME    ActorTemplate to deploy, from manifests/NAME-template.yaml.tmpl."
   echo "                              Required with --deploy, and may be given more than once. With"
   echo "                              --delete it narrows the delete; without it every template goes."
-  echo "  --worker-count N            Number of WorkerPool replicas (default: 1)"
-  echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
-  echo "                              microvm requires dependency-repos/substrate/hack/install-microvm-deps.sh --install to have run."
-  echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi,"
+  echo "  --sandbox-class CLASS       Sandbox runtime for the ActorTemplates: gvisor | microvm (default: gvisor)."
+  echo "                              Has to match the WorkerPool's."
+  echo "  --actor-memory SIZE        Memory limit for the benchmark ActorTemplates (default: 256Mi,"
   echo "                              the smallest size microvm admits)"
   echo "  --otlp-endpoint URL         The address to which an instrumented actor container"
   echo "                              sends telemetry (default: the endpoint in the"
   echo "                              ate-otel-config ConfigMap)"
-  echo "  --wait-timeout SECONDS      The timeout in seconds for waiting for the ateom workers to be ready (default: 300)"
+  echo "  --wait-timeout SECONDS      The timeout in seconds for waiting for mock-llm and each golden snapshot (default: 300)"
   echo "  -h, --help                  Show this help message"
 }
 
@@ -160,7 +158,6 @@ substitute() {
     microvm) sandbox_config_name="microvm"        sandbox_class_enum="SANDBOX_CLASS_MICROVM" ;;
   esac
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
-      -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
       -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
       -e "s|\${SANDBOX_CLASS_ENUM}|${sandbox_class_enum}|g" \
       -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
@@ -292,32 +289,43 @@ wait_templates_ready() {
   echo "All ${total} golden snapshots ready."
 }
 
+# The golden snapshots are taken on the pool's workers, so it has to be up and
+# of the templates' sandbox class.
+check_worker_pool() {
+  local pool_class
+  if ! pool_class="$(kubectl get workerpool "${POOL_NAME}" --namespace=benchmark-workloads \
+      -o jsonpath='{.spec.sandboxClass}' 2>/dev/null)"; then
+    echo "Error: no ${POOL_NAME} WorkerPool in benchmark-workloads." >&2
+    echo "Run: benchmarking/workloads/deploy_worker_pool.sh --deploy --sandbox-class ${SANDBOX_CLASS}" >&2
+    exit 1
+  fi
+  if [[ "${pool_class}" != "${SANDBOX_CLASS}" ]]; then
+    echo "Error: the ${POOL_NAME} WorkerPool is ${pool_class}, but --sandbox-class is ${SANDBOX_CLASS}." >&2
+    exit 1
+  fi
+  kubectl rollout status "deployment/${POOL_NAME}" \
+    --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
+}
+
 deploy() {
+  check_worker_pool
   resolve_otlp_endpoint
   # Echoed up front because every later failure is explained by one of these:
-  # the bucket receives the golden snapshots, the templates are what the wait
-  # below blocks on, and the sandbox class has to match the WorkerPool's.
+  # the bucket receives the golden snapshots and the templates are what the
+  # wait below blocks on.
   echo "Deploying workloads:"
   echo "  templates:      ${TEMPLATES[*]}"
-  echo "  worker_count:   ${WORKER_COUNT}"
   echo "  sandbox_class:  ${SANDBOX_CLASS}"
   echo "  actor_memory:   ${ACTOR_MEMORY}"
   echo "  otlp_endpoint:  ${OTLP_ENDPOINT}"
   echo "  bucket:         gs://${BUCKET_NAME}/benchmark-workloads/"
   echo "  substrate:      ${SUBSTRATE_DIR} ($(cd "${SUBSTRATE_DIR}" && git rev-parse --short HEAD 2>/dev/null || echo 'unknown rev'))"
-  substitute "${POOL_MANIFEST}" | run_ko apply -f -
   echo "Deploying mock-llm service..."
   local mock_llm_image
   mock_llm_image="$(pin_image "${MOCK_LLM_IMAGE:-}")"
   sed "s|\${IMAGE_WITH_DIGEST}|${mock_llm_image}|g" "${MANIFEST_DIR}/mock-llm.yaml.tmpl" | kubectl apply -f -
   echo "Waiting for mock-llm to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
   kubectl rollout status deployment/mock-llm --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
-
-  echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
-  kubectl wait --for=create deployment/benchmark-ateom \
-    --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
-  kubectl rollout status deployment/benchmark-ateom \
-    --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
 
   # The store enforces that a template's atespace exists at create time.
   run_kubectl_ate create atespace benchmark-workloads >/dev/null 2>&1 \
@@ -359,9 +367,6 @@ delete() {
   done
   run_kubectl_ate delete atespace benchmark-workloads >/dev/null 2>&1 \
     || echo "atespace benchmark-workloads not deleted (may not exist or is not empty)"
-  # The pool manifest contains ko:// image references; route through
-  # `ko delete` so they get resolved before kubectl sees them.
-  substitute "${POOL_MANIFEST}" | run_ko delete --ignore-not-found -f -
   kubectl delete -f "${MANIFEST_DIR}/mock-llm.yaml.tmpl" --ignore-not-found 2>/dev/null || true
 }
 
@@ -385,13 +390,6 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --workload-template=*)
       TEMPLATES+=("${1#*=}")
-      ;;
-    --worker-count)
-      shift
-      WORKER_COUNT="$1"
-      ;;
-    --worker-count=*)
-      WORKER_COUNT="${1#*=}"
       ;;
     --sandbox-class)
       shift
