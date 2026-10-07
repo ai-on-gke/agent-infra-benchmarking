@@ -234,12 +234,12 @@ wait_for_jobs() {
 
 if [[ "${NO_BUILD}" -eq 0 ]]; then
   echo "=== Building and pushing images ==="
+  images_files=(--images-file benchmarking/locust/images.json)
   # The workload images are only read when the workloads are deployed.
   if [[ "${NO_DEPLOY_WORKLOADS}" -eq 0 ]]; then
-    benchmarking/locust/build_and_push_images.sh benchmarking/locust benchmarking/workloads
-  else
-    benchmarking/locust/build_and_push_images.sh benchmarking/locust
+    images_files+=(--images-file benchmarking/workloads/images.json)
   fi
+  benchmarking/locust/build_and_push_images.sh "${images_files[@]}"
   echo
 fi
 

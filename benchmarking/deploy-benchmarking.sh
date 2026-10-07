@@ -158,7 +158,9 @@ fi
 
 echo
 echo "=== Building and pushing images ==="
-"${BENCHMARKING_DIR}/locust/build_and_push_images.sh" "${BENCHMARKING_DIR}/workloads"
+"${BENCHMARKING_DIR}/locust/build_and_push_images.sh" \
+  --images-file "${BENCHMARKING_DIR}/locust/images.json" \
+  --images-file "${BENCHMARKING_DIR}/workloads/images.json"
 
 # Before the workloads, so Prometheus is already watching while they come up.
 echo

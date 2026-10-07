@@ -87,22 +87,15 @@ def sources:
   + ($i.build_contexts // {} | [.[]]);
 '
 
-# build_and_push_images DIR... builds and pushes the images listed in each
-# DIR/images.json, each image with the variable that holds its tag.
+# build_and_push_images FILE... builds and pushes the images listed in each
+# images.json FILE, each image with the variable that holds its tag.
 build_and_push_images() {
-  local dir files=() images vars var named=() tags
+  local images vars var named=() tags
   if [[ "$#" -eq 0 ]]; then
-    echo "Error: name a directory whose images.json to build." >&2
+    echo "Error: name an images.json to build." >&2
     exit 1
   fi
-  for dir in "$@"; do
-    if [[ ! -f "${dir}/images.json" ]]; then
-      echo "Error: no images.json in ${dir}." >&2
-      exit 1
-    fi
-    files+=("${dir}/images.json")
-  done
-  images="$(jq -cs 'add' "${files[@]}")"
+  images="$(jq -cs 'add' "$@")"
 
   mapfile -t vars < <(jq -r '.[].image_var' <<<"${images}")
   require_image_vars "${vars[@]}"
