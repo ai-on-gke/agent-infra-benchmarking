@@ -14,10 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Sourced for build_and_push, by the per-folder build_and_push_images.sh
-# scripts such as benchmarking/locust/build_and_push_images.sh, and for
-# pin_image. Paths given to build_and_push are relative to the repo root, which
-# the caller has to be in.
+# Sourced for build_and_push_images, by locust/build_and_push_images.sh, and
+# for pin_image. The paths in an images.json are relative to the repo root,
+# which the caller has to be in.
 #
 # USE_CLOUD_BUILD=1 builds and pushes on Cloud Build, for a host without a
 # Docker daemon. SKIP_DOCKER_LOGIN=1 leaves the registry credentials of a local
@@ -71,70 +70,116 @@ docker_login() {
   LOGGED_IN_HOSTS+="${host} "
 }
 
-# Arguments after the context go to docker build as they are.
-docker_build_and_push() {
-  local image="$1" dockerfile="$2" context="$3"
-  shift 3
+# For an image of an images.json, with its .tag and .platform filled in: its
+# docker build arguments, and the paths that build reads.
+IMAGES_JQ='
+def build_args:
+  ["build", "--platform", .platform, "-t", .tag, "-f", .dockerfile]
+  + (.build_contexts // {} | to_entries | map("--build-context", "\(.key)=\(.value)"))
+  + (.build_args // {} | to_entries | map("--build-arg", "\(.key)=\(.value)"))
+  + (if .target then ["--target", .target] else [] end)
+  + (.args // [])
+  + [.context];
+def sources:
+  . as $i
+  | [$i.context]
+  + (if $i.dockerfile | startswith($i.context + "/") then [] else [$i.dockerfile] end)
+  + ($i.build_contexts // {} | [.[]]);
+'
 
-  docker_login "${image}"
-  echo "Building Docker image: ${image} (platform: ${PLATFORM})"
-  docker build --platform "${PLATFORM}" -t "${image}" -f "${dockerfile}" "$@" "${context}"
+# build_and_push_images DIR... builds and pushes the images listed in each
+# DIR/images.json, each image with the variable that holds its tag.
+build_and_push_images() {
+  local dir files=() images vars var named=() tags
+  if [[ "$#" -eq 0 ]]; then
+    echo "Error: name a directory whose images.json to build." >&2
+    exit 1
+  fi
+  for dir in "$@"; do
+    if [[ ! -f "${dir}/images.json" ]]; then
+      echo "Error: no images.json in ${dir}." >&2
+      exit 1
+    fi
+    files+=("${dir}/images.json")
+  done
+  images="$(jq -cs 'add' "${files[@]}")"
 
-  echo "Pushing ${image}..."
-  docker push "${image}"
+  mapfile -t vars < <(jq -r '.[].image_var' <<<"${images}")
+  require_image_vars "${vars[@]}"
+  for var in "${vars[@]}"; do
+    named+=(--arg "${var}" "${!var}")
+  done
+  tags="$(jq -cn '$ARGS.named' "${named[@]}")"
+  images="$(jq -c --argjson tags "${tags}" --arg platform "${PLATFORM}" \
+    'map(.tag = $tags[.image_var] | .platform //= $platform)' <<<"${images}")"
+
+  if [[ "${USE_CLOUD_BUILD}" == "1" ]]; then
+    cloud_build_and_push_images "${images}"
+  else
+    docker_build_and_push_images "${images}"
+  fi
 }
 
-# Runs the same docker build on Cloud Build, which pushes with its own service
-# account. The source uploaded is only the context, the Dockerfile and any
-# --build-context paths, at their repo-relative paths, so the build's arguments
-# are the local ones unchanged.
-cloud_build_and_push() {
-  local image="$1" dockerfile="$2" context="$3"
-  shift 3
+# Builds and pushes each image of the JSON array $1 in turn.
+docker_build_and_push_images() {
+  local image_list image tag args_sh argv first=1
+  mapfile -t image_list < <(jq -c '.[]' <<<"$1")
+  for image in "${image_list[@]}"; do
+    tag="$(jq -r '.tag' <<<"${image}")"
+    # @sh quotes each argument for eval, whatever characters it holds.
+    args_sh="$(jq -r "${IMAGES_JQ}"'build_args | @sh' <<<"${image}")"
+    eval "argv=(${args_sh})"
+
+    [[ "${first}" -eq 1 ]] || echo
+    first=0
+    docker_login "${tag}"
+    echo "Building Docker image: ${tag} (platform: $(jq -r '.platform' <<<"${image}"))"
+    docker "${argv[@]}"
+
+    echo "Pushing ${tag}..."
+    docker push "${tag}"
+  done
+}
+
+# Runs the same docker builds as one Cloud Build, which pushes with its own
+# service account. The source uploaded is only the paths the builds read, at
+# their repo-relative paths, so the build arguments are the local ones
+# unchanged.
+cloud_build_and_push_images() {
+  local images="$1" sources_sh sources dir status=0
   if [[ -z "${PROJECT_ID:-}" ]]; then
     echo "Error: PROJECT_ID must be set to build on Cloud Build." >&2
     exit 1
   fi
-  local paths=("${context}") prev="" arg
-  if [[ "${dockerfile}" != "${context}"/* ]]; then
-    paths+=("${dockerfile}")
-  fi
-  for arg in "$@"; do
-    if [[ "${prev}" == --build-context ]]; then
-      paths+=("${arg#*=}")
-    fi
-    prev="${arg}"
-  done
+  sources_sh="$(jq -r "${IMAGES_JQ}"'[.[] | sources[]] | unique | @sh' <<<"${images}")"
+  eval "sources=(${sources_sh})"
 
-  local dir args status=0
   dir="$(mktemp -d)"
-  tar -czf "${dir}/source.tgz" --exclude-vcs "${paths[@]}"
-  args="$(printf '%s\n' build --platform "${PLATFORM}" -t "${image}" -f "${dockerfile}" "$@" "${context}" |
-    jq -Rn '[inputs]')"
-  # --build-context needs BuildKit, which docker 24 does not default to.
-  jq -n --arg image "${image}" --argjson args "${args}" '{
-    steps: [{name: "gcr.io/cloud-builders/docker:24.0.9", env: ["DOCKER_BUILDKIT=1"], args: $args}],
-    images: [$image],
+  tar -czf "${dir}/source.tgz" --exclude-vcs "${sources[@]}"
+  # The builds start together, and the images are pushed only once all of them
+  # have succeeded. --build-context needs BuildKit, which docker 24 does not
+  # default to.
+  jq "${IMAGES_JQ}"'{
+    steps: map({
+      id: .image_var,
+      name: "gcr.io/cloud-builders/docker:24.0.9",
+      env: ["DOCKER_BUILDKIT=1"],
+      args: build_args,
+      waitFor: ["-"]
+    }),
+    images: map(.tag),
     timeout: "3600s",
     options: {machineType: "E2_HIGHCPU_8"}
-  }' >"${dir}/cloudbuild.json"
+  }' <<<"${images}" >"${dir}/cloudbuild.json"
 
-  echo "Building ${image} on Cloud Build (platform: ${PLATFORM})"
+  echo "Building on Cloud Build:"
+  jq -r '.[] | "  \(.tag) (platform: \(.platform))"' <<<"${images}"
   # gcloud streams the build log, but Python holds it back until the build ends
   # when stdout is not a terminal.
   PYTHONUNBUFFERED=1 gcloud builds submit "${dir}/source.tgz" \
     --config="${dir}/cloudbuild.json" --project="${PROJECT_ID}" || status=$?
   rm -rf "${dir}"
   return "${status}"
-}
-
-# build_and_push IMAGE DOCKERFILE CONTEXT [docker build arguments...]
-build_and_push() {
-  if [[ "${USE_CLOUD_BUILD}" == "1" ]]; then
-    cloud_build_and_push "$@"
-  else
-    docker_build_and_push "$@"
-  fi
 }
 
 # pin_image IMAGE prints IMAGE pinned to the digest its registry serves for its
@@ -153,9 +198,9 @@ pin_image() {
   digest="$(gcloud artifacts docker images describe "${image}" \
     --format='value(image_summary.digest)' 2>/dev/null || true)"
   if [[ "${digest}" != sha256:* ]]; then
-    echo "Error: cannot resolve ${image} to a digest. Push it first with its folder's" >&2
-    echo "build_and_push_images.sh, and check that the active gcloud account can read" >&2
-    echo "the repository." >&2
+    echo "Error: cannot resolve ${image} to a digest. Push it first with" >&2
+    echo "benchmarking/locust/build_and_push_images.sh, and check that the active" >&2
+    echo "gcloud account can read the repository." >&2
     return 1
   fi
   # The configured path rather than the registry's spelling of it. Only the

@@ -14,7 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Builds and pushes the locust master and boomer worker images.
+# Builds and pushes the images listed in each named directory's images.json:
+#
+#   benchmarking/locust/build_and_push_images.sh benchmarking/locust benchmarking/workloads
+#
+# USE_CLOUD_BUILD=1 builds them all in one Cloud Build.
 
 set -o errexit -o nounset -o pipefail
 
@@ -27,12 +31,4 @@ fi
 
 source benchmarking/images/lib.sh
 
-require_image_vars LOCUST_IMAGE BOOMER_IMAGE
-
-build_and_push "${LOCUST_IMAGE}" benchmarking/locust/master-image/Dockerfile benchmarking/locust/master-image
-
-# go.mod replaces the substrate module with the submodule, which the build
-# reads as a second context.
-echo
-build_and_push "${BOOMER_IMAGE}" benchmarking/locust/go/Dockerfile benchmarking/locust/go \
-  --build-context substrate=dependency-repos/substrate
+build_and_push_images "$@"
