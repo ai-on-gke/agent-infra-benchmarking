@@ -1,0 +1,18 @@
+project_id = "<YOUR_PROJECT_ID>"
+region     = "us-central1"
+
+name = "<PICK_YOUR_NAME>"
+
+# Google's sample job image, which prints its task index and exits.
+image = "us-docker.pkg.dev/cloudrun/container/job:latest"
+
+args = []
+env  = {}
+
+cpu          = "2"
+memory       = "4Gi"
+task_timeout = "86400s"
+
+# 3am UTC every day. Leave it out to create no schedule.
+schedule  = "0 3 * * *"
+time_zone = "Etc/UTC"
