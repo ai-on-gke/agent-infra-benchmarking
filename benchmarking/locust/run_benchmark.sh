@@ -35,6 +35,8 @@ if [[ -f .env.sh ]]; then
   source .env.sh
 fi
 
+source benchmarking/images/lib.sh
+
 MANIFESTS_DIR=benchmarking/locust/manifests
 
 # Have to match metadata.name and namespace in the manifests.
@@ -239,7 +241,7 @@ if [[ "${NO_BUILD}" -eq 0 ]]; then
   if [[ "${NO_DEPLOY_WORKLOADS}" -eq 0 ]]; then
     images_files+=(--images-file benchmarking/workloads/images.json)
   fi
-  benchmarking/locust/build_and_push_images.sh "${images_files[@]}"
+  build_and_push_images "${images_files[@]}"
   echo
 fi
 

@@ -14,8 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Sourced for build_and_push_images, by locust/build_and_push_images.sh, and
-# for pin_image. The paths in an images.json are relative to the repo root,
+# Sourced for build_and_push_images, by locust/run_benchmark.sh, and for
+# pin_image. The paths in an images.json are relative to the repo root,
 # which the caller has to be in.
 #
 # USE_CLOUD_BUILD=1 builds and pushes on Cloud Build, for a host without a
@@ -87,15 +87,27 @@ def sources:
   + ($i.build_contexts // {} | [.[]]);
 '
 
-# build_and_push_images FILE... builds and pushes the images listed in each
-# images.json FILE, each image with the variable that holds its tag.
+# build_and_push_images --images-file PATH [--images-file PATH]... builds and
+# pushes the images listed in each images.json, each image with the variable
+# that holds its tag.
 build_and_push_images() {
-  local images vars var named=() tags
-  if [[ "$#" -eq 0 ]]; then
-    echo "Error: name an images.json to build." >&2
+  local files=() images vars var named=() tags
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --images-file) shift; files+=("$1") ;;
+      --images-file=*) files+=("${1#*=}") ;;
+      *)
+        echo "Error: Unknown option: $1" >&2
+        exit 1
+        ;;
+    esac
+    shift
+  done
+  if [[ "${#files[@]}" -eq 0 ]]; then
+    echo "Error: no --images-file given." >&2
     exit 1
   fi
-  images="$(jq -cs 'add' "$@")"
+  images="$(jq -cs 'add' "${files[@]}")"
 
   mapfile -t vars < <(jq -r '.[].image_var' <<<"${images}")
   require_image_vars "${vars[@]}"
@@ -191,8 +203,8 @@ pin_image() {
   digest="$(gcloud artifacts docker images describe "${image}" \
     --format='value(image_summary.digest)' 2>/dev/null || true)"
   if [[ "${digest}" != sha256:* ]]; then
-    echo "Error: cannot resolve ${image} to a digest. Push it first with" >&2
-    echo "benchmarking/locust/build_and_push_images.sh, and check that the active" >&2
+    echo "Error: cannot resolve ${image} to a digest. Push it first, which" >&2
+    echo "run_benchmark.sh does without --no-build, and check that the active" >&2
     echo "gcloud account can read the repository." >&2
     return 1
   fi
