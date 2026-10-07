@@ -59,10 +59,10 @@ docker_login() {
 }
 
 # For an image of an images.json, with its key as .name: its full name under
-# $repo. With its .ref and .platform filled in as well: its docker build
-# arguments, and the paths that build reads.
+# $repo, tagged $tag. With its .ref and .platform filled in as well: its docker
+# build arguments, and the paths that build reads.
 IMAGES_JQ='
-def ref($repo): "\($repo)/\(.name):\(.tag // "latest")";
+def ref($repo; $tag): "\($repo)/\(.name):\($tag)";
 def build_args:
   ["build", "--platform", .platform, "-t", .ref, "-f", .dockerfile]
   + (.build_contexts // {} | to_entries | map("--build-context", "\(.key)=\(.value)"))
@@ -115,13 +115,20 @@ read_images_files() {
   jq -cs 'add | to_entries | map(.value + {name: .key})' "${files[@]}"
 }
 
+# Every image is tagged with the commit the repo is at, so a manifest names the
+# image built from the code that rendered it.
+image_tag() {
+  git rev-parse HEAD
+}
+
 # image_ref FILE NAME prints the image NAME of the images.json FILE as
-# ${DOCKER_REPO}/NAME:<tag>, the tag defaulting to latest.
+# ${DOCKER_REPO}/NAME:<commit>.
 image_ref() {
-  local file="$1" name="$2"
+  local file="$1" name="$2" tag
   require_docker_repo
-  if ! jq -er --arg name "${name}" --arg repo "${DOCKER_REPO}" "${IMAGES_JQ}"'
-      .[$name] // empty | .name = $name | ref($repo)' "${file}"; then
+  tag="$(image_tag)"
+  if ! jq -er --arg name "${name}" --arg repo "${DOCKER_REPO}" --arg tag "${tag}" "${IMAGES_JQ}"'
+      .[$name] // empty | .name = $name | ref($repo; $tag)' "${file}"; then
     echo "Error: no image ${name} in ${file}." >&2
     exit 1
   fi
@@ -131,11 +138,12 @@ image_ref() {
 # pushes the images listed in each images.json, under the names image_ref
 # gives them.
 build_and_push_images() {
-  local images
+  local images tag
   require_docker_repo
   images="$(read_images_files "$@")"
-  images="$(jq -c --arg repo "${DOCKER_REPO}" --arg platform "${PLATFORM}" "${IMAGES_JQ}"'
-    map(.ref = ref($repo) | .platform //= $platform)' <<<"${images}")"
+  tag="$(image_tag)"
+  images="$(jq -c --arg repo "${DOCKER_REPO}" --arg tag "${tag}" --arg platform "${PLATFORM}" "${IMAGES_JQ}"'
+    map(.ref = ref($repo; $tag) | .platform //= $platform)' <<<"${images}")"
 
   if [[ "${USE_CLOUD_BUILD}" == "1" ]]; then
     cloud_build_and_push_images "${images}"
