@@ -12,15 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The direct dependencies of the locust image's Python: runner.py, reports/ and
-# tests/. requirements.txt is compiled from this with every transitive
+# The locust master image's Python: locust, which the locustfile in tests/ is
+# all it imports. requirements.txt is compiled from this with every transitive
 # dependency pinned and hashed, for the image's Python 3.11 on linux/amd64:
 #
 #   uv pip compile requirements.in --python-version 3.11 \
 #     --python-platform x86_64-manylinux_2_28 --generate-hashes -o requirements.txt
 
 locust==2.32.7
-# reports/upload.py
-google-cloud-storage
-# runner.py --test-case reads benchmarking/tests.yaml
-pyyaml

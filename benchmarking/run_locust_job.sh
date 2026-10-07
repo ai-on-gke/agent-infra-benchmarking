@@ -809,8 +809,8 @@ download_reports() {
 }
 
 BENCHMARK_USER_CLASS="${USER_CLASS:-${DEFAULT_USER_CLASS}}"
-if [[ ! -f "${BENCHMARKING_DIR}/locust/tests/${BENCHMARK_USER_CLASS}.py" ]]; then
-  echo "Error: no locust/tests/${BENCHMARK_USER_CLASS}.py; --user-class must name a test file" >&2
+if [[ ! -f "${BENCHMARKING_DIR}/locust/master-image/tests/${BENCHMARK_USER_CLASS}.py" ]]; then
+  echo "Error: no locust/master-image/tests/${BENCHMARK_USER_CLASS}.py; --user-class must name a test file" >&2
   exit 1
 fi
 

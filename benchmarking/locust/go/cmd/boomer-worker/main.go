@@ -196,7 +196,7 @@ func main() {
 		shutdownFn(ctx)
 	})
 
-	// The master sends this stop before it quits (tests/runworkload.py) and
+	// The master sends this stop before it quits (master-image/tests/runworkload.py) and
 	// waits for it. Boomer reports stats only until the handler returns, so it
 	// holds on until the teardown's rows have gone out.
 	boomer.Events.Subscribe("boomer:stop", func() {

@@ -29,11 +29,11 @@ if [ -z "${PROJECT_ID:-}" ]; then
   exit 1
 fi
 
-# Both image names come from the environment rather than from here, so this
+# The image names come from the environment rather than from here, so this
 # push and whatever resolves them name one string. An environment predating
 # that move does not set them, and nounset would report only the bare variable
 # name.
-for var in LOCUST_IMAGE OPENCLAW_IMAGE MOCK_LLM_IMAGE; do
+for var in LOCUST_IMAGE BOOMER_IMAGE OPENCLAW_IMAGE MOCK_LLM_IMAGE; do
   if [ -z "${!var:-}" ]; then
     echo "Error: ${var} must be set; .terraform-env.sh exports it, and .env.sh" >&2
     echo "sources that. An .env.sh not built from env.sh.example has to set it itself." >&2
@@ -53,7 +53,7 @@ PLATFORM="${LOCUST_IMAGE_PLATFORM:-linux/amd64}"
 docker_login() {
   local host token
   # One login per host, so two images in one repository do not log in twice.
-  for host in $(printf '%s\n' "${LOCUST_IMAGE%%/*}" "${OPENCLAW_IMAGE%%/*}" "${MOCK_LLM_IMAGE%%/*}" | sort -u); do
+  for host in $(printf '%s\n' "${LOCUST_IMAGE%%/*}" "${BOOMER_IMAGE%%/*}" "${OPENCLAW_IMAGE%%/*}" "${MOCK_LLM_IMAGE%%/*}" | sort -u); do
     # Captured rather than piped straight into docker login: under pipefail a
     # failing gcloud would otherwise surface as docker's complaint about an
     # empty password.
@@ -72,19 +72,25 @@ if [[ "${SKIP_DOCKER_LOGIN:-0}" != "1" ]]; then
   docker_login
 fi
 
+# Arguments after the context go to docker build as they are.
 build_and_push() {
   local image="$1" dockerfile="$2" context="$3"
+  shift 3
 
   echo "Building Docker image: ${image} (platform: ${PLATFORM})"
-  docker build --platform "${PLATFORM}" -t "${image}" -f "${dockerfile}" "${context}"
+  docker build --platform "${PLATFORM}" -t "${image}" -f "${dockerfile}" "$@" "${context}"
 
   echo "Pushing ${image}..."
   docker push "${image}"
 }
 
-# Build context is the monorepo root because the Dockerfile compiles the
-# boomer-worker Go binary alongside the Python install (see Dockerfile).
-build_and_push "${LOCUST_IMAGE}" benchmarking/locust/Dockerfile .
+build_and_push "${LOCUST_IMAGE}" benchmarking/locust/master-image/Dockerfile benchmarking/locust/master-image
+
+# go.mod replaces the substrate module with the submodule, which the build
+# reads as a second context.
+echo
+build_and_push "${BOOMER_IMAGE}" benchmarking/locust/go/Dockerfile benchmarking/locust/go \
+  --build-context substrate=dependency-repos/substrate
 
 # The actor the openclaw workload drives. Its context is its own
 # directory: the Dockerfile installs openclaw from npm and copies one script,

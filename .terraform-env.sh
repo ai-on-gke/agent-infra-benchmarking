@@ -111,6 +111,7 @@ export KO_DOCKER_REPO="${DOCKER_REPO}"
 # them so that a build and a deployment cannot disagree about where the image
 # lives.
 export LOCUST_IMAGE="${DOCKER_REPO}/locust-test:latest"
+export BOOMER_IMAGE="${DOCKER_REPO}/boomer-worker:latest"
 export OPENCLAW_IMAGE="${DOCKER_REPO}/openclaw-workload:latest"
 export MOCK_LLM_IMAGE="${DOCKER_REPO}/mock-llm:latest"
 

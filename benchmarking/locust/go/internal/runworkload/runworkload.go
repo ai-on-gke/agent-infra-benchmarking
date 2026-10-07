@@ -61,7 +61,7 @@ import (
 const templateAtespace = "benchmark-workloads"
 
 const (
-	// Locust class name from tests/runworkload.py; must match boomer.Task.Name.
+	// Locust class name from master-image/tests/runworkload.py; must match boomer.Task.Name.
 	runWorkloadUserClass = "RunWorkloadUser"
 
 	// DefaultWorkload is the workload a RunWorkloadUser drives unless Options
