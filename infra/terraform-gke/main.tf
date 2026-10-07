@@ -274,5 +274,5 @@ resource "google_storage_bucket_iam_member" "benchmark_runner_object_creator" {
 
 # The binding names a principal by namespace and ServiceAccount, so the
 # account has to exist under exactly those names for it to grant anything.
-# benchmarking/locust/manifests/job.yaml creates it; the two have to agree on
+# benchmarking/locust/manifests/worker-job.yaml creates it; the two have to agree on
 # benchmark_runner_namespace and benchmark_runner_ksa_name.

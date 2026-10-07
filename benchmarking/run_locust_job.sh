@@ -14,11 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Runs the benchmark as a Job, waits for it, and exits with its result. In
-# order: it builds and pushes the images, resolves the case out of the image it
-# just built, recreates the WorkerPool and deletes every actor in between,
-# renders manifests/job.yaml and submits it, follows the run, deletes the actors
-# again, and downloads the reports runner.py uploaded.
+# Runs the benchmark as two Jobs, a locust master and a boomer worker, waits
+# for them, and exits with their result. In order: it builds and pushes the
+# images, resolves the case out of tests.yaml into each Job's arguments,
+# recreates the WorkerPool and deletes every actor in between, submits the
+# master and then, once it is ready, the worker, follows the run, and deletes
+# the actors again.
 #
 # It assumes the thing being measured is already in the cluster.
 # deploy-benchmarking.sh puts it there, and owns every teardown but the Job's:
@@ -41,20 +42,31 @@ if [[ -f .env.sh ]]; then
   source .env.sh
 fi
 
-# The manifest's only unconditional substitution. Unset would render an empty
-# image field, which kubectl rejects without naming the cause.
-if [[ -z "${LOCUST_IMAGE:-}" ]]; then
-  echo "Error: LOCUST_IMAGE must be set; .terraform-env.sh exports it, and .env.sh" >&2
-  echo "sources that." >&2
-  exit 1
-fi
+# Unset would render an empty image field, which kubectl rejects without
+# naming the cause.
+for var in LOCUST_IMAGE BOOMER_IMAGE; do
+  if [[ -z "${!var:-}" ]]; then
+    echo "Error: ${var} must be set; .terraform-env.sh exports it, and .env.sh" >&2
+    echo "sources that." >&2
+    exit 1
+  fi
+done
 
-JOB_MANIFEST="${BENCHMARKING_DIR}/locust/manifests/job.yaml"
+MASTER_MANIFEST="${BENCHMARKING_DIR}/locust/manifests/master-job.yaml"
+WORKER_MANIFEST="${BENCHMARKING_DIR}/locust/manifests/worker-job.yaml"
 
-# Has to match metadata.name in the manifest. Fixed rather than generated, so a
-# run can be followed, waited on and deleted by name.
-JOB_NAME=locust-job
+# Have to match metadata.name in the manifests. Fixed rather than generated, so
+# a run can be followed, waited on and deleted by name.
+MASTER_JOB=locust-master
+WORKER_JOB=boomer-worker
 NAMESPACE=benchmarking
+# The master's Service, which the worker connects to.
+MASTER_HOST="${MASTER_JOB}.${NAMESPACE}.svc.cluster.local"
+
+# The case keys that are not worker flags: the load, which goes to the master,
+# the pool's shape, and what only this script reads. Every other key becomes a
+# worker flag, `key: value` to `--key=value`.
+NON_WORKER_KEYS='["duration","users","spawn-rate","worker-count","sandbox-class","max-failure-ratio","warm-up","repeats"]'
 
 # The WorkerPool, recreated per run so every run starts on cold workers rather
 # than on whatever the last one left warm. Names have to match the manifest.
@@ -109,9 +121,9 @@ PROGRESS_EVERY_SECS=30
 RUN_ID=""
 USER_CLASS=""
 
-# Names a case in tests.yaml, forwarded to the Job and read by runner.py
-# inside the pod. It is the whole of the worker's configuration: the workload,
-# its template, and every other flag the worker takes.
+# Names a case in tests.yaml, which this script turns into both Jobs'
+# arguments. It is the whole of the run: the load, and the workload, its
+# template and every other flag the worker takes.
 TEST_CASE=""
 NO_BUILD=0
 WAIT_TIMEOUT_SECS=""
@@ -152,9 +164,9 @@ WAIT_TIMED_OUT=124
 # Status after Ctrl-C or a SIGTERM stopped the run. run_all_test_cases.sh reads
 # it as "stop here", where any other failure moves on to the next case.
 INTERRUPTED=130
-# Ceiling on the wait for the Job's pod to go once a run is stopped early. Longer
-# than the pod's terminationGracePeriodSeconds in manifests/job.yaml, which is
-# the time runner.py has to wind the run down and upload what it recorded.
+# Ceiling on the wait for the Jobs' pods to go once a run is stopped early.
+# Longer than the terminationGracePeriodSeconds in manifests/, which is the time
+# the worker has to delete its actors.
 STOP_TIMEOUT_SECS=480
 
 DELETE=0
@@ -198,29 +210,28 @@ usage() {
   echo "  --no-wait               Submit the Job and return, instead of following it."
   echo "                          The run continues in the cluster either way, and its"
   echo "                          actors are left for the next run to delete."
-  echo "  --follow-logs           Stream the run's logs while it runs. Without it the run"
-  echo "                          is still waited on, and its log read afterwards from the"
-  echo "                          finished Job: kubectl logs job/${JOB_NAME} -n ${NAMESPACE}"
+  echo "  --follow-logs           Stream both Jobs' logs while the run goes. Without it the"
+  echo "                          run is still waited on, and its log read afterwards from"
+  echo "                          the finished Job: kubectl logs job/${MASTER_JOB} -n ${NAMESPACE}"
   echo "  --only-summary          Pass locust --only-summary, dropping the stats table it"
   echo "                          reprints while the run goes. The aggregate it prints when"
   echo "                          the run ends is kept, so the result is unaffected."
   echo "  --wait-timeout SECONDS  Ceiling on the wait for the run (default: 3600). Reaching"
-  echo "                          it stops the waiting, not the Job, and leaves the Job's"
-  echo "                          actors and reports to it."
+  echo "                          it stops the waiting, not the Jobs, and leaves the"
+  echo "                          worker's actors to it."
   echo "  --pod-start-timeout SECONDS"
-  echo "                          Ceiling on the wait for the pod to start, which covers the"
-  echo "                          image pull and the scheduling (default: 300)"
+  echo "                          Ceiling on the wait for each Job's pod to start, which"
+  echo "                          covers the image pull and the scheduling (default: 300)"
   echo "  --reports-dir DIR       Where the run's reports are downloaded from the bucket,"
   echo "                          into DIR/<run-id>/<test-case>/ (default: ${ROOT}/reports)"
   echo "  --no-download           Leave the reports in the bucket."
   echo ""
-  echo "Ctrl-C (or SIGTERM) while a run is going stops it: the Job is deleted, which"
-  echo "gives the run time to delete its actors and upload what it recorded, and the"
-  echo "reports are then downloaded as usual. To leave a run going, use --no-wait."
+  echo "Ctrl-C (or SIGTERM) while a run is going stops it: the Jobs are deleted, which"
+  echo "gives the worker time to delete its actors. To leave a run going, use --no-wait."
   echo ""
   echo "Other:"
-  echo "  --delete                Stop and delete the Job, waiting while it deletes its actors"
-  echo "                          and uploads what it recorded. The workloads are left alone;"
+  echo "  --delete                Stop and delete the Jobs, waiting while the worker deletes"
+  echo "                          its actors. The workloads are left alone;"
   echo "                          deploy-benchmarking.sh --delete removes those."
   echo "  -h|--help               Show this help message"
   echo ""
@@ -330,24 +341,38 @@ wait_for_actors_gone() {
   fi
 }
 
-# resolve_test_case prints the named case as JSON, by running the
-# testcase-helper binary that ships in the locust image beside the tests.yaml it
-# reads. LOCUST_IMAGE is pinned to a digest by then, so the image read here is
-# the one the Job runs rather than whatever copy of the tag is local. Going through the image is what keeps a YAML parser off the host, which
-# has kubectl and docker and not necessarily PyYAML or yq.
-#
-# It also moves the "no such case" failure to before the pool is rebuilt and
-# the Job submitted, where it used to surface in the pod once both had happened.
+# resolve_test_case prints the named case of the working tree's tests.yaml as
+# JSON, before the pool is rebuilt and the Jobs submitted.
 resolve_test_case() {
-  if ! command -v docker &>/dev/null; then
-    echo "Error: docker is required to resolve --test-case, which runs the" >&2
-    echo "testcase-helper binary out of ${LOCUST_IMAGE}." >&2
-    return 1
-  fi
-  # --entrypoint because the distroless python3 base image launches python.
-  # --platform suppresses the Docker warning about host/image architecture mismatch
-  # when resolving the case locally on an ARM Mac.
-  docker run --rm --platform "${LOCUST_IMAGE_PLATFORM:-linux/amd64}" --entrypoint /app/testcase-helper "${LOCUST_IMAGE}" --case "$1"
+  python3 "${BENCHMARKING_DIR}/test_case.py" --case "$1"
+}
+
+# master_args prints the master Job's arguments as a JSON array: the case's
+# load, and what makes locust a headless master of the one worker.
+master_args() {
+  jq -c --arg file "/app/tests/${BENCHMARK_USER_CLASS}.py" \
+    --arg max_wait "${POD_START_TIMEOUT_SECS}" '
+    ["-f", $file, "--headless", "-t", .duration, "-u", .users, "-r", ."spawn-rate",
+     # The clock starts once the worker has connected, so the seconds before
+     # it does are not counted as part of the run. Bounded, so a worker that
+     # never comes does not leave the master waiting for good.
+     "--master", "--expect-workers", "1", "--expect-workers-max-wait", $max_wait,
+     # A run is failed by its max-failure-ratio, not by locust on its first
+     # failed request out of tens of thousands.
+     "--exit-code-on-error", "0"]
+    | map(tostring)' <<<"$1"
+}
+
+# worker_args prints the worker Job's arguments as a JSON array: where the
+# master is, the user class, and every key of the case that is not the load or
+# the pool's.
+worker_args() {
+  jq -c --arg master "${MASTER_HOST}" --arg class "${BENCHMARK_USER_CLASS}" \
+    --arg egress "${BENCHMARK_ACTOR_EGRESS_ALLOW}" --argjson skip "${NON_WORKER_KEYS}" '
+    (if $egress == "" then . else
+      ."actor-egress-allow" = ([."actor-egress-allow" // empty, $egress] | join(",")) end)
+    | ["--master-host=\($master)", "--user-class=\($class)"]
+      + [to_entries[] | select(.key as $k | $skip | index($k) | not) | "--\(.key)=\(.value)"]' <<<"$1"
 }
 
 # read_template prints the deployed ActorTemplate as JSON.
@@ -379,16 +404,17 @@ check_template_class() {
   fi
 }
 
-# tag_image_with_run_id adds the run id as a tag on the pinned locust image, so
-# the image a run used can be found by the run's name, and a registry cleanup
-# that deletes untagged images cannot take it once the build tag moves on.
+# tag_image_with_run_id adds the run id as a tag on a pinned image, so the
+# image a run used can be found by the run's name, and a registry cleanup that
+# deletes untagged images cannot take it once the build tag moves on.
 tag_image_with_run_id() {
+  local image="$1"
   if ! command -v gcloud &>/dev/null; then
-    echo "Warning: gcloud is not installed, so ${LOCUST_IMAGE} is not tagged ${RUN_ID}." >&2
+    echo "Warning: gcloud is not installed, so ${image} is not tagged ${RUN_ID}." >&2
     return 0
   fi
-  if ! gcloud artifacts docker tags add "${LOCUST_IMAGE}" "${LOCUST_IMAGE%@*}:${RUN_ID}" --quiet; then
-    echo "Warning: could not tag ${LOCUST_IMAGE} as ${RUN_ID}; the run goes ahead untagged." >&2
+  if ! gcloud artifacts docker tags add "${image}" "${image%@*}:${RUN_ID}" --quiet; then
+    echo "Warning: could not tag ${image} as ${RUN_ID}; the run goes ahead untagged." >&2
   fi
 }
 
@@ -501,12 +527,14 @@ run_info() {
     --argjson sandbox_configs "${sandbox_configs}" \
     --argjson deployments "${deployments}" \
     --arg locust_image "${LOCUST_IMAGE}" \
+    --arg boomer_image "${BOOMER_IMAGE}" \
     --arg commit "$(git rev-parse HEAD)" \
     --argjson commit_dirty "${dirty}" \
     --arg substrate_commit "$(git -C "${SUBSTRATE_DIR}" rev-parse HEAD)" \
     '{case: $case, cluster: $cluster, nodes: $nodes, worker_pool: $worker_pool,
       actor_templates: $actor_templates, sandbox_configs: $sandbox_configs,
-      deployments: $deployments, locust_image: $locust_image, commit: $commit,
+      deployments: $deployments, locust_image: $locust_image,
+      boomer_image: $boomer_image, commit: $commit,
       commit_dirty: $commit_dirty, substrate_commit: $substrate_commit}'
 }
 
@@ -557,65 +585,82 @@ recreate_worker_pool() {
   fi
 }
 
-# submit_job renders the manifest and applies it, then returns; it does not
-# wait. What to do with a run in flight is decided below, not here.
-submit_job() {
+# submit_jobs renders both manifests and applies them, the worker only once the
+# master is ready: boomer tries the master once at startup and does not retry.
+# It does not wait for the run. What to do with a run in flight is decided
+# below, not here.
+submit_jobs() {
   ensure_namespace
   # A Job's pod template is immutable, so a second run cannot be an apply over
-  # the first. Deleting also keeps the fixed name unambiguous: the logs and the
-  # status under it are the run just submitted. --wait=true so the old pods are
-  # gone before the new Job creates its own.
-  echo "Deleting any previous ${JOB_NAME}..."
-  kubectl delete job "${JOB_NAME}" --namespace="${NAMESPACE}" \
+  # the first. Deleting also keeps the fixed names unambiguous: the logs and the
+  # status under them are the run just submitted. --wait=true so the old pods
+  # are gone before the new Jobs create their own.
+  echo "Deleting any previous ${MASTER_JOB} and ${WORKER_JOB}..."
+  kubectl delete job "${MASTER_JOB}" "${WORKER_JOB}" --namespace="${NAMESPACE}" \
     --ignore-not-found --wait=true
-  echo "Running Locust benchmark as a Job:"
-  echo "  image:     ${LOCUST_IMAGE}"
-  echo "  class:     ${BENCHMARK_USER_CLASS}"
+  echo "Running the benchmark as two Jobs:"
+  echo "  master:    ${LOCUST_IMAGE} ${LOCUST_MASTER_ARGS}"
+  echo "  worker:    ${BOOMER_IMAGE} ${BOOMER_WORKER_ARGS}"
   echo "  case:      ${BENCHMARK_RECORD_NAME}"
   echo "  run_id:    ${BENCHMARK_RUN_ID}"
-  envsubst < "${JOB_MANIFEST}" | kubectl apply -f -
+  envsubst < "${MASTER_MANIFEST}" | kubectl apply -f -
+  wait_for_pod "${MASTER_JOB}" ready || return 1
+  envsubst < "${WORKER_MANIFEST}" | kubectl apply -f -
 }
 
-# stop_job deletes the Job and waits for its pod to go. Only the Job: deleting
-# it sends the pod the SIGTERM runner.py winds the run down on, and the upload
-# at the end of that goes through the Job's ServiceAccount, so that and its
-# RoleBinding have to stay.
-stop_job() {
-  kubectl delete job "${JOB_NAME}" --namespace="${NAMESPACE}" --ignore-not-found \
+# stop_jobs deletes both Jobs and waits for their pods to go. Only the Jobs:
+# deleting them sends the worker the SIGTERM it deletes its actors on, which
+# goes through its ServiceAccount, so that and its RoleBinding have to stay.
+stop_jobs() {
+  kubectl delete job "${MASTER_JOB}" "${WORKER_JOB}" --namespace="${NAMESPACE}" --ignore-not-found \
     --cascade=foreground --wait=true --timeout="${STOP_TIMEOUT_SECS}s"
 }
 
-# job_status prints the Job's succeeded and failed counts as one pipe-joined
+# job_status prints a Job's succeeded and failed counts as one pipe-joined
 # pair. One get for both, so they cannot come from different reads of a Job
 # that finished in between them, and a pipe rather than a space because the
 # default IFS collapses a leading empty field — "not succeeded, failed" would
 # otherwise be read as "succeeded".
 job_status() {
-  kubectl get job "${JOB_NAME}" --namespace="${NAMESPACE}" \
+  kubectl get job "$1" --namespace="${NAMESPACE}" \
     -o jsonpath='{.status.succeeded}|{.status.failed}' 2>/dev/null || echo '|'
 }
 
-# wait_for_pod blocks until the Job's pod has left Pending, because there are
-# no logs to follow until it has. A pod that went straight to Succeeded or
-# Failed counts as started: its logs are still there to read.
+# wait_for_pod blocks until a Job's pod has left Pending, because there are no
+# logs to follow until it has, or with "ready" until it is Ready. A pod that
+# went straight to Succeeded or Failed counts as started, its logs still being
+# there to read, but not as ready.
 wait_for_pod() {
+  local job="$1" want="${2:-started}"
   local started=${SECONDS}
   local deadline=$((SECONDS + POD_START_TIMEOUT_SECS))
   local next_report=$((SECONDS + PROGRESS_EVERY_SECS))
-  local phase job_uid
+  local phase ready job_uid
 
-  echo "Waiting for the pod to start..."
+  echo "Waiting for the ${job} pod to be ${want}..."
   while ((SECONDS < deadline)); do
     if [[ -z "${job_uid:-}" ]]; then
-      job_uid="$(kubectl get job "${JOB_NAME}" --namespace="${NAMESPACE}" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
+      job_uid="$(kubectl get job "${job}" --namespace="${NAMESPACE}" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
     fi
     if [[ -n "${job_uid:-}" ]]; then
       # controller-uid isolates the pod to this specific Job run, ignoring
       # terminating pods from the previous run.
-      phase="$(kubectl get pods --namespace="${NAMESPACE}" -l "controller-uid=${job_uid}" \
-        -o jsonpath='{.items[0].status.phase}' 2>/dev/null || true)"
+      IFS='|' read -r phase ready < <(kubectl get pods --namespace="${NAMESPACE}" -l "controller-uid=${job_uid}" \
+        -o jsonpath='{.items[0].status.phase}|{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo '|')
       case "${phase}" in
-        Running|Succeeded|Failed) return 0 ;;
+        Succeeded|Failed)
+          if [[ "${want}" != ready ]]; then
+            return 0
+          fi
+          echo "Error: the ${job} pod ended before it was ready:" >&2
+          echo "  kubectl logs job/${job} -n ${NAMESPACE}" >&2
+          return 1
+          ;;
+        Running)
+          if [[ "${want}" != ready || "${ready}" == True ]]; then
+            return 0
+          fi
+          ;;
       esac
     fi
     if ((SECONDS >= next_report)); then
@@ -625,25 +670,28 @@ wait_for_pod() {
     sleep 2
   done
 
-  echo "Error: the pod did not start within ${POD_START_TIMEOUT_SECS}s." >&2
-  kubectl describe job "${JOB_NAME}" --namespace="${NAMESPACE}" >&2 || true
+  echo "Error: the ${job} pod was not ${want} within ${POD_START_TIMEOUT_SECS}s." >&2
+  kubectl describe job "${job}" --namespace="${NAMESPACE}" >&2 || true
   return 1
 }
 
-# follow_run waits for the run to end and returns what the Job did.
+# follow_run waits for both Jobs to end and returns whether both succeeded.
+# Both, rather than the first to fail: the master outlives a failed worker to
+# the end of its duration, and a worker outlives a failed master by its
+# heartbeat timeout, and each one's log is part of the run.
 #
-# With --follow-logs the stream is the wait: kubectl logs -f returns when the
+# With --follow-logs the streams are the wait: kubectl logs -f returns when the
 # container exits, so the output arrives as it is produced. Without it the
 # status poll below is the wait on its own. Either way the result is read from
-# the Job rather than inferred from the wait ending, which says that the run is
+# the Jobs rather than inferred from the wait ending, which says that the run is
 # over and not how it went — and a stream that broke early says nothing at all.
 follow_run() {
   local deadline=$((SECONDS + WAIT_TIMEOUT_SECS))
   local started=${SECONDS}
   local next_report=$((SECONDS + PROGRESS_EVERY_SECS))
-  local succeeded failed
+  local job succeeded failed done_count failed_jobs
 
-  wait_for_pod || return 1
+  wait_for_pod "${WORKER_JOB}" || return 1
 
   if [[ "${FOLLOW_LOGS}" -eq 1 ]]; then
     echo
@@ -652,10 +700,13 @@ follow_run() {
     # and the status below is what decides. In the background because bash runs
     # a trap only between commands, and a foreground stream lasts the whole run;
     # `wait` is interrupted by a trapped signal where the stream is not.
-    kubectl logs -f "job/${JOB_NAME}" --namespace="${NAMESPACE}" &
-    LOGS_PID=$!
-    wait "${LOGS_PID}" || true
-    LOGS_PID=""
+    LOGS_PIDS=()
+    for job in "${MASTER_JOB}" "${WORKER_JOB}"; do
+      kubectl logs -f "job/${job}" --namespace="${NAMESPACE}" --prefix &
+      LOGS_PIDS+=("$!")
+    done
+    wait "${LOGS_PIDS[@]}" || true
+    LOGS_PIDS=()
     echo "=== End of run log ==="
     echo
   else
@@ -663,21 +714,29 @@ follow_run() {
   fi
 
   while ((SECONDS < deadline)); do
-    IFS='|' read -r succeeded failed < <(job_status)
-    if [[ "${succeeded:-0}" -ge 1 ]]; then
-      echo "${JOB_NAME} completed."
-      if [[ "${FOLLOW_LOGS}" -eq 0 ]]; then
-        echo "  kubectl logs job/${JOB_NAME} -n ${NAMESPACE}"
+    done_count=0
+    failed_jobs=()
+    for job in "${MASTER_JOB}" "${WORKER_JOB}"; do
+      IFS='|' read -r succeeded failed < <(job_status "${job}")
+      if [[ "${succeeded:-0}" -ge 1 ]]; then
+        done_count=$((done_count + 1))
+      elif [[ "${failed:-0}" -ge 1 ]]; then
+        done_count=$((done_count + 1))
+        failed_jobs+=("${job}")
       fi
-      return 0
-    fi
-    if [[ "${failed:-0}" -ge 1 ]]; then
-      if [[ "${FOLLOW_LOGS}" -eq 1 ]]; then
-        echo "Error: ${JOB_NAME} failed. The log above is the run." >&2
-      else
-        echo "Error: ${JOB_NAME} failed. Its log is the run:" >&2
-        echo "  kubectl logs job/${JOB_NAME} -n ${NAMESPACE}" >&2
+    done
+    if [[ "${done_count}" -eq 2 ]]; then
+      if [[ "${#failed_jobs[@]}" -eq 0 ]]; then
+        echo "${MASTER_JOB} and ${WORKER_JOB} completed."
+        if [[ "${FOLLOW_LOGS}" -eq 0 ]]; then
+          echo "  kubectl logs job/${MASTER_JOB} -n ${NAMESPACE}"
+        fi
+        return 0
       fi
+      echo "Error: ${failed_jobs[*]} failed. Their logs are the run:" >&2
+      for job in "${failed_jobs[@]}"; do
+        echo "  kubectl logs job/${job} -n ${NAMESPACE}" >&2
+      done
       return 1
     fi
     # Nothing else reports without the stream, so a long run would otherwise
@@ -689,27 +748,26 @@ follow_run() {
     sleep 5
   done
 
-  echo "Error: timed out after ${WAIT_TIMEOUT_SECS}s waiting for ${JOB_NAME}." >&2
-  echo "It is still running, so its actors and reports are left to it;" >&2
-  echo "--wait-timeout raises the ceiling. To follow it, or to stop it:" >&2
-  echo "  kubectl logs -f job/${JOB_NAME} -n ${NAMESPACE}" >&2
+  echo "Error: timed out after ${WAIT_TIMEOUT_SECS}s waiting for ${MASTER_JOB} and ${WORKER_JOB}." >&2
+  echo "They are still running, so the worker's actors are left to it;" >&2
+  echo "--wait-timeout raises the ceiling. To follow the run, or to stop it:" >&2
+  echo "  kubectl logs -f job/${MASTER_JOB} -n ${NAMESPACE}" >&2
   echo "  ./benchmarking/run_locust_job.sh --delete" >&2
   return "${WAIT_TIMED_OUT}"
 }
 
-# stop_run is the INT/TERM trap while a run is in flight. Deleting the Job sends
-# its pod the SIGTERM that runner.py winds the run down on: locust stops, the
-# worker deletes its actors, and what the run recorded is uploaded. Then the
-# leftover actors and the download are handled as for a run that ended on its
-# own.
+# stop_run is the INT/TERM trap while a run is in flight. Deleting the Jobs
+# stops locust and sends the worker the SIGTERM it deletes its actors on. Then
+# the leftover actors and the download are handled as for a run that ended on
+# its own.
 stop_run() {
   trap - INT TERM
-  if [[ -n "${LOGS_PID:-}" ]]; then
-    kill "${LOGS_PID}" 2>/dev/null || true
+  if [[ "${#LOGS_PIDS[@]}" -gt 0 ]]; then
+    kill "${LOGS_PIDS[@]}" 2>/dev/null || true
   fi
   echo
   echo "=== Interrupted: stopping the run ===" >&2
-  stop_job || true
+  stop_jobs || true
   echo
   echo "=== Deleting actors ==="
   delete_actors || true
@@ -815,12 +873,14 @@ if [[ ! -f "${BENCHMARKING_DIR}/locust/master-image/tests/${BENCHMARK_USER_CLASS
 fi
 
 # Exported for envsubst, which reads the environment rather than arguments.
-export LOCUST_IMAGE BENCHMARK_USER_CLASS BENCHMARK_RUNNER_KSA
-export BENCHMARK_REPORTS BENCHMARK_REPORT_BUCKET
+export LOCUST_IMAGE BOOMER_IMAGE BENCHMARK_USER_CLASS BENCHMARK_RUNNER_KSA
+
+# The log streams --follow-logs starts, which stop_run ends.
+LOGS_PIDS=()
 
 if [[ "${DELETE}" -eq 1 ]]; then
-  echo "=== Stopping and deleting the locust Job ==="
-  stop_job
+  echo "=== Stopping and deleting the benchmark Jobs ==="
+  stop_jobs
   exit 0
 fi
 
@@ -836,9 +896,10 @@ for pair in "--wait-timeout:${WAIT_TIMEOUT_SECS}" \
   fi
 done
 
-# The pool's shape is read off the case with it, so a run cannot start without.
+# The Jobs' arguments and the pool's shape are read off the case with it, so a
+# run cannot start without.
 if ! command -v jq &>/dev/null; then
-  echo "Error: jq is required to read the pool's shape out of the test case." >&2
+  echo "Error: jq is required to turn the test case into the Jobs' arguments." >&2
   exit 1
 fi
 if ! command -v kubectl-ate &>/dev/null; then
@@ -885,30 +946,48 @@ else
   export BENCHMARK_ONLY_SUMMARY=false
 fi
 
-# Ahead of the resolve below, not merely ahead of the pool: the case is read
-# out of the locust image, so building first is what makes a run measure the
-# tests.yaml in the working tree rather than the one the last build baked in.
 if [[ "${NO_BUILD}" -eq 0 ]]; then
   echo
   echo "=== Building and pushing images ==="
   "${BENCHMARKING_DIR}/locust/build_and_push.sh"
 fi
 
-# The Job's pod pulls the tag afresh, so without a digest a --no-build run read
-# its case out of whatever image was left locally while running the registry's.
+# By digest, so what run_info records is what the Jobs' pods pull rather than
+# whatever the tag points to by then.
 LOCUST_IMAGE="$("${BENCHMARKING_DIR}/locust/pin_image.sh" "${LOCUST_IMAGE}")"
-export LOCUST_IMAGE
-tag_image_with_run_id
+BOOMER_IMAGE="$("${BENCHMARKING_DIR}/locust/pin_image.sh" "${BOOMER_IMAGE}")"
+export LOCUST_IMAGE BOOMER_IMAGE
+tag_image_with_run_id "${LOCUST_IMAGE}"
+tag_image_with_run_id "${BOOMER_IMAGE}"
 
 echo
 echo "=== Resolving test case ==="
-echo "  image: ${LOCUST_IMAGE}"
 TEST_CASE_JSON="$(resolve_test_case "${BENCHMARK_TEST_CASE}")"
 echo "  ${BENCHMARK_TEST_CASE}: ${TEST_CASE_JSON}"
 
+# The load, checked here because locust reads -u and -r as numbers and a wrong
+# one would otherwise be a traceback in the master's pod. The duration is left
+# to locust, which rejects a spelling it does not know at startup. spawn-rate
+# defaults to the user count, which puts the whole load on at the first
+# dispatch rather than at locust's 1 user/sec.
+if [[ "$(jq -r '.duration // empty' <<<"${TEST_CASE_JSON}")" == "" ]]; then
+  echo "Error: case ${BENCHMARK_TEST_CASE} has no \`duration\`; a case states the load it runs at." >&2
+  exit 1
+fi
+USERS="$(jq -r '.users // empty' <<<"${TEST_CASE_JSON}")"
+if ! [[ "${USERS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Error: case ${BENCHMARK_TEST_CASE}: \`users\` must be a whole number from 1, got '${USERS}'" >&2
+  exit 1
+fi
+SPAWN_RATE="$(jq -r --arg d "${USERS}" '."spawn-rate" // $d' <<<"${TEST_CASE_JSON}")"
+if ! [[ "${SPAWN_RATE}" =~ ^([0-9]+\.?[0-9]*|\.[0-9]+)$ ]] || [[ "${SPAWN_RATE}" =~ ^[0.]+$ ]]; then
+  echo "Error: case ${BENCHMARK_TEST_CASE}: \`spawn-rate\` must be a positive number, got '${SPAWN_RATE}'" >&2
+  exit 1
+fi
+TEST_CASE_JSON="$(jq -c --arg r "${SPAWN_RATE}" '."spawn-rate" = $r' <<<"${TEST_CASE_JSON}")"
+
 # The pool keys, defaulted here rather than in the file so a case states only
-# what it means to change. runner.py drops the same two before the rest of the
-# case becomes worker flags.
+# what it means to change. Like the load, they are not passed to the worker.
 WORKER_COUNT="$(jq -r --argjson d "${DEFAULT_WORKER_COUNT}" '."worker-count" // $d' <<<"${TEST_CASE_JSON}")"
 SANDBOX_CLASS="$(jq -r --arg d "${DEFAULT_SANDBOX_CLASS}" '."sandbox-class" // $d' <<<"${TEST_CASE_JSON}")"
 
@@ -955,7 +1034,10 @@ if [[ -n "${TEMPLATE}" ]]; then
     | capture("^[a-z][a-z0-9+.-]*://(?<host>[^/:?#]+)").host] | unique | join(",")' <<<"${TEMPLATE_JSON}")"
   echo "  actors may connect to: ${BENCHMARK_ACTOR_EGRESS_ALLOW:-(nothing)}"
 fi
-export BENCHMARK_ACTOR_EGRESS_ALLOW
+
+LOCUST_MASTER_ARGS="$(master_args "${TEST_CASE_JSON}")"
+BOOMER_WORKER_ARGS="$(worker_args "${TEST_CASE_JSON}")"
+export LOCUST_MASTER_ARGS BOOMER_WORKER_ARGS
 
 export BENCHMARK_REPEAT BENCHMARK_RECORD_NAME BENCHMARK_RUN_INFO
 STATUSES=()
@@ -963,7 +1045,6 @@ run_status=0
 # A failed repeat does not stop the ones after it; the exit status is the last
 # failure's.
 for ((repeat = 1; repeat <= REPEATS; repeat++)); do
-  # Must match runner.py's record_name.
   if [[ "${REPEATS}" -gt 1 ]]; then
     BENCHMARK_REPEAT="${repeat}"
     BENCHMARK_RECORD_NAME="${BENCHMARK_TEST_CASE}-${repeat}"
@@ -982,25 +1063,29 @@ for ((repeat = 1; repeat <= REPEATS; repeat++)); do
   BENCHMARK_RUN_INFO="$(run_info | base64 | tr -d '\n')"
 
   echo
-  echo "=== Running the benchmark Job ==="
-  # Set before the submit, so an interrupt that lands while the Job is being
-  # created still stops it.
+  echo "=== Running the benchmark Jobs ==="
+  # Set before the submit, so an interrupt that lands while the Jobs are being
+  # created still stops them.
   if [[ "${NO_WAIT}" -eq 0 ]]; then
     trap stop_run INT TERM
   fi
-  submit_job
+  status=0
+  submit_jobs || status=$?
 
   if [[ "${NO_WAIT}" -eq 1 ]]; then
-    exit 0
+    exit "${status}"
   fi
 
   # The result of the run is decided by follow_run and by nothing after it, so
   # the download cannot turn a passing run into a failing one. A failed run still
   # gets one: what it managed to record before it stopped is usually the point.
-  status=0
-  follow_run || status=$?
+  # A master that never became ready is left as it is, so its log stays: the
+  # worker was never submitted, and --expect-workers-max-wait ends the master.
+  if [[ "${status}" -eq 0 ]]; then
+    follow_run || status=$?
+  fi
   # The run is over, or being left to itself: an interrupt from here on should
-  # not delete the Job and its log.
+  # not delete the Jobs and their logs.
   trap - INT TERM
 
   if [[ "${status}" -eq "${WAIT_TIMED_OUT}" ]]; then

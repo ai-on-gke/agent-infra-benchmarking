@@ -1,0 +1,118 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The boomer worker of one benchmark run. Rendered and submitted by
+# run_locust_job.sh once master-job.yaml's pod is ready; it ends when the
+# master quits it, after deleting the actors it created.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: boomer-worker
+  namespace: benchmarking
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        # What the boomer-worker job in monitoring/prometheus.yaml selects on.
+        app: boomer-worker
+        # What the run was, carried as labels so Prometheus can relabel them
+        # onto every series the worker produces. Its own metric labels are
+        # fixed upstream at method/name/status/user_class and say nothing about
+        # which run they came from.
+        #
+        # The values are constrained by what a label may hold — 63 characters
+        # of alphanumerics, dashes, underscores and dots — which the run id is
+        # checked against in run_locust_job.sh; the case name is safe by
+        # construction, having to match a key in tests.yaml. One of a case's
+        # several repeats is recorded as <case>-<n>.
+        benchmark-run-id: "${BENCHMARK_RUN_ID}"
+        benchmark-test-case: "${BENCHMARK_RECORD_NAME}"
+    spec:
+      restartPolicy: Never
+      # Time for boomer to delete its actors on a SIGTERM and wait for the last
+      # scrape: its teardown timeout, 45s, and the scrape wait, 15s.
+      terminationGracePeriodSeconds: 120
+      # Created by infra/terraform-gke. The RoleBinding below lets it read the
+      # endpoints the worker's k8s:/// ateapi target resolves through.
+      serviceAccountName: ${BENCHMARK_RUNNER_KSA}
+      containers:
+      - name: boomer
+        image: ${BOOMER_IMAGE}
+        imagePullPolicy: Always
+        # The master's address, the user class and the test case's worker
+        # flags; the image's entrypoint is boomer-worker.
+        args: ${BOOMER_WORKER_ARGS}
+        env:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+        ports:
+        - name: boomer-prom
+          containerPort: 8001
+          protocol: TCP
+        volumeMounts:
+        - name: servicedns-ca
+          mountPath: /run/servicedns-ca
+          readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        resources:
+          requests:
+            cpu: "1"
+            memory: "512Mi"
+
+      volumes:
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: ca.crt
+      # The benchmark's client identity, presented to ateapi over mTLS.
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+---
+# The account the pod runs as. infra/terraform-gke grants this exact
+# namespace/name pair objectCreator on the bucket through a principal://
+# subject, so no iam.gke.io annotation is needed here — but the two spellings
+# have to agree or the grant lands on nothing.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${BENCHMARK_RUNNER_KSA}
+  namespace: benchmarking
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: benchmarking-job-permissions
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: ${BENCHMARK_RUNNER_KSA}
+  namespace: benchmarking
+roleRef:
+  kind: Role
+  name: atelet-endpointslices
+  apiGroup: rbac.authorization.k8s.io

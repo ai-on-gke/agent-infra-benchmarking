@@ -33,12 +33,6 @@ if [[ -f .env.sh ]]; then
   source .env.sh
 fi
 
-if [[ -z "${LOCUST_IMAGE:-}" ]]; then
-  echo "Error: LOCUST_IMAGE must be set; .terraform-env.sh exports it, and .env.sh" >&2
-  echo "sources that." >&2
-  exit 1
-fi
-
 RUN_ID=""
 NO_BUILD=0
 # Passed to run_locust_job.sh for every case.
@@ -89,12 +83,8 @@ if [[ "${NO_BUILD}" -eq 0 ]]; then
   "${BENCHMARKING_DIR}/locust/build_and_push.sh"
 fi
 
-# Listed out of the pushed image, which is where run_locust_job.sh resolves each
-# case from, so the list and the cases come from the same tests.yaml. By digest,
-# because a local copy of the tag can be older than the registry's.
-pinned_image="$("${BENCHMARKING_DIR}/locust/pin_image.sh" "${LOCUST_IMAGE}")"
-cases="$(docker run --rm --platform "${LOCUST_IMAGE_PLATFORM:-linux/amd64}" \
-  --entrypoint /app/testcase-helper "${pinned_image}" --list)"
+# From the same tests.yaml run_locust_job.sh resolves each case from.
+cases="$(python3 "${BENCHMARKING_DIR}/test_case.py" --list)"
 CASES=()
 while IFS= read -r c; do
   if [[ -n "${c}" ]]; then
