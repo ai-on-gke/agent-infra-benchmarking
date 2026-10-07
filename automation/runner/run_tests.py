@@ -26,7 +26,7 @@ from pathlib import Path
 
 import yaml
 
-TESTS_FILE = Path(__file__).resolve().parent / "tests.yaml"
+TESTS_FILE = Path(__file__).resolve().parent.parent / "tests.yaml"
 
 
 def load_cases(tests_file: Path) -> dict[str, dict]:
