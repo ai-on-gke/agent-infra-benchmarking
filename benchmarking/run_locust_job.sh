@@ -41,6 +41,7 @@ BENCHMARKING_DIR="${ROOT}/benchmarking"
 if [[ -f .env.sh ]]; then
   source .env.sh
 fi
+source "${BENCHMARKING_DIR}/images/lib.sh"
 
 # Unset would render an empty image field, which kubectl rejects without
 # naming the cause.
@@ -954,8 +955,8 @@ fi
 
 # By digest, so what run_info records is what the Jobs' pods pull rather than
 # whatever the tag points to by then.
-LOCUST_IMAGE="$("${BENCHMARKING_DIR}/locust/pin_image.sh" "${LOCUST_IMAGE}")"
-BOOMER_IMAGE="$("${BENCHMARKING_DIR}/locust/pin_image.sh" "${BOOMER_IMAGE}")"
+LOCUST_IMAGE="$(pin_image "${LOCUST_IMAGE}")"
+BOOMER_IMAGE="$(pin_image "${BOOMER_IMAGE}")"
 export LOCUST_IMAGE BOOMER_IMAGE
 tag_image_with_run_id "${LOCUST_IMAGE}"
 tag_image_with_run_id "${BOOMER_IMAGE}"

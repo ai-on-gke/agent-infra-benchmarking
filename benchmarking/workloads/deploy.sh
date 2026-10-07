@@ -33,6 +33,7 @@ fi
 if [[ -f .env.sh ]]; then
   source .env.sh
 fi
+source benchmarking/images/lib.sh
 
 # Ensure BUCKET_NAME is set
 if [[ -z "${BUCKET_NAME:-}" ]]; then
@@ -138,53 +139,6 @@ run_kubectl_ate() {
 # subshell unchanged.
 run_ko() {
   (cd "${SUBSTRATE_DIR}" && hack/run-tool.sh ko "$@")
-}
-
-# resolve_image_digest prints the digest reference for the image tag it is
-# given. An ActorTemplate's image field takes a digest and rejects a tag, so
-# the registry is asked what the tag points at right now and the template names
-# whatever was last pushed. Called from the one loop iteration whose template
-# needs it, so a run without that template never reaches the registry. Progress
-# and errors go to stderr because the caller captures stdout.
-resolve_image_digest() {
-  local image="$1"
-  if [[ -z "${image}" ]]; then
-    echo "Error: no image reference to resolve; the one this template needs comes" >&2
-    echo "from .terraform-env.sh, which .env.sh sources." >&2
-    return 1
-  fi
-  if ! command -v gcloud &>/dev/null; then
-    echo "Error: gcloud is required to resolve ${image} to a digest." >&2
-    return 1
-  fi
-
-  local digest
-  digest="$(gcloud artifacts docker images describe "${image}" \
-    --format="value(image_summary.digest)" 2>/dev/null || true)"
-  # An unpushed tag and a registry that refused the request look the same from
-  # here, and both leave this empty. Either way the template cannot be created,
-  # so name the image that could not be resolved rather than substituting an
-  # empty image field.
-  if [[ "${digest}" != sha256:* ]]; then
-    echo "Error: cannot resolve ${image} to a digest." >&2
-    echo "Push it first with benchmarking/locust/build_and_push.sh, and check that" >&2
-    echo "the active gcloud account can read that Artifact Registry repository." >&2
-    return 1
-  fi
-
-  # The template takes the configured image path with the digest in place of
-  # the tag, not the digest on its own. The path comes from the argument rather
-  # than from the registry's own spelling of it, so the deployed reference is
-  # the one .env.sh configured even where a repository answers to more than one
-  # name. Only the last path segment can carry a tag, which leaves a registry
-  # host with a port alone; ${image%@*} handles an argument that already names
-  # a digest.
-  local repo="${image%@*}"
-  if [[ "${repo##*/}" == *:* ]]; then
-    repo="${repo%:*}"
-  fi
-  echo "  image: ${repo}@${digest}" >&2
-  printf '%s@%s\n' "${repo}" "${digest}"
 }
 
 substitute() {
@@ -351,9 +305,9 @@ deploy() {
   echo "  substrate:      ${SUBSTRATE_DIR} ($(cd "${SUBSTRATE_DIR}" && git rev-parse --short HEAD 2>/dev/null || echo 'unknown rev'))"
   substitute "${POOL_MANIFEST}" | run_ko apply -f -
   echo "Deploying mock-llm service..."
-  local mock_llm_digest
-  mock_llm_digest="$(resolve_image_digest "${MOCK_LLM_IMAGE:-}")"
-  sed "s|\${IMAGE_WITH_DIGEST}|${mock_llm_digest}|g" "${MANIFEST_DIR}/mock-llm.yaml.tmpl" | kubectl apply -f -
+  local mock_llm_image
+  mock_llm_image="$(pin_image "${MOCK_LLM_IMAGE:-}")"
+  sed "s|\${IMAGE_WITH_DIGEST}|${mock_llm_image}|g" "${MANIFEST_DIR}/mock-llm.yaml.tmpl" | kubectl apply -f -
   echo "Waiting for mock-llm to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
   kubectl rollout status deployment/mock-llm --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
 
@@ -382,7 +336,7 @@ deploy() {
     # local's status and hide a failed lookup from errexit.
     image_with_digest=""
     if [[ "${template}" == "openclaw" ]]; then
-      image_with_digest="$(resolve_image_digest "${OPENCLAW_IMAGE:-}")"
+      image_with_digest="$(pin_image "${OPENCLAW_IMAGE:-}")"
     fi
     # ko resolve builds the ko:// image references and replaces them with
     # pushed digests before the manifest reaches kubectl-ate.

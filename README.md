@@ -13,7 +13,7 @@ Backend for benchmarks and corresponding recipes for agent infra offerings.
 - **`jq`** and **`envsubst`** (the `gettext` package) — used throughout
   `benchmarking/*.sh` and `.terraform-env.sh`.
 - **Docker**, with `linux/amd64` emulation available if your machine isn't
-  already amd64. `benchmarking/locust/build_and_push.sh` always builds and
+  already amd64. `benchmarking/images/lib.sh` always builds and
   pushes `linux/amd64` images, to match the GKE nodes, regardless of the
   build host's architecture.
 - **`gcloud`**, authenticated via `gcloud auth application-default login`,
