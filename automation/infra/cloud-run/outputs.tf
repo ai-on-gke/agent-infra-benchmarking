@@ -17,3 +17,8 @@ output "execute_command" {
   description = "Runs the job once, now."
   value       = "gcloud run jobs execute ${google_cloud_run_v2_job.job.name} --project=${var.project_id} --region=${var.region}"
 }
+
+output "runner_state_bucket" {
+  description = "Bucket holding runner/infra's Terraform state: run_tests.py's --state-bucket."
+  value       = google_storage_bucket.runner_state.name
+}

@@ -78,3 +78,10 @@ variable "time_zone" {
   type        = string
   default     = "Etc/UTC"
 }
+
+# Bucket names are global, hence the project ID in the default.
+variable "runner_state_bucket" {
+  description = "Name of the bucket holding runner/infra's Terraform state. Empty takes <project_id>-<name>."
+  type        = string
+  default     = ""
+}

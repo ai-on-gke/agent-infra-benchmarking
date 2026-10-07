@@ -1,6 +1,10 @@
+locals {
+  runner_state_bucket = var.runner_state_bucket != "" ? var.runner_state_bucket : "${var.project_id}-${var.name}"
+}
+
 resource "google_project_service" "services" {
   for_each = toset(concat(
-    ["run.googleapis.com"],
+    ["run.googleapis.com", "storage.googleapis.com"],
     var.schedule == null ? [] : ["cloudscheduler.googleapis.com"],
   ))
 
@@ -9,10 +13,35 @@ resource "google_project_service" "services" {
   disable_on_destroy = false
 }
 
-# Holds no roles here: grant it whatever the job's container needs.
+# Holds only the runner state bucket here: grant it whatever else the job's
+# container needs.
 resource "google_service_account" "job" {
   account_id   = var.name
   display_name = "Cloud Run job ${var.name}"
+}
+
+# Holds the Terraform state of runner/infra, one prefix per execution.
+resource "google_storage_bucket" "runner_state" {
+  name     = local.runner_state_bucket
+  location = var.region
+
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  # No force_destroy: a state left in it may be the only record of an
+  # execution's infra that is still up.
+
+  # Recovers a state an execution overwrote or deleted by mistake.
+  versioning {
+    enabled = true
+  }
+
+  depends_on = [google_project_service.services]
+}
+
+resource "google_storage_bucket_iam_member" "job_runner_state" {
+  bucket = google_storage_bucket.runner_state.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.job.email}"
 }
 
 resource "google_cloud_run_v2_job" "job" {
