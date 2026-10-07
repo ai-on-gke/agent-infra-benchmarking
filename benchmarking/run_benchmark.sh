@@ -44,6 +44,7 @@ BENCHMARK_RUNNER_KSA="${BENCHMARK_RUNNER_KSA:-benchmark-runner}"
 # Case keys that are not worker flags; every other key becomes `--key=value`.
 NON_WORKER_KEYS='["duration","users","spawn-rate","worker-count","sandbox-class","max-failure-ratio","warm-up","repeats"]'
 
+TEMPLATES_DIR=benchmarking/workloads/manifests
 # Have to match the WorkerPool in the manifest.
 POOL_MANIFEST=benchmarking/workloads/manifests/worker-pool.yaml.tmpl
 POOL_NAME=benchmark-ateom
@@ -60,15 +61,18 @@ TEST_CASE_NAME=""
 TEST_CASE_JSON=""
 RUN_ID=""
 NO_BUILD=0
+NO_DEPLOY=0
 
 usage() {
-  echo "Usage: $0 --test-case-name NAME --test-case JSON [--run-id ID] [--no-build]"
+  echo "Usage: $0 --test-case-name NAME --test-case JSON [--run-id ID] [--no-build] [--no-deploy]"
   echo ""
   echo "  --test-case-name NAME  What the run is recorded under: the benchmark-test-case"
   echo "                         label and the test_case label in Prometheus."
   echo "  --test-case JSON       The case's keys as a JSON object, as in tests.yaml."
   echo "  --run-id ID            The run this case is part of (default: a UTC timestamp)."
   echo "  --no-build             Use the images already pushed rather than building them."
+  echo "  --no-deploy            Use the workloads already deployed rather than deploying"
+  echo "                         the case's ActorTemplate and taking its golden snapshot."
   echo ""
   echo "LOCUST_IMAGE and BOOMER_IMAGE must be set; .env.sh is sourced if present."
   echo "USE_CLOUD_BUILD=1 builds the images on Cloud Build instead of local Docker."
@@ -83,6 +87,7 @@ while [[ "$#" -gt 0 ]]; do
     --run-id) shift; RUN_ID="$1" ;;
     --run-id=*) RUN_ID="${1#*=}" ;;
     --no-build) NO_BUILD=1 ;;
+    --no-deploy) NO_DEPLOY=1 ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "Error: Unknown option: $1" >&2
@@ -121,6 +126,11 @@ SANDBOX_CLASS="$(jq -r '."sandbox-class" // "gvisor"' <<<"${TEST_CASE_JSON}")"
 [[ "${WORKER_COUNT}" =~ ^[0-9]+$ ]] || die "\`worker-count\` must be a whole number, got '${WORKER_COUNT}'."
 [[ "${SANDBOX_CLASS}" == gvisor || "${SANDBOX_CLASS}" == microvm ]] ||
   die "\`sandbox-class\` must be gvisor or microvm, got '${SANDBOX_CLASS}'."
+# Empty deploys workloads/deploy.sh's default set of templates.
+TEMPLATE="$(jq -r '."workload-template" // ."workload-name" // empty' <<<"${TEST_CASE_JSON}")"
+if [[ "${NO_DEPLOY}" -eq 0 && -n "${TEMPLATE}" && ! -f "${TEMPLATES_DIR}/${TEMPLATE}-template.yaml.tmpl" ]]; then
+  die "no ${TEMPLATES_DIR}/${TEMPLATE}-template.yaml.tmpl to deploy the case's workload from."
+fi
 [[ -f "${SUBSTRATE_DIR}/go.mod" ]] ||
   die "the substrate submodule is not checked out: git submodule update --init dependency-repos/substrate"
 
@@ -240,6 +250,11 @@ wait_for_jobs() {
 if [[ "${NO_BUILD}" -eq 0 ]]; then
   echo "=== Building and pushing images ==="
   benchmarking/locust/build_and_push.sh
+  # The workload images are only read when the workloads are deployed.
+  if [[ "${NO_DEPLOY}" -eq 0 ]]; then
+    echo
+    benchmarking/workloads/build_and_push.sh
+  fi
   echo
 fi
 
@@ -260,6 +275,15 @@ kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply
 echo "Deleting any previous ${MASTER_JOB} and ${WORKER_JOB}..."
 kubectl delete job "${MASTER_JOB}" "${WORKER_JOB}" --namespace="${NAMESPACE}" \
   --ignore-not-found --cascade=foreground --wait=true
+
+# Redeploying retakes the golden snapshot. The deploy's pool is only there to
+# take it, so it keeps deploy.sh's single worker; the run's own pool follows.
+if [[ "${NO_DEPLOY}" -eq 0 ]]; then
+  echo
+  echo "=== Deploying workloads ==="
+  WORKLOAD_TEMPLATES="${TEMPLATE}" benchmarking/workloads/deploy.sh --deploy --sandbox-class "${SANDBOX_CLASS}"
+  echo
+fi
 
 recreate_worker_pool
 echo
