@@ -1,12 +1,10 @@
-[
-  {
-    "image_var": "LOCUST_IMAGE",
+{
+  "locust-test": {
     "description": "The locust master.",
     "dockerfile": "benchmarking/locust/master-image/Dockerfile",
     "context": "benchmarking/locust/master-image"
   },
-  {
-    "image_var": "BOOMER_IMAGE",
+  "boomer-worker": {
     "description": "The boomer worker. go.mod replaces the substrate module with the submodule, which the build reads as a second context.",
     "dockerfile": "benchmarking/locust/go/Dockerfile",
     "context": "benchmarking/locust/go",
@@ -14,4 +12,4 @@
       "substrate": "dependency-repos/substrate"
     }
   }
-]
+}

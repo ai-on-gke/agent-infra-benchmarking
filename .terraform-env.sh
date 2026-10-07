@@ -101,19 +101,12 @@ BUCKET_NAME="$(_tf_value '.bucket_name.value' 'bucket_name')" || return 1 2>/dev
 export BUCKET_NAME
 
 # The Artifact Registry repository Terraform created, as an image path prefix.
-# Images built against this file land in the repository this deployment owns,
-# which is the one its cluster is granted to pull from.
+# benchmarking/images/lib.sh names every image under it, so they land in the
+# repository this deployment owns, which is the one its cluster is granted to
+# pull from.
 DOCKER_REPO="$(_tf_value '.artifact_registry_docker_repo.value' 'artifact_registry_docker_repo')" || return 1 2>/dev/null || exit 1
 export DOCKER_REPO
 export KO_DOCKER_REPO="${DOCKER_REPO}"
-
-# The images this repo builds, named here rather than in the scripts that push
-# them so that a build and a deployment cannot disagree about where the image
-# lives.
-export LOCUST_IMAGE="${DOCKER_REPO}/locust-test:latest"
-export BOOMER_IMAGE="${DOCKER_REPO}/boomer-worker:latest"
-export OPENCLAW_IMAGE="${DOCKER_REPO}/openclaw-workload:latest"
-export MOCK_LLM_IMAGE="${DOCKER_REPO}/mock-llm:latest"
 
 unset -f _tf_value
 unset _TF_DIR _TF_OUT

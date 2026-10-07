@@ -34,18 +34,6 @@ USE_CLOUD_BUILD="${USE_CLOUD_BUILD:-0}"
 # Registry hosts docker_login has already logged in to.
 LOGGED_IN_HOSTS=" "
 
-# require_image_vars stops when any of the named image variables is unset.
-require_image_vars() {
-  local var
-  for var in "$@"; do
-    if [[ -z "${!var:-}" ]]; then
-      echo "Error: ${var} must be set; .terraform-env.sh exports it, and .env.sh" >&2
-      echo "sources that. An .env.sh not built from env.sh.example has to set it itself." >&2
-      exit 1
-    fi
-  done
-}
-
 # Authenticate to the registry host an image names, rather than assuming
 # `gcloud auth configure-docker <host>` has been run for it. Docker consults
 # ~/.docker/config.json by host, so a repository in a project or a location
@@ -70,11 +58,13 @@ docker_login() {
   LOGGED_IN_HOSTS+="${host} "
 }
 
-# For an image of an images.json, with its .tag and .platform filled in: its
-# docker build arguments, and the paths that build reads.
+# For an image of an images.json, with its key as .name: its full name under
+# $repo. With its .ref and .platform filled in as well: its docker build
+# arguments, and the paths that build reads.
 IMAGES_JQ='
+def ref($repo): "\($repo)/\(.name):\(.tag // "latest")";
 def build_args:
-  ["build", "--platform", .platform, "-t", .tag, "-f", .dockerfile]
+  ["build", "--platform", .platform, "-t", .ref, "-f", .dockerfile]
   + (.build_contexts // {} | to_entries | map("--build-context", "\(.key)=\(.value)"))
   + (.build_args // {} | to_entries | map("--build-arg", "\(.key)=\(.value)"))
   + (if .target then ["--target", .target] else [] end)
@@ -87,11 +77,21 @@ def sources:
   + ($i.build_contexts // {} | [.[]]);
 '
 
-# build_and_push_images --images-file PATH [--images-file PATH]... builds and
-# pushes the images listed in each images.json, each image with the variable
-# that holds its tag.
-build_and_push_images() {
-  local files=() images vars var named=() tags
+# Every image is named under DOCKER_REPO, so nothing can build or deploy one
+# without it.
+require_docker_repo() {
+  if [[ -z "${DOCKER_REPO:-}" ]]; then
+    echo "Error: DOCKER_REPO must be set to name the images; .terraform-env.sh" >&2
+    echo "exports it, and .env.sh sources that." >&2
+    exit 1
+  fi
+}
+
+# read_images_files --images-file PATH [--images-file PATH]... prints the
+# images of every images.json named as one JSON array, each with its key as
+# .name.
+read_images_files() {
+  local files=() duplicates
   while [[ "$#" -gt 0 ]]; do
     case "$1" in
       --images-file) shift; files+=("$1") ;;
@@ -107,16 +107,35 @@ build_and_push_images() {
     echo "Error: no --images-file given." >&2
     exit 1
   fi
-  images="$(jq -cs 'add' "${files[@]}")"
+  duplicates="$(jq -rs '[.[] | keys[]] | group_by(.) | map(select(length > 1)[0]) | join(" ")' "${files[@]}")"
+  if [[ -n "${duplicates}" ]]; then
+    echo "Error: ${duplicates} named in more than one of ${files[*]}." >&2
+    exit 1
+  fi
+  jq -cs 'add | to_entries | map(.value + {name: .key})' "${files[@]}"
+}
 
-  mapfile -t vars < <(jq -r '.[].image_var' <<<"${images}")
-  require_image_vars "${vars[@]}"
-  for var in "${vars[@]}"; do
-    named+=(--arg "${var}" "${!var}")
-  done
-  tags="$(jq -cn '$ARGS.named' "${named[@]}")"
-  images="$(jq -c --argjson tags "${tags}" --arg platform "${PLATFORM}" \
-    'map(.tag = $tags[.image_var] | .platform //= $platform)' <<<"${images}")"
+# image_ref FILE NAME prints the image NAME of the images.json FILE as
+# ${DOCKER_REPO}/NAME:<tag>, the tag defaulting to latest.
+image_ref() {
+  local file="$1" name="$2"
+  require_docker_repo
+  if ! jq -er --arg name "${name}" --arg repo "${DOCKER_REPO}" "${IMAGES_JQ}"'
+      .[$name] // empty | .name = $name | ref($repo)' "${file}"; then
+    echo "Error: no image ${name} in ${file}." >&2
+    exit 1
+  fi
+}
+
+# build_and_push_images --images-file PATH [--images-file PATH]... builds and
+# pushes the images listed in each images.json, under the names image_ref
+# gives them.
+build_and_push_images() {
+  local images
+  require_docker_repo
+  images="$(read_images_files "$@")"
+  images="$(jq -c --arg repo "${DOCKER_REPO}" --arg platform "${PLATFORM}" "${IMAGES_JQ}"'
+    map(.ref = ref($repo) | .platform //= $platform)' <<<"${images}")"
 
   if [[ "${USE_CLOUD_BUILD}" == "1" ]]; then
     cloud_build_and_push_images "${images}"
@@ -127,22 +146,22 @@ build_and_push_images() {
 
 # Builds and pushes each image of the JSON array $1 in turn.
 docker_build_and_push_images() {
-  local image_list image tag args_sh argv first=1
+  local image_list image ref args_sh argv first=1
   mapfile -t image_list < <(jq -c '.[]' <<<"$1")
   for image in "${image_list[@]}"; do
-    tag="$(jq -r '.tag' <<<"${image}")"
+    ref="$(jq -r '.ref' <<<"${image}")"
     # @sh quotes each argument for eval, whatever characters it holds.
     args_sh="$(jq -r "${IMAGES_JQ}"'build_args | @sh' <<<"${image}")"
     eval "argv=(${args_sh})"
 
     [[ "${first}" -eq 1 ]] || echo
     first=0
-    docker_login "${tag}"
-    echo "Building Docker image: ${tag} (platform: $(jq -r '.platform' <<<"${image}"))"
+    docker_login "${ref}"
+    echo "Building Docker image: ${ref} (platform: $(jq -r '.platform' <<<"${image}"))"
     docker "${argv[@]}"
 
-    echo "Pushing ${tag}..."
-    docker push "${tag}"
+    echo "Pushing ${ref}..."
+    docker push "${ref}"
   done
 }
 
@@ -166,19 +185,19 @@ cloud_build_and_push_images() {
   # default to.
   jq "${IMAGES_JQ}"'{
     steps: map({
-      id: .image_var,
+      id: .name,
       name: "gcr.io/cloud-builders/docker:24.0.9",
       env: ["DOCKER_BUILDKIT=1"],
       args: build_args,
       waitFor: ["-"]
     }),
-    images: map(.tag),
+    images: map(.ref),
     timeout: "3600s",
     options: {machineType: "E2_HIGHCPU_8"}
   }' <<<"${images}" >"${dir}/cloudbuild.json"
 
   echo "Building on Cloud Build:"
-  jq -r '.[] | "  \(.tag) (platform: \(.platform))"' <<<"${images}"
+  jq -r '.[] | "  \(.ref) (platform: \(.platform))"' <<<"${images}"
   # gcloud streams the build log, but Python holds it back until the build ends
   # when stdout is not a terminal.
   PYTHONUNBUFFERED=1 gcloud builds submit "${dir}/source.tgz" \
@@ -194,8 +213,7 @@ cloud_build_and_push_images() {
 pin_image() {
   local image="$1" digest repo
   if [[ -z "${image}" ]]; then
-    echo "Error: no image to pin; the image names come from .terraform-env.sh," >&2
-    echo "which .env.sh sources." >&2
+    echo "Error: no image to pin; image_ref names one from its images.json." >&2
     return 1
   fi
   # An unpushed tag and a registry that refused the request both leave this

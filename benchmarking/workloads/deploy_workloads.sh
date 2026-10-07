@@ -321,8 +321,9 @@ deploy() {
   echo "  bucket:         gs://${BUCKET_NAME}/benchmark-workloads/"
   echo "  substrate:      ${SUBSTRATE_DIR} ($(cd "${SUBSTRATE_DIR}" && git rev-parse --short HEAD 2>/dev/null || echo 'unknown rev'))"
   echo "Deploying mock-llm service..."
-  local mock_llm_image
-  mock_llm_image="$(pin_image "${MOCK_LLM_IMAGE:-}")"
+  local mock_llm_ref mock_llm_image
+  mock_llm_ref="$(image_ref benchmarking/workloads/images.json mock-llm)"
+  mock_llm_image="$(pin_image "${mock_llm_ref}")"
   sed "s|\${IMAGE_WITH_DIGEST}|${mock_llm_image}|g" "${MANIFEST_DIR}/mock-llm.yaml.tmpl" | kubectl apply -f -
   echo "Waiting for mock-llm to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
   kubectl rollout status deployment/mock-llm --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
@@ -336,7 +337,7 @@ deploy() {
   # the old template first. This removal is safe, because the benchmark
   # automation deletes the actors between the tests; it also removes the old
   # golden actor and snapshot server-side.
-  local template image_with_digest
+  local template openclaw_ref image_with_digest
   for template in "${TEMPLATES[@]}"; do
     run_kubectl_ate delete actor-template "${template}" -a benchmark-workloads \
       >/dev/null 2>&1 || true
@@ -346,7 +347,8 @@ deploy() {
     # local's status and hide a failed lookup from errexit.
     image_with_digest=""
     if [[ "${template}" == "openclaw" ]]; then
-      image_with_digest="$(pin_image "${OPENCLAW_IMAGE:-}")"
+      openclaw_ref="$(image_ref benchmarking/workloads/images.json openclaw-workload)"
+      image_with_digest="$(pin_image "${openclaw_ref}")"
     fi
     # ko resolve builds the ko:// image references and replaces them with
     # pushed digests before the manifest reaches kubectl-ate.

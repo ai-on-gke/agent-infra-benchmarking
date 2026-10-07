@@ -73,7 +73,7 @@ usage() {
   echo "                         deploying the case's ActorTemplate and taking its golden snapshot."
   echo "                         The WorkerPool is recreated either way."
   echo ""
-  echo "LOCUST_IMAGE and BOOMER_IMAGE must be set; .env.sh is sourced if present."
+  echo "The images are named under DOCKER_REPO; .env.sh is sourced if present."
   echo "USE_CLOUD_BUILD=1 builds the images on Cloud Build instead of local Docker."
 }
 
@@ -102,10 +102,10 @@ die() {
   exit 1
 }
 
-for var in LOCUST_IMAGE BOOMER_IMAGE; do
-  [[ -n "${!var:-}" ]] || die "${var} must be set."
-done
 command -v jq &>/dev/null || die "jq is required to turn the test case into the Jobs' arguments."
+# The images the manifests name, with or without a build.
+LOCUST_IMAGE="$(image_ref benchmarking/locust/images.json locust-test)"
+BOOMER_IMAGE="$(image_ref benchmarking/locust/images.json boomer-worker)"
 
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dt%H%M%Sz)}"
 # Both end up as label values, which the API server would reject less clearly.

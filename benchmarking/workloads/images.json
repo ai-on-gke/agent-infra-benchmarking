@@ -1,14 +1,12 @@
-[
-  {
-    "image_var": "OPENCLAW_IMAGE",
+{
+  "openclaw-workload": {
     "description": "The actor the openclaw workload drives. The Dockerfile installs openclaw from npm and copies one script, so its context is its own directory.",
     "dockerfile": "demos/openclaw/Dockerfile",
     "context": "demos/openclaw"
   },
-  {
-    "image_var": "MOCK_LLM_IMAGE",
+  "mock-llm": {
     "description": "The mock LLM deployed beside the workloads.",
     "dockerfile": "demos/mock-llm/Dockerfile",
     "context": "demos/mock-llm"
   }
-]
+}
