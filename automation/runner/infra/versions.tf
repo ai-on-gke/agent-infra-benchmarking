@@ -1,8 +1,8 @@
 terraform {
   required_version = ">= 1.5"
 
-  # No backend here, so state is local by default. A backend_override.tf
-  # (gitignored) moves it to a GCS bucket instead.
+  # run_tests.py gives terraform init the bucket and the execution's prefix.
+  backend "gcs" {}
 
   required_providers {
     google = {

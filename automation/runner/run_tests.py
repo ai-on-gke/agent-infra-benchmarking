@@ -14,19 +14,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runs the cases in tests.yaml one after another: every case in the order
-listed, or the ones --test-case-name names in the order given."""
+"""Applies the runner's infra/, then runs the cases in tests.yaml one after
+another: every case in the order listed, or the ones --test-case-name names in
+the order given."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import shutil
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
 
-TESTS_FILE = Path(__file__).resolve().parent.parent / "tests.yaml"
+RUNNER_DIR = Path(__file__).resolve().parent
+TESTS_FILE = RUNNER_DIR.parent / "tests.yaml"
+INFRA_DIR = RUNNER_DIR / "infra"
+# Each execution's state is under STATE_PREFIX/<name> in the state bucket.
+STATE_PREFIX = "automation/runner"
 
 
 def load_cases(tests_file: Path) -> dict[str, dict]:
@@ -38,6 +46,28 @@ def load_cases(tests_file: Path) -> dict[str, dict]:
         if not isinstance(case, dict):
             raise ValueError(f"{tests_file}: case {name} is not a mapping")
     return cases
+
+
+def apply_infra(project_id: str, region: str, name: str, state_bucket: str) -> None:
+    def terraform(*args: str) -> None:
+        subprocess.run(["terraform", f"-chdir={INFRA_DIR}", *args], check=True)
+
+    # -reconfigure, as the .terraform/ left by the last execution names its prefix.
+    terraform(
+        "init",
+        "-input=false",
+        "-reconfigure",
+        f"-backend-config=bucket={state_bucket}",
+        f"-backend-config=prefix={STATE_PREFIX}/{name}",
+    )
+    terraform(
+        "apply",
+        "-input=false",
+        "-auto-approve",
+        f"-var=project_id={project_id}",
+        f"-var=region={region}",
+        f"-var=name={name}",
+    )
 
 
 def run_case(name: str, case: dict) -> None:
@@ -54,6 +84,14 @@ def main() -> None:
         metavar="NAME",
         help="a case to run; repeat it for more. Default: every case",
     )
+    p.add_argument("--project-id", required=True, help="GCP project to create the infra in")
+    p.add_argument("--region", default="us-central1", help="default: %(default)s")
+    p.add_argument("--state-bucket", required=True, help="GCS bucket holding the infra's Terraform state")
+    p.add_argument(
+        "--name",
+        default=datetime.now(timezone.utc).strftime("run-%Y%m%dt%H%M%Sz"),
+        help="this execution's infra and state prefix; unique to it. Default: run-<UTC timestamp>",
+    )
     args = p.parse_args()
 
     try:
@@ -66,6 +104,13 @@ def main() -> None:
     unknown = [name for name in names if name not in cases]
     if unknown:
         sys.exit(f"run_tests: no case {', '.join(unknown)} in {args.tests_file}; it has {', '.join(cases)}")
+
+    if not shutil.which("terraform"):
+        sys.exit("run_tests: terraform is required to apply the infra")
+    try:
+        apply_infra(args.project_id, args.region, args.name, args.state_bucket)
+    except subprocess.CalledProcessError as exc:
+        sys.exit(f"run_tests: terraform {exc.cmd[2]} failed in {INFRA_DIR}")
 
     for name in names:
         run_case(name, cases[name])
