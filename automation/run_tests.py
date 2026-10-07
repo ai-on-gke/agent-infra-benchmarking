@@ -14,7 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runs every case in tests.yaml, one after another, in the order listed."""
+"""Runs the cases in tests.yaml one after another: every case in the order
+listed, or the ones --test-case-name names in the order given."""
 
 from __future__ import annotations
 
@@ -47,6 +48,12 @@ def run_case(name: str, case: dict) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--tests-file", type=Path, default=TESTS_FILE, help=f"default: {TESTS_FILE}")
+    p.add_argument(
+        "--test-case-name",
+        action="append",
+        metavar="NAME",
+        help="a case to run; repeat it for more. Default: every case",
+    )
     args = p.parse_args()
 
     try:
@@ -54,8 +61,14 @@ def main() -> None:
     except (OSError, ValueError, yaml.YAMLError) as exc:
         sys.exit(f"run_tests: {exc}")
 
-    for name, case in cases.items():
-        run_case(name, case)
+    # dict.fromkeys drops repeated names, keeping the first.
+    names = list(dict.fromkeys(args.test_case_name or cases))
+    unknown = [name for name in names if name not in cases]
+    if unknown:
+        sys.exit(f"run_tests: no case {', '.join(unknown)} in {args.tests_file}; it has {', '.join(cases)}")
+
+    for name in names:
+        run_case(name, cases[name])
 
 
 if __name__ == "__main__":
