@@ -39,7 +39,7 @@ import (
 	// Imported for the user class each registers via init(). runworkload is
 	// named rather than blank because its settings are declared here, as
 	// flags, and handed over with runworkload.SetOptions.
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/internal/benchmarking/boomer/runworkload"
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/runworkload"
 	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
 )
 

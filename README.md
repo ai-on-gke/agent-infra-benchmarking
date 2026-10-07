@@ -3,7 +3,7 @@ Backend for benchmarks and corresponding recipes for agent infra offerings.
 
 ## Prerequisites
 
-- **Go 1.27+** — matches [`go.mod`](go.mod); also builds `kubectl-ate` below.
+- **Go 1.27+** — matches [`go.mod`](benchmarking/locust/go/go.mod); also builds `kubectl-ate` below.
 - **`kubectl`**, recent enough to work with the ClusterTrustBundle/PodCertificateRequest
   APIs substrate depends on (GKE 1.36+ serves them; kubectl 1.31 or newer is
   what's been tested against this repo).

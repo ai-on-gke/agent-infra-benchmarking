@@ -1,8 +1,8 @@
-module github.com/agent-substrate/substrate/agent-infra-benchmarking
+module github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go
 
 go 1.27.0
 
-replace github.com/agent-substrate/substrate => ./dependency-repos/substrate
+replace github.com/agent-substrate/substrate => ../../../dependency-repos/substrate
 
 require (
 	github.com/agent-substrate/substrate v0.1.0

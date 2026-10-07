@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Build context must be the monorepo root so the Go builder can pull in
-# cmd/, internal/ and the substrate submodule. build_and_push.sh sets this up.
+# benchmarking/locust/go/ and the substrate submodule. build_and_push.sh sets this up.
 #
 # Every base image is pinned by digest, the tag beside it saying which one it
 # was taken from, so a rebuild of the same commit is the same image.
@@ -31,16 +31,16 @@ FROM golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be902
 # The image's own Go, which has to satisfy go.mod's go line. auto would
 # download a newer toolchain mid-build whenever go.mod asked for one.
 ENV GOTOOLCHAIN=local
-WORKDIR /src
-COPY dependency-repos/substrate ./dependency-repos/substrate
-COPY go.mod go.sum ./
+COPY dependency-repos/substrate /src/dependency-repos/substrate
+# go.mod's replace reaches the submodule as ../../../dependency-repos/substrate.
+WORKDIR /src/benchmarking/locust/go
+COPY benchmarking/locust/go/go.mod benchmarking/locust/go/go.sum ./
 RUN go mod download
-COPY cmd ./cmd
-COPY internal ./internal
+COPY benchmarking/locust/go ./
 # Read from outside the image too: run_locust_job.sh resolves a case by running
 # this binary, so the host needs no YAML parser of its own.
-RUN CGO_ENABLED=0 go build -o /out/testcase-helper ./cmd/benchmarking/testcase-helper
-RUN CGO_ENABLED=0 go build -o /out/boomer-worker ./cmd/benchmarking/boomer-worker
+RUN CGO_ENABLED=0 go build -o /out/testcase-helper ./cmd/testcase-helper
+RUN CGO_ENABLED=0 go build -o /out/boomer-worker ./cmd/boomer-worker
 
 # Stage 3: Distroless runner. Carries the locust install AND the boomer
 # binary; the manifest decides which to launch via the `args` field.

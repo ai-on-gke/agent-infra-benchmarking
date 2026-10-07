@@ -11,6 +11,9 @@ permissions:
 jobs:
   go:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: benchmarking/locust/go
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -19,10 +22,11 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: benchmarking/locust/go/go.mod
+          cache-dependency-path: benchmarking/locust/go/go.sum
       - name: gofmt
         run: |
-          unformatted="$(gofmt -l cmd internal)"
+          unformatted="$(gofmt -l .)"
           if [ -n "$unformatted" ]; then
             echo "Not gofmt-formatted:"
             echo "$unformatted"

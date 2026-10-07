@@ -16,7 +16,7 @@
 its steady-state stats.
 
 The real load implementation lives in the boomer-Go worker at
-internal/benchmarking/boomer/runworkload/; this Python class is declared only
+benchmarking/locust/go/internal/runworkload/; this Python class is declared only
 so the master's --class-picker enumerates the name. A Python worker container
 would set LOCUST_NO_RUNWORKLOAD_USER=1 to skip loading this file, leaving
 boomer as the sole owner of RunWorkloadUser load.

@@ -25,7 +25,7 @@
 // The workload the actor runs is a parameter: --workload-name selects an
 // implementation of the workload interface (see workload.go) and
 // --workload-template overrides the ActorTemplate it names. Both flags are
-// declared by cmd/benchmarking/boomer-worker and arrive through SetOptions.
+// declared by benchmarking/locust/go/cmd/boomer-worker and arrive through SetOptions.
 package runworkload
 
 import (
@@ -121,7 +121,7 @@ const (
 
 // Options are the runworkload-only settings of a run, handed to this package
 // rather than parsed by it: every flag the worker accepts is declared in
-// cmd/benchmarking/boomer-worker. The zero value asks for the defaults.
+// benchmarking/locust/go/cmd/boomer-worker. The zero value asks for the defaults.
 type Options struct {
 	// Workload names a registered workload (see workload.go). Empty selects
 	// DefaultWorkload.
