@@ -2,7 +2,7 @@ terraform {
   required_version = ">= 1.5"
 
   backend "gcs" {
-    bucket = "agent-substrate-auto-benchmarking-state"
+    bucket = "agent-substrate-bench-nightly-tfstate"
     prefix = "automation/cloud-run/agent-substrate-bench-nightly"
   }
 }
