@@ -24,6 +24,6 @@ output "runner_state_bucket" {
 }
 
 output "runner_image" {
-  description = "The runner image the job runs, tagged by the hash of its sources."
-  value       = terraform_data.runner_image.output
+  description = "The runner image the job runs, by digest."
+  value       = data.google_artifact_registry_docker_image.runner.self_link
 }

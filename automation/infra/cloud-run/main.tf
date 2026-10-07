@@ -8,13 +8,20 @@ locals {
     for f in fileset(local.runner_context, "runner/**") : f
     if !can(regex("(^|/)(\\.terraform|__pycache__)/|\\.tfstate|\\.tfvars$", f))
   ])
-  # Tags the image, so that a change to any of its sources or to the build
-  # rebuilds it on apply, and nothing else does.
+  # Rebuilds the image on apply when any of its sources or the build changes,
+  # also uncommitted, as the commit it is tagged with does not.
   runner_hash = sha1(join("\n", concat(
     [for f in local.runner_sources : "${f} ${filesha1("${local.runner_context}/${f}")}"],
     [filesha1("${path.module}/cloudbuild.yaml")],
   )))
-  runner_image = "${google_artifact_registry_repository.images.registry_uri}/test-runner:${local.runner_hash}"
+  runner_image_name = "test-runner:${data.external.git.result.commit}"
+  runner_image      = "${google_artifact_registry_repository.images.registry_uri}/${local.runner_image_name}"
+}
+
+# The repo's commit, which the image is tagged with like the other images.
+data "external" "git" {
+  program     = ["sh", "-c", "printf '{\"commit\": \"%s\"}' \"$(git rev-parse HEAD)\""]
+  working_dir = path.module
 }
 
 resource "google_project_service" "services" {
@@ -68,10 +75,11 @@ resource "google_artifact_registry_repository" "images" {
 }
 
 # Builds and pushes the runner image on Cloud Build, so apply needs gcloud but
-# no Docker. Replaced, and so run again, whenever runner_hash changes.
+# no Docker. Replaced, and so run again, whenever the commit or runner_hash
+# changes.
 resource "terraform_data" "runner_image" {
   input            = local.runner_image
-  triggers_replace = local.runner_image
+  triggers_replace = [local.runner_image, local.runner_hash]
 
   provisioner "local-exec" {
     command = "gcloud builds submit \"$CONTEXT\" --project=\"$PROJECT\" --config=\"$CONFIG\" --ignore-file=.dockerignore --substitutions=_IMAGE=\"$IMAGE\""
@@ -82,6 +90,16 @@ resource "terraform_data" "runner_image" {
       IMAGE   = local.runner_image
     }
   }
+}
+
+# The image just pushed, by digest: a rebuild of the same commit keeps the tag
+# but still changes the job's image.
+data "google_artifact_registry_docker_image" "runner" {
+  location      = google_artifact_registry_repository.images.location
+  repository_id = google_artifact_registry_repository.images.repository_id
+  image_name    = local.runner_image_name
+
+  depends_on = [terraform_data.runner_image]
 }
 
 resource "google_cloud_run_v2_job" "job" {
@@ -102,7 +120,7 @@ resource "google_cloud_run_v2_job" "job" {
       max_retries     = var.max_retries
 
       containers {
-        image   = terraform_data.runner_image.output
+        image   = data.google_artifact_registry_docker_image.runner.self_link
         command = var.command
         args    = var.args
 
