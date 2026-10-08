@@ -135,10 +135,10 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
    gcloud run jobs execute "$DEPLOYMENT" --project="$PROJECT_ID" --region="$REGION" --wait
    ```
 
-   Or with [`scripts/trigger.sh`](scripts/trigger.sh), which starts it through
+   Or with [`tools/trigger`](tools/trigger), which starts it through
    the Cloud Run Admin API, as an external caller would, and prints its log as
    it comes in. It also needs `jq`:
 
    ```bash
-   automation-infra/scripts/trigger.sh "$DEPLOYMENT"
+   automation-infra/tools/trigger "$DEPLOYMENT"
    ```

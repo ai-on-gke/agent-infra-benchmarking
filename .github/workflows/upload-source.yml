@@ -5,7 +5,7 @@ name: Upload source
 # commit to latest.txt beside it, for each deployment in the matrix. The
 # bucket is the state_bucket local of the deployment's main.tf, and its key
 # the secret GCP_CREDENTIALS_<DEPLOYMENT>, which
-# automation-infra/scripts/get-gh-actions-gcs-config sets.
+# automation-infra/tools/get-gh-actions-gcs-config sets.
 
 on:
   push:

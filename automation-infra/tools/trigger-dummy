@@ -15,11 +15,11 @@
 # limitations under the License.
 
 # Runs tests.yaml's dummy case in a deployment's Cloud Run job with
-# trigger.sh, passing every other orchestrator option on unchanged. Its cluster
+# trigger, passing every other orchestrator option on unchanged. Its cluster
 # is benchmarking/automation/infra/clusters/dummy, which creates nothing in
 # GCP; infra/orchestrator still does.
 #
-#   trigger-dummy.sh DEPLOYMENT [ORCHESTRATOR_ARG...]
+#   trigger-dummy DEPLOYMENT [ORCHESTRATOR_ARG...]
 
 set -o errexit -o nounset -o pipefail
 
@@ -28,4 +28,4 @@ if [[ $# -lt 1 ]]; then
   exit 2
 fi
 
-exec "$(dirname "$0")/trigger.sh" "$1" --test-case-name=dummy "${@:2}"
+exec "$(dirname "$0")/trigger" "$1" --test-case-name=dummy "${@:2}"

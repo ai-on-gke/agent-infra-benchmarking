@@ -1,5 +1,5 @@
 # Lets GitHub Actions write under source/ in var.github_actions_bucket. Its
-# key is made by automation-infra/scripts/get-gh-actions-gcs-config, outside
+# key is made by automation-infra/tools/get-gh-actions-gcs-config, outside
 # of the state.
 resource "google_service_account" "github" {
   count = var.github_actions_bucket == null ? 0 : 1
