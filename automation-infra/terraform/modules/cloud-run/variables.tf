@@ -73,11 +73,9 @@ variable "time_zone" {
   default     = "Etc/UTC"
 }
 
-# Bucket names are global, hence the project ID in the default.
-variable "runner_state_bucket" {
-  description = "Name of the bucket holding runner/infra's Terraform state. Empty takes <project_id>-<default_resource_name>."
+variable "state_bucket" {
+  description = "Bucket holding the deployment's Terraform state. runner/infra's goes under tests/ in it."
   type        = string
-  default     = ""
 }
 
 variable "github_actions_bucket" {

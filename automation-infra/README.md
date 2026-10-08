@@ -96,6 +96,8 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
      project_id            = "$PROJECT_ID"
      region                = "$REGION"
      default_resource_name = "$DEPLOYMENT"
+
+     state_bucket = local.state_bucket
    }
 
    output "cloud_run" {

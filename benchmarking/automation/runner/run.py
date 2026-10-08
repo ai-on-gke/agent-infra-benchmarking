@@ -39,7 +39,7 @@ RUNNER_DIR = Path(__file__).resolve().parent
 TESTS_FILE = RUNNER_DIR.parent / "tests.yaml"
 INFRA_DIR = RUNNER_DIR / "infra"
 # Each execution's state is under STATE_PREFIX/<name> in the state bucket.
-STATE_PREFIX = "automation/runner"
+STATE_PREFIX = "tests"
 
 
 def fail(message: str) -> NoReturn:

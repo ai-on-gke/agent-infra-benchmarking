@@ -18,11 +18,6 @@ output "execute_command" {
   value       = "gcloud run jobs execute ${google_cloud_run_v2_job.job.name} --project=${var.project_id} --region=${var.region}"
 }
 
-output "runner_state_bucket" {
-  description = "Bucket holding runner/infra's Terraform state: run.py's --state-bucket."
-  value       = google_storage_bucket.runner_state.name
-}
-
 output "runner_image" {
   description = "The runner image the job runs, by digest."
   value       = data.google_artifact_registry_docker_image.runner.self_link

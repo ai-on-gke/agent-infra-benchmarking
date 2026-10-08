@@ -20,6 +20,7 @@ module "cloud_run" {
   region                = "us-central1"
   default_resource_name = "substrate-bench-auto"
 
+  state_bucket          = local.state_bucket
   github_actions_bucket = local.state_bucket
   source_branch         = "add-automation"
 }

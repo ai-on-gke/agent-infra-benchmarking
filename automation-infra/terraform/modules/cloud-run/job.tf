@@ -4,10 +4,20 @@ resource "google_service_account" "job" {
   display_name = "Cloud Run job ${var.default_resource_name}"
 }
 
-resource "google_storage_bucket_iam_member" "job_runner_state" {
-  bucket = google_storage_bucket.runner_state.name
+# The Terraform state of runner/infra, under tests/. Listing is checked on the
+# bucket rather than an object, hence its own clause.
+resource "google_storage_bucket_iam_member" "job_tests_state" {
+  bucket = var.state_bucket
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.job.email}"
+
+  condition {
+    title = "tests-only"
+    expression = join(" || ", [
+      "resource.name.startsWith(\"projects/_/buckets/${var.state_bucket}/objects/tests/\")",
+      "api.getAttribute(\"storage.googleapis.com/objectListPrefix\", \"\").startsWith(\"tests/\")",
+    ])
+  }
 }
 
 # The source tarballs the image fetches, which GitHub Actions uploads.
@@ -58,11 +68,11 @@ resource "google_cloud_run_v2_job" "job" {
         image   = data.google_artifact_registry_docker_image.runner.self_link
         command = var.command
         # run.py's infra goes in this deployment's project and region,
-        # with its state in the runner state bucket.
+        # with its state in the deployment's state bucket.
         args = concat([
           "--project-id=${var.project_id}",
           "--region=${var.region}",
-          "--state-bucket=${google_storage_bucket.runner_state.name}",
+          "--state-bucket=${var.state_bucket}",
         ], var.args)
 
         dynamic "env" {

@@ -1,6 +1,4 @@
 locals {
-  runner_state_bucket = var.runner_state_bucket != "" ? var.runner_state_bucket : "${var.project_id}-${var.default_resource_name}"
-
   runner_context = abspath("${path.module}/image")
   runner_sources = fileset(local.runner_context, "**")
   # Rebuilds the image on apply when any of its sources or the build changes,
@@ -29,25 +27,6 @@ resource "google_project_service" "services" {
   service = each.value
   # Other deployments in the project may rely on these APIs.
   disable_on_destroy = false
-}
-
-# Holds the Terraform state of runner/infra, one prefix per execution.
-resource "google_storage_bucket" "runner_state" {
-  project  = var.project_id
-  name     = local.runner_state_bucket
-  location = var.region
-
-  uniform_bucket_level_access = true
-  public_access_prevention    = "enforced"
-  # No force_destroy: a state left in it may be the only record of an
-  # execution's infra that is still up.
-
-  # Recovers a state an execution overwrote or deleted by mistake.
-  versioning {
-    enabled = true
-  }
-
-  depends_on = [google_project_service.services]
 }
 
 resource "google_artifact_registry_repository" "images" {
