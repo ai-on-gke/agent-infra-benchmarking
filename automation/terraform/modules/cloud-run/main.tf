@@ -189,7 +189,13 @@ resource "google_cloud_run_v2_job" "job" {
       containers {
         image   = data.google_artifact_registry_docker_image.runner.self_link
         command = var.command
-        args    = var.args
+        # run_tests.py's infra goes in this deployment's project and region,
+        # with its state in the runner state bucket.
+        args = concat([
+          "--project-id=${var.project_id}",
+          "--region=${var.region}",
+          "--state-bucket=${google_storage_bucket.runner_state.name}",
+        ], var.args)
 
         dynamic "env" {
           for_each = var.env
