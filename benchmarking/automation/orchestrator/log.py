@@ -12,4 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runs the cases in tests.yaml on infra of their own: python3 -m runner."""
+"""Logs the orchestrator's messages, on Cloud Run as one log entry each."""
+
+from __future__ import annotations
+
+import json
+import os
+
+# Set by Cloud Run in a job's container.
+ON_CLOUD_RUN = "CLOUD_RUN_JOB" in os.environ
+
+
+def log(message: str, severity: str = "INFO") -> None:
+    # Cloud Run logs each line as an entry of its own, except a line of JSON,
+    # which is one entry however many lines its message has.
+    if ON_CLOUD_RUN:
+        print(json.dumps({"message": message, "severity": severity}), flush=True)
+    else:
+        print(message, flush=True)

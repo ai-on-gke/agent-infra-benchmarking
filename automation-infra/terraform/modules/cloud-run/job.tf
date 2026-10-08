@@ -4,7 +4,7 @@ resource "google_service_account" "job" {
   display_name = "Cloud Run job ${var.default_resource_name}"
 }
 
-# The Terraform state of runner/infra, under var.state_bucket_prefix. Listing
+# The Terraform state of orchestrator/infra, under var.state_bucket_prefix. Listing
 # is checked on the bucket rather than an object, hence its own clause.
 resource "google_storage_bucket_iam_member" "job_state" {
   bucket = var.state_bucket
@@ -34,7 +34,7 @@ resource "google_storage_bucket_iam_member" "job_source" {
   }
 }
 
-# What runner/infra creates in the project.
+# What orchestrator/infra creates in the project.
 resource "google_project_iam_member" "job" {
   for_each = toset([
     "roles/serviceusage.serviceUsageAdmin",
@@ -67,7 +67,7 @@ resource "google_cloud_run_v2_job" "job" {
       containers {
         image   = data.google_artifact_registry_docker_image.runner.self_link
         command = var.command
-        # The runner's infra goes in this deployment's project and region,
+        # The orchestrator's infra goes in this deployment's project and region,
         # with its state in the deployment's state bucket.
         args = concat([
           "--project-id=${var.project_id}",

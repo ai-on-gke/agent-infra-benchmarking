@@ -2,7 +2,7 @@
 
 # Extracts the tarball of SOURCE_BRANCH's latest commit, which
 # .github/workflows/upload-source.yml uploads to SOURCE_BUCKET, and runs the
-# runner in it with its arguments.
+# orchestrator in it with its arguments.
 
 set -o errexit -o nounset -o pipefail
 
@@ -34,5 +34,5 @@ fi
 # safe.directory, as the files keep the uploader's owner.
 git -c safe.directory=/source log -1
 
-# Installs the runner's requirements in a venv of its own and runs it.
+# Installs the orchestrator's requirements in a venv of its own and runs it.
 exec benchmarking/automation/tools/run "$@"

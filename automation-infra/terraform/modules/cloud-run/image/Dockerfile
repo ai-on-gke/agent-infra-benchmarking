@@ -1,6 +1,6 @@
 # The job's image: fetches the latest source of a branch, then installs and
-# runs the runner in it. The same Python and terraform as
-# benchmarking/automation/runner/Dockerfile, whose requirements.txt is
+# runs the orchestrator in it. The same Python and terraform as
+# benchmarking/automation/orchestrator/Dockerfile, whose requirements.txt is
 # compiled for that Python.
 FROM hashicorp/terraform:1.13.3@sha256:dfb1889a8ee74ada3ddacc48f89b8a0d69f3e114de3d8a2ce15f6a8d3dbfdbe2 AS terraform
 

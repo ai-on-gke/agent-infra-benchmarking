@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The Cloud Run job's container: the runner package, its infra/,
+# The Cloud Run job's container: the orchestrator package, its infra/,
 # terraform and tests.yaml. Its build context is benchmarking/automation/, for
 # tests.yaml.
 #
@@ -25,16 +25,16 @@ FROM python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36
 COPY --from=terraform /bin/terraform /usr/local/bin/terraform
 
 WORKDIR /app
-COPY runner/requirements.txt runner/
-RUN pip install --no-cache-dir --require-hashes -r runner/requirements.txt
+COPY orchestrator/requirements.txt orchestrator/
+RUN pip install --no-cache-dir --require-hashes -r orchestrator/requirements.txt
 
 COPY tests.yaml .
-COPY runner/infra/ runner/infra/
+COPY orchestrator/infra/ orchestrator/infra/
 # The providers the lock file pins, installed now rather than downloaded by
 # every execution's terraform init.
-RUN terraform -chdir=runner/infra init -backend=false -input=false
-COPY runner/*.py runner/
+RUN terraform -chdir=orchestrator/infra init -backend=false -input=false
+COPY orchestrator/*.py orchestrator/
 
 ENV PYTHONUNBUFFERED=1
-# Takes the runner's arguments.
-ENTRYPOINT ["python3", "-m", "runner"]
+# Takes the orchestrator's arguments.
+ENTRYPOINT ["python3", "-m", "orchestrator"]

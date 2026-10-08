@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Applies the runner's infra/, runs the cases in tests.yaml one after another
+"""Applies the orchestrator's infra/, runs the cases in tests.yaml one after another
 (every case in the order listed, or the ones --test-case-name names in the
 order given), and destroys the infra again."""
 
@@ -33,9 +33,9 @@ import yaml
 from . import terraform
 from .log import log
 
-RUNNER_DIR = Path(__file__).resolve().parent
-TESTS_FILE = RUNNER_DIR.parent / "tests.yaml"
-INFRA_DIR = RUNNER_DIR / "infra"
+ORCHESTRATOR_DIR = Path(__file__).resolve().parent
+TESTS_FILE = ORCHESTRATOR_DIR.parent / "tests.yaml"
+INFRA_DIR = ORCHESTRATOR_DIR / "infra"
 
 
 def fail(message: str) -> NoReturn:
@@ -60,7 +60,7 @@ def run_case(name: str, case: dict) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(prog="python3 -m runner", description=__doc__)
+    p = argparse.ArgumentParser(prog="python3 -m orchestrator", description=__doc__)
     p.add_argument("--tests-file", type=Path, default=TESTS_FILE, help=f"default: {TESTS_FILE}")
     p.add_argument(
         "--test-case-name",
