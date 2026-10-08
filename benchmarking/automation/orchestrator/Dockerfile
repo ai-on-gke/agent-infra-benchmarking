@@ -34,7 +34,8 @@ COPY infra/orchestrator/ infra/orchestrator/
 # every execution's terraform init.
 RUN terraform -chdir=infra/orchestrator init -backend=false -input=false
 COPY orchestrator/*.py orchestrator/
+COPY orchestrator/cli/*.py orchestrator/cli/
 
 ENV PYTHONUNBUFFERED=1
 # Takes the orchestrator's arguments.
-ENTRYPOINT ["python3", "-m", "orchestrator"]
+ENTRYPOINT ["python3", "-m", "orchestrator.cli.run"]

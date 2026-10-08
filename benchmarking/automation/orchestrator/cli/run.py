@@ -32,12 +32,12 @@ from typing import NoReturn
 
 import yaml
 
-from . import AUTOMATION_DIR, benchmark, dev_infra, substrate
-from .cases import SKIP_SUBSTRATE_INSTALL, TESTS_FILE, load_cases
-from .cluster import Cluster
-from .deployment import ORCHESTRATOR_DIR, Deployment, cluster_deployment, files_under, tf_vars
-from .log import log
-from .process import failure
+from .. import AUTOMATION_DIR, benchmark, dev_infra, substrate
+from ..cases import SKIP_SUBSTRATE_INSTALL, TESTS_FILE, load_cases
+from ..cluster import Cluster
+from ..deployment import ORCHESTRATOR_DIR, Deployment, cluster_deployment, files_under, tf_vars
+from ..log import log
+from ..process import failure
 
 # The executions' local Terraform files, as the Cloud Run job's state is under
 # terraform/ in its bucket. An execution's are in <name>/: a folder for
@@ -52,7 +52,7 @@ def fail(message: str) -> NoReturn:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="python3 -m orchestrator", description=__doc__)
+    p = argparse.ArgumentParser(prog="python3 -m orchestrator.cli.run", description=__doc__)
     p.add_argument("--tests-file", type=Path, default=TESTS_FILE, help=f"default: {TESTS_FILE}")
     p.add_argument(
         "--test-case-name",
@@ -92,7 +92,7 @@ def parse_args() -> argparse.Namespace:
         type=dev_infra.check_name,
         metavar="NAME",
         help="run every case on this dev infra, an infra/orchestrator and a cluster kept until"
-        " python3 -m orchestrator.dev_infra destroys them, rather than on ones applied for this execution."
+        " python3 -m orchestrator.cli.dev_infra destroys them, rather than on ones applied for this execution."
         " Applied unless complete, a new one with the first case's cluster",
     )
     p.add_argument(

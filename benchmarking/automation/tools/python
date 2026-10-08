@@ -17,7 +17,7 @@
 # Runs python with every argument, in a venv beside this script that has
 # orchestrator/requirements.txt installed, the orchestrator package importable:
 #
-#   ./benchmarking/automation/tools/python -m orchestrator.dev_infra --help
+#   ./benchmarking/automation/tools/python -m orchestrator.cli.dev_infra --help
 
 set -o errexit -o nounset -o pipefail
 

@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runs the cases in tests.yaml on infra of their own: python3 -m orchestrator."""
+"""Runs the cases in tests.yaml on infra of their own, with the command lines
+in cli/."""
 
 from pathlib import Path
 

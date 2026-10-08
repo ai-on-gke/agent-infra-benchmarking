@@ -14,7 +14,7 @@
 
 # Named benchmark runs, each picked by the orchestrator's --test-case-name:
 #
-#   python3 -m orchestrator --test-case-name glutton ...
+#   python3 -m orchestrator.cli.run --test-case-name glutton ...
 #
 # `type` picks orchestrator/<type>.py, which documents the rest.
 # For locust: `worker-count` and `sandbox-class` shape the WorkerPool, and
