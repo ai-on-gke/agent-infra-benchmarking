@@ -15,10 +15,11 @@
 # limitations under the License.
 
 # Runs tests.yaml's dummy case with tools/run-local, passing every other option
-# on unchanged. Its cluster is infra/clusters/dummy, which creates nothing in
-# GCP; infra/orchestrator still does, so --project-id is still needed:
+# on unchanged. Its cluster is automation/infra/clusters/dummy, which creates
+# nothing in GCP; automation/infra/orchestrator still does, so --project-id is
+# still needed:
 #
-#   ./benchmarking/automation/tools/run-local-dummy --project-id my-project
+#   ./benchmarking/tools/run-local-dummy --project-id my-project
 
 set -o errexit -o nounset -o pipefail
 

@@ -35,4 +35,4 @@ fi
 git -c safe.directory=/source log -1
 
 # Installs the orchestrator's requirements in a venv of its own and runs it.
-exec benchmarking/automation/tools/run "$@"
+exec benchmarking/tools/run "$@"

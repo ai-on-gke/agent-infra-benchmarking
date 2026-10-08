@@ -8,8 +8,8 @@
 /.venv/
 /benchmark-charts/build/
 
-# The venv benchmarking/automation/tools/run makes.
-/benchmarking/automation/tools/venv_run/
+# The venv benchmarking/tools/run makes.
+/benchmarking/tools/venv_run/
 
 # Each orchestrator execution's local state and Terraform data.
 /benchmarking/automation/local-runs/

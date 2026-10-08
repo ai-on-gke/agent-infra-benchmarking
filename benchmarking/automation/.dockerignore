@@ -9,5 +9,3 @@
 .terraform-plugin-cache/
 local-runs/
 .dev-infra/
-# The venv tools/run makes.
-tools/venv_run/

@@ -17,12 +17,12 @@
 # Runs python with every argument, in a venv beside this script that has
 # orchestrator/requirements.txt installed, the orchestrator package importable:
 #
-#   ./benchmarking/automation/tools/python -m orchestrator.cli.dev_infra --help
+#   ./benchmarking/tools/python -m orchestrator.cli.dev_infra --help
 
 set -o errexit -o nounset -o pipefail
 
 TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AUTOMATION_DIR="$(dirname "${TOOLS_DIR}")"
+AUTOMATION_DIR="$(dirname "${TOOLS_DIR}")/automation"
 VENV="${TOOLS_DIR}/venv_run"
 REQUIREMENTS="${AUTOMATION_DIR}/orchestrator/requirements.txt"
 
