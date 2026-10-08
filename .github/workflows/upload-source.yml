@@ -1,7 +1,8 @@
 name: Upload source
 
 # Uploads each pushed commit, as a git repo, to
-# gs://<SOURCE_BUCKET>/source/<branch>/<commit>.tar.gz. The secrets come from
+# gs://<SOURCE_BUCKET>/source/<branch>/<commit>.tar.gz, and writes the
+# branch's tip commit to latest.txt beside it. The secrets come from
 # automation-infra/scripts/get-gh-actions-gcs-config.
 
 on:
@@ -37,3 +38,33 @@ jobs:
           # and the key may only write under source/.
           CLOUDSDK_STORAGE_PARALLEL_COMPOSITE_UPLOAD_ENABLED: "False"
         run: gcloud storage cp "$RUNNER_TEMP/source.tar.gz" "gs://$BUCKET/source/$BRANCH/$COMMIT.tar.gz"
+
+  # Only while COMMIT is the branch's tip, so that neither a run finishing
+  # after a newer push's nor a rerun of an old one takes latest back. The
+  # group runs one at a time per branch: a push between the check and the
+  # write has its own job, which waits for this one and so writes last. A
+  # newer push's job replaces one still waiting.
+  latest:
+    needs: upload
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-latest-${{ github.ref }}
+    steps:
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Update latest
+        env:
+          BUCKET: ${{ secrets.SOURCE_BUCKET }}
+          BRANCH: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Empty once the branch is deleted.
+          tip="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --jq .object.sha 2>/dev/null)" || tip=""
+          if [[ "$tip" != "$COMMIT" ]]; then
+            echo "$BRANCH is at ${tip:-nothing} now, leaving latest as it is."
+            exit 0
+          fi
+          printf '%s\n' "$COMMIT" | gcloud storage cp - "gs://$BUCKET/source/$BRANCH/latest.txt" --content-type=text/plain
