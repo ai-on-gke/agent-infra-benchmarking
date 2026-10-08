@@ -76,6 +76,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--name",
+        type=benchmark.check_run_id,
         default=datetime.now(timezone.utc).strftime("run-%Y%m%dt%H%M%Sz"),
         help="this execution's infra and state prefix; unique to it. Default: run-<UTC timestamp>",
     )

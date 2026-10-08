@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import argparse
+
 from . import images, locust, workloads
 from .cluster import Cluster
 from .log import log
@@ -32,6 +34,15 @@ def types() -> list[str]:
 def check(name: str, case: dict) -> None:
     """Raises ValueError for a case its type can't run."""
     RUNNERS[case["type"]].check_case(name, case, deploy_workloads=True)
+
+
+def check_run_id(run_id: str) -> str:
+    # The runs' pods are labeled with it.
+    if not locust.LABEL_RE.fullmatch(run_id):
+        raise argparse.ArgumentTypeError(
+            f"{run_id!r}: use at most 63 letters, digits, '-', '_' and '.', starting and ending with a letter or digit"
+        )
+    return run_id
 
 
 def missing_requirements(cases: dict[str, dict], cloud_build: bool = False) -> list[str]:
