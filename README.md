@@ -53,17 +53,13 @@ place.
    git submodule update --init dependency-repos/substrate
    ```
 
-2. Copy the example — the real file is gitignored and per-developer:
-
-   ```bash
-   cp benchmarking/automation/infra/clusters/common/terraform.tfvars.example benchmarking/automation/infra/clusters/common/terraform.tfvars
-   ```
-
-   Then set in it:
+2. `benchmarking/automation/infra/clusters/common/default.tfvars` holds the
+   cluster's shape, `cluster.node_pools` being the hardware the benchmark runs
+   on, see below. It leaves out the two variables every deployment sets for
+   itself, passed with `-var` in the commands below:
 
    - `project_id` — required, no default.
    - `default_resource_name` — default name for all created resources.
-   - `cluster.node_pools` — the hardware the benchmark runs on, see below.
 
    The example ships two pools:
 
@@ -125,7 +121,8 @@ place.
    minutes:
 
    ```bash
-   terraform -chdir=benchmarking/automation/infra/clusters/common apply -var-file=terraform.tfvars
+   terraform -chdir=benchmarking/automation/infra/clusters/common apply -var-file=default.tfvars \
+     -var=project_id=<YOUR_PROJECT_ID> -var=default_resource_name=<PICK_YOUR_NAME>
    ```
 
 ## Setting up the Agent Substrate
@@ -300,5 +297,6 @@ Download any worth keeping first, or set it to `false`, in which case destroy
 stops at the bucket while it holds anything.
 
    ```bash
-   terraform -chdir=benchmarking/automation/infra/clusters/common destroy
+   terraform -chdir=benchmarking/automation/infra/clusters/common destroy -var-file=default.tfvars \
+     -var=project_id=<YOUR_PROJECT_ID> -var=default_resource_name=<PICK_YOUR_NAME>
    ```

@@ -29,7 +29,7 @@ resource "google_project_service" "this" {
 }
 
 # The build version of the substrate submodule, read from its git checkout by
-# substrate-version.sh rather than written into terraform.tfvars, so bumping
+# substrate-version.sh rather than written into default.tfvars, so bumping
 # the submodule is the only step in moving to another version.
 data "external" "substrate_version" {
   program = ["${path.module}/substrate-version.sh"]
@@ -53,7 +53,11 @@ locals {
       labels = merge(pool.labels, {
         "ate.dev/substrate-version" = local.substrate_version
       })
-    })
+      }, key == "sandboxed" ? {
+      node_count     = var.sandboxed_node_count
+      min_node_count = var.sandboxed_min_node_count
+      max_node_count = var.sandboxed_max_node_count
+    } : {})
   }
 }
 

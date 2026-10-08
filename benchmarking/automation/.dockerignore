@@ -4,6 +4,7 @@
 **/*.tfstate
 **/*.tfstate.*
 **/*.tfvars
+!infra/clusters/common/default.tfvars
 **/__pycache__/
 # The venv tools/run makes.
 tools/venv_run/

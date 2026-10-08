@@ -1,9 +1,4 @@
-project_id = "<YOUR_PROJECT_ID>"
-region     = "us-central1"
-
-# The deafult name for all resources. The cluster takes it too, unless
-# cluster.name below overrides it.
-default_resource_name = "<PICK_YOUR_NAME>"
+region = "us-central1"
 
 # Lets terraform destroy delete the bucket, and with it every run's reports
 # under reports/. Download any worth keeping first, or set this to false.
@@ -34,10 +29,9 @@ cluster = {
     }
     sandboxed = {
       machine_type   = "c2-standard-16"
-      node_count     = 30
       node_locations = ["us-central1-a"]
-      min_node_count = 30
-      max_node_count = 30
+      # The pool's size comes from sandboxed_node_count,
+      # sandboxed_min_node_count and sandboxed_max_node_count below.
       # ate.dev/substrate-version is not set here: Terraform reads it off the
       # substrate submodule and adds it to every pool. See main.tf.
       labels = {
@@ -60,3 +54,9 @@ cluster = {
     }
   }
 }
+
+# Size of cluster.node_pools.sandboxed, kept out of it so a run can set it
+# with -var. All three default to 1.
+sandboxed_node_count     = 1
+sandboxed_min_node_count = 1
+sandboxed_max_node_count = 1

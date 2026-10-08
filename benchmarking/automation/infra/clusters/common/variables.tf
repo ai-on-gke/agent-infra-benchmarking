@@ -125,6 +125,26 @@ variable "cluster" {
   default = {}
 }
 
+# Separate from cluster.node_pools so a run can size the sandboxed pool with
+# -var alone. They override whatever node_pools.sandboxed sets.
+variable "sandboxed_node_count" {
+  description = "Initial node count of the sandboxed node pool."
+  type        = number
+  default     = 1
+}
+
+variable "sandboxed_min_node_count" {
+  description = "Autoscaling minimum of the sandboxed node pool."
+  type        = number
+  default     = 1
+}
+
+variable "sandboxed_max_node_count" {
+  description = "Autoscaling maximum of the sandboxed node pool."
+  type        = number
+  default     = 1
+}
+
 variable "artifact_repository_id" {
   description = "ID of the Artifact Registry repository. Defaults to var.default_resource_name when empty. Set it only when that name is already taken in this project."
   type        = string

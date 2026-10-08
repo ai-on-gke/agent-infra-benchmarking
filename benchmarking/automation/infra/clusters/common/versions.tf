@@ -18,7 +18,7 @@ terraform {
     }
     # Runs substrate-version.sh to read the submodule's build version. Nothing
     # in Terraform can ask git, and the alternative is typing the version into
-    # terraform.tfvars by hand and keeping it in step with the submodule.
+    # default.tfvars by hand and keeping it in step with the submodule.
     external = {
       source  = "hashicorp/external"
       version = ">= 2.3.0, < 3.0.0"
