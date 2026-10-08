@@ -65,7 +65,6 @@ variable "zone" {
 variable "sandboxed_machine_type" {
   description = "Machine type of the sandboxed node pool, which runs the workers."
   type        = string
-  default     = "c2-standard-16"
 }
 
 # Every node pool's ate.dev/substrate-version label, which has to be the
