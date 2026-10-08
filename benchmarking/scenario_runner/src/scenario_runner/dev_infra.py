@@ -67,12 +67,12 @@ def deployment(name: str, infra: str, json_output: bool = False) -> Deployment:
 def create_deployment(record: dict, infra: str, json_output: bool = False) -> Deployment:
     """Creates the deployment of the record's infra, its config copied from
     the source as it is now."""
-    root = DEV_INFRA_DIR / record["name"] / infra
+    uncreated = deployment(record["name"], infra, json_output)
     variables = tf_vars(record["project_id"], record["region"], record["name"])
     if infra == "scenario-runner":
-        return Deployment.create(root, RUNNER_INFRA_DIR, variables, json_output=json_output)
+        return uncreated.create(RUNNER_INFRA_DIR, variables)
     version = None if record.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
-    return cluster_deployment(record["cluster"], root, variables, version, json_output=json_output)
+    return cluster_deployment(record["cluster"], uncreated, variables, version)
 
 
 def apply(record: dict, json_output: bool = False) -> dict:

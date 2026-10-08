@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The scenario-runner's Python: PyYAML to read scenarios.yaml.
+# The scenario-runner's Python: PyYAML to read scenarios.yaml, and
+# google-cloud-storage to keep a GcsDeployment's root in its bucket.
 # requirements.txt is compiled from this with every dependency pinned and
 # hashed, for the Python 3.11 on linux/amd64 of the Cloud Run job's image,
 # automation-infra/terraform/modules/cloud-run/image/Dockerfile:
@@ -20,4 +21,5 @@
 #   uv pip compile requirements.in --python-version 3.11 \
 #     --python-platform x86_64-manylinux_2_28 --generate-hashes -o requirements.txt
 
+google-cloud-storage==3.17.0
 pyyaml==6.0.3

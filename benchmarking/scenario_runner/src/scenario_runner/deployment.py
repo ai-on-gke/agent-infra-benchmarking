@@ -24,6 +24,8 @@ Every path in it is relative, so the folder can be moved, and terraform runs
 on it by hand from config/ as well:
 
     TF_DATA_DIR=../tf-data terraform plan
+
+A GcsDeployment keeps the same layout in a GCS bucket, its state included.
 """
 
 from __future__ import annotations
@@ -32,11 +34,15 @@ import json
 import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Self
+
+from google.cloud import storage
 
 from . import RUNNER_DIR, terraform
 from .cases import CLUSTERS_DIR
+from .log import log
 
 RUNNER_INFRA_DIR = RUNNER_DIR / "infra"
 # The config's own deployments' files, e.g. one applied by hand, which would
@@ -58,8 +64,15 @@ FOREIGN_FILES = (
 TFVARS_FILE = "00-tfvars.auto.tfvars"
 TFVARS_INLINE_FILE = "10-inline.auto.tfvars"
 VARIABLES_FILE = "20-variables.auto.tfvars.json"
-STATE_FILE = "terraform.tfstate"
+STATES_DIR = "tfstates"
+# The gcs backend's name for the default workspace's state, which the local
+# backend's is given too.
+STATE_FILE = "default.tfstate"
 DESTROYED_FILE = "DESTROYED"
+# Not in a GcsDeployment's bucket as a copy: the state, which the backend
+# keeps there itself, and the providers, links into the plugin cache that init
+# makes again.
+UNSYNCED = (f"{STATES_DIR}/", "tf-data/providers/")
 
 
 def tf_vars(project_id: str, region: str, name: str) -> dict:
@@ -84,7 +97,7 @@ class Deployment:
     @property
     def state_file(self) -> Path:
         """The state, with the local backend."""
-        return self.root / "tfstates" / STATE_FILE
+        return self.root / STATES_DIR / STATE_FILE
 
     @property
     def destroyed_flag(self) -> Path:
@@ -98,38 +111,34 @@ class Deployment:
     def destroyed(self) -> bool:
         return self.destroyed_flag.exists()
 
-    @classmethod
+    @property
+    def backend(self) -> tuple[str, dict[str, str]]:
+        # Relative to config/, where terraform runs.
+        return "local", {"path": f"../{STATES_DIR}/{STATE_FILE}"}
+
     def create(
-        cls,
-        root: Path,
+        self,
         source: Path,
         variables: dict,
         *,
         tfvars_file: Path | None = None,
         tfvars_inline: str | None = None,
-        backend: str = "local",
-        backend_config: dict[str, str] | None = None,
-        json_output: bool = False,
-    ) -> Deployment:
-        """Copies source into root's config/, replacing any copy already
-        there, with the backend and the variables it is applied with:
-        tfvars_file's, then tfvars_inline's, then variables, later ones
-        winning. Any tf-data/ and tfstates/ already in root are kept."""
-        deployment = cls(root, json_output)
-        shutil.rmtree(deployment.config, ignore_errors=True)
-        shutil.copytree(source, deployment.config, ignore=shutil.ignore_patterns(*FOREIGN_FILES))
-        if backend_config is None:
-            # Relative to config/, where terraform runs.
-            backend_config = {"path": str(Path("..") / deployment.state_file.relative_to(root))}
-        (deployment.config / "backend_override.tf").write_text(terraform.backend_block(backend, backend_config))
+    ) -> Self:
+        """Copies source into config/, replacing any copy already there, with
+        the backend and the variables it is applied with: tfvars_file's, then
+        tfvars_inline's, then variables, later ones winning. Any tf-data/ and
+        tfstates/ already in root are kept."""
+        shutil.rmtree(self.config, ignore_errors=True)
+        shutil.copytree(source, self.config, ignore=shutil.ignore_patterns(*FOREIGN_FILES))
+        (self.config / "backend_override.tf").write_text(terraform.backend_block(*self.backend))
         if tfvars_file is not None:
             name = TFVARS_FILE + (".json" if tfvars_file.suffix == ".json" else "")
-            shutil.copyfile(tfvars_file, deployment.config / name)
+            shutil.copyfile(tfvars_file, self.config / name)
         if tfvars_inline is not None:
-            (deployment.config / TFVARS_INLINE_FILE).write_text(tfvars_inline)
-        (deployment.config / VARIABLES_FILE).write_text(json.dumps(variables, indent=2) + "\n")
-        deployment.data.mkdir(parents=True, exist_ok=True)
-        return deployment
+            (self.config / TFVARS_INLINE_FILE).write_text(tfvars_inline)
+        (self.config / VARIABLES_FILE).write_text(json.dumps(variables, indent=2) + "\n")
+        self.data.mkdir(parents=True, exist_ok=True)
+        return self
 
     def env(self) -> dict[str, str]:
         return terraform.data_env(self.data)
@@ -187,21 +196,101 @@ class Deployment:
             self.deploy("-destroy")
 
 
-def cluster_deployment(spec: dict, root: Path, tf_vars: dict, substrate_version: str | None, **create) -> Deployment:
-    """Creates the deployment of the config a case's infra.cluster names, with
-    its tfvars, tfvars_inline and variables, then substrate_version unless
-    None and tf_vars, later ones winning."""
+@cache
+def storage_client() -> storage.Client:
+    return storage.Client()
+
+
+def synced(path: str) -> bool:
+    return not path.startswith(UNSYNCED)
+
+
+@dataclass(frozen=True, kw_only=True)
+class GcsDeployment(Deployment):
+    """A Deployment that keeps its root in a GCS bucket under prefix too, laid
+    out the same: its state, which the gcs backend keeps in tfstates/ there,
+    and a copy of the rest of the root. The copy is uploaded before every
+    apply and after a destroy, and downloaded before a destroy, so a destroy
+    needs nothing but the bucket."""
+
+    bucket: str
+    prefix: str
+
+    @property
+    def url(self) -> str:
+        return f"gs://{self.bucket}/{self.prefix}"
+
+    @property
+    def backend(self) -> tuple[str, dict[str, str]]:
+        # The backend names the state <prefix>/default.tfstate.
+        return "gcs", {"bucket": self.bucket, "prefix": f"{self.prefix}/{STATES_DIR}"}
+
+    def state(self) -> dict:
+        """The state in the bucket, empty before the first apply."""
+        blob = storage_client().bucket(self.bucket).blob(f"{self.prefix}/{STATES_DIR}/{STATE_FILE}")
+        return json.loads(blob.download_as_text()) if blob.exists() else {}
+
+    def local_files(self) -> dict[str, Path]:
+        """The root's files to copy, by their path in it."""
+        paths = {path.relative_to(self.root).as_posix(): path for path in self.root.rglob("*") if path.is_file()}
+        return {name: path for name, path in paths.items() if synced(name)}
+
+    def remote_files(self) -> dict[str, storage.Blob]:
+        """The bucket's copies, by their path in the root."""
+        blobs = storage_client().list_blobs(self.bucket, prefix=f"{self.prefix}/")
+        named = {blob.name.removeprefix(f"{self.prefix}/"): blob for blob in blobs}
+        return {name: blob for name, blob in named.items() if synced(name)}
+
+    def upload(self) -> None:
+        """Makes the bucket's copy of the root the same as the root."""
+        local, remote = self.local_files(), self.remote_files()
+        bucket = storage_client().bucket(self.bucket)
+        for name, path in local.items():
+            bucket.blob(f"{self.prefix}/{name}").upload_from_filename(path)
+        for name in remote.keys() - local.keys():
+            remote[name].delete()
+        log(f"Uploaded {self.root} to {self.url}")
+
+    def download(self) -> None:
+        """Makes the root the same as the bucket's copy of it."""
+        local, remote = self.local_files(), self.remote_files()
+        for name, blob in remote.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            blob.download_to_filename(path)
+        for name in local.keys() - remote.keys():
+            local[name].unlink()
+        log(f"Downloaded {self.url} to {self.root}")
+
+    def deploy(self, *args: str) -> None:
+        destroying = "-destroy" in args
+        if not destroying:
+            # The DESTROYED flag leaves the bucket's copy too before anything
+            # is created.
+            self.destroyed_flag.unlink(missing_ok=True)
+            self.upload()
+        super().deploy(*args)
+        if destroying:
+            self.upload()
+
+    def destroy(self) -> None:
+        self.download()
+        super().destroy()
+
+
+def cluster_deployment(spec: dict, deployment: Deployment, tf_vars: dict, substrate_version: str | None) -> Deployment:
+    """Creates deployment of the config a case's infra.cluster names, with its
+    tfvars, tfvars_inline and variables, then substrate_version unless None
+    and tf_vars, later ones winning."""
     cluster_dir = CLUSTERS_DIR / spec["name"]
     variables = dict(spec.get("variables", {}))
     if substrate_version is not None:
         variables["substrate_version"] = substrate_version
     variables.update(tf_vars)
-    return Deployment.create(
-        root,
+    return deployment.create(
         cluster_dir,
         variables,
         # An absolute path stays as it is.
         tfvars_file=cluster_dir / spec["tfvars"] if "tfvars" in spec else None,
         tfvars_inline=spec.get("tfvars_inline"),
-        **create,
     )

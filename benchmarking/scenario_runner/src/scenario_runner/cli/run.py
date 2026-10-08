@@ -35,12 +35,12 @@ import yaml
 from .. import LOCAL_DATA_DIR, benchmark, dev_infra, substrate
 from ..cases import SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases
 from ..cluster import Cluster
-from ..deployment import RUNNER_INFRA_DIR, Deployment, cluster_deployment, tf_vars
+from ..deployment import RUNNER_INFRA_DIR, Deployment, GcsDeployment, cluster_deployment, tf_vars
 from ..log import log
 from ..process import failure
 
-# The executions' Deployments, kept after they are destroyed, as the Cloud Run
-# job's state is under terraform/ in its bucket. An execution's are in <name>/:
+# The executions' Deployments, kept after they are destroyed, and with gcs in
+# the state bucket under <state prefix>/ too. An execution's are in <name>/:
 # scenario-runner/ for scenario_runner/infra, and tests/<case>/ for each
 # case's cluster.
 LOCAL_TERRAFORM_DIR = LOCAL_DATA_DIR / "runs" / "terraform"
@@ -71,8 +71,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--state-bucket", help="GCS bucket holding the state; only, and required, with gcs")
     p.add_argument(
         "--state-prefix",
-        help="prefix in the state bucket, each execution's state being under <prefix>/<name>; only, and required,"
-        f" with gcs. With local, the state is under {LOCAL_TERRAFORM_DIR}/<name>",
+        help="prefix in the state bucket, each execution's Terraform deployments being under <prefix>/<name>; only,"
+        f" and required, with gcs. With local, they are only under {LOCAL_TERRAFORM_DIR}/<name>",
     )
     p.add_argument(
         "--name",
@@ -160,19 +160,16 @@ def check_requirements(cases: dict[str, dict], cloud_build: bool) -> None:
         fail(f"running the benchmark requires {', '.join(missing)}")
 
 
-def deployment_args(args: argparse.Namespace, *key: str) -> dict:
-    """Deployment.create's arguments for an infra of this execution: its root
-    .local-data/runs/terraform/<name>/<key>/, and its state there with the
-    local backend or under <state prefix>/<name>/<key> in GCS."""
-    backend = {}
+def deployment(args: argparse.Namespace, *key: str) -> Deployment:
+    """The deployment of an infra of this execution, in
+    .local-data/runs/terraform/<name>/<key>/, and with gcs under
+    <state prefix>/<name>/<key> in the state bucket too."""
+    root = LOCAL_TERRAFORM_DIR.joinpath(args.name, *key)
+    json_output = args.terraform_output == "json"
     if args.state_backend == "gcs":
         prefix = "/".join([args.state_prefix, args.name, *key])
-        backend = {"backend": "gcs", "backend_config": {"bucket": args.state_bucket, "prefix": prefix}}
-    return {
-        "root": LOCAL_TERRAFORM_DIR.joinpath(args.name, *key),
-        "json_output": args.terraform_output == "json",
-        **backend,
-    }
+        return GcsDeployment(root, json_output, bucket=args.state_bucket, prefix=prefix)
+    return Deployment(root, json_output)
 
 
 def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
@@ -237,20 +234,14 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
 
 def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     variables = tf_vars(args.project_id, args.region, args.name)
-    runner_infra = Deployment.create(
-        source=RUNNER_INFRA_DIR, variables=variables, **deployment_args(args, "scenario-runner")
-    )
+    runner_infra = deployment(args, "scenario-runner").create(RUNNER_INFRA_DIR, variables)
     with runner_infra.applied():
         for name, case in cases.items():
             version = None if case.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
-            deployment = cluster_deployment(
-                case["infra"]["cluster"],
-                tf_vars=variables,
-                substrate_version=version,
-                **deployment_args(args, "tests", name),
-            )
-            with deployment.applied():
-                cluster = Cluster(deployment.outputs(), deployment.data / "kubeconfig")
+            uncreated = deployment(args, "tests", name)
+            case_infra = cluster_deployment(case["infra"]["cluster"], uncreated, variables, version)
+            with case_infra.applied():
+                cluster = Cluster(case_infra.outputs(), case_infra.data / "kubeconfig")
                 if not case.get(SKIP_SUBSTRATE_INSTALL):
                     substrate.install(cluster)
                 run_case(args, name, case, cluster)
