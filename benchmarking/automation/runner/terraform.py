@@ -12,15 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runs terraform in a config's directory and logs its output, each of its
-messages as one log entry. A failed command raises CalledProcessError, whose
-cmd[2] is the terraform command."""
+"""Runs terraform in a config's directory and logs its output, as text or as
+-json, each of whose messages is one log entry. A failed command raises
+CalledProcessError, whose cmd[2] is the terraform command."""
 
 from __future__ import annotations
 
 import json
 import subprocess
 from pathlib import Path
+from typing import Callable
 
 from .log import log
 
@@ -49,6 +50,8 @@ def format_diagnostic(diag: dict) -> str:
 
 
 def log_event(line: str) -> None:
+    if not line.strip():
+        return
     try:
         event = json.loads(line)
     except ValueError:
@@ -90,15 +93,13 @@ def run(chdir: Path, command: str, *args: str) -> None:
     proc.check_returncode()
 
 
-def run_json(chdir: Path, command: str, *args: str) -> None:
-    """Runs a terraform command with -json and logs each of its messages, an
-    error with all its detail, as one entry as it comes."""
-    cmd = ["terraform", f"-chdir={chdir}", command, "-json", *args]
+def stream(cmd: list[str], log_line: Callable[[str], None]) -> None:
+    """Runs a command and passes each line of its output to log_line as it
+    comes."""
     with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as proc:
         try:
             for line in proc.stdout:
-                if line.strip():
-                    log_event(line.rstrip("\n"))
+                log_line(line.rstrip("\n"))
         except BaseException:
             # As subprocess.run does, e.g. on SIGTERM.
             proc.kill()
@@ -107,9 +108,25 @@ def run_json(chdir: Path, command: str, *args: str) -> None:
         raise subprocess.CalledProcessError(proc.returncode, cmd)
 
 
-def deploy(chdir: Path, *plan_args: str) -> None:
-    """Plans, logs the whole plan as terraform shows it, which -json leaves
-    out, and applies that plan."""
+def run_text(chdir: Path, command: str, *args: str) -> None:
+    """Runs a terraform command and logs each line of its output as one entry
+    as it comes."""
+    stream(["terraform", f"-chdir={chdir}", command, "-no-color", *args], log)
+
+
+def run_json(chdir: Path, command: str, *args: str) -> None:
+    """Runs a terraform command with -json and logs each of its messages, an
+    error with all its detail, as one entry as it comes."""
+    stream(["terraform", f"-chdir={chdir}", command, "-json", *args], log_event)
+
+
+def deploy(chdir: Path, *plan_args: str, json_output: bool = False) -> None:
+    """Plans and applies that plan. With json_output, also logs the whole plan
+    as terraform shows it, which -json leaves out."""
+    if not json_output:
+        run_text(chdir, "plan", "-input=false", f"-out={PLAN_FILE}", *plan_args)
+        run_text(chdir, "apply", "-input=false", PLAN_FILE)
+        return
     run_json(chdir, "plan", "-input=false", f"-out={PLAN_FILE}", *plan_args)
     run(chdir, "show", PLAN_FILE)
     run_json(chdir, "apply", "-input=false", PLAN_FILE)

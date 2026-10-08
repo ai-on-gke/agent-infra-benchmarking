@@ -81,6 +81,13 @@ def main() -> None:
         default=datetime.now(timezone.utc).strftime("run-%Y%m%dt%H%M%Sz"),
         help="this execution's infra and state prefix; unique to it. Default: run-<UTC timestamp>",
     )
+    p.add_argument(
+        "--terraform-output",
+        choices=["text", "json"],
+        default="text",
+        help="how terraform plan and apply log: their text output line by line, or -json one message per entry."
+        " Default: %(default)s",
+    )
     args = p.parse_args()
 
     try:
@@ -101,6 +108,7 @@ def main() -> None:
     # on it, rather than dying, still destroys the infra.
     signal.signal(signal.SIGTERM, lambda *_: fail("stopped by SIGTERM"))
 
+    json_output = args.terraform_output == "json"
     tf_vars = [
         f"-var=project_id={args.project_id}",
         f"-var=region={args.region}",
@@ -117,12 +125,12 @@ def main() -> None:
             f"-backend-config=prefix={args.state_prefix}/{args.name}",
         )
         try:
-            terraform.deploy(INFRA_DIR, *tf_vars)
+            terraform.deploy(INFRA_DIR, *tf_vars, json_output=json_output)
             for name in names:
                 run_case(name, cases[name])
         finally:
             # Also after a failed apply, which may have created part of the infra.
-            terraform.deploy(INFRA_DIR, "-destroy", *tf_vars)
+            terraform.deploy(INFRA_DIR, "-destroy", *tf_vars, json_output=json_output)
     except subprocess.CalledProcessError as exc:
         fail(f"terraform {exc.cmd[2]} failed in {INFRA_DIR}")
 
