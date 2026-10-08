@@ -35,7 +35,7 @@ import yaml
 from . import AUTOMATION_DIR, benchmark, dev_infra, substrate
 from .cases import SKIP_SUBSTRATE_INSTALL, TESTS_FILE, load_cases
 from .cluster import Cluster
-from .deployment import ORCHESTRATOR_DIR, Deployment, cluster_deployment, tf_vars
+from .deployment import ORCHESTRATOR_DIR, Deployment, cluster_deployment, files_under, tf_vars
 from .log import log
 from .process import failure
 
@@ -160,19 +160,16 @@ def deployment_files(args: argparse.Namespace, *key: str) -> dict:
     <state prefix>/<name>/<key> in GCS, or in
     local-runs/terraform/<name>/<key>/tfstates/ with the local backend, and its
     TF_DATA_DIR in local-runs/terraform/<name>/<key>/tf-data/ with either."""
+    backend_config = None
     if args.state_backend == "gcs":
         backend_config = [f"bucket={args.state_bucket}", f"prefix={'/'.join([args.state_prefix, args.name, *key])}"]
-    else:
-        backend_config = [f"path={LOCAL_TERRAFORM_DIR.joinpath(args.name, *key, 'tfstates', 'terraform.tfstate')}"]
-    data = LOCAL_TERRAFORM_DIR.joinpath(args.name, *key, "tf-data")
-    data.mkdir(parents=True, exist_ok=True)
-    return {
-        "data": data,
-        "backend": args.state_backend,
-        "backend_config": backend_config,
-        "owner": f"orchestrator_{args.name}",
-        "json_output": args.terraform_output == "json",
-    }
+    return files_under(
+        LOCAL_TERRAFORM_DIR.joinpath(args.name, *key),
+        f"orchestrator_{args.name}",
+        args.terraform_output == "json",
+        args.state_backend,
+        backend_config,
+    )
 
 
 def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:

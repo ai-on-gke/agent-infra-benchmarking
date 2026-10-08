@@ -29,6 +29,30 @@ from .cases import CLUSTERS_DIR
 ORCHESTRATOR_DIR = AUTOMATION_DIR / "infra" / "orchestrator"
 
 
+def state_file_under(root: Path) -> Path:
+    return root / "tfstates" / "terraform.tfstate"
+
+
+def data_dir_under(root: Path) -> Path:
+    return root / "tf-data"
+
+
+def files_under(
+    root: Path, owner: str, json_output: bool, backend: str = "local", backend_config: list[str] | None = None
+) -> dict:
+    """A Deployment's arguments for one keeping its files under root: its
+    TF_DATA_DIR in tf-data/ and, by default, its state in tfstates/."""
+    data = data_dir_under(root)
+    data.mkdir(parents=True, exist_ok=True)
+    return {
+        "data": data,
+        "backend": backend,
+        "backend_config": backend_config or [f"path={state_file_under(root)}"],
+        "owner": owner,
+        "json_output": json_output,
+    }
+
+
 def tf_vars(project_id: str, region: str, name: str) -> list[str]:
     """The variables every config takes, name naming its resources."""
     return [f"-var=project_id={project_id}", f"-var=region={region}", f"-var=default_resource_name={name}"]

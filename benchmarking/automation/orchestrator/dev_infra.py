@@ -31,7 +31,15 @@ from typing import NoReturn
 
 from . import AUTOMATION_DIR, substrate, terraform
 from .cluster import Cluster
-from .deployment import ORCHESTRATOR_DIR, Deployment, cluster_deployment, tf_vars
+from .deployment import (
+    ORCHESTRATOR_DIR,
+    Deployment,
+    cluster_deployment,
+    data_dir_under,
+    files_under,
+    state_file_under,
+    tf_vars,
+)
 from .process import failure
 
 DEV_INFRA_DIR = AUTOMATION_DIR / ".dev-infra" / "terraform"
@@ -65,11 +73,11 @@ def write_record(record: dict) -> None:
 
 
 def state_file(name: str, infra: str) -> Path:
-    return DEV_INFRA_DIR / name / infra / "tfstates" / "terraform.tfstate"
+    return state_file_under(DEV_INFRA_DIR / name / infra)
 
 
 def data_dir(name: str, infra: str) -> Path:
-    return DEV_INFRA_DIR / name / infra / "tf-data"
+    return data_dir_under(DEV_INFRA_DIR / name / infra)
 
 
 def read_state(path: Path) -> dict:
@@ -81,15 +89,7 @@ def deployments(record: dict, json_output: bool = False) -> dict[str, Deployment
     variables = tf_vars(record["project_id"], record["region"], name)
 
     def files(infra: str) -> dict:
-        data = data_dir(name, infra)
-        data.mkdir(parents=True, exist_ok=True)
-        return {
-            "data": data,
-            "backend": "local",
-            "backend_config": [f"path={state_file(name, infra)}"],
-            "owner": f"dev_infra_{name}",
-            "json_output": json_output,
-        }
+        return files_under(DEV_INFRA_DIR / name / infra, f"dev_infra_{name}", json_output)
 
     return {
         "orchestrator": Deployment(dir=ORCHESTRATOR_DIR, plan_args=variables, **files("orchestrator")),
