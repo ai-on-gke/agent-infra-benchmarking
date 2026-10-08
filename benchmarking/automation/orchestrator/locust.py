@@ -41,8 +41,6 @@ WORKER_JOB = "boomer-worker"
 NAMESPACE = "benchmarking"
 MASTER_HOST = f"{MASTER_JOB}.{NAMESPACE}.svc.cluster.local"
 USER_CLASS = "runworkload"
-# Created by infra/clusters/common, and named in the bucket's grant.
-RUNNER_KSA = "benchmark-runner"
 POD_START_TIMEOUT_SECS = 300
 WAIT_TIMEOUT_SECS = 3600
 # The run id and case name end up as label values.
@@ -218,12 +216,14 @@ def run(
     build: bool = True,
     deploy_workloads: bool = True,
     cloud_build: bool = False,
+    docker_login: bool = True,
 ) -> None:
     """Runs the case, recorded under name, as part of run_id, by default a UTC
     timestamp and the commit. Without build, uses the images already pushed;
     without deploy_workloads, the mock-llm and ActorTemplates already
-    deployed. The worker pool is recreated either way. Expects the cluster's
-    credentials in its kubeconfig."""
+    deployed. The worker pool is recreated either way. Without docker_login, a
+    local build uses the registry credentials Docker already has. Expects the
+    cluster's credentials in its kubeconfig."""
     case = check_case(name, case, deploy_workloads)
     run_id = run_id or f"{datetime.now(timezone.utc):%Y%m%dt%H%M%Sz}-{images.tag()}"
     if not LABEL_RE.fullmatch(run_id):
@@ -235,7 +235,7 @@ def run(
     if build:
         # The workload images are only read when the workloads are deployed.
         files = [images.LOCUST_IMAGES] + ([images.WORKLOADS_IMAGES] if deploy_workloads else [])
-        images.build_and_push(cluster, files, cloud_build=cloud_build)
+        images.build_and_push(cluster, files, cloud_build=cloud_build, login=docker_login)
 
     apply(cluster, f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {NAMESPACE}\n")
     # A Job's pod template is immutable. Foreground, so their pods are gone too
@@ -253,7 +253,7 @@ def run(
     values = {
         "LOCUST_IMAGE": locust_image,
         "BOOMER_IMAGE": boomer_image,
-        "BENCHMARK_RUNNER_KSA": RUNNER_KSA,
+        "BENCHMARK_RUNNER_KSA": cluster.runner_ksa,
         "BENCHMARK_RUN_ID": run_id,
         "BENCHMARK_RECORD_NAME": name,
         "BENCHMARK_ONLY_SUMMARY": "false",

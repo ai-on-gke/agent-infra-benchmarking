@@ -50,7 +50,8 @@ def missing_requirements(cases: dict[str, dict], cloud_build: bool = False) -> l
     return list(dict.fromkeys(missing))
 
 
-def run(name: str, case: dict, run_id: str, cluster: Cluster, cloud_build: bool = False) -> None:
+def run(name: str, case: dict, run_id: str, cluster: Cluster, **options: bool) -> None:
+    """options are those of its type's run, e.g. locust.run's build."""
     cluster.get_credentials()
     log(f"{name}: running as {run_id} on cluster {cluster.name}")
-    RUNNERS[case["type"]].run(cluster, name, case, run_id, cloud_build=cloud_build)
+    RUNNERS[case["type"]].run(cluster, name, case, run_id, **options)

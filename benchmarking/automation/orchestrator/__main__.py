@@ -100,7 +100,27 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="build the benchmark images on Cloud Build rather than with local Docker",
     )
+    p.add_argument(
+        "--no-docker-login",
+        action="store_true",
+        help="leave a local build's registry credentials to Docker's own configuration, rather than logging in"
+        " with gcloud's access token",
+    )
+    p.add_argument(
+        "--no-build",
+        action="store_true",
+        help="use the benchmark images already pushed for this commit rather than building them; only with --dev-infra",
+    )
+    p.add_argument(
+        "--no-deploy-workloads",
+        action="store_true",
+        help="use the mock-llm and ActorTemplates already deployed rather than deploying the case's; only with"
+        " --dev-infra. The worker pool is recreated either way",
+    )
     args = p.parse_args()
+    # A cluster applied for the execution has neither yet.
+    if not args.dev_infra and (args.no_build or args.no_deploy_workloads):
+        p.error("--no-build and --no-deploy-workloads are only for --dev-infra")
     if args.state_backend == "gcs" and not (args.state_bucket and args.state_prefix):
         p.error("--state-backend=gcs requires --state-bucket and --state-prefix")
     if args.state_backend == "local" and (args.state_bucket or args.state_prefix):
@@ -193,7 +213,16 @@ def run_case(args: argparse.Namespace, name: str, case: dict, cluster: Cluster) 
     if case["type"] == "noop":
         log(f"{name}: noop, nothing to run")
         return
-    benchmark.run(name, case, args.name, cluster, args.cloud_build)
+    benchmark.run(
+        name,
+        case,
+        args.name,
+        cluster,
+        cloud_build=args.cloud_build,
+        docker_login=not args.no_docker_login,
+        build=not args.no_build,
+        deploy_workloads=not args.no_deploy_workloads,
+    )
 
 
 def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:

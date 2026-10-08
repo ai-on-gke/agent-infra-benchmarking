@@ -55,6 +55,11 @@ class Cluster:
         # The cluster's own repository, which its nodes are granted to pull from.
         return self.outputs["artifact_registry_docker_repo"]
 
+    @property
+    def runner_ksa(self) -> str:
+        # The variable's default for a state applied before the output existed.
+        return self.outputs.get("benchmark_runner_ksa_name", "benchmark-runner")
+
     def env(self) -> dict[str, str]:
         return {
             "PROJECT_ID": self.project_id,

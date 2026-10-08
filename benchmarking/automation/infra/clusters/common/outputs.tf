@@ -65,6 +65,11 @@ output "bucket_url" {
   value       = google_storage_bucket.this.url
 }
 
+output "benchmark_runner_ksa_name" {
+  description = "Kubernetes ServiceAccount the benchmark runner Jobs run as, which the bucket grants object creation."
+  value       = var.benchmark_runner_ksa_name
+}
+
 output "atelet_wi_principal" {
   description = "IAM principal atelet authenticates as via Workload Identity Federation."
   value       = local.atelet_wi_principal
