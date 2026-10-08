@@ -1,4 +1,8 @@
-# A placeholder job image: exits successfully, ignoring its arguments.
-FROM busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+# The job's image: fetches the latest source of a branch, then does nothing
+# with it yet.
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
-ENTRYPOINT ["true"]
+RUN apk add --no-cache bash curl
+
+COPY entrypoint.sh /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

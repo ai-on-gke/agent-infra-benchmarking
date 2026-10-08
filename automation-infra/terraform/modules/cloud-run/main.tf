@@ -62,6 +62,20 @@ resource "google_storage_bucket_iam_member" "job_runner_state" {
   member = "serviceAccount:${google_service_account.job.email}"
 }
 
+# The source tarballs the image fetches, which GitHub Actions uploads.
+resource "google_storage_bucket_iam_member" "job_source" {
+  count = var.github_actions_bucket == null ? 0 : 1
+
+  bucket = var.github_actions_bucket
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.job.email}"
+
+  condition {
+    title      = "source-only"
+    expression = "resource.name.startsWith(\"projects/_/buckets/${var.github_actions_bucket}/objects/source/\")"
+  }
+}
+
 # What runner/infra creates in the project.
 resource "google_project_iam_member" "job" {
   for_each = toset([
@@ -203,7 +217,10 @@ resource "google_cloud_run_v2_job" "job" {
         ], var.args)
 
         dynamic "env" {
-          for_each = var.env
+          for_each = merge(var.github_actions_bucket == null ? {} : {
+            SOURCE_BUCKET = var.github_actions_bucket
+            SOURCE_BRANCH = var.source_branch
+          }, var.env)
           content {
             name  = env.key
             value = env.value

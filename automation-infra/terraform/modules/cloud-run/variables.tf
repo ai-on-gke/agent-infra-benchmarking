@@ -81,7 +81,13 @@ variable "runner_state_bucket" {
 }
 
 variable "github_actions_bucket" {
-  description = "Bucket under whose source/ GitHub Actions may write, as the github_service_account_email account. Null creates no account."
+  description = "Bucket under whose source/ GitHub Actions may write, as the github_service_account_email account, and the job reads its source from. Null creates no account and leaves the job without source, so it fails."
   type        = string
   default     = null
+}
+
+variable "source_branch" {
+  description = "Branch whose latest uploaded commit the job fetches from github_actions_bucket."
+  type        = string
+  default     = "main"
 }
