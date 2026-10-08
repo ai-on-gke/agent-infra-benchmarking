@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Applies, reads and destroys the dev infras: infra/orchestrator and a case's
+"""Applies, reads and destroys the dev infras: automation/infra and a case's
 cluster, which the orchestrator's --dev-infra creates and keeps, each with
 every Terraform file of it in .dev-infra/terraform/<name>/<infra>/."""
 

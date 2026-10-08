@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Applies infra/orchestrator/, runs the cases in tests.yaml one after another
+"""Applies automation/infra/, runs the cases in tests.yaml one after another
 (every case in the order listed, or the ones --test-case-name names in the
 order given), each on its own infra/clusters/ cluster applied for it and
 destroyed after it, and destroys the infra again. With --dev-infra, uses the
-infra/orchestrator and the cluster of that dev infra instead, which outlive the
+automation/infra and the cluster of that dev infra instead, which outlive the
 execution."""
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from ..process import failure
 
 # The executions' local Terraform files, as the Cloud Run job's state is under
 # terraform/ in its bucket. An execution's are in <name>/: a folder for
-# infra/orchestrator, orchestrator/, and one per case, tests/<case>/, each with
+# automation/infra, orchestrator/, and one per case, tests/<case>/, each with
 # its tfstates/ when the backend is local and its tf-data/ with either.
 LOCAL_TERRAFORM_DIR = AUTOMATION_DIR / "local-runs" / "terraform"
 
@@ -91,7 +91,7 @@ def parse_args() -> argparse.Namespace:
         "--dev-infra",
         type=dev_infra.check_name,
         metavar="NAME",
-        help="run every case on this dev infra, an infra/orchestrator and a cluster kept until"
+        help="run every case on this dev infra, an automation/infra and a cluster kept until"
         " python3 -m orchestrator.cli.dev_infra destroys them, rather than on ones applied for this execution."
         " Applied unless complete, a new one with the first case's cluster",
     )

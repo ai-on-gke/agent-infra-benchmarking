@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The Cloud Run job's container: the orchestrator package, its
-# infra/orchestrator/, terraform and tests.yaml. Its build context is
-# benchmarking/automation/, for tests.yaml.
+# The Cloud Run job's container: the orchestrator package, its infra/,
+# terraform and tests/tests.yaml. Its build context is benchmarking/, for
+# tests/, laid out under /app as there.
 #
 # Every base image is pinned by digest, the tag beside it saying which one it
 # was taken from, so a rebuild of the same commit is the same image.
@@ -24,17 +24,17 @@ FROM hashicorp/terraform:1.13.3@sha256:dfb1889a8ee74ada3ddacc48f89b8a0d69f3e114d
 FROM python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e
 COPY --from=terraform /bin/terraform /usr/local/bin/terraform
 
-WORKDIR /app
-COPY orchestrator/requirements.txt orchestrator/
+WORKDIR /app/automation
+COPY automation/orchestrator/requirements.txt orchestrator/
 RUN pip install --no-cache-dir --require-hashes -r orchestrator/requirements.txt
 
-COPY tests.yaml .
-COPY infra/orchestrator/ infra/orchestrator/
+COPY tests/tests.yaml /app/tests/
+COPY automation/infra/ infra/
 # The providers the lock file pins, installed now rather than downloaded by
 # every execution's terraform init.
-RUN terraform -chdir=infra/orchestrator init -backend=false -input=false
-COPY orchestrator/*.py orchestrator/
-COPY orchestrator/cli/*.py orchestrator/cli/
+RUN terraform -chdir=infra init -backend=false -input=false
+COPY automation/orchestrator/*.py orchestrator/
+COPY automation/orchestrator/cli/*.py orchestrator/cli/
 
 ENV PYTHONUNBUFFERED=1
 # Takes the orchestrator's arguments.

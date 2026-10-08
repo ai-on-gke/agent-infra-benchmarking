@@ -18,3 +18,5 @@ in cli/."""
 from pathlib import Path
 
 AUTOMATION_DIR = Path(__file__).resolve().parent.parent
+# tests.yaml and the Terraform configs its cases run on.
+TESTS_DIR = AUTOMATION_DIR.parent / "tests"

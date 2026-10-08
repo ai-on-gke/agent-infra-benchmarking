@@ -4,8 +4,10 @@
 **/*.tfstate
 **/*.tfstate.*
 **/*.tfvars
-!infra/clusters/common/default.tfvars
+!tests/infra/clusters/common/default.tfvars
 **/__pycache__/
-.terraform-plugin-cache/
-local-runs/
-.dev-infra/
+automation/.terraform-plugin-cache/
+automation/local-runs/
+automation/.dev-infra/
+# The venv tools/run makes.
+tools/venv_run/

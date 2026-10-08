@@ -20,11 +20,11 @@ from pathlib import Path
 
 import yaml
 
-from . import AUTOMATION_DIR, benchmark
+from . import TESTS_DIR, benchmark
 
-TESTS_FILE = AUTOMATION_DIR / "tests.yaml"
+TESTS_FILE = TESTS_DIR / "tests.yaml"
 # One Terraform config per directory, which a case's infra.cluster.name picks.
-CLUSTERS_DIR = AUTOMATION_DIR / "infra" / "clusters"
+CLUSTERS_DIR = TESTS_DIR / "infra" / "clusters"
 CLUSTER_KEYS = {"name", "tfvars", "tfvars_inline", "variables"}
 SKIP_SUBSTRATE_INSTALL = "skip-substrate-install"
 

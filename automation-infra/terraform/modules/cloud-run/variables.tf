@@ -74,12 +74,12 @@ variable "time_zone" {
 }
 
 variable "state_bucket" {
-  description = "Bucket holding the deployment's Terraform state. infra/orchestrator's goes under state_bucket_prefix in it."
+  description = "Bucket holding the deployment's Terraform state. automation/infra's goes under state_bucket_prefix in it."
   type        = string
 }
 
 variable "state_bucket_prefix" {
-  description = "Prefix in state_bucket that infra/orchestrator's Terraform state goes under, one folder per execution. The job may only write there."
+  description = "Prefix in state_bucket that automation/infra's Terraform state goes under, one folder per execution. The job may only write there."
   type        = string
 
   validation {
