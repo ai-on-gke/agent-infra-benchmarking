@@ -2,7 +2,7 @@ locals {
   runner_state_bucket = var.runner_state_bucket != "" ? var.runner_state_bucket : "${var.project_id}-${var.default_resource_name}"
 
   # automation/, the runner image's build context.
-  runner_context = abspath("${path.module}/../../..")
+  runner_context = abspath("${path.module}/../../../../automation")
   # The files the image is built from, less what .dockerignore leaves out.
   runner_sources = concat(["tests.yaml", ".dockerignore"], [
     for f in fileset(local.runner_context, "runner/**") : f

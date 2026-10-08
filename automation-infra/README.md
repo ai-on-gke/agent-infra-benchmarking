@@ -1,11 +1,11 @@
 # Automation
 
-Runs the cases in [`tests.yaml`](tests.yaml) as a Cloud Run job, on a schedule
+Runs the cases in [`tests.yaml`](../automation/tests.yaml) as a Cloud Run job, on a schedule
 or by hand. A deployment is a folder under [`deployments/`](deployments) that
 calls the [`terraform/modules/cloud-run`](terraform/modules/cloud-run) module,
 which deploys the Cloud Run job and builds its image. The Cloud Run job runs
-[`runner/run.py`](runner/run.py), which creates
-[`runner/infra`](runner/infra) for each execution and destroys it afterwards.
+[`runner/run.py`](../automation/runner/run.py), which creates
+[`runner/infra`](../automation/runner/infra) for each execution and destroys it afterwards.
 
 ## Prerequisites
 
@@ -74,11 +74,11 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
    `module` block, e.g. `schedule = "0 3 * * *"` to run every day at 3am UTC:
 
    ```bash
-   mkdir -p "automation/deployments/$DEPLOYMENT"
+   mkdir -p "automation-infra/deployments/$DEPLOYMENT"
    ```
 
    ```bash
-   cat > "automation/deployments/$DEPLOYMENT/main.tf" <<EOF
+   cat > "automation-infra/deployments/$DEPLOYMENT/main.tf" <<EOF
    terraform {
      required_version = ">= 1.5"
 
@@ -103,26 +103,26 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
    ```
 
    ```bash
-   printf '.terraform/\n' > "automation/deployments/$DEPLOYMENT/.gitignore"
+   printf '.terraform/\n' > "automation-infra/deployments/$DEPLOYMENT/.gitignore"
    ```
 
 2. Initialize it, which also writes the lock file that pins the providers:
 
    ```bash
-   terraform -chdir="automation/deployments/$DEPLOYMENT" init
+   terraform -chdir="automation-infra/deployments/$DEPLOYMENT" init
    ```
 
 3. Apply. This also builds the runner image on Cloud Build, which takes a few
    minutes, and again whenever the commit or the image's files change:
 
    ```bash
-   terraform -chdir="automation/deployments/$DEPLOYMENT" apply
+   terraform -chdir="automation-infra/deployments/$DEPLOYMENT" apply
    ```
 
 4. Commit the folder: `main.tf`, `.gitignore` and `.terraform.lock.hcl`.
 
    ```bash
-   git add "automation/deployments/$DEPLOYMENT"
+   git add "automation-infra/deployments/$DEPLOYMENT"
    ```
 
 5. Run it once, now, and wait for it to finish:

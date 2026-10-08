@@ -1,6 +1,6 @@
 # Builds and pushes the runner image, from automation/ as the source:
 #
-#   gcloud builds submit automation --config=automation/terraform/modules/cloud-run/cloudbuild.yaml \
+#   gcloud builds submit automation --config=automation-infra/terraform/modules/cloud-run/cloudbuild.yaml \
 #     --ignore-file=.dockerignore --substitutions=_IMAGE=IMAGE \
 #     --service-account=SERVICE_ACCOUNT --gcs-source-staging-dir=SOURCE_DIR
 #

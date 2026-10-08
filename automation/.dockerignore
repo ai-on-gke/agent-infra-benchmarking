@@ -8,6 +8,3 @@
 **/*.tfstate.*
 **/*.tfvars
 **/__pycache__/
-# The Terraform that builds and deploys the image, not part of it.
-/terraform/
-/deployments/
