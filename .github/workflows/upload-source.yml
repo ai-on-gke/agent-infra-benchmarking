@@ -3,8 +3,8 @@ name: Upload source
 # Uploads each pushed commit, as a git repo, to
 # gs://<bucket>/source/<branch>/<commit>.tar.gz, and writes the branch's tip
 # commit to latest.txt beside it, for each deployment in the matrix. The
-# bucket is the deployment's backend.hcl's, and its key the secret
-# GCP_CREDENTIALS_<DEPLOYMENT>, which
+# bucket is the state_bucket local of the deployment's main.tf, and its key
+# the secret GCP_CREDENTIALS_<DEPLOYMENT>, which
 # automation-infra/scripts/get-gh-actions-gcs-config sets.
 
 on:
@@ -35,8 +35,8 @@ jobs:
         env:
           DEPLOYMENT: ${{ matrix.deployment }}
         run: |
-          bucket="$(sed -n 's/^bucket *= *"\(.*\)"/\1/p' "automation-infra/deployments/$DEPLOYMENT/backend.hcl")"
-          [[ -n "$bucket" ]] || { echo "No bucket in $DEPLOYMENT's backend.hcl." >&2; exit 1; }
+          bucket="$(sed -n 's/^ *state_bucket *= *"\(.*\)"/\1/p' "automation-infra/deployments/$DEPLOYMENT/main.tf")"
+          [[ -n "$bucket" ]] || { echo "No state_bucket in $DEPLOYMENT's main.tf." >&2; exit 1; }
           echo "bucket=$bucket" >> "$GITHUB_OUTPUT"
           echo "credentials_secret=GCP_CREDENTIALS_$(tr 'a-z-' 'A-Z_' <<<"$DEPLOYMENT")" >> "$GITHUB_OUTPUT"
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -77,8 +77,8 @@ jobs:
         env:
           DEPLOYMENT: ${{ matrix.deployment }}
         run: |
-          bucket="$(sed -n 's/^bucket *= *"\(.*\)"/\1/p' "automation-infra/deployments/$DEPLOYMENT/backend.hcl")"
-          [[ -n "$bucket" ]] || { echo "No bucket in $DEPLOYMENT's backend.hcl." >&2; exit 1; }
+          bucket="$(sed -n 's/^ *state_bucket *= *"\(.*\)"/\1/p' "automation-infra/deployments/$DEPLOYMENT/main.tf")"
+          [[ -n "$bucket" ]] || { echo "No state_bucket in $DEPLOYMENT's main.tf." >&2; exit 1; }
           echo "bucket=$bucket" >> "$GITHUB_OUTPUT"
           echo "credentials_secret=GCP_CREDENTIALS_$(tr 'a-z-' 'A-Z_' <<<"$DEPLOYMENT")" >> "$GITHUB_OUTPUT"
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0

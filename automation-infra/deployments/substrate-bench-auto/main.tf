@@ -1,8 +1,16 @@
 terraform {
   required_version = ">= 1.5"
 
-  # Set by backend.hcl: terraform init -backend-config=backend.hcl
-  backend "gcs" {}
+  backend "gcs" {
+    bucket = "substrate-bench-auto-tfstate"
+    prefix = "automation/cloud-run/substrate-bench-auto"
+  }
+}
+
+locals {
+  # The backend's bucket, which the backend block cannot take from here. Also
+  # read by .github/workflows/upload-source.yml.
+  state_bucket = "substrate-bench-auto-tfstate"
 }
 
 module "cloud_run" {
@@ -12,8 +20,7 @@ module "cloud_run" {
   region                = "us-central1"
   default_resource_name = "substrate-bench-auto"
 
-  # The state bucket, from backend.hcl.
-  github_actions_bucket = regex("bucket *= *\"([^\"]+)\"", file("${path.module}/backend.hcl"))[0]
+  github_actions_bucket = local.state_bucket
 }
 
 output "cloud_run" {
