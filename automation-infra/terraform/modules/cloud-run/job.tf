@@ -4,18 +4,18 @@ resource "google_service_account" "job" {
   display_name = "Cloud Run job ${var.default_resource_name}"
 }
 
-# The Terraform state of runner/infra, under tests/. Listing is checked on the
-# bucket rather than an object, hence its own clause.
-resource "google_storage_bucket_iam_member" "job_tests_state" {
+# The Terraform state of runner/infra, under var.state_bucket_prefix. Listing
+# is checked on the bucket rather than an object, hence its own clause.
+resource "google_storage_bucket_iam_member" "job_state" {
   bucket = var.state_bucket
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.job.email}"
 
   condition {
-    title = "tests-only"
+    title = "state-prefix-only"
     expression = join(" || ", [
-      "resource.name.startsWith(\"projects/_/buckets/${var.state_bucket}/objects/tests/\")",
-      "api.getAttribute(\"storage.googleapis.com/objectListPrefix\", \"\").startsWith(\"tests/\")",
+      "resource.name.startsWith(\"projects/_/buckets/${var.state_bucket}/objects/${var.state_bucket_prefix}/\")",
+      "api.getAttribute(\"storage.googleapis.com/objectListPrefix\", \"\").startsWith(\"${var.state_bucket_prefix}/\")",
     ])
   }
 }
@@ -73,6 +73,7 @@ resource "google_cloud_run_v2_job" "job" {
           "--project-id=${var.project_id}",
           "--region=${var.region}",
           "--state-bucket=${var.state_bucket}",
+          "--state-prefix=${var.state_bucket_prefix}",
         ], var.args)
 
         dynamic "env" {

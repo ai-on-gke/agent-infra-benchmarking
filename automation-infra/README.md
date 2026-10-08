@@ -67,7 +67,8 @@ successfully and does nothing else.
 In the same shell, with the variables from [Preparing](#preparing) still set:
 
 1. Create the deployment's folder, with its state in the bucket under its own
-   prefix. Any other variable of the module, see its
+   prefix, and the state of the infra each test run creates under
+   `state_bucket_prefix`. Any other variable of the module, see its
    [`variables.tf`](terraform/modules/cloud-run/variables.tf), goes in the
    `module` block, e.g. `schedule = "0 3 * * *"` to run every day at 3am UTC:
 
@@ -97,7 +98,8 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
      region                = "$REGION"
      default_resource_name = "$DEPLOYMENT"
 
-     state_bucket = local.state_bucket
+     state_bucket        = local.state_bucket
+     state_bucket_prefix = "tests"
    }
 
    output "cloud_run" {

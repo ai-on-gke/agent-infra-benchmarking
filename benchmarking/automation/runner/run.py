@@ -38,8 +38,6 @@ from log import log
 RUNNER_DIR = Path(__file__).resolve().parent
 TESTS_FILE = RUNNER_DIR.parent / "tests.yaml"
 INFRA_DIR = RUNNER_DIR / "infra"
-# Each execution's state is under STATE_PREFIX/<name> in the state bucket.
-STATE_PREFIX = "tests"
 
 
 def fail(message: str) -> NoReturn:
@@ -75,6 +73,11 @@ def main() -> None:
     p.add_argument("--project-id", required=True, help="GCP project to create the infra in")
     p.add_argument("--region", default="us-central1", help="default: %(default)s")
     p.add_argument("--state-bucket", required=True, help="GCS bucket holding the infra's Terraform state")
+    p.add_argument(
+        "--state-prefix",
+        required=True,
+        help="prefix in the state bucket; each execution's state is under <prefix>/<name>",
+    )
     p.add_argument(
         "--name",
         default=datetime.now(timezone.utc).strftime("run-%Y%m%dt%H%M%Sz"),
@@ -113,7 +116,7 @@ def main() -> None:
             "-input=false",
             "-reconfigure",
             f"-backend-config=bucket={args.state_bucket}",
-            f"-backend-config=prefix={STATE_PREFIX}/{args.name}",
+            f"-backend-config=prefix={args.state_prefix}/{args.name}",
         )
         try:
             terraform.deploy(INFRA_DIR, *tf_vars)

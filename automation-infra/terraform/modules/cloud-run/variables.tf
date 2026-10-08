@@ -26,7 +26,7 @@ variable "command" {
 }
 
 variable "args" {
-  description = "Arguments passed to the entrypoint after --project-id, --region and --state-bucket, which the module passes itself."
+  description = "Arguments passed to the entrypoint after --project-id, --region, --state-bucket and --state-prefix, which the module passes itself."
   type        = list(string)
   default     = []
 }
@@ -74,8 +74,18 @@ variable "time_zone" {
 }
 
 variable "state_bucket" {
-  description = "Bucket holding the deployment's Terraform state. runner/infra's goes under tests/ in it."
+  description = "Bucket holding the deployment's Terraform state. runner/infra's goes under state_bucket_prefix in it."
   type        = string
+}
+
+variable "state_bucket_prefix" {
+  description = "Prefix in state_bucket that runner/infra's Terraform state goes under, one folder per execution. The job may only write there."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[^/]+(/[^/]+)*$", var.state_bucket_prefix))
+    error_message = "state_bucket_prefix must not be empty, nor start or end with a slash."
+  }
 }
 
 variable "github_actions_bucket" {
