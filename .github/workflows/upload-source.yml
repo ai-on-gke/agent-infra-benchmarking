@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  upload:
+  upload-tarball:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,8 +44,8 @@ jobs:
   # group runs one at a time per branch: a push between the check and the
   # write has its own job, which waits for this one and so writes last. A
   # newer push's job replaces one still waiting.
-  latest:
-    needs: upload
+  upload-latest:
+    needs: upload-tarball
     runs-on: ubuntu-latest
     concurrency:
       group: ${{ github.workflow }}-latest-${{ github.ref }}
