@@ -12,13 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Named benchmark runs. Each case is the --test-case JSON of
-# benchmarking/run_benchmark.sh, and its name the --test-case-name:
+# Named benchmark runs, each picked by the orchestrator's --test-case-name:
 #
-#   ./benchmarking/run_benchmark.sh --test-case-name glutton \
-#     --test-case "$(yq -c '.cases.glutton' benchmarking/automation/tests.yaml)"
+#   python3 -m orchestrator --test-case-name glutton ...
 #
-# `type` picks benchmarking/<type>/run_benchmark.sh, which documents the rest.
+# `type` picks orchestrator/<type>.py, which documents the rest.
 # For locust: `worker-count` and `sandbox-class` shape the WorkerPool, and
 # every key in `master` and `worker` becomes `--key=value` on that process.
 # `noop` is the orchestrator's alone: it applies and destroys the case's
@@ -29,10 +27,10 @@
 # The orchestrator installs substrate on the case's cluster before running it,
 # unless `skip-substrate-install` is true.
 #
-# `infra.cluster` is the cluster the case runs on, which run_benchmark.sh
-# ignores. `name` picks the Terraform config in infra/clusters/<name>/, and the
-# rest is optional: `tfvars` a tfvars file in that config (or an absolute path),
-# `tfvars_inline` tfvars content, and `variables` values passed as TF_VAR_<key>.
+# `infra.cluster` is the cluster the case runs on. `name` picks the Terraform
+# config in infra/clusters/<name>/, and the rest is optional: `tfvars` a tfvars
+# file in that config (or an absolute path), `tfvars_inline` tfvars content, and
+# `variables` values passed as TF_VAR_<key>.
 #
 # Varying the load or the pool means another case, so that every run is
 # reproducible from the name it is recorded under: benchmark-test-case is the

@@ -13,8 +13,8 @@
 # limitations under the License.
 
 # The boomer worker of one benchmark run. Rendered and submitted by
-# run_benchmark.sh once master-job.yaml's pod is ready; it ends when the
-# master quits it, after deleting the actors it created.
+# automation/orchestrator/locust.py once master-job.yaml's pod is ready; it ends
+# when the master quits it, after deleting the actors it created.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -34,7 +34,7 @@ spec:
         # which run they came from.
         #
         # The values are constrained by what a label may hold — 63 characters
-        # of alphanumerics, dashes, underscores and dots — which run_benchmark.sh
+        # of alphanumerics, dashes, underscores and dots — which the orchestrator
         # checks the run id and the case name against.
         benchmark-run-id: "${BENCHMARK_RUN_ID}"
         benchmark-test-case: "${BENCHMARK_RECORD_NAME}"
