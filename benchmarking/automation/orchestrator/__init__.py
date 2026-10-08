@@ -13,3 +13,7 @@
 # limitations under the License.
 
 """Runs the cases in tests.yaml on infra of their own: python3 -m orchestrator."""
+
+from pathlib import Path
+
+AUTOMATION_DIR = Path(__file__).resolve().parent.parent

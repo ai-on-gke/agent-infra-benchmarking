@@ -24,7 +24,12 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
+from . import AUTOMATION_DIR
 from .log import log
+
+# Every TF_DATA_DIR the orchestrator uses starts empty, so its providers come
+# from here rather than from a download each.
+PLUGIN_CACHE_DIR = Path(os.environ.get("TF_PLUGIN_CACHE_DIR") or AUTOMATION_DIR / ".terraform-plugin-cache")
 
 # terraform -json's @level, as a Cloud Logging severity.
 SEVERITIES = {"trace": "DEBUG", "debug": "DEBUG", "info": "INFO", "warn": "WARNING", "error": "ERROR"}
@@ -76,6 +81,15 @@ def log_event(line: str) -> None:
             return
         message = "\n".join(["Outputs:", *values])
     log(message, SEVERITIES.get(event.get("@level"), "DEFAULT"))
+
+
+def data_env(path: Path) -> dict[str, str]:
+    PLUGIN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return {"TF_DATA_DIR": str(path), "TF_PLUGIN_CACHE_DIR": str(PLUGIN_CACHE_DIR)}
+
+
+def backend_block(backend: str) -> str:
+    return f'terraform {{\n  backend "{backend}" {{}}\n}}\n'
 
 
 def environ(env: dict[str, str] | None) -> dict[str, str] | None:

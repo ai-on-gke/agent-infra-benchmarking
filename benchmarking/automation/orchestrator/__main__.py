@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import signal
 import subprocess
@@ -32,21 +31,15 @@ from typing import NoReturn
 
 import yaml
 
-from . import terraform
+from . import AUTOMATION_DIR, terraform
+from .cases import TESTS_FILE, load_cases
+from .cluster import Cluster
 from .log import log
 
-AUTOMATION_DIR = Path(__file__).resolve().parent.parent
-TESTS_FILE = AUTOMATION_DIR / "tests.yaml"
 INFRA_DIR = AUTOMATION_DIR / "infra" / "orchestrator"
 # The infra's backend, which each execution writes; the infra's .gitignore
 # leaves out *_override.tf.
 BACKEND_FILE = INFRA_DIR / "backend_override.tf"
-# One Terraform config per directory, which a case's infra.cluster.name picks.
-CLUSTERS_DIR = AUTOMATION_DIR / "infra" / "clusters"
-CLUSTER_KEYS = {"name", "tfvars", "tfvars_inline", "variables"}
-# Every TF_DATA_DIR the orchestrator uses starts empty, so its providers come
-# from here rather than from a download each.
-PLUGIN_CACHE_DIR = Path(os.environ.get("TF_PLUGIN_CACHE_DIR") or AUTOMATION_DIR / ".terraform-plugin-cache")
 # The executions' local Terraform files, as the Cloud Run job's state is under
 # terraform/ in its bucket. An execution's are in <name>/: a folder for
 # infra/orchestrator, orchestrator/, and one per case, tests/<case>/, each with
@@ -57,40 +50,6 @@ LOCAL_TERRAFORM_DIR = AUTOMATION_DIR / "local-runs" / "terraform"
 def fail(message: str) -> NoReturn:
     log(f"run: {message}", "ERROR")
     sys.exit(1)
-
-
-def load_cases(tests_file: Path) -> dict[str, dict]:
-    with tests_file.open() as f:
-        cases = (yaml.safe_load(f) or {}).get("cases")
-    if not isinstance(cases, dict) or not cases:
-        raise ValueError(f"{tests_file} has no `cases` mapping")
-    for name, case in cases.items():
-        if not isinstance(case, dict):
-            raise ValueError(f"{tests_file}: case {name} is not a mapping")
-        check_cluster(f"{tests_file}: case {name}", case)
-    return cases
-
-
-def check_cluster(where: str, case: dict) -> None:
-    infra = case.get("infra")
-    cluster = infra.get("cluster") if isinstance(infra, dict) else None
-    if not isinstance(cluster, dict):
-        raise ValueError(f"{where} has no `infra.cluster` mapping")
-    unknown = cluster.keys() - CLUSTER_KEYS
-    if unknown:
-        raise ValueError(f"{where}: `infra.cluster` has unknown {', '.join(sorted(unknown))}")
-
-    clusters = sorted(p.name for p in CLUSTERS_DIR.iterdir() if p.is_dir())
-    if cluster.get("name") not in clusters:
-        raise ValueError(f"{where}: `infra.cluster.name` must be one of {', '.join(clusters)}")
-    tfvars = cluster.get("tfvars")
-    # An absolute path stays as it is; a relative one is in the cluster's config.
-    if tfvars is not None and not (isinstance(tfvars, str) and (CLUSTERS_DIR / cluster["name"] / tfvars).is_file()):
-        raise ValueError(f"{where}: `infra.cluster.tfvars` {tfvars!r} is not a file")
-    if not isinstance(cluster.get("tfvars_inline", ""), str):
-        raise ValueError(f"{where}: `infra.cluster.tfvars_inline` must be a string")
-    if not isinstance(cluster.get("variables", {}), dict):
-        raise ValueError(f"{where}: `infra.cluster.variables` must be a mapping")
 
 
 def backend_config(args: argparse.Namespace, *key: str) -> list[str]:
@@ -110,61 +69,19 @@ def data_dir(args: argparse.Namespace, *key: str) -> Path:
     return path
 
 
-def data_env(path: Path) -> dict[str, str]:
-    PLUGIN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    return {"TF_DATA_DIR": str(path), "TF_PLUGIN_CACHE_DIR": str(PLUGIN_CACHE_DIR)}
-
-
-def backend_block(args: argparse.Namespace) -> str:
-    return f'terraform {{\n  backend "{args.state_backend}" {{}}\n}}\n'
-
-
 def run_case(name: str, case: dict, args: argparse.Namespace, tf_vars: list[str]) -> None:
-    cluster = case["infra"]["cluster"]
-    cluster_dir = CLUSTERS_DIR / cluster["name"]
-    json_output = args.terraform_output == "json"
-    # The config is also applied by hand, so its .terraform/ and
-    # backend_override.tf stay that deployment's: the case has its own data
-    # dir, and an override file sorting after backend_override.tf replaces it.
-    override = cluster_dir / f"orchestrator_{args.name}_override.tf"
-    # Also holds the inline tfvars.
-    case_data = data_dir(args, "tests", name)
-    env = data_env(case_data)
-    plan_file = str(case_data / "run.tfplan")
-
-    # Later ones win: tfvars, tfvars_inline, variables, and last the
-    # execution's own project, region and name.
-    plan_args = []
-    if "tfvars" in cluster:
-        plan_args.append(f"-var-file={cluster_dir / cluster['tfvars']}")
-    if "tfvars_inline" in cluster:
-        inline = case_data / "inline.tfvars"
-        inline.write_text(cluster["tfvars_inline"])
-        plan_args.append(f"-var-file={inline}")
-    # A string as it is; anything else as JSON, which terraform reads as HCL.
-    plan_args += [
-        f"-var={key}={value if isinstance(value, str) else json.dumps(value)}"
-        for key, value in cluster.get("variables", {}).items()
-    ]
-    plan_args += tf_vars
-
-    override.write_text(backend_block(args))
-    try:
-        terraform.run(
-            cluster_dir,
-            "init",
-            "-input=false",
-            *(f"-backend-config={c}" for c in backend_config(args, "tests", name)),
-            env=env,
-        )
-        try:
-            terraform.deploy(cluster_dir, *plan_args, json_output=json_output, env=env, plan_file=plan_file)
-            # The case itself is a no-op for now.
-            log(f"{name}: {json.dumps(case)}")
-        finally:
-            terraform.deploy(cluster_dir, "-destroy", *plan_args, json_output=json_output, env=env, plan_file=plan_file)
-    finally:
-        override.unlink()
+    cluster = Cluster(
+        spec=case["infra"]["cluster"],
+        data=data_dir(args, "tests", name),
+        backend=args.state_backend,
+        backend_config=backend_config(args, "tests", name),
+        owner=f"orchestrator_{args.name}",
+        tf_vars=tf_vars,
+        json_output=args.terraform_output == "json",
+    )
+    with cluster.applied():
+        # The case itself is a no-op for now.
+        log(f"{name}: {json.dumps(case)}")
 
 
 def main() -> None:
@@ -233,9 +150,9 @@ def main() -> None:
         f"-var=default_resource_name={args.name}",
     ]
     orchestrator_data = data_dir(args, "orchestrator")
-    env = data_env(orchestrator_data)
+    env = terraform.data_env(orchestrator_data)
     plan_file = str(orchestrator_data / "run.tfplan")
-    BACKEND_FILE.write_text(backend_block(args))
+    BACKEND_FILE.write_text(terraform.backend_block(args.state_backend))
     try:
         terraform.run(
             INFRA_DIR,
