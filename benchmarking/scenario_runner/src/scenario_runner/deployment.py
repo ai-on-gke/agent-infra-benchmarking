@@ -84,6 +84,9 @@ class Deployment:
                 self.dir,
                 "init",
                 "-input=false",
+                # The state is where backend_config says, even if the data dir
+                # was initialized with another path, e.g. before a move.
+                "-reconfigure",
                 *(f"-backend-config={c}" for c in self.backend_config),
                 env=terraform.data_env(self.data),
             )
