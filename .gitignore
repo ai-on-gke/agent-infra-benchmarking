@@ -11,9 +11,9 @@
 # The venv benchmarking/tools/run makes.
 /benchmarking/tools/venv_run/
 
-# Each orchestrator execution's local state and Terraform data in runs/, and
-# the dev infras' Terraform files, which the orchestrator's --dev-infra keeps,
-# in dev-infra/.
+# Each orchestrator execution's local state and Terraform data in runs/, the
+# dev infras' Terraform files, which the orchestrator's --dev-infra keeps, in
+# dev-infra/, and the copies of the configs terraform runs on in active/.
 /benchmarking/scenario_runner/.local-data/
 *.egg-info/
 

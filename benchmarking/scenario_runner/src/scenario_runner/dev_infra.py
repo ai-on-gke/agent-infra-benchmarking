@@ -83,7 +83,7 @@ def deployments(record: dict, json_output: bool = False) -> dict[str, Deployment
     variables = tf_vars(record["project_id"], record["region"], name)
 
     def files(infra: str) -> dict:
-        return files_under(DEV_INFRA_DIR / name / infra, f"dev_infra_{name}", json_output)
+        return files_under(DEV_INFRA_DIR / name / infra, json_output)
 
     return {
         "orchestrator": Deployment(dir=ORCHESTRATOR_DIR, plan_args=variables, **files("orchestrator")),

@@ -166,7 +166,6 @@ def deployment_files(args: argparse.Namespace, *key: str) -> dict:
         backend_config = [f"bucket={args.state_bucket}", f"prefix={'/'.join([args.state_prefix, args.name, *key])}"]
     return files_under(
         LOCAL_TERRAFORM_DIR.joinpath(args.name, *key),
-        f"orchestrator_{args.name}",
         args.terraform_output == "json",
         args.state_backend,
         backend_config,
