@@ -76,8 +76,8 @@ spec:
             memory: "512Mi"
 ---
 # The account both Jobs run as. Here rather than in worker-job.yaml because
-# this Job is applied first. infra/terraform-gke grants this exact
-# namespace/name pair objectCreator on the bucket through a principal://
+# this Job is applied first. benchmarking/automation/infra/common grants this
+# exact namespace/name pair objectCreator on the bucket through a principal://
 # subject, so no iam.gke.io annotation is needed here — but the two spellings
 # have to agree or the grant lands on nothing.
 apiVersion: v1

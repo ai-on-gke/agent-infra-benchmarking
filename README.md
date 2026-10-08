@@ -30,8 +30,8 @@ Backend for benchmarks and corresponding recipes for agent infra offerings.
   buckets, service accounts and project-level IAM bindings — `Owner` or
   `Editor` covers all of it; see the `enable_atelet_iam`/
   `enable_atelet_bucket_iam` comments in
-  [`infra/terraform-gke/variables.tf`](infra/terraform-gke/variables.tf) if
-  you're granting narrower roles instead.
+  [`benchmarking/automation/infra/common/variables.tf`](benchmarking/automation/infra/common/variables.tf)
+  if you're granting narrower roles instead.
 - **Cost**: this stands up billable resources — a GKE Standard cluster with
   autoscaling node pools, a VPC, a GCS bucket and an Artifact Registry repo.
   See [Cleanup](#cleanup) to tear it down.
@@ -39,11 +39,12 @@ Backend for benchmarks and corresponding recipes for agent infra offerings.
 ## Setting up the infrastructure
 
 The cluster, the snapshot bucket and the Artifact Registry repository come from
-the Terraform config in `infra/terraform-gke`. Run from the repo root, with
-gcloud application-default credentials already in place.
+the Terraform config in `benchmarking/automation/infra/common`. Run from the
+repo root, with gcloud application-default credentials already in place.
 
 1. Initialize the `substrate` submodule. Terraform reads its build version
-   off this checkout (`infra/terraform-gke/substrate-version.sh`), and every
+   off this checkout
+   (`benchmarking/automation/infra/common/substrate-version.sh`), and every
    script under `scripts/substrate` shells out into it, so both fail without
    it:
 
@@ -54,7 +55,7 @@ gcloud application-default credentials already in place.
 2. Copy the example — the real file is gitignored and per-developer:
 
    ```bash
-   cp infra/terraform-gke/terraform.tfvars.example infra/terraform-gke/terraform.tfvars
+   cp benchmarking/automation/infra/common/terraform.tfvars.example benchmarking/automation/infra/common/terraform.tfvars
    ```
 
    Then set in it:
@@ -90,10 +91,10 @@ gcloud application-default credentials already in place.
 
    Follow one of:
 
-   1. **Local state**, in `infra/terraform-gke/terraform.tfstate`:
+   1. **Local state**, in `benchmarking/automation/infra/common/terraform.tfstate`:
 
       ```bash
-      terraform -chdir=infra/terraform-gke init
+      terraform -chdir=benchmarking/automation/infra/common init
       ```
 
    2. **State in GCS.** The bucket is shared by the project's deployments; the
@@ -106,13 +107,13 @@ gcloud application-default credentials already in place.
         --uniform-bucket-level-access
       gcloud storage buckets update gs://<project-id>-tfstate --versioning
 
-      cat > infra/terraform-gke/backend_override.tf <<'EOF'
+      cat > benchmarking/automation/infra/common/backend_override.tf <<'EOF'
       terraform {
         backend "gcs" {}
       }
       EOF
 
-      terraform -chdir=infra/terraform-gke init \
+      terraform -chdir=benchmarking/automation/infra/common init \
         -backend-config=bucket=<project-id>-tfstate \
         -backend-config=prefix=<default_resource_name>
       ```
@@ -123,7 +124,7 @@ gcloud application-default credentials already in place.
    minutes:
 
    ```bash
-   terraform -chdir=infra/terraform-gke apply -var-file=terraform.tfvars
+   terraform -chdir=benchmarking/automation/infra/common apply -var-file=terraform.tfvars
    ```
 
 ## Setting up the Agent Substrate
@@ -298,5 +299,5 @@ Download any worth keeping first, or set it to `false`, in which case destroy
 stops at the bucket while it holds anything.
 
    ```bash
-   terraform -chdir=infra/terraform-gke destroy
+   terraform -chdir=benchmarking/automation/infra/common destroy
    ```

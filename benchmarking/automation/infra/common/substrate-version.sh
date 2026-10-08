@@ -29,7 +29,7 @@
 set -o errexit -o nounset -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SUBSTRATE_DIR="${SCRIPT_DIR}/../../dependency-repos/substrate"
+SUBSTRATE_DIR="${SCRIPT_DIR}/../../../../dependency-repos/substrate"
 
 if [[ ! -d "${SUBSTRATE_DIR}/.git" && ! -f "${SUBSTRATE_DIR}/.git" ]]; then
   echo "Error: substrate submodule not initialized at ${SUBSTRATE_DIR}." >&2
