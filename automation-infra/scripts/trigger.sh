@@ -68,16 +68,14 @@ echo "Started ${EXECUTION}."
 LOG_FILTER="resource.type=\"cloud_run_job\" AND labels.\"run.googleapis.com/execution_name\"=\"${EXECUTION}\""
 LAST_TIMESTAMP="1970-01-01T00:00:00Z"
 
-# Prints the log lines written since the last ones printed.
+# Prints the log entries written since the last ones printed. As JSON, since
+# an entry's message may span many lines.
 print_new_logs() {
-  local entries timestamp text
+  local entries
   entries="$(gcloud logging read "${LOG_FILTER} AND timestamp>\"${LAST_TIMESTAMP}\"" \
-    --project="${PROJECT_ID}" --order=asc --format='value(timestamp,textPayload)')"
-  [[ -n "${entries}" ]] || return 0
-  while IFS=$'\t' read -r timestamp text; do
-    printf '%s\n' "${text}"
-    LAST_TIMESTAMP="${timestamp}"
-  done <<<"${entries}"
+    --project="${PROJECT_ID}" --order=asc --format=json)"
+  jq -r '.[] | .textPayload // .jsonPayload.message // empty' <<<"${entries}"
+  LAST_TIMESTAMP="$(jq -r --arg last "${LAST_TIMESTAMP}" 'last.timestamp // $last' <<<"${entries}")"
 }
 
 # Prints "True" once the execution succeeded and "False" once it failed or was
