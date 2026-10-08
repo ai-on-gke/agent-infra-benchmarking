@@ -173,10 +173,8 @@ data "google_project" "this" {
 
 
 locals {
-  atelet_wi_principal         = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${var.atelet_namespace}/sa/${var.atelet_ksa_name}"
-  ate_api_server_wi_principal = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${var.atelet_namespace}/sa/${var.ate_api_server_ksa_name}"
-  # Disabled along with the orchestrator-cluster resources below.
-  # orchestrator_wi_principal     = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${var.orchestrator_namespace}/sa/${var.orchestrator_ksa_name}"
+  atelet_wi_principal           = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${var.atelet_namespace}/sa/${var.atelet_ksa_name}"
+  ate_api_server_wi_principal   = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${var.atelet_namespace}/sa/${var.ate_api_server_ksa_name}"
   benchmark_runner_wi_principal = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${var.benchmark_runner_namespace}/sa/${var.benchmark_runner_ksa_name}"
 }
 
