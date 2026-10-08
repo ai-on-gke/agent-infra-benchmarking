@@ -43,7 +43,7 @@ STATE_PREFIX = "automation/runner"
 
 
 def fail(message: str) -> NoReturn:
-    log(f"run_tests: {message}", "ERROR")
+    log(f"run: {message}", "ERROR")
     sys.exit(1)
 
 

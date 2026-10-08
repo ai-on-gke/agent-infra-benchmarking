@@ -4,7 +4,7 @@ Runs the cases in [`tests.yaml`](tests.yaml) as a Cloud Run job, on a schedule
 or by hand. A deployment is a folder under [`deployments/`](deployments) that
 calls the [`terraform/modules/cloud-run`](terraform/modules/cloud-run) module,
 which deploys the Cloud Run job and builds its image. The Cloud Run job runs
-[`runner/run_tests.py`](runner/run_tests.py), which creates
+[`runner/run.py`](runner/run.py), which creates
 [`runner/infra`](runner/infra) for each execution and destroys it afterwards.
 
 ## Prerequisites
@@ -15,7 +15,7 @@ which deploys the Cloud Run job and builds its image. The Cloud Run job runs
 - A GCP project with billing, and an account with `Owner` on it. `Editor` is
   not enough, as it cannot set IAM.
 
-### Running `run_tests.py` locally
+### Running `run.py` locally
 
 - **Python 3.11+ with PyYAML**.
 

@@ -19,7 +19,7 @@ output "execute_command" {
 }
 
 output "runner_state_bucket" {
-  description = "Bucket holding runner/infra's Terraform state: run_tests.py's --state-bucket."
+  description = "Bucket holding runner/infra's Terraform state: run.py's --state-bucket."
   value       = google_storage_bucket.runner_state.name
 }
 
