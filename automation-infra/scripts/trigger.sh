@@ -22,15 +22,20 @@
 #
 # Stopping the script leaves the execution running.
 #
-#   trigger.sh DEPLOYMENT
+# Any ORCHESTRATOR_ARG goes to the orchestrator after the job's own arguments,
+# for this execution only, e.g. --test-case-name=glutton. Passing one also
+# needs run.jobs.runWithOverrides, e.g. roles/run.developer.
+#
+#   trigger.sh DEPLOYMENT [ORCHESTRATOR_ARG...]
 
 set -o errexit -o nounset -o pipefail
 
-if [[ $# -ne 1 ]]; then
-  echo "Usage: $0 DEPLOYMENT" >&2
+if [[ $# -lt 1 ]]; then
+  echo "Usage: $0 DEPLOYMENT [ORCHESTRATOR_ARG...]" >&2
   exit 2
 fi
 MAIN_TF="$(cd "$(dirname "$0")/../deployments" && pwd)/$1/main.tf"
+shift
 if [[ ! -f "${MAIN_TF}" ]]; then
   echo "Error: no ${MAIN_TF}" >&2
   exit 1
@@ -51,10 +56,22 @@ fi
 POLL_SECS=10
 
 TOKEN="$(gcloud auth print-access-token)"
+JOB_URL="https://run.googleapis.com/v2/projects/${PROJECT_ID}/locations/${REGION}/jobs/${JOB}"
+
+REQUEST="{}"
+if [[ $# -gt 0 ]]; then
+  # An override replaces the container's arguments rather than adding to them,
+  # so it repeats the job's own first.
+  JOB_ARGS="$(curl --silent --show-error --fail-with-body -H "Authorization: Bearer ${TOKEN}" "${JOB_URL}" |
+    jq -c '.template.template.containers[0].args // []')"
+  # On stdin, a line each, as jq would take one starting with -- for its own.
+  REQUEST="$(printf '%s\n' "$@" | jq -cRn --argjson job "${JOB_ARGS}" \
+    '{overrides: {containerOverrides: [{args: ($job + [inputs])}]}}')"
+fi
 
 OPERATION="$(curl --silent --show-error --fail-with-body -X POST \
-  -H "Authorization: Bearer ${TOKEN}" \
-  "https://run.googleapis.com/v2/projects/${PROJECT_ID}/locations/${REGION}/jobs/${JOB}:run")"
+  -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" -d "${REQUEST}" \
+  "${JOB_URL}:run")"
 # The operation's metadata is the execution it started.
 EXECUTION="$(jq -r '.metadata.name // empty' <<<"${OPERATION}")"
 if [[ -z "${EXECUTION}" ]]; then
