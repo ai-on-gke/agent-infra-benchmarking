@@ -18,6 +18,7 @@ infra/clusters/ one a case's infra.cluster names, kept whole in a root folder:
     config/    a copy of the config, with its backend and variables in it
     tf-data/   its TF_DATA_DIR
     tfstates/  its state, with the local backend
+    DESTROYED  an empty file, there once it is destroyed until it is applied again
 
 Every path in it is relative, so the folder can be moved, and terraform runs
 on it by hand from config/ as well:
@@ -58,6 +59,7 @@ TFVARS_FILE = "00-tfvars.auto.tfvars"
 TFVARS_INLINE_FILE = "10-inline.auto.tfvars"
 VARIABLES_FILE = "20-variables.auto.tfvars.json"
 STATE_FILE = "terraform.tfstate"
+DESTROYED_FILE = "DESTROYED"
 
 
 def tf_vars(project_id: str, region: str, name: str) -> dict:
@@ -85,8 +87,16 @@ class Deployment:
         return self.root / "tfstates" / STATE_FILE
 
     @property
+    def destroyed_flag(self) -> Path:
+        return self.root / DESTROYED_FILE
+
+    @property
     def created(self) -> bool:
         return self.config.is_dir()
+
+    @property
+    def destroyed(self) -> bool:
+        return self.destroyed_flag.exists()
 
     @classmethod
     def create(
@@ -129,6 +139,12 @@ class Deployment:
         terraform.run(self.config, "init", "-input=false", "-reconfigure", env=self.env())
 
     def deploy(self, *args: str) -> None:
+        """Plans and applies, with -destroy a destroy, which flags it destroyed
+        once it succeeds."""
+        destroying = "-destroy" in args
+        if not destroying:
+            # Unflagged before, as even an apply that fails may create part of it.
+            self.destroyed_flag.unlink(missing_ok=True)
         terraform.deploy(
             self.config,
             *args,
@@ -136,6 +152,8 @@ class Deployment:
             env=self.env(),
             plan_file=str(self.data / "run.tfplan"),
         )
+        if destroying:
+            self.destroyed_flag.touch()
 
     def outputs(self) -> dict:
         """Its outputs, by name; only after init."""
