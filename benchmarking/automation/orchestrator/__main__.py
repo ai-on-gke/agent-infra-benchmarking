@@ -224,21 +224,20 @@ def main() -> None:
     BACKEND_FILE.write_text(backend_block(args))
     try:
         # -reconfigure, as the .terraform/ left by the last execution names its backend.
-        # terraform.run(
-        #     INFRA_DIR,
-        #     "init",
-        #     "-input=false",
-        #     "-reconfigure",
-        #     *(f"-backend-config={c}" for c in backend_config(args)),
-        # )
+        terraform.run(
+            INFRA_DIR,
+            "init",
+            "-input=false",
+            "-reconfigure",
+            *(f"-backend-config={c}" for c in backend_config(args)),
+        )
         try:
-            # terraform.deploy(INFRA_DIR, *tf_vars, json_output=json_output)
+            terraform.deploy(INFRA_DIR, *tf_vars, json_output=json_output)
             for name in names:
                 run_case(name, cases[name], args, tf_vars)
         finally:
             # Also after a failed apply, which may have created part of the infra.
-            # terraform.deploy(INFRA_DIR, "-destroy", *tf_vars, json_output=json_output)
-            pass
+            terraform.deploy(INFRA_DIR, "-destroy", *tf_vars, json_output=json_output)
     except subprocess.CalledProcessError as exc:
         # cmd[1] is -chdir=<the config's directory>.
         fail(f"terraform {exc.cmd[2]} failed in {exc.cmd[1].removeprefix('-chdir=')}")
