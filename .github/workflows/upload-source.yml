@@ -1,9 +1,11 @@
 name: Upload source
 
 # Uploads each pushed commit, as a git repo, to
-# gs://<SOURCE_BUCKET>/source/<branch>/<commit>.tar.gz, and writes the
-# branch's tip commit to latest.txt beside it. The secrets come from
-# automation-infra/scripts/get-gh-actions-gcs-config.
+# gs://<bucket>/source/<branch>/<commit>.tar.gz, and writes the branch's tip
+# commit to latest.txt beside it, for each deployment in the matrix. The
+# bucket is the deployment's backend.hcl's, and its key the secret
+# GCP_CREDENTIALS_<DEPLOYMENT>, which
+# automation-infra/scripts/get-gh-actions-gcs-config sets.
 
 on:
   push:
@@ -15,6 +17,9 @@ permissions:
 jobs:
   upload-tarball:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        deployment: [substrate-bench-auto]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -25,13 +30,22 @@ jobs:
       # Before auth, which writes the key into the workspace.
       - name: Pack
         run: tar -czf "$RUNNER_TEMP/source.tar.gz" -C "$GITHUB_WORKSPACE" .
+      - name: Deployment
+        id: deployment
+        env:
+          DEPLOYMENT: ${{ matrix.deployment }}
+        run: |
+          bucket="$(sed -n 's/^bucket *= *"\(.*\)"/\1/p' "automation-infra/deployments/$DEPLOYMENT/backend.hcl")"
+          [[ -n "$bucket" ]] || { echo "No bucket in $DEPLOYMENT's backend.hcl." >&2; exit 1; }
+          echo "bucket=$bucket" >> "$GITHUB_OUTPUT"
+          echo "credentials_secret=GCP_CREDENTIALS_$(tr 'a-z-' 'A-Z_' <<<"$DEPLOYMENT")" >> "$GITHUB_OUTPUT"
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          credentials_json: ${{ secrets[steps.deployment.outputs.credentials_secret] }}
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
       - name: Upload
         env:
-          BUCKET: ${{ secrets.SOURCE_BUCKET }}
+          BUCKET: ${{ steps.deployment.outputs.bucket }}
           BRANCH: ${{ github.ref_name }}
           COMMIT: ${{ github.sha }}
           # A parallel composite upload's parts would go under gcloud/tmp/,
@@ -41,22 +55,39 @@ jobs:
 
   # Only while COMMIT is the branch's tip, so that neither a run finishing
   # after a newer push's nor a rerun of an old one takes latest back. The
-  # group runs one at a time per branch: a push between the check and the
-  # write has its own job, which waits for this one and so writes last. A
-  # newer push's job replaces one still waiting.
+  # group runs one at a time per deployment and branch: a push between the
+  # check and the write has its own job, which waits for this one and so
+  # writes last. A newer push's job replaces one still waiting.
   upload-latest:
     needs: upload-tarball
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The same as upload-tarball's.
+        deployment: [substrate-bench-auto]
     concurrency:
-      group: ${{ github.workflow }}-latest-${{ github.ref }}
+      group: ${{ github.workflow }}-latest-${{ matrix.deployment }}-${{ github.ref }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: automation-infra/deployments
+          persist-credentials: false
+      - name: Deployment
+        id: deployment
+        env:
+          DEPLOYMENT: ${{ matrix.deployment }}
+        run: |
+          bucket="$(sed -n 's/^bucket *= *"\(.*\)"/\1/p' "automation-infra/deployments/$DEPLOYMENT/backend.hcl")"
+          [[ -n "$bucket" ]] || { echo "No bucket in $DEPLOYMENT's backend.hcl." >&2; exit 1; }
+          echo "bucket=$bucket" >> "$GITHUB_OUTPUT"
+          echo "credentials_secret=GCP_CREDENTIALS_$(tr 'a-z-' 'A-Z_' <<<"$DEPLOYMENT")" >> "$GITHUB_OUTPUT"
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          credentials_json: ${{ secrets[steps.deployment.outputs.credentials_secret] }}
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
       - name: Update latest
         env:
-          BUCKET: ${{ secrets.SOURCE_BUCKET }}
+          BUCKET: ${{ steps.deployment.outputs.bucket }}
           BRANCH: ${{ github.ref_name }}
           COMMIT: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}

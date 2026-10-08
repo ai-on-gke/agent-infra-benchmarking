@@ -14,11 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Prints the secrets .github/workflows/upload-source.yml reads to upload to a
-# deployment's state bucket: SOURCE_BUCKET, from its backend.hcl, and
-# GCP_CREDENTIALS, a new key of the service account its github_actions_bucket
-# created. With --set, stores them as secrets of this repo with gh instead,
-# printing neither.
+# Prints the secret .github/workflows/upload-source.yml reads to upload to a
+# deployment's state bucket: GCP_CREDENTIALS_<DEPLOYMENT>, a new key of the
+# service account its github_actions_bucket created. With --set, stores it as
+# a secret of this repo with gh instead, printing nothing.
 #
 # The account keeps one key: any it had are deleted before the new one is
 # made, so a run is also how the key is rotated.
@@ -40,15 +39,16 @@ fi
 [[ $# -eq 1 ]] || usage
 
 DEPLOYMENT_DIR="$(cd "$(dirname "$0")/../deployments" && pwd)/$1"
-if [[ ! -f "${DEPLOYMENT_DIR}/backend.hcl" ]]; then
-  echo "Error: no ${DEPLOYMENT_DIR}/backend.hcl" >&2
+if [[ ! -d "${DEPLOYMENT_DIR}" ]]; then
+  echo "Error: no ${DEPLOYMENT_DIR}" >&2
   exit 1
 fi
+# The name the workflow derives from the deployment's, the same way.
+SECRET="GCP_CREDENTIALS_$(tr 'a-z-' 'A-Z_' <<<"$1")"
 
-BUCKET="$(sed -n 's/^bucket *= *"\(.*\)"/\1/p' "${DEPLOYMENT_DIR}/backend.hcl")"
 SERVICE_ACCOUNT="$(terraform -chdir="${DEPLOYMENT_DIR}" output -json cloud_run | jq -r '.github_service_account_email // empty')"
-if [[ -z "${BUCKET}" || -z "${SERVICE_ACCOUNT}" ]]; then
-  echo "Error: no bucket in backend.hcl, or no github_actions_bucket applied in $1" >&2
+if [[ -z "${SERVICE_ACCOUNT}" ]]; then
+  echo "Error: no github_actions_bucket applied in $1" >&2
   exit 1
 fi
 
@@ -67,12 +67,7 @@ CREDENTIALS="$(jq -c . "${KEY_FILE}")"
 if [[ "${SET}" == true ]]; then
   # gh takes the repo from the git remote of where it runs, and a value on
   # stdin, keeping the key out of the process list.
-  (
-    cd "${DEPLOYMENT_DIR}"
-    gh secret set SOURCE_BUCKET <<<"${BUCKET}"
-    gh secret set GCP_CREDENTIALS <<<"${CREDENTIALS}"
-  )
+  (cd "${DEPLOYMENT_DIR}" && gh secret set "${SECRET}" <<<"${CREDENTIALS}")
 else
-  echo "SOURCE_BUCKET=${BUCKET}"
-  echo "GCP_CREDENTIALS=${CREDENTIALS}"
+  echo "${SECRET}=${CREDENTIALS}"
 fi
