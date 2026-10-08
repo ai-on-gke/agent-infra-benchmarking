@@ -10,7 +10,7 @@ variable "region" {
 }
 
 variable "default_resource_name" {
-  description = "Name of every resource this config creates. Unique to one orchestrator execution."
+  description = "Name of every resource this config creates. Unique to one scenario-runner execution."
   type        = string
 
   validation {

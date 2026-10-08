@@ -35,8 +35,8 @@ spec:
         # which run they came from.
         #
         # The values are constrained by what a label may hold — 63 characters
-        # of alphanumerics, dashes, underscores and dots — which the orchestrator
-        # checks the run id and the case name against.
+        # of alphanumerics, dashes, underscores and dots — which the
+        # scenario-runner checks the run id and the case name against.
         benchmark-run-id: "${BENCHMARK_RUN_ID}"
         benchmark-test-case: "${BENCHMARK_RECORD_NAME}"
     spec:

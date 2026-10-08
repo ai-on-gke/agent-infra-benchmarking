@@ -11,10 +11,10 @@
 # The venv benchmarking/tools/run makes.
 /benchmarking/tools/venv_run/
 
-# Each orchestrator execution's Terraform deployments in runs/, and the dev
-# infras', which the orchestrator's --dev-infra keeps, in dev-infra/.
+# Each scenario-runner execution's Terraform deployments in runs/, and the dev
+# infras', which the scenario-runner's --dev-infra keeps, in dev-infra/.
 /benchmarking/scenario_runner/.local-data/
 *.egg-info/
 
-# The providers the orchestrator's cluster applies share.
+# The providers the scenario-runner's cluster applies share.
 /benchmarking/scenario_runner/.terraform-plugin-cache/

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """Applies, reads and destroys the dev infras: scenario_runner/infra and a
-case's cluster, which the orchestrator's --dev-infra creates and keeps, each
+case's cluster, which the scenario-runner's --dev-infra creates and keeps, each
 a Deployment in .local-data/dev-infra/terraform/<name>/<infra>/."""
 
 from __future__ import annotations

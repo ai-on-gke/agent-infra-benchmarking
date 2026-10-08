@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runs the orchestrator's commands, logging their output as it comes."""
+"""Runs the scenario-runner's commands, logging their output as it comes."""
 
 from __future__ import annotations
 

@@ -12,5 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The orchestrator's command lines: python3 -m scenario_runner.cli.run and
+"""The scenario-runner's command lines: python3 -m scenario_runner.cli.run and
 python3 -m scenario_runner.cli.dev_infra."""

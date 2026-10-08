@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Lists the dev infras the orchestrator's --dev-infra creates and keeps, shows
-their outputs or destroys them."""
+"""Lists the dev infras the scenario-runner's --dev-infra creates and keeps,
+shows their outputs or destroys them."""
 
 from __future__ import annotations
 

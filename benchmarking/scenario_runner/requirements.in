@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The orchestrator's Python: PyYAML to read scenarios.yaml. requirements.txt is
-# compiled from this with every dependency pinned and hashed, for the Python
-# 3.11 on linux/amd64 of the Cloud Run job's image,
+# The scenario-runner's Python: PyYAML to read scenarios.yaml.
+# requirements.txt is compiled from this with every dependency pinned and
+# hashed, for the Python 3.11 on linux/amd64 of the Cloud Run job's image,
 # automation-infra/terraform/modules/cloud-run/image/Dockerfile:
 #
 #   uv pip compile requirements.in --python-version 3.11 \

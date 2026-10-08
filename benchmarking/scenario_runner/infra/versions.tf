@@ -1,7 +1,7 @@
 terraform {
   required_version = ">= 1.5"
 
-  # The backend, local or gcs, is in the backend_override.tf the orchestrator
+  # The backend, local or gcs, is in the backend_override.tf the scenario-runner
   # writes.
 
   required_providers {

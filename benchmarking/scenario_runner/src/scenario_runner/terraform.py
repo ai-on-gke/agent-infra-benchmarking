@@ -27,7 +27,7 @@ from . import RUNNER_DIR
 from .log import log
 from .process import environ, stream
 
-# Every TF_DATA_DIR the orchestrator uses starts empty, so its providers come
+# Every TF_DATA_DIR the scenario-runner uses starts empty, so its providers come
 # from here rather than from a download each.
 PLUGIN_CACHE_DIR = Path(os.environ.get("TF_PLUGIN_CACHE_DIR") or RUNNER_DIR / ".terraform-plugin-cache")
 

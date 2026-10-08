@@ -70,7 +70,7 @@ variable "sandboxed_machine_type" {
 # Every node pool's ate.dev/substrate-version label, which has to be the
 # version hack/install-ate.sh stamps on the atelet DaemonSet: a worker pod
 # schedules only onto a node whose label matches the dataplane's. The
-# orchestrator passes the submodule's, worked out as the installer does; by
+# scenario-runner passes the submodule's, worked out as the installer does; by
 # hand, that is the output of
 #   git -C dependency-repos/substrate describe --tags --always --dirty
 variable "substrate_version" {

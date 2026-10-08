@@ -1,14 +1,14 @@
-# The inputs of common that the orchestrator and scenarios.yaml's cases pass,
+# The inputs of common that the scenario-runner and scenarios.yaml's cases pass,
 # so a case can switch infra.cluster.name between the two. Nothing here
 # reaches GCP.
 
 variable "project_id" {
-  description = "Unused; taken for the orchestrator's -var."
+  description = "Unused; taken for the scenario-runner's -var."
   type        = string
 }
 
 variable "region" {
-  description = "Unused; taken for the orchestrator's -var."
+  description = "Unused; taken for the scenario-runner's -var."
   type        = string
   default     = "us-central1"
 }

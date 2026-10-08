@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Lists, shows or destroys the dev infras the orchestrator's --dev-infra
+# Lists, shows or destroys the dev infras the scenario-runner's --dev-infra
 # creates, with python3 -m scenario_runner.cli.dev_infra in tools/python:
 #
 #   dev-infra list

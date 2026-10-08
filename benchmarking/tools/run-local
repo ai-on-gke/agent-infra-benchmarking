@@ -14,9 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Runs the orchestrator with tools/run, its infra's state in local files under
-# benchmarking/scenario_runner/.local-data/runs/terraform/<name>/, passing every
-# other option on unchanged:
+# Runs the scenario-runner with tools/run, its infra's state in local files
+# under benchmarking/scenario_runner/.local-data/runs/terraform/<name>/, passing
+# every other option on unchanged:
 #
 #   ./benchmarking/tools/run-local --project-id my-project \
 #     --scenario glutton

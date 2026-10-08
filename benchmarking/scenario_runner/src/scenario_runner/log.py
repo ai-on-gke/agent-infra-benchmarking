@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Logs the orchestrator's messages, on Cloud Run as one log entry each."""
+"""Logs the scenario-runner's messages, on Cloud Run as one log entry each."""
 
 from __future__ import annotations
 

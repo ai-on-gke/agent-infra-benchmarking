@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Runs the orchestrator locally with tools/python, passing every option on
+# Runs the scenario-runner locally with tools/python, passing every option on
 # unchanged:
 #
 #   ./benchmarking/tools/run --project-id my-project \
