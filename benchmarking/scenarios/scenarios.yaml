@@ -14,9 +14,10 @@
 
 # Named benchmark runs, each picked by the orchestrator's --scenario:
 #
-#   python3 -m orchestrator.cli.run --scenario glutton ...
+#   python3 -m scenario_runner.cli.run --scenario glutton ...
 #
-# `type` picks orchestrator/<type>.py, which documents the rest.
+# `type` picks scenario_runner/src/scenario_runner/<type>.py, which documents
+# the rest.
 # For locust: `worker-count` and `sandbox-class` shape the WorkerPool, and
 # every key in `master` and `worker` becomes `--key=value` on that process.
 # `noop` is the orchestrator's alone: it applies and destroys the case's

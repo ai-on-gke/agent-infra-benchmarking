@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Applies and destroys a Terraform config: automation/infra, or the
+"""Applies and destroys a Terraform config: scenario_runner/infra, or the
 infra/clusters/ one a case's infra.cluster names."""
 
 from __future__ import annotations
@@ -23,10 +23,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-from . import AUTOMATION_DIR, terraform
+from . import RUNNER_DIR, terraform
 from .cases import CLUSTERS_DIR
 
-ORCHESTRATOR_DIR = AUTOMATION_DIR / "infra"
+ORCHESTRATOR_DIR = RUNNER_DIR / "infra"
 
 
 def state_file_under(root: Path) -> Path:

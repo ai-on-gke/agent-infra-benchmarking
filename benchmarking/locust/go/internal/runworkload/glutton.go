@@ -31,7 +31,8 @@ import (
 const (
 	gluttonWorkloadName = "glutton"
 
-	// The ActorTemplate automation/orchestrator/workloads.py creates for glutton.
+	// The ActorTemplate scenario_runner/src/scenario_runner/workloads.py creates
+	// for glutton.
 	gluttonTemplate = "glutton"
 
 	pingPath         = "/ping"

@@ -12,5 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The orchestrator's command lines: python3 -m orchestrator.cli.run and
-python3 -m orchestrator.cli.dev_infra."""
+"""Runs the cases in scenarios.yaml on infra of their own, with the command
+lines in cli/."""
+
+from pathlib import Path
+
+RUNNER_DIR = Path(__file__).resolve().parent.parent.parent
+# scenarios.yaml and the Terraform configs its cases run on.
+SCENARIOS_DIR = RUNNER_DIR.parent / "scenarios"

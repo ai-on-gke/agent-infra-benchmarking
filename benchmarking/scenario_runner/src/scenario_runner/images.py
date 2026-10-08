@@ -26,12 +26,12 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import AUTOMATION_DIR
+from . import RUNNER_DIR
 from .cluster import Cluster
 from .log import log
 from .process import output, stream
 
-ROOT = AUTOMATION_DIR.parent.parent
+ROOT = RUNNER_DIR.parent.parent
 LOCUST_IMAGES = ROOT / "benchmarking" / "locust" / "images.json"
 WORKLOADS_IMAGES = ROOT / "benchmarking" / "workloads" / "images.json"
 # The nodes', whatever the build host's.

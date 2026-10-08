@@ -4,7 +4,7 @@ resource "google_service_account" "job" {
   display_name = "Cloud Run job ${var.default_resource_name}"
 }
 
-# The Terraform state of automation/infra, under var.state_bucket_prefix.
+# The Terraform state of scenario_runner/infra, under var.state_bucket_prefix.
 # Listing is checked on the bucket rather than an object, hence its own clause.
 resource "google_storage_bucket_iam_member" "job_state" {
   bucket = var.state_bucket
@@ -34,7 +34,7 @@ resource "google_storage_bucket_iam_member" "job_source" {
   }
 }
 
-# What automation/infra creates in the project.
+# What scenario_runner/infra creates in the project.
 resource "google_project_iam_member" "job" {
   for_each = toset([
     "roles/serviceusage.serviceUsageAdmin",

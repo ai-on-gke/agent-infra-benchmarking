@@ -13,9 +13,9 @@
 # limitations under the License.
 
 # The locust master of one benchmark run, ended by its own clock. Rendered and
-# submitted by automation/orchestrator/locust.py, which starts worker-job.yaml
-# once this pod is ready. The run's results are this pod's log and the CSVs it
-# uploads.
+# submitted by scenario_runner/src/scenario_runner/locust.py, which starts
+# worker-job.yaml once this pod is ready. The run's results are this pod's log
+# and the CSVs it uploads.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -65,8 +65,9 @@ spec:
         - name: locust-master
           containerPort: 5557
           protocol: TCP
-        # Ready once locust listens, which is when automation/orchestrator/locust.py
-        # starts the worker: boomer tries the master once and does not retry.
+        # Ready once locust listens, which is when
+        # scenario_runner/src/scenario_runner/locust.py starts the worker:
+        # boomer tries the master once and does not retry.
         readinessProbe:
           tcpSocket:
             port: locust-master

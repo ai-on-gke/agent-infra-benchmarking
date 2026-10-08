@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Applies automation/infra/, runs the cases in scenarios.yaml one after
+"""Applies scenario_runner/infra/, runs the cases in scenarios.yaml one after
 another (every case in the order listed, or the ones --scenario names in the
 order given), each on its own infra/clusters/ cluster applied for it and
 destroyed after it, and destroys the infra again. With --dev-infra, uses the
-automation/infra and the cluster of that dev infra instead, which outlive the
-execution."""
+scenario_runner/infra and the cluster of that dev infra instead, which outlive
+the execution."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from typing import NoReturn
 
 import yaml
 
-from .. import AUTOMATION_DIR, benchmark, dev_infra, substrate
+from .. import RUNNER_DIR, benchmark, dev_infra, substrate
 from ..cases import SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases
 from ..cluster import Cluster
 from ..deployment import ORCHESTRATOR_DIR, Deployment, cluster_deployment, files_under, tf_vars
@@ -41,9 +41,9 @@ from ..process import failure
 
 # The executions' local Terraform files, as the Cloud Run job's state is under
 # terraform/ in its bucket. An execution's are in <name>/: a folder for
-# automation/infra, orchestrator/, and one per case, tests/<case>/, each with
-# its tfstates/ when the backend is local and its tf-data/ with either.
-LOCAL_TERRAFORM_DIR = AUTOMATION_DIR / "local-runs" / "terraform"
+# scenario_runner/infra, orchestrator/, and one per case, tests/<case>/, each
+# with its tfstates/ when the backend is local and its tf-data/ with either.
+LOCAL_TERRAFORM_DIR = RUNNER_DIR / "local-runs" / "terraform"
 
 
 def fail(message: str) -> NoReturn:
@@ -52,7 +52,7 @@ def fail(message: str) -> NoReturn:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(prog="python3 -m orchestrator.cli.run", description=__doc__)
+    p = argparse.ArgumentParser(prog="python3 -m scenario_runner.cli.run", description=__doc__)
     p.add_argument("--scenarios-file", type=Path, default=SCENARIOS_FILE, help=f"default: {SCENARIOS_FILE}")
     p.add_argument(
         "--scenario",
@@ -91,8 +91,8 @@ def parse_args() -> argparse.Namespace:
         "--dev-infra",
         type=dev_infra.check_name,
         metavar="NAME",
-        help="run every case on this dev infra, an automation/infra and a cluster kept until"
-        " python3 -m orchestrator.cli.dev_infra destroys them, rather than on ones applied for this execution."
+        help="run every case on this dev infra, a scenario_runner/infra and a cluster kept until"
+        " python3 -m scenario_runner.cli.dev_infra destroys them, rather than on ones applied for this execution."
         " Applied unless complete, a new one with the first case's cluster",
     )
     p.add_argument(

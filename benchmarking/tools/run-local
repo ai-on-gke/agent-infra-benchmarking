@@ -15,7 +15,7 @@
 # limitations under the License.
 
 # Runs the orchestrator with tools/run, its infra's state in local files under
-# benchmarking/automation/local-runs/terraform/<name>/, passing every other
+# benchmarking/scenario_runner/local-runs/terraform/<name>/, passing every other
 # option on unchanged:
 #
 #   ./benchmarking/tools/run-local --project-id my-project \

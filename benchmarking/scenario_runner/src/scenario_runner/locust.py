@@ -29,12 +29,12 @@ from datetime import datetime, timezone
 from string import Template
 from typing import Callable, Iterator
 
-from . import AUTOMATION_DIR, images, worker_pool, workloads
+from . import RUNNER_DIR, images, worker_pool, workloads
 from .cluster import Cluster
 from .log import log
 from .process import stream
 
-MANIFESTS_DIR = AUTOMATION_DIR.parent / "locust" / "manifests"
+MANIFESTS_DIR = RUNNER_DIR.parent / "locust" / "manifests"
 # Have to match metadata.name and namespace in the manifests.
 MASTER_JOB = "locust-master"
 WORKER_JOB = "boomer-worker"

@@ -4,7 +4,7 @@ output "job_name" {
 }
 
 output "service_account_email" {
-  description = "Service account the job runs as, and so the one automation/infra is applied as."
+  description = "Service account the job runs as, and so the one scenario_runner/infra is applied as."
   value       = google_service_account.job.email
 }
 

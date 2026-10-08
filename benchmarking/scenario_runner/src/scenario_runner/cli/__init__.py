@@ -12,11 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runs the cases in scenarios.yaml on infra of their own, with the command
-lines in cli/."""
-
-from pathlib import Path
-
-AUTOMATION_DIR = Path(__file__).resolve().parent.parent
-# scenarios.yaml and the Terraform configs its cases run on.
-SCENARIOS_DIR = AUTOMATION_DIR.parent / "scenarios"
+"""The orchestrator's command lines: python3 -m scenario_runner.cli.run and
+python3 -m scenario_runner.cli.dev_infra."""

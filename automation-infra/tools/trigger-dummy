@@ -17,7 +17,7 @@
 # Runs scenarios.yaml's dummy case in a deployment's Cloud Run job with
 # trigger, passing every other orchestrator option on unchanged. Its cluster
 # is benchmarking/scenarios/infra/clusters/dummy, which creates nothing in
-# GCP; benchmarking/automation/infra still does.
+# GCP; benchmarking/scenario_runner/infra still does.
 #
 #   trigger-dummy --deployment=DEPLOYMENT [ORCHESTRATOR_ARG...]
 

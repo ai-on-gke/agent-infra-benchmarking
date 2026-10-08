@@ -27,12 +27,12 @@ from contextlib import contextmanager
 from string import Template
 from typing import Callable, Iterator
 
-from . import AUTOMATION_DIR, images, substrate, worker_pool
+from . import RUNNER_DIR, images, substrate, worker_pool
 from .cluster import Cluster
 from .log import log
 from .process import output, stream
 
-MANIFESTS_DIR = AUTOMATION_DIR.parent / "workloads" / "manifests"
+MANIFESTS_DIR = RUNNER_DIR.parent / "workloads" / "manifests"
 NAMESPACE = worker_pool.NAMESPACE
 ATESPACE = "benchmark-workloads"
 MOCK_LLM_IMAGE = "mock-llm"

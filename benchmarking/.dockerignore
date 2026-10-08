@@ -6,8 +6,8 @@
 **/*.tfvars
 !scenarios/infra/clusters/common/default.tfvars
 **/__pycache__/
-automation/.terraform-plugin-cache/
-automation/local-runs/
-automation/.dev-infra/
+scenario_runner/.terraform-plugin-cache/
+scenario_runner/local-runs/
+scenario_runner/.dev-infra/
 # The venv tools/run makes.
 tools/venv_run/

@@ -21,12 +21,12 @@ from __future__ import annotations
 import shutil
 import subprocess
 
-from . import AUTOMATION_DIR
+from . import RUNNER_DIR
 from .cluster import Cluster
 from .log import log
 from .process import output, stream
 
-SUBSTRATE_DIR = AUTOMATION_DIR.parent.parent / "dependency-repos" / "substrate"
+SUBSTRATE_DIR = RUNNER_DIR.parent.parent / "dependency-repos" / "substrate"
 
 
 def revision() -> str:

@@ -23,13 +23,13 @@ import os
 import subprocess
 from pathlib import Path
 
-from . import AUTOMATION_DIR
+from . import RUNNER_DIR
 from .log import log
 from .process import environ, stream
 
 # Every TF_DATA_DIR the orchestrator uses starts empty, so its providers come
 # from here rather than from a download each.
-PLUGIN_CACHE_DIR = Path(os.environ.get("TF_PLUGIN_CACHE_DIR") or AUTOMATION_DIR / ".terraform-plugin-cache")
+PLUGIN_CACHE_DIR = Path(os.environ.get("TF_PLUGIN_CACHE_DIR") or RUNNER_DIR / ".terraform-plugin-cache")
 
 # terraform -json's @level, as a Cloud Logging severity.
 SEVERITIES = {"trace": "DEBUG", "debug": "DEBUG", "info": "INFO", "warn": "WARNING", "error": "ERROR"}

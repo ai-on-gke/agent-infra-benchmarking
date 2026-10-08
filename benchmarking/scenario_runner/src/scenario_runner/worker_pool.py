@@ -21,12 +21,12 @@ import shutil
 import subprocess
 from string import Template
 
-from . import AUTOMATION_DIR, substrate
+from . import RUNNER_DIR, substrate
 from .cluster import Cluster
 from .log import log
 from .process import stream
 
-MANIFEST = AUTOMATION_DIR.parent / "workloads" / "manifests" / "worker-pool.yaml.tmpl"
+MANIFEST = RUNNER_DIR.parent / "workloads" / "manifests" / "worker-pool.yaml.tmpl"
 # Have to match the WorkerPool in the manifest.
 NAME = "benchmark-ateom"
 NAMESPACE = "benchmark-workloads"

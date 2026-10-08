@@ -82,7 +82,7 @@ def print_list() -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(prog="python3 -m orchestrator.cli.dev_infra", description=__doc__)
+    p = argparse.ArgumentParser(prog="python3 -m scenario_runner.cli.dev_infra", description=__doc__)
     commands = p.add_subparsers(dest="command", required=True)
     commands.add_parser("list", help="list the dev infras, with how many resources each of their infras holds")
     outputs_command = commands.add_parser("outputs", help="show the outputs of a dev infra's infras")

@@ -15,7 +15,7 @@
 # limitations under the License.
 
 # Lists, shows or destroys the dev infras the orchestrator's --dev-infra
-# creates, with python3 -m orchestrator.cli.dev_infra in tools/python:
+# creates, with python3 -m scenario_runner.cli.dev_infra in tools/python:
 #
 #   dev-infra list
 #   dev-infra outputs NAME
@@ -25,4 +25,4 @@ set -o errexit -o nounset -o pipefail
 
 TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-exec "${TOOLS_DIR}/python" -m orchestrator.cli.dev_infra "$@"
+exec "${TOOLS_DIR}/python" -m scenario_runner.cli.dev_infra "$@"
