@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
-from typing import Callable
+from typing import IO, Callable
 
 from .log import log
 
@@ -35,14 +36,16 @@ def stream(
     env: dict[str, str] | None = None,
     cwd: Path | None = None,
     input: str | None = None,
+    stdout: IO[str] | None = None,
 ) -> None:
     """Runs a command, with input on its stdin, and passes each line of its
-    output to log_line as it comes."""
+    output to log_line as it comes. With stdout, its stdout goes there and only
+    its stderr is logged."""
     with subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE if input is not None else None,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stdout=stdout or subprocess.PIPE,
+        stderr=subprocess.PIPE if stdout else subprocess.STDOUT,
         text=True,
         env=environ(env),
         cwd=cwd,
@@ -51,7 +54,7 @@ def stream(
             if input is not None:
                 proc.stdin.write(input)
                 proc.stdin.close()
-            for line in proc.stdout:
+            for line in proc.stderr if stdout else proc.stdout:
                 log_line(line.rstrip("\n"))
         except BaseException:
             # As subprocess.run does, e.g. on SIGTERM.
@@ -59,6 +62,21 @@ def stream(
             raise
     if proc.returncode:
         raise subprocess.CalledProcessError(proc.returncode, cmd)
+
+
+def output(
+    cmd: list[str],
+    log_line: Callable[[str], None] = log,
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+    input: str | None = None,
+) -> str:
+    """Runs a command as stream does, and returns its stdout rather than
+    logging it."""
+    with tempfile.TemporaryFile("w+") as out:
+        stream(cmd, log_line, env, cwd, input, stdout=out)
+        out.seek(0)
+        return out.read()
 
 
 def failure(exc: subprocess.CalledProcessError) -> str:

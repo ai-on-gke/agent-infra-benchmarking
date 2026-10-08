@@ -21,11 +21,10 @@ import shutil
 import subprocess
 from string import Template
 
-from . import AUTOMATION_DIR
+from . import AUTOMATION_DIR, substrate
 from .cluster import Cluster
 from .log import log
 from .process import stream
-from .substrate import SUBSTRATE_DIR
 
 MANIFEST = AUTOMATION_DIR.parent / "workloads" / "manifests" / "worker-pool.yaml.tmpl"
 # Have to match the WorkerPool in the manifest.
@@ -37,8 +36,8 @@ DEFAULT_TIMEOUT_SECS = 300
 def missing_requirements() -> list[str]:
     missing = [tool for tool in ("kubectl", "go", "git") if not shutil.which(tool)]
     # ko resolves the pool's ko:// workerImage, and only works inside the submodule.
-    if not (SUBSTRATE_DIR / "go.mod").is_file():
-        missing.append(f"the substrate submodule in {SUBSTRATE_DIR}")
+    if not (substrate.SUBSTRATE_DIR / "go.mod").is_file():
+        missing.append(f"the substrate submodule in {substrate.SUBSTRATE_DIR}")
     return missing
 
 
@@ -68,14 +67,7 @@ def deploy(cluster: Cluster, worker_count: int, sandbox_class: str, timeout: int
 
     log(f"worker pool: deploying {NAME} (replicas={worker_count}, sandbox_class={sandbox_class})")
     manifest = Template(MANIFEST.read_text()).substitute(WORKER_COUNT=worker_count, SANDBOX_CLASS=sandbox_class)
-    # ko has no flag for the registry. The platform is the nodes', whatever the
-    # build host's.
-    stream(
-        [str(SUBSTRATE_DIR / "hack" / "run-tool.sh"), "ko", "apply", "-f", "-", "--", *kubectl_flags(cluster)],
-        env={"KO_DOCKER_REPO": cluster.docker_repo, "KO_DEFAULTPLATFORMS": "linux/amd64"},
-        cwd=SUBSTRATE_DIR,
-        input=manifest,
-    )
+    log(substrate.ko(cluster, "apply", "-f", "-", "--", *kubectl_flags(cluster), input=manifest).strip())
 
     log(f"worker pool: waiting for the workers to be ready (timeout: {timeout}s)")
     kubectl(cluster, "wait", "--for=create", f"deployment/{NAME}", f"--timeout={timeout}s")

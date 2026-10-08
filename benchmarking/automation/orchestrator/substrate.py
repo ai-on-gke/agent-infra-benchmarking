@@ -23,9 +23,22 @@ import shutil
 from . import AUTOMATION_DIR
 from .cluster import Cluster
 from .log import log
-from .process import stream
+from .process import output, stream
 
 SUBSTRATE_DIR = AUTOMATION_DIR.parent.parent / "dependency-repos" / "substrate"
+
+
+def ko(cluster: Cluster, *args: str, input: str) -> str:
+    """Runs substrate's ko with input on its stdin and returns its stdout. Only
+    in the submodule do its ko:// references resolve."""
+    # ko has no flag for the registry. The platform is the nodes', whatever the
+    # build host's.
+    return output(
+        [str(SUBSTRATE_DIR / "hack" / "run-tool.sh"), "ko", *args],
+        env={"KO_DOCKER_REPO": cluster.docker_repo, "KO_DEFAULTPLATFORMS": "linux/amd64"},
+        cwd=SUBSTRATE_DIR,
+        input=input,
+    )
 
 
 def missing_requirements() -> list[str]:

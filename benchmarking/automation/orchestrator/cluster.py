@@ -43,16 +43,24 @@ class Cluster:
         return self.outputs["region"]
 
     @property
+    def project_id(self) -> str:
+        return self.outputs["project_id"]
+
+    @property
+    def bucket(self) -> str:
+        return self.outputs["bucket_name"]
+
+    @property
     def docker_repo(self) -> str:
         # The cluster's own repository, which its nodes are granted to pull from.
         return self.outputs["artifact_registry_docker_repo"]
 
     def env(self) -> dict[str, str]:
         return {
-            "PROJECT_ID": self.outputs["project_id"],
+            "PROJECT_ID": self.project_id,
             "CLUSTER_NAME": self.name,
             "CLUSTER_LOCATION": self.location,
-            "BUCKET_NAME": self.outputs["bucket_name"],
+            "BUCKET_NAME": self.bucket,
             "DOCKER_REPO": self.docker_repo,
             "KO_DOCKER_REPO": self.docker_repo,
             # The nodes' platform, whatever the build host's.
