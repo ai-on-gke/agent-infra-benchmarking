@@ -20,8 +20,8 @@
 # created. With --set, stores them as secrets of this repo with gh instead,
 # printing neither.
 #
-# The account keeps one key: any it had are deleted once the new one is made
-# and stored, so a run is also how the key is rotated.
+# The account keeps one key: any it had are deleted before the new one is
+# made, so a run is also how the key is rotated.
 #
 #   get-gh-actions-gcs-config [--set] DEPLOYMENT
 
@@ -54,6 +54,9 @@ fi
 
 mapfile -t OLD_KEYS < <(gcloud iam service-accounts keys list --iam-account="${SERVICE_ACCOUNT}" \
   --managed-by=user --format='value(name.basename())')
+for key in "${OLD_KEYS[@]}"; do
+  gcloud iam service-accounts keys delete "${key}" --iam-account="${SERVICE_ACCOUNT}" --quiet
+done
 
 KEY_FILE="$(mktemp)"
 trap 'rm -f "${KEY_FILE}"' EXIT
@@ -73,7 +76,3 @@ else
   echo "SOURCE_BUCKET=${BUCKET}"
   echo "GCP_CREDENTIALS=${CREDENTIALS}"
 fi
-
-for key in "${OLD_KEYS[@]}"; do
-  gcloud iam service-accounts keys delete "${key}" --iam-account="${SERVICE_ACCOUNT}" --quiet
-done
