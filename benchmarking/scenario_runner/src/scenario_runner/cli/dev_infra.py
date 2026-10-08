@@ -38,6 +38,7 @@ from ..dev_infra import (
     state_file,
 )
 from ..process import failure
+from ..substrate import SubstrateError
 
 
 def fail(message: str) -> NoReturn:
@@ -110,6 +111,8 @@ def main() -> None:
         destroy(record, args.terraform_output == "json")
     except subprocess.CalledProcessError as exc:
         fail(failure(exc))
+    except SubstrateError as exc:
+        fail(str(exc))
 
 
 if __name__ == "__main__":

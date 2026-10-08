@@ -125,6 +125,17 @@ variable "cluster" {
   default = {}
 }
 
+# Every node pool's ate.dev/substrate-version label, which has to be the
+# version hack/install-ate.sh stamps on the atelet DaemonSet: a worker pod
+# schedules only onto a node whose label matches the dataplane's. The
+# orchestrator passes the submodule's, worked out as the installer does; by
+# hand, that is the output of
+#   git -C dependency-repos/substrate describe --tags --always --dirty
+variable "substrate_version" {
+  description = "Build version of the substrate submodule, as the ate.dev/substrate-version label on every node pool."
+  type        = string
+}
+
 # Separate from cluster.node_pools so a run can size the sandboxed pool with
 # -var alone. They override whatever node_pools.sandboxed sets.
 variable "sandboxed_node_count" {

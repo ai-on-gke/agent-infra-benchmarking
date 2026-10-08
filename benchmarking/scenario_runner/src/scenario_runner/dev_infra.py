@@ -25,6 +25,7 @@ import shutil
 from pathlib import Path
 
 from . import LOCAL_DATA_DIR, substrate
+from .cases import SKIP_SUBSTRATE_INSTALL
 from .cluster import Cluster
 from .deployment import (
     ORCHESTRATOR_DIR,
@@ -81,13 +82,16 @@ def read_state(path: Path) -> dict:
 def deployments(record: dict, json_output: bool = False) -> dict[str, Deployment]:
     name = record["name"]
     variables = tf_vars(record["project_id"], record["region"], name)
+    version = None if record.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
 
     def files(infra: str) -> dict:
         return files_under(DEV_INFRA_DIR / name / infra, json_output)
 
     return {
         "orchestrator": Deployment(dir=ORCHESTRATOR_DIR, plan_args=variables, **files("orchestrator")),
-        "cluster": cluster_deployment(record["cluster"], tf_vars=variables, **files("cluster")),
+        "cluster": cluster_deployment(
+            record["cluster"], tf_vars=variables, substrate_version=version, **files("cluster")
+        ),
     }
 
 

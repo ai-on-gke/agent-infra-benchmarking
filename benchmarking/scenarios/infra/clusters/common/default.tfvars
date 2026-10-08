@@ -32,8 +32,8 @@ cluster = {
       node_locations = ["us-central1-a"]
       # The pool's size comes from sandboxed_node_count,
       # sandboxed_min_node_count and sandboxed_max_node_count below.
-      # ate.dev/substrate-version is not set here: Terraform reads it off the
-      # substrate submodule and adds it to every pool. See main.tf.
+      # ate.dev/substrate-version is not set here: it is var.substrate_version,
+      # which main.tf adds to every pool.
       labels = {
         "benchmarking-worker" = "true",
       }

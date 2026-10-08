@@ -18,6 +18,9 @@ Terraform outputs."""
 
 from __future__ import annotations
 
+import functools
+import os
+import re
 import shutil
 import subprocess
 
@@ -27,12 +30,39 @@ from .log import log
 from .process import output, stream
 
 SUBSTRATE_DIR = RUNNER_DIR.parent.parent / "dependency-repos" / "substrate"
+LABEL_VALUE = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?")
+
+
+class SubstrateError(RuntimeError):
+    pass
 
 
 def revision() -> str:
     """The submodule's short commit, which every failure is explained against."""
     proc = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=SUBSTRATE_DIR, capture_output=True, text=True)
     return proc.stdout.strip() if proc.returncode == 0 else "unknown revision"
+
+
+@functools.cache
+def build_version() -> str:
+    """The submodule's build version, which the cluster labels its nodes with,
+    read once per run. It has to be the one hack/install-ate.sh stamps on the
+    atelet DaemonSet, so it is worked out as ko.BuildVersion
+    (cmd/ate-setup/internal/ko/ko.go) does: VERSION if set, else git describe
+    in the submodule, else "dev"."""
+    missing = missing_submodule()
+    if missing:
+        raise SubstrateError(f"the substrate build version requires {missing[0]}")
+    version = os.environ.get("VERSION", "")
+    if not version:
+        cmd = ["git", "describe", "--tags", "--always", "--dirty"]
+        proc = subprocess.run(cmd, cwd=SUBSTRATE_DIR, capture_output=True, text=True)
+        version = proc.stdout.strip() if proc.returncode == 0 else ""
+    version = version or "dev"
+    # ate-setup rejects one that is not a label value rather than sanitizing it.
+    if not LABEL_VALUE.fullmatch(version):
+        raise SubstrateError(f"substrate build version {version!r} is not a Kubernetes label value; set VERSION")
+    return version
 
 
 def ko(cluster: Cluster, *args: str, input: str) -> str:

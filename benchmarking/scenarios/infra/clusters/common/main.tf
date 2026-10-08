@@ -28,16 +28,7 @@ resource "google_project_service" "this" {
   disable_on_destroy = false
 }
 
-# The build version of the substrate submodule, read from its git checkout by
-# substrate-version.sh rather than written into default.tfvars, so bumping
-# the submodule is the only step in moving to another version.
-data "external" "substrate_version" {
-  program = ["${path.module}/substrate-version.sh"]
-}
-
 locals {
-  substrate_version = data.external.substrate_version.result.version
-
   # Substrate's dataplane schedules only onto nodes carrying this label, and
   # hack/install-ate.sh stamps it on the nodes that exist when it runs. Setting
   # it on the pools instead covers the nodes GKE adds afterwards — autoscaling,
@@ -51,7 +42,7 @@ locals {
   node_pools = {
     for key, pool in var.cluster.node_pools : key => merge(pool, {
       labels = merge(pool.labels, {
-        "ate.dev/substrate-version" = local.substrate_version
+        "ate.dev/substrate-version" = var.substrate_version
       })
       }, key == "sandboxed" ? {
       node_count     = var.sandboxed_node_count

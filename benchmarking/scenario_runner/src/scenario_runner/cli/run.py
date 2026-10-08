@@ -149,6 +149,11 @@ def check_requirements(cases: dict[str, dict], cloud_build: bool) -> None:
         missing = substrate.missing_requirements()
         if missing:
             fail(f"installing substrate requires {', '.join(missing)}")
+        # Its cluster's nodes are labeled with it.
+        try:
+            substrate.build_version()
+        except substrate.SubstrateError as exc:
+            fail(str(exc))
     benchmarks = {name: case for name, case in cases.items() if case["type"] != "noop"}
     missing = benchmark.missing_requirements(benchmarks, cloud_build)
     if missing:
@@ -185,6 +190,7 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
             "project_id": args.project_id,
             "region": args.region,
             "cluster": cases[first]["infra"]["cluster"],
+            SKIP_SUBSTRATE_INSTALL: cases[first].get(SKIP_SUBSTRATE_INSTALL, False),
         }
     elif (record["project_id"], record["region"]) != (args.project_id, args.region):
         fail(
@@ -237,7 +243,10 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     with orchestrator.applied():
         for name, case in cases.items():
             files = deployment_files(args, "tests", name)
-            deployment = cluster_deployment(case["infra"]["cluster"], tf_vars=variables, **files)
+            version = None if case.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
+            deployment = cluster_deployment(
+                case["infra"]["cluster"], tf_vars=variables, substrate_version=version, **files
+            )
             with deployment.applied():
                 cluster = Cluster(deployment.outputs(), deployment.data / "kubeconfig")
                 if not case.get(SKIP_SUBSTRATE_INSTALL):
@@ -261,7 +270,7 @@ def main() -> None:
             run_on_own_infra(args, cases)
     except subprocess.CalledProcessError as exc:
         fail(failure(exc))
-    except benchmark.ERRORS as exc:
+    except (*benchmark.ERRORS, substrate.SubstrateError) as exc:
         fail(str(exc))
 
 

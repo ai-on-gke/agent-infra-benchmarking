@@ -150,10 +150,12 @@ class Deployment:
             self.remove_copy()
 
 
-def cluster_deployment(spec: dict, data: Path, tf_vars: list[str], **deployment) -> Deployment:
+def cluster_deployment(
+    spec: dict, data: Path, tf_vars: list[str], substrate_version: str | None, **deployment
+) -> Deployment:
     """The config a case's infra.cluster names, planned with its tfvars,
-    tfvars_inline and variables, then tf_vars, later ones winning. The inline
-    tfvars go in data."""
+    tfvars_inline and variables, then substrate_version unless None and
+    tf_vars, later ones winning. The inline tfvars go in data."""
     cluster_dir = CLUSTERS_DIR / spec["name"]
     args = []
     if "tfvars" in spec:
@@ -167,4 +169,6 @@ def cluster_deployment(spec: dict, data: Path, tf_vars: list[str], **deployment)
         f"-var={key}={value if isinstance(value, str) else json.dumps(value)}"
         for key, value in spec.get("variables", {}).items()
     ]
+    if substrate_version is not None:
+        args.append(f"-var=substrate_version={substrate_version}")
     return Deployment(dir=cluster_dir, data=data, plan_args=args + tf_vars, **deployment)

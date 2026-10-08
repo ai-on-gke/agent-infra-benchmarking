@@ -28,7 +28,7 @@ output "cluster_endpoint" {
 #   kubectl get ds -n ate-system -l app=atelet -L ate.dev/substrate-version
 output "substrate_version" {
   description = "Build version of the substrate submodule, as the ate.dev/substrate-version label on every node pool."
-  value       = local.substrate_version
+  value       = var.substrate_version
 }
 
 output "network_name" {

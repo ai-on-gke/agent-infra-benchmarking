@@ -16,13 +16,6 @@ terraform {
       # google-beta only for now; not yet in the GA "google" provider.
       version = ">= 7.33.0, < 8.0.0"
     }
-    # Runs substrate-version.sh to read the submodule's build version. Nothing
-    # in Terraform can ask git, and the alternative is typing the version into
-    # default.tfvars by hand and keeping it in step with the submodule.
-    external = {
-      source  = "hashicorp/external"
-      version = ">= 2.3.0, < 3.0.0"
-    }
   }
 }
 
