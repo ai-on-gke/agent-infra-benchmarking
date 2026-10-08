@@ -31,11 +31,13 @@ from typing import Iterator, NoReturn
 
 import yaml
 
-from . import terraform
+from . import AUTOMATION_DIR, terraform
 from .cases import CLUSTERS_DIR, TESTS_FILE, load_cases
 from .log import log
 
 RECORD_FILE = "cluster.json"
+# Where tools/dev-infra keeps each dev cluster's --terraform-dir, by name.
+DEV_INFRA_DIR = AUTOMATION_DIR / ".dev-infra" / "terraform"
 
 
 @dataclass

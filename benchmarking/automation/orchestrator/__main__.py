@@ -15,7 +15,8 @@
 """Applies infra/orchestrator/, runs the cases in tests.yaml one after another
 (every case in the order listed, or the ones --test-case-name names in the
 order given), each on its own infra/clusters/ cluster applied for it and
-destroyed after it, and destroys the infra again."""
+destroyed after it, or all on the one --dev-infra names, and destroys the infra
+again."""
 
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ import shutil
 import signal
 import subprocess
 import sys
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn
@@ -33,7 +35,7 @@ import yaml
 
 from . import AUTOMATION_DIR, terraform
 from .cases import TESTS_FILE, load_cases
-from .cluster import Cluster
+from .cluster import DEV_INFRA_DIR, RECORD_FILE, Cluster, local_cluster
 from .log import log
 
 INFRA_DIR = AUTOMATION_DIR / "infra" / "orchestrator"
@@ -69,8 +71,29 @@ def data_dir(args: argparse.Namespace, *key: str) -> Path:
     return path
 
 
-def run_case(name: str, case: dict, args: argparse.Namespace, tf_vars: list[str]) -> None:
-    cluster = Cluster(
+def dev_cluster(args: argparse.Namespace, cases: dict[str, dict], names: list[str]) -> Cluster:
+    """The dev cluster --dev-infra names, once it is one every case can run on."""
+    terraform_dir = DEV_INFRA_DIR / args.dev_infra
+    record_file = terraform_dir / RECORD_FILE
+    if not record_file.exists():
+        fail(f"no dev infra {args.dev_infra}: no {record_file}")
+    record = json.loads(record_file.read_text())
+    if record["project_id"] != args.project_id:
+        fail(f"dev infra {args.dev_infra} is in project {record['project_id']}, not {args.project_id}")
+    for name in names:
+        spec = cases[name]["infra"]["cluster"]
+        if spec["name"] != record["cluster"]["name"]:
+            fail(
+                f"case {name} runs on infra/clusters/{spec['name']}, but dev infra {args.dev_infra}"
+                f" is infra/clusters/{record['cluster']['name']}"
+            )
+        if spec != record["cluster"]:
+            log(f"run: case {name}'s infra.cluster differs from dev infra {args.dev_infra}'s it runs on", "WARNING")
+    return local_cluster(terraform_dir, record, args.terraform_output == "json")
+
+
+def run_case(name: str, case: dict, args: argparse.Namespace, tf_vars: list[str], dev: Cluster | None) -> None:
+    cluster = dev or Cluster(
         spec=case["infra"]["cluster"],
         data=data_dir(args, "tests", name),
         backend=args.state_backend,
@@ -79,7 +102,8 @@ def run_case(name: str, case: dict, args: argparse.Namespace, tf_vars: list[str]
         tf_vars=tf_vars,
         json_output=args.terraform_output == "json",
     )
-    with cluster.applied():
+    # A dev cluster outlives the execution, so is neither applied nor destroyed.
+    with nullcontext() if dev else cluster.applied():
         if case["type"] == "noop":
             log(f"{name}: noop, nothing to run")
         else:
@@ -122,6 +146,11 @@ def main() -> None:
         help="how terraform plan and apply log: their text output line by line, or -json one message per entry."
         " Default: %(default)s",
     )
+    p.add_argument(
+        "--dev-infra",
+        metavar="NAME",
+        help="run every case on this dev cluster, which tools/dev-infra created, rather than on one applied for it",
+    )
     args = p.parse_args()
     if args.state_backend == "gcs" and not (args.state_bucket and args.state_prefix):
         p.error("--state-backend=gcs requires --state-bucket and --state-prefix")
@@ -141,6 +170,7 @@ def main() -> None:
 
     if not shutil.which("terraform"):
         fail("terraform is required to apply the infra")
+    dev = dev_cluster(args, cases, names) if args.dev_infra else None
 
     # Cloud Run stops a task that outlives its timeout with SIGTERM; exiting
     # on it, rather than dying, still destroys the infra.
@@ -167,7 +197,7 @@ def main() -> None:
         try:
             terraform.deploy(INFRA_DIR, *tf_vars, json_output=json_output, env=env, plan_file=plan_file)
             for name in names:
-                run_case(name, cases[name], args, tf_vars)
+                run_case(name, cases[name], args, tf_vars, dev)
         finally:
             # Also after a failed apply, which may have created part of the infra.
             terraform.deploy(INFRA_DIR, "-destroy", *tf_vars, json_output=json_output, env=env, plan_file=plan_file)
