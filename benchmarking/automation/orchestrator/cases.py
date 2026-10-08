@@ -20,7 +20,7 @@ from pathlib import Path
 
 import yaml
 
-from . import AUTOMATION_DIR
+from . import AUTOMATION_DIR, benchmark
 
 TESTS_FILE = AUTOMATION_DIR / "tests.yaml"
 # One Terraform config per directory, which a case's infra.cluster.name picks.
@@ -39,6 +39,9 @@ def load_cases(tests_file: Path) -> dict[str, dict]:
             raise ValueError(f"{tests_file}: case {name} is not a mapping")
         if not isinstance(case.get("type"), str):
             raise ValueError(f"{tests_file}: case {name} has no `type`")
+        known = ["noop", *benchmark.types()]
+        if case["type"] not in known:
+            raise ValueError(f"{tests_file}: case {name}'s `type` must be one of {', '.join(known)}")
         if not isinstance(case.get(SKIP_SUBSTRATE_INSTALL, False), bool):
             raise ValueError(f"{tests_file}: case {name}'s `{SKIP_SUBSTRATE_INSTALL}` must be true or false")
         check_cluster(f"{tests_file}: case {name}", case)

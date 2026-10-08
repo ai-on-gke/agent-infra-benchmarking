@@ -13,30 +13,24 @@
 # limitations under the License.
 
 """Recreates or deletes the benchmark WorkerPool the workloads run on, from
-workloads/manifests/worker-pool.yaml.tmpl, on a dev infra's cluster:
-
-  tools/python -m orchestrator.worker_pool deploy NAME --worker-count 30
-"""
+workloads/manifests/worker-pool.yaml.tmpl."""
 
 from __future__ import annotations
 
-import argparse
 import shutil
 import subprocess
-import sys
 from string import Template
 
-from . import AUTOMATION_DIR, dev_infra
+from . import AUTOMATION_DIR
 from .cluster import Cluster
 from .log import log
-from .process import failure, stream
+from .process import stream
 from .substrate import SUBSTRATE_DIR
 
 MANIFEST = AUTOMATION_DIR.parent / "workloads" / "manifests" / "worker-pool.yaml.tmpl"
 # Have to match the WorkerPool in the manifest.
 NAME = "benchmark-ateom"
 NAMESPACE = "benchmark-workloads"
-SANDBOX_CLASSES = ("gvisor", "microvm")
 DEFAULT_TIMEOUT_SECS = 300
 
 
@@ -98,49 +92,3 @@ def deploy(cluster: Cluster, worker_count: int, sandbox_class: str, timeout: int
             except subprocess.CalledProcessError:
                 pass
         raise
-
-
-def main() -> None:
-    p = argparse.ArgumentParser(
-        prog="python3 -m orchestrator.worker_pool",
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    commands = p.add_subparsers(dest="command", required=True)
-    deploy_command = commands.add_parser("deploy", help="recreate the WorkerPool and wait for its workers to be ready")
-    deploy_command.add_argument("--worker-count", type=int, default=1, help="replicas; default: %(default)s")
-    deploy_command.add_argument(
-        "--sandbox-class",
-        choices=SANDBOX_CLASSES,
-        default="gvisor",
-        help="microvm requires dependency-repos/substrate/hack/install-microvm-deps.sh --install to have run."
-        " Default: %(default)s",
-    )
-    delete_command = commands.add_parser("delete", help="delete the WorkerPool")
-    for command in (deploy_command, delete_command):
-        command.add_argument("name", type=dev_infra.check_name, metavar="NAME", help="the dev infra")
-        command.add_argument(
-            "--wait-timeout", type=int, default=DEFAULT_TIMEOUT_SECS, metavar="SECONDS", help="default: %(default)s"
-        )
-    args = p.parse_args()
-    if args.command == "deploy" and args.worker_count < 0:
-        p.error("--worker-count must not be negative")
-
-    missing = missing_requirements()
-    if missing:
-        sys.exit(f"worker pool: requires {', '.join(missing)}")
-    if not dev_infra.state_file(args.name, "cluster").exists():
-        sys.exit(f"worker pool: dev infra {args.name}'s cluster is not applied")
-    cluster = dev_infra.cluster(args.name)
-    try:
-        cluster.get_credentials()
-        if args.command == "deploy":
-            deploy(cluster, args.worker_count, args.sandbox_class, args.wait_timeout)
-        else:
-            delete(cluster, args.wait_timeout)
-    except subprocess.CalledProcessError as exc:
-        sys.exit(f"worker pool: {failure(exc)}")
-
-
-if __name__ == "__main__":
-    main()
