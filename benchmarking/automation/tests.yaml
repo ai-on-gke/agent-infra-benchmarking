@@ -80,3 +80,14 @@ cases:
       workload-template: openclaw
       workload-timeout: 120s
       resume-mode: explicit
+
+  # The orchestrator's Terraform path on infra/clusters/dummy, which creates no
+  # GCP resources and so has nothing to benchmark on.
+  dummy:
+    infra:
+      cluster:
+        name: dummy
+        tfvars_inline: |
+          sandboxed_node_count     = 10
+          sandboxed_min_node_count = 10
+          sandboxed_max_node_count = 10
