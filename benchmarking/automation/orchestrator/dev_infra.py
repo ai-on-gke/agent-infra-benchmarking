@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
-from . import AUTOMATION_DIR
+from . import AUTOMATION_DIR, substrate
 from .deployment import ORCHESTRATOR_DIR, Deployment, cluster
 from .log import log
 
@@ -90,14 +90,30 @@ def deployments(record: dict, json_output: bool = False) -> dict[str, Deployment
     }
 
 
-def apply(record: dict, json_output: bool = False) -> None:
+def apply(record: dict, json_output: bool = False) -> dict:
     """Applies every infra of the dev infra, which is complete only once all
-    of them are."""
+    of them are, and returns its record."""
     record = {**record, "complete": False}
     write_record(record)
     for deployment in deployments(record, json_output).values():
         deployment.apply()
-    write_record({**record, "complete": True})
+    record["complete"] = True
+    write_record(record)
+    return record
+
+
+def install_substrate(record: dict, json_output: bool = False) -> dict:
+    """Installs substrate on the dev infra's cluster unless its record says it
+    is, and returns its record."""
+    if record.get("substrate_installed"):
+        return record
+    deployment = deployments(record, json_output)["cluster"]
+    with deployment.initialized():
+        outputs = deployment.outputs()
+    substrate.install(outputs, deployment.data / "kubeconfig")
+    record = {**record, "substrate_installed": True}
+    write_record(record)
+    return record
 
 
 def destroy(record: dict, json_output: bool = False) -> None:
@@ -124,12 +140,14 @@ def print_list() -> None:
         r = json.loads(path.read_text())
         fields = [r["name"], r["test_case"], r["cluster"]["name"], r["project_id"], r["region"]]
         status = "complete" if r.get("complete") else "incomplete"
+        installed = "installed" if r.get("substrate_installed") else "-"
         counts = [str(resource_count(state_file(r["name"], infra))) for infra in INFRAS]
-        rows.append([*fields, status, *counts])
+        rows.append([*fields, status, installed, *counts])
     if not rows:
         print(f"No dev infra in {DEV_INFRA_DIR}")
         return
-    rows.insert(0, ["NAME", "TEST_CASE", "CLUSTER_CONFIG", "PROJECT", "REGION", "STATUS", *map(str.upper, INFRAS)])
+    header = ["NAME", "TEST_CASE", "CLUSTER_CONFIG", "PROJECT", "REGION", "STATUS", "SUBSTRATE"]
+    rows.insert(0, [*header, *map(str.upper, INFRAS)])
     widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
     for row in rows:
         print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())

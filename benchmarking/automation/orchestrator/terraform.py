@@ -111,11 +111,13 @@ def run(chdir: Path, command: str, *args: str, env: dict[str, str] | None = None
     proc.check_returncode()
 
 
-def stream(cmd: list[str], log_line: Callable[[str], None], env: dict[str, str] | None = None) -> None:
+def stream(
+    cmd: list[str], log_line: Callable[[str], None], env: dict[str, str] | None = None, cwd: Path | None = None
+) -> None:
     """Runs a command and passes each line of its output to log_line as it
     comes."""
     with subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=environ(env)
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=environ(env), cwd=cwd
     ) as proc:
         try:
             for line in proc.stdout:
@@ -126,6 +128,17 @@ def stream(cmd: list[str], log_line: Callable[[str], None], env: dict[str, str] 
             raise
     if proc.returncode:
         raise subprocess.CalledProcessError(proc.returncode, cmd)
+
+
+def output(chdir: Path, env: dict[str, str] | None = None) -> dict:
+    """The config's outputs, by name. Only an error is logged, as -json shows
+    sensitive values too."""
+    cmd = ["terraform", f"-chdir={chdir}", "output", "-json"]
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=environ(env))
+    if proc.returncode:
+        log(proc.stderr.strip(), "ERROR")
+        raise subprocess.CalledProcessError(proc.returncode, cmd)
+    return {name: out["value"] for name, out in json.loads(proc.stdout).items()}
 
 
 def run_text(chdir: Path, command: str, *args: str, env: dict[str, str] | None = None) -> None:

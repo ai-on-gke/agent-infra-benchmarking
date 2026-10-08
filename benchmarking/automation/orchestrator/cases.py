@@ -26,6 +26,7 @@ TESTS_FILE = AUTOMATION_DIR / "tests.yaml"
 # One Terraform config per directory, which a case's infra.cluster.name picks.
 CLUSTERS_DIR = AUTOMATION_DIR / "infra" / "clusters"
 CLUSTER_KEYS = {"name", "tfvars", "tfvars_inline", "variables"}
+SKIP_SUBSTRATE_INSTALL = "skip-substrate-install"
 
 
 def load_cases(tests_file: Path) -> dict[str, dict]:
@@ -38,6 +39,8 @@ def load_cases(tests_file: Path) -> dict[str, dict]:
             raise ValueError(f"{tests_file}: case {name} is not a mapping")
         if not isinstance(case.get("type"), str):
             raise ValueError(f"{tests_file}: case {name} has no `type`")
+        if not isinstance(case.get(SKIP_SUBSTRATE_INSTALL, False), bool):
+            raise ValueError(f"{tests_file}: case {name}'s `{SKIP_SUBSTRATE_INSTALL}` must be true or false")
         check_cluster(f"{tests_file}: case {name}", case)
     return cases
 

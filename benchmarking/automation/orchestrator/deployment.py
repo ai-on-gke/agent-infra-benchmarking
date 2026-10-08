@@ -72,6 +72,10 @@ class Deployment:
             plan_file=str(self.data / "run.tfplan"),
         )
 
+    def outputs(self) -> dict:
+        """Its outputs, by name; only while initialized."""
+        return terraform.output(self.dir, env=terraform.data_env(self.data))
+
     def apply(self) -> None:
         with self.initialized():
             self.deploy()

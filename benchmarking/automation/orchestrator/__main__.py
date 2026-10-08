@@ -33,8 +33,8 @@ from typing import NoReturn
 
 import yaml
 
-from . import AUTOMATION_DIR, dev_infra, terraform
-from .cases import TESTS_FILE, load_cases
+from . import AUTOMATION_DIR, dev_infra, substrate
+from .cases import SKIP_SUBSTRATE_INSTALL, TESTS_FILE, load_cases
 from .deployment import ORCHESTRATOR_DIR, Deployment, cluster
 from .log import log
 
@@ -70,9 +70,10 @@ def deployment_files(args: argparse.Namespace, *key: str) -> dict:
     }
 
 
-def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict], names: list[str]) -> None:
-    """Checks every case can run on the dev infra --dev-infra names, and applies
-    it unless it is complete. A new one has the first case's cluster."""
+def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict], names: list[str]) -> dict:
+    """Checks every case can run on the dev infra --dev-infra names, applies it
+    unless it is complete, and returns its record. A new one has the first
+    case's cluster."""
     record = dev_infra.read_record(args.dev_infra)
     if record is None:
         record = {
@@ -98,7 +99,15 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict], names: l
             log(f"run: case {name}'s infra.cluster differs from dev infra {args.dev_infra}'s it runs on", "WARNING")
     if not record.get("complete"):
         log(f"run: applying dev infra {args.dev_infra}, which is not complete")
-        dev_infra.apply(record, args.terraform_output == "json")
+        record = dev_infra.apply(record, args.terraform_output == "json")
+    return record
+
+
+def failure(exc: subprocess.CalledProcessError) -> str:
+    if exc.cmd[0] == "terraform":
+        # cmd[1] is -chdir=<the config's directory>.
+        return f"terraform {exc.cmd[2]} failed in {exc.cmd[1].removeprefix('-chdir=')}"
+    return f"{' '.join(exc.cmd)} failed"
 
 
 def run_case(name: str, case: dict) -> None:
@@ -171,11 +180,16 @@ def main() -> None:
 
     if not shutil.which("terraform"):
         fail("terraform is required to apply the infra")
+    if not all(cases[name].get(SKIP_SUBSTRATE_INSTALL) for name in names):
+        missing = substrate.missing_requirements()
+        if missing:
+            fail(f"installing substrate requires {', '.join(missing)}")
 
     # Cloud Run stops a task that outlives its timeout with SIGTERM; exiting
     # on it, rather than dying, still destroys the infra.
     signal.signal(signal.SIGTERM, lambda *_: fail("stopped by SIGTERM"))
 
+    json_output = args.terraform_output == "json"
     tf_vars = [
         f"-var=project_id={args.project_id}",
         f"-var=region={args.region}",
@@ -183,19 +197,23 @@ def main() -> None:
     ]
     try:
         if args.dev_infra:
-            prepare_dev_infra(args, cases, names)
+            record = prepare_dev_infra(args, cases, names)
             for name in names:
+                if not cases[name].get(SKIP_SUBSTRATE_INSTALL):
+                    record = dev_infra.install_substrate(record, json_output)
                 run_case(name, cases[name])
             return
         orchestrator = Deployment(dir=ORCHESTRATOR_DIR, plan_args=tf_vars, **deployment_files(args, "orchestrator"))
         with orchestrator.applied():
             for name in names:
                 files = deployment_files(args, "tests", name)
-                with cluster(cases[name]["infra"]["cluster"], tf_vars=tf_vars, **files).applied():
+                case_cluster = cluster(cases[name]["infra"]["cluster"], tf_vars=tf_vars, **files)
+                with case_cluster.applied():
+                    if not cases[name].get(SKIP_SUBSTRATE_INSTALL):
+                        substrate.install(case_cluster.outputs(), files["data"] / "kubeconfig")
                     run_case(name, cases[name])
     except subprocess.CalledProcessError as exc:
-        # cmd[1] is -chdir=<the config's directory>.
-        fail(f"terraform {exc.cmd[2]} failed in {exc.cmd[1].removeprefix('-chdir=')}")
+        fail(failure(exc))
 
 
 if __name__ == "__main__":
