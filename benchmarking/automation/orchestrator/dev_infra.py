@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Lists or destroys the dev infras: infra/orchestrator and a case's cluster,
+"""Lists the dev infras, shows their outputs or destroys them: infra/orchestrator and a case's cluster,
 which the orchestrator's --dev-infra creates and keeps, each with every
 Terraform file of it in .dev-infra/terraform/<name>/<infra>/."""
 
@@ -129,9 +129,25 @@ def fail(message: str) -> NoReturn:
     sys.exit(1)
 
 
+def read_state(path: Path) -> dict:
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
 def resource_count(path: Path) -> int:
-    state = json.loads(path.read_text()) if path.exists() else {}
-    return sum(len(r.get("instances", [])) for r in state.get("resources", []))
+    return sum(len(r.get("instances", [])) for r in read_state(path).get("resources", []))
+
+
+def print_outputs(name: str) -> None:
+    """Each infra's outputs, read off its state, sensitive ones hidden as
+    terraform output hides them."""
+    for infra in INFRAS:
+        path = state_file(name, infra)
+        if not path.exists():
+            print(f"{infra}: not applied")
+            continue
+        print(f"{infra}:")
+        for key, out in read_state(path).get("outputs", {}).items():
+            print(f"  {key} = {'(sensitive value)' if out.get('sensitive') else json.dumps(out['value'])}")
 
 
 def print_list() -> None:
@@ -157,6 +173,8 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="python3 -m orchestrator.dev_infra", description=__doc__)
     commands = p.add_subparsers(dest="command", required=True)
     commands.add_parser("list", help="list the dev infras, with how many resources each of their infras holds")
+    outputs_command = commands.add_parser("outputs", help="show the outputs of a dev infra's infras")
+    outputs_command.add_argument("name", type=check_name, metavar="NAME")
     destroy_command = commands.add_parser("destroy", help="destroy a dev infra and remove its Terraform files")
     destroy_command.add_argument("name", type=check_name, metavar="NAME")
     destroy_command.add_argument(
@@ -171,6 +189,9 @@ def main() -> None:
     record = read_record(args.name)
     if record is None:
         fail(f"no dev infra {args.name}: no {record_file(args.name)}")
+    if args.command == "outputs":
+        print_outputs(args.name)
+        return
     if not shutil.which("terraform"):
         fail("terraform is required to destroy the dev infra")
     try:
