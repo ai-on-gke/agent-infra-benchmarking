@@ -18,6 +18,7 @@ cluster's repository, with local Docker or on Cloud Build, each named
 
 from __future__ import annotations
 
+import functools
 import json
 import shutil
 import subprocess
@@ -95,9 +96,11 @@ def read_images(*files: Path) -> list[Image]:
     return list(images.values())
 
 
+@functools.cache
 def tag() -> str:
     """The commit the repo is at, so a manifest names the image built from the
-    code that rendered it."""
+    code that rendered it. Read once, so a commit made during a run doesn't
+    change the tag between the build and what reads it."""
     return output(["git", "rev-parse", "HEAD"], cwd=ROOT).strip()
 
 
