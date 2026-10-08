@@ -58,15 +58,22 @@ def missing_requirements(cloud_build: bool = False) -> list[str]:
     return list(dict.fromkeys(missing + workloads.missing_requirements()))
 
 
+def flag_value(value: object) -> str:
+    # As jq's string interpolation spells it: false, null, compact JSON.
+    return value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
+
+
 def flags(values: dict) -> list[str]:
-    return [f"--{key}" if value is True else f"--{key}={value}" for key, value in values.items()]
+    return [f"--{key}" if value is True else f"--{key}={flag_value(value)}" for key, value in values.items()]
 
 
 def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     """The case with its defaults filled in."""
     if not LABEL_RE.fullmatch(name):
         raise ValueError(f"case name {name!r} is not a valid label value")
-    master, worker = case.get("master"), case.get("worker", {})
+    master, worker = case.get("master"), case.get("worker")
+    if worker is None:
+        worker = {}
     if not isinstance(master, dict) or not isinstance(worker, dict):
         raise ValueError(f"case {name}'s `master` and `worker` must be mappings of flags")
     if "run-time" not in master or "users" not in master:
@@ -221,6 +228,9 @@ def run(
     run_id = run_id or f"{datetime.now(timezone.utc):%Y%m%dt%H%M%Sz}-{images.tag()}"
     if not LABEL_RE.fullmatch(run_id):
         raise ValueError(f"run id {run_id!r} is not a valid label value")
+    # The images the manifests name, with or without a build.
+    locust_image = images.image_ref(images.LOCUST_IMAGES, cluster.docker_repo, "locust-master")
+    boomer_image = images.image_ref(images.LOCUST_IMAGES, cluster.docker_repo, "boomer-worker")
 
     if build:
         # The workload images are only read when the workloads are deployed.
@@ -241,8 +251,8 @@ def run(
         workloads.deploy(cluster, [template], case["sandbox-class"])
 
     values = {
-        "LOCUST_IMAGE": images.ref(cluster.docker_repo, "locust-master"),
-        "BOOMER_IMAGE": images.ref(cluster.docker_repo, "boomer-worker"),
+        "LOCUST_IMAGE": locust_image,
+        "BOOMER_IMAGE": boomer_image,
         "BENCHMARK_RUNNER_KSA": RUNNER_KSA,
         "BENCHMARK_RUN_ID": run_id,
         "BENCHMARK_RECORD_NAME": name,

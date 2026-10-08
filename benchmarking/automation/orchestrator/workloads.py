@@ -35,7 +35,6 @@ from .process import output, stream
 MANIFESTS_DIR = AUTOMATION_DIR.parent / "workloads" / "manifests"
 NAMESPACE = worker_pool.NAMESPACE
 ATESPACE = "benchmark-workloads"
-# Of images.WORKLOADS_IMAGES.
 MOCK_LLM_IMAGE = "mock-llm"
 # The templates whose image is neither ko:// nor a literal, but one of ours.
 TEMPLATE_IMAGES = {"openclaw": "openclaw-workload"}
@@ -93,24 +92,31 @@ def kubectl_ate(cluster: Cluster) -> Iterator[KubectlAte]:
 
 def pinned_image(cluster: Cluster, name: str) -> str:
     """The image images.build_and_push built from this commit, pinned."""
-    return images.pin(images.ref(cluster.docker_repo, name))
+    return images.pin(images.image_ref(images.WORKLOADS_IMAGES, cluster.docker_repo, name))
 
 
 def otlp_endpoint(cluster: Cluster) -> str:
     """The endpoint the control plane sends its telemetry to, so the actors
     follow it on any kind of cluster."""
-    endpoint = output(
-        kubectl(
-            cluster,
-            "get",
-            "configmap",
-            "ate-otel-config",
-            "-o=jsonpath={.data.OTEL_EXPORTER_OTLP_ENDPOINT}",
-            namespace="ate-system",
-        )
-    ).strip()
+    get = kubectl(
+        cluster,
+        "get",
+        "configmap",
+        "ate-otel-config",
+        "-o=jsonpath={.data.OTEL_EXPORTER_OTLP_ENDPOINT}",
+        namespace="ate-system",
+    )
+    try:
+        endpoint = output(get).strip()
+    except subprocess.CalledProcessError:
+        endpoint = ""
+    # No default: it would send the actors' telemetry to the wrong collector
+    # without a word.
     if not endpoint:
-        raise WorkloadError("no OTEL_EXPORTER_OTLP_ENDPOINT in ate-system's ate-otel-config ConfigMap")
+        raise WorkloadError(
+            "no OTEL_EXPORTER_OTLP_ENDPOINT in ate-system's ate-otel-config ConfigMap;"
+            " install substrate first, or pass otlp"
+        )
     return endpoint
 
 
@@ -132,6 +138,7 @@ def deploy_mock_llm(cluster: Cluster, timeout: int) -> None:
     image = pinned_image(cluster, MOCK_LLM_IMAGE)
     manifest = Template((MANIFESTS_DIR / "mock-llm.yaml.tmpl").read_text()).substitute(IMAGE_WITH_DIGEST=image)
     stream(kubectl(cluster, "apply", "-f", "-"), input=manifest)
+    log(f"workloads: waiting for mock-llm to be ready (timeout: {timeout}s)")
     stream(kubectl(cluster, "rollout", "status", "deployment/mock-llm", f"--timeout={timeout}s"))
 
 
@@ -155,7 +162,7 @@ def delete_template(ate: KubectlAte, name: str) -> None:
     subprocess.run(ate("delete", "actor-template", name, "-a", ATESPACE), capture_output=True)
 
 
-def wait_golden_snapshot(ate: KubectlAte, name: str, timeout: int) -> None:
+def wait_golden_snapshot(ate: KubectlAte, cluster: Cluster, name: str, timeout: int) -> None:
     """Ready once the controller publishes the golden tag, which is when an
     actor can be restored from it; the snapshot existing is not enough."""
     started = time.monotonic()
@@ -164,9 +171,13 @@ def wait_golden_snapshot(ate: KubectlAte, name: str, timeout: int) -> None:
     while (elapsed := int(time.monotonic() - started)) < timeout:
         get = ate("get", "actor-template", name, "-a", ATESPACE, "-o", "json")
         proc = subprocess.run(get, capture_output=True, text=True)
-        if proc.returncode == 0:
+        try:
+            template = json.loads(proc.stdout) if proc.returncode == 0 else None
+        except ValueError:
+            template, proc.stderr = None, f"unreadable output: {proc.stdout.strip()}"
+        if template is not None:
             error = ""
-            status = json.loads(proc.stdout).get("status") or {}
+            status = template.get("status") or {}
             golden = status.get("goldenSnapshotStatus") or {}
             tag = golden.get("goldenTag") or {}
             if tag.get("name"):
@@ -190,9 +201,11 @@ def wait_golden_snapshot(ate: KubectlAte, name: str, timeout: int) -> None:
         log(f"  every get failed, the last with: {error}", "ERROR")
     elif status is not None:
         log(f"  neither a snapshot nor an error; last status: {json.dumps(status)}", "ERROR")
+    # The golden actor's snapshot is published as a tag under the bucket.
     raise WorkloadError(
-        f"no golden snapshot of {ATESPACE}/{name} within {timeout}s; check that the workers can write to"
-        f" gs://<bucket>/{ATESPACE}/ and their logs: kubectl logs -n {NAMESPACE} deployment/{worker_pool.NAME}"
+        f"no golden snapshot of {ATESPACE}/{name} within {timeout}s; check that gs://{cluster.bucket}/ exists"
+        f" and the workers can write to it, then the workers: kubectl get pods -n {NAMESPACE};"
+        f" kubectl logs -n {NAMESPACE} deployment/{worker_pool.NAME} --tail=50"
     )
 
 
@@ -213,7 +226,7 @@ def deploy(
     otlp = otlp or otlp_endpoint(cluster)
     log(
         f"workloads: deploying {', '.join(names)} (sandbox_class={sandbox_class}, actor_memory={actor_memory},"
-        f" otlp_endpoint={otlp}, bucket=gs://{cluster.bucket}/{ATESPACE}/)"
+        f" otlp_endpoint={otlp}, bucket=gs://{cluster.bucket}/{ATESPACE}/, substrate={substrate.revision()})"
     )
     deploy_mock_llm(cluster, timeout)
 
@@ -231,7 +244,8 @@ def deploy(
             stream(ate("create", "actor-template", "-f", "-"), input=resolved)
         for i, name in enumerate(names, 1):
             log(f"workloads: [{i}/{len(names)}] waiting for the {ATESPACE}/{name} golden snapshot (timeout {timeout}s)")
-            wait_golden_snapshot(ate, name, timeout)
+            wait_golden_snapshot(ate, cluster, name, timeout)
+    log(f"workloads: all {len(names)} golden snapshots ready")
 
 
 def delete(cluster: Cluster, names: list[str] | None = None) -> None:
@@ -244,4 +258,7 @@ def delete(cluster: Cluster, names: list[str] | None = None) -> None:
             delete_template(ate, name)
         if subprocess.run(ate("delete", "atespace", ATESPACE), capture_output=True).returncode:
             log(f"workloads: atespace {ATESPACE} not deleted; it may not exist or not be empty")
-    stream(kubectl(cluster, "delete", "deployment,service", "mock-llm", "--ignore-not-found"))
+    try:
+        stream(kubectl(cluster, "delete", "deployment,service", "mock-llm", "--ignore-not-found"))
+    except subprocess.CalledProcessError:
+        log("workloads: mock-llm not deleted")

@@ -19,6 +19,7 @@ Terraform outputs."""
 from __future__ import annotations
 
 import shutil
+import subprocess
 
 from . import AUTOMATION_DIR
 from .cluster import Cluster
@@ -26,6 +27,12 @@ from .log import log
 from .process import output, stream
 
 SUBSTRATE_DIR = AUTOMATION_DIR.parent.parent / "dependency-repos" / "substrate"
+
+
+def revision() -> str:
+    """The submodule's short commit, which every failure is explained against."""
+    proc = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=SUBSTRATE_DIR, capture_output=True, text=True)
+    return proc.stdout.strip() if proc.returncode == 0 else "unknown revision"
 
 
 def ko(cluster: Cluster, *args: str, input: str) -> str:

@@ -105,6 +105,13 @@ def ref(repo: str, name: str, image_tag: str | None = None) -> str:
     return f"{repo}/{name}:{image_tag or tag()}"
 
 
+def image_ref(file: Path, repo: str, name: str) -> str:
+    """As ref, for an image that has to be one of file's."""
+    if name not in json.loads(file.read_text()):
+        raise ImageError(f"no image {name} in {file}")
+    return ref(repo, name)
+
+
 def pin(image: str) -> str:
     """The image pinned to the digest its registry serves for its tag now, so
     what reads it and what runs it are the same bits even if the tag moves."""
@@ -126,7 +133,8 @@ def docker_login(host: str) -> None:
     token = subprocess.run(["gcloud", "auth", "print-access-token"], capture_output=True, text=True)
     if token.returncode or not token.stdout.strip():
         raise ImageError(f"cannot get an access token from gcloud for {host}; run gcloud auth login")
-    log(f"images: authenticating to {host}")
+    account = subprocess.run(["gcloud", "config", "get-value", "account"], capture_output=True, text=True)
+    log(f"images: authenticating to {host} as {account.stdout.strip() or 'an unknown account'}")
     stream(
         ["docker", "login", "--username=oauth2accesstoken", "--password-stdin", f"https://{host}"],
         input=token.stdout.strip(),
@@ -180,7 +188,8 @@ def cloud_build_and_push(images: list[Image], repo: str, image_tag: str, platfor
         config_file = Path(tmp) / "cloudbuild.json"
         config_file.write_text(json.dumps(config))
 
-        log("images: building on Cloud Build:\n" + "\n".join(f"  {r}" for r in refs))
+        builds = [f"  {r} (platform: {image.platform or platform})" for image, r in zip(images, refs)]
+        log("images: building on Cloud Build:\n" + "\n".join(builds))
         # gcloud holds the build log back until the end when stdout isn't a terminal.
         stream(
             ["gcloud", "builds", "submit", str(source), f"--config={config_file}", f"--project={project_id}"],
