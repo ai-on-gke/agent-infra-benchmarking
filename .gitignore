@@ -13,4 +13,7 @@
 
 # The venv benchmarking/automation/tools/run makes.
 /benchmarking/automation/tools/venv_run/
+
+# The orchestrator's local state, from benchmarking/automation/tools/run-local.
+/benchmarking/automation/local-tfstates/
 *.egg-info/
