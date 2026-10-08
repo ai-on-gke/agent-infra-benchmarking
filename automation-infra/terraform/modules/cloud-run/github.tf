@@ -12,6 +12,8 @@ resource "google_service_account" "github" {
 
 # Only under source/: the bucket may also hold Terraform state. objectUser
 # rather than objectCreator, so that a rerun can overwrite its tarball.
+# Listing is checked on the bucket rather than an object, hence its own
+# clause, for prefixes under source/: gcloud storage cp lists its destination.
 resource "google_storage_bucket_iam_member" "github_source" {
   count = var.github_actions_bucket == null ? 0 : 1
 
@@ -20,7 +22,10 @@ resource "google_storage_bucket_iam_member" "github_source" {
   member = "serviceAccount:${google_service_account.github[0].email}"
 
   condition {
-    title      = "source-only"
-    expression = "resource.name.startsWith(\"projects/_/buckets/${var.github_actions_bucket}/objects/source/\")"
+    title = "source-only"
+    expression = join(" || ", [
+      "resource.name.startsWith(\"projects/_/buckets/${var.github_actions_bucket}/objects/source/\")",
+      "api.getAttribute(\"storage.googleapis.com/objectListPrefix\", \"\").startsWith(\"source/\")",
+    ])
   }
 }

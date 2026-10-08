@@ -33,4 +33,7 @@ jobs:
           BUCKET: ${{ secrets.SOURCE_BUCKET }}
           BRANCH: ${{ github.ref_name }}
           COMMIT: ${{ github.sha }}
+          # A parallel composite upload's parts would go under gcloud/tmp/,
+          # and the key may only write under source/.
+          CLOUDSDK_STORAGE_PARALLEL_COMPOSITE_UPLOAD_ENABLED: "False"
         run: gcloud storage cp "$RUNNER_TEMP/source.tar.gz" "gs://$BUCKET/source/$BRANCH/$COMMIT.tar.gz"
