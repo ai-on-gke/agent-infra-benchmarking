@@ -94,6 +94,11 @@ def parse_args() -> argparse.Namespace:
         " python3 -m orchestrator.dev_infra destroys them, rather than on ones applied for this execution."
         " Applied unless complete, a new one with the first case's cluster",
     )
+    p.add_argument(
+        "--cloud-build",
+        action="store_true",
+        help="build the benchmark images on Cloud Build rather than with local Docker",
+    )
     args = p.parse_args()
     if args.state_backend == "gcs" and not (args.state_bucket and args.state_prefix):
         p.error("--state-backend=gcs requires --state-bucket and --state-prefix")
@@ -116,17 +121,17 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
     return {name: cases[name] for name in names}
 
 
-def check_requirements(cases: dict[str, dict]) -> None:
+def check_requirements(cases: dict[str, dict], cloud_build: bool) -> None:
     if not shutil.which("terraform"):
         fail("terraform is required to apply the infra")
     if not all(case.get(SKIP_SUBSTRATE_INSTALL) for case in cases.values()):
         missing = substrate.missing_requirements()
         if missing:
             fail(f"installing substrate requires {', '.join(missing)}")
-    if not all(case["type"] == "noop" for case in cases.values()):
-        missing = benchmark.missing_requirements()
-        if missing:
-            fail(f"running the benchmark requires {', '.join(missing)}")
+    benchmarks = {name: case for name, case in cases.items() if case["type"] != "noop"}
+    missing = benchmark.missing_requirements(benchmarks, cloud_build)
+    if missing:
+        fail(f"running the benchmark requires {', '.join(missing)}")
 
 
 def deployment_files(args: argparse.Namespace, *key: str) -> dict:
@@ -183,11 +188,11 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
     return record
 
 
-def run_case(name: str, case: dict, run_id: str, cluster: Cluster) -> None:
+def run_case(args: argparse.Namespace, name: str, case: dict, cluster: Cluster) -> None:
     if case["type"] == "noop":
         log(f"{name}: noop, nothing to run")
         return
-    benchmark.run(name, case, run_id, cluster)
+    benchmark.run(name, case, args.name, cluster, args.cloud_build)
 
 
 def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
@@ -196,7 +201,7 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     for name, case in cases.items():
         if not case.get(SKIP_SUBSTRATE_INSTALL):
             record = dev_infra.install_substrate(record)
-        run_case(name, case, args.name, cluster)
+        run_case(args, name, case, cluster)
 
 
 def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
@@ -210,13 +215,13 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
                 cluster = Cluster(deployment.outputs(), deployment.data / "kubeconfig")
                 if not case.get(SKIP_SUBSTRATE_INSTALL):
                     substrate.install(cluster)
-                run_case(name, case, args.name, cluster)
+                run_case(args, name, case, cluster)
 
 
 def main() -> None:
     args = parse_args()
     cases = selected_cases(args)
-    check_requirements(cases)
+    check_requirements(cases, args.cloud_build)
 
     # Cloud Run stops a task that outlives its timeout with SIGTERM; exiting
     # on it, rather than dying, still destroys the infra.
@@ -229,6 +234,8 @@ def main() -> None:
             run_on_own_infra(args, cases)
     except subprocess.CalledProcessError as exc:
         fail(failure(exc))
+    except benchmark.ERRORS as exc:
+        fail(str(exc))
 
 
 if __name__ == "__main__":

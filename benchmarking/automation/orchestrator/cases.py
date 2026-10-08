@@ -45,6 +45,11 @@ def load_cases(tests_file: Path) -> dict[str, dict]:
         if not isinstance(case.get(SKIP_SUBSTRATE_INSTALL, False), bool):
             raise ValueError(f"{tests_file}: case {name}'s `{SKIP_SUBSTRATE_INSTALL}` must be true or false")
         check_cluster(f"{tests_file}: case {name}", case)
+        if case["type"] != "noop":
+            try:
+                benchmark.check(name, case)
+            except ValueError as exc:
+                raise ValueError(f"{tests_file}: {exc}") from None
     return cases
 
 
