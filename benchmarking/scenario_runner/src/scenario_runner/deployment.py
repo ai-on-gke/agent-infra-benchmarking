@@ -38,7 +38,7 @@ from typing import Iterator
 from . import RUNNER_DIR, terraform
 from .cases import CLUSTERS_DIR
 
-ORCHESTRATOR_DIR = RUNNER_DIR / "infra"
+RUNNER_INFRA_DIR = RUNNER_DIR / "infra"
 # The config's own deployments' files, e.g. one applied by hand, which would
 # change this one's backend, variables or state.
 FOREIGN_FILES = (

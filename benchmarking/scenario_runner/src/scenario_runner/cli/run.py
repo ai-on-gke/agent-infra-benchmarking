@@ -35,14 +35,14 @@ import yaml
 from .. import LOCAL_DATA_DIR, benchmark, dev_infra, substrate
 from ..cases import SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases
 from ..cluster import Cluster
-from ..deployment import ORCHESTRATOR_DIR, Deployment, cluster_deployment, tf_vars
+from ..deployment import RUNNER_INFRA_DIR, Deployment, cluster_deployment, tf_vars
 from ..log import log
 from ..process import failure
 
 # The executions' Deployments, kept after they are destroyed, as the Cloud Run
 # job's state is under terraform/ in its bucket. An execution's are in <name>/:
-# orchestrator/ for scenario_runner/infra, and tests/<case>/ for each case's
-# cluster.
+# scenario-runner/ for scenario_runner/infra, and tests/<case>/ for each
+# case's cluster.
 LOCAL_TERRAFORM_DIR = LOCAL_DATA_DIR / "runs" / "terraform"
 
 
@@ -237,10 +237,10 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
 
 def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     variables = tf_vars(args.project_id, args.region, args.name)
-    orchestrator = Deployment.create(
-        source=ORCHESTRATOR_DIR, variables=variables, **deployment_args(args, "orchestrator")
+    runner_infra = Deployment.create(
+        source=RUNNER_INFRA_DIR, variables=variables, **deployment_args(args, "scenario-runner")
     )
-    with orchestrator.applied():
+    with runner_infra.applied():
         for name, case in cases.items():
             version = None if case.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
             deployment = cluster_deployment(

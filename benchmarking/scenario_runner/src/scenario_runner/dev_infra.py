@@ -27,14 +27,14 @@ from pathlib import Path
 from . import LOCAL_DATA_DIR, substrate
 from .cases import SKIP_SUBSTRATE_INSTALL
 from .cluster import Cluster
-from .deployment import ORCHESTRATOR_DIR, Deployment, cluster_deployment, tf_vars
+from .deployment import RUNNER_INFRA_DIR, Deployment, cluster_deployment, tf_vars
 
 DEV_INFRA_DIR = LOCAL_DATA_DIR / "dev-infra" / "terraform"
 # What a dev infra is, written before it is applied so that one whose apply
 # failed can be applied again or destroyed.
 RECORD_FILE = "dev-infra.json"
 # In the order they are applied.
-INFRAS = ("orchestrator", "cluster")
+INFRAS = ("scenario-runner", "cluster")
 
 
 def check_name(name: str) -> str:
@@ -69,8 +69,8 @@ def create_deployment(record: dict, infra: str, json_output: bool = False) -> De
     the source as it is now."""
     root = DEV_INFRA_DIR / record["name"] / infra
     variables = tf_vars(record["project_id"], record["region"], record["name"])
-    if infra == "orchestrator":
-        return Deployment.create(root, ORCHESTRATOR_DIR, variables, json_output=json_output)
+    if infra == "scenario-runner":
+        return Deployment.create(root, RUNNER_INFRA_DIR, variables, json_output=json_output)
     version = None if record.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
     return cluster_deployment(record["cluster"], root, variables, version, json_output=json_output)
 
