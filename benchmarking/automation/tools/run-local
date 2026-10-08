@@ -15,8 +15,8 @@
 # limitations under the License.
 
 # Runs the orchestrator with tools/run, its infra's state in local files under
-# benchmarking/automation/local-tfstates/<name>/, passing every other option on
-# unchanged:
+# benchmarking/automation/local-runs/<name>/tfstates/, passing every other
+# option on unchanged:
 #
 #   ./benchmarking/automation/tools/run-local --project-id my-project \
 #     --test-case-name glutton
@@ -25,4 +25,4 @@ set -o errexit -o nounset -o pipefail
 
 TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-exec "${TOOLS_DIR}/run" --state-backend local --state-prefix "$(dirname "${TOOLS_DIR}")/local-tfstates" "$@"
+exec "${TOOLS_DIR}/run" --state-backend local "$@"

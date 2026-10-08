@@ -14,6 +14,9 @@
 # The venv benchmarking/automation/tools/run makes.
 /benchmarking/automation/tools/venv_run/
 
-# The orchestrator's local state, from benchmarking/automation/tools/run-local.
-/benchmarking/automation/local-tfstates/
+# Each orchestrator execution's local state and Terraform data.
+/benchmarking/automation/local-runs/
 *.egg-info/
+
+# The providers the orchestrator's cluster applies share.
+/benchmarking/automation/.terraform-plugin-cache/

@@ -19,6 +19,7 @@ CalledProcessError, whose cmd[2] is the terraform command."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Callable
@@ -80,7 +81,12 @@ def log_event(line: str) -> None:
     log(message, SEVERITIES.get(event.get("@level"), "DEFAULT"))
 
 
-def run(chdir: Path, command: str, *args: str) -> None:
+def environ(env: dict[str, str] | None) -> dict[str, str] | None:
+    """The process's environment with env added, for subprocess."""
+    return {**os.environ, **env} if env else None
+
+
+def run(chdir: Path, command: str, *args: str, env: dict[str, str] | None = None) -> None:
     """Runs a terraform command quick enough to wait for, and logs all its
     output as one entry."""
     proc = subprocess.run(
@@ -88,15 +94,18 @@ def run(chdir: Path, command: str, *args: str) -> None:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        env=environ(env),
     )
     log(proc.stdout.strip(), "ERROR" if proc.returncode else "INFO")
     proc.check_returncode()
 
 
-def stream(cmd: list[str], log_line: Callable[[str], None]) -> None:
+def stream(cmd: list[str], log_line: Callable[[str], None], env: dict[str, str] | None = None) -> None:
     """Runs a command and passes each line of its output to log_line as it
     comes."""
-    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as proc:
+    with subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=environ(env)
+    ) as proc:
         try:
             for line in proc.stdout:
                 log_line(line.rstrip("\n"))
@@ -108,25 +117,31 @@ def stream(cmd: list[str], log_line: Callable[[str], None]) -> None:
         raise subprocess.CalledProcessError(proc.returncode, cmd)
 
 
-def run_text(chdir: Path, command: str, *args: str) -> None:
+def run_text(chdir: Path, command: str, *args: str, env: dict[str, str] | None = None) -> None:
     """Runs a terraform command and logs each line of its output as one entry
     as it comes."""
-    stream(["terraform", f"-chdir={chdir}", command, "-no-color", *args], log)
+    stream(["terraform", f"-chdir={chdir}", command, "-no-color", *args], log, env)
 
 
-def run_json(chdir: Path, command: str, *args: str) -> None:
+def run_json(chdir: Path, command: str, *args: str, env: dict[str, str] | None = None) -> None:
     """Runs a terraform command with -json and logs each of its messages, an
     error with all its detail, as one entry as it comes."""
-    stream(["terraform", f"-chdir={chdir}", command, "-json", *args], log_event)
+    stream(["terraform", f"-chdir={chdir}", command, "-json", *args], log_event, env)
 
 
-def deploy(chdir: Path, *plan_args: str, json_output: bool = False) -> None:
+def deploy(
+    chdir: Path,
+    *plan_args: str,
+    json_output: bool = False,
+    env: dict[str, str] | None = None,
+    plan_file: str = PLAN_FILE,
+) -> None:
     """Plans and applies that plan. With json_output, also logs the whole plan
     as terraform shows it, which -json leaves out."""
     if not json_output:
-        run_text(chdir, "plan", "-input=false", f"-out={PLAN_FILE}", *plan_args)
-        run_text(chdir, "apply", "-input=false", PLAN_FILE)
+        run_text(chdir, "plan", "-input=false", f"-out={plan_file}", *plan_args, env=env)
+        run_text(chdir, "apply", "-input=false", plan_file, env=env)
         return
-    run_json(chdir, "plan", "-input=false", f"-out={PLAN_FILE}", *plan_args)
-    run(chdir, "show", PLAN_FILE)
-    run_json(chdir, "apply", "-input=false", PLAN_FILE)
+    run_json(chdir, "plan", "-input=false", f"-out={plan_file}", *plan_args, env=env)
+    run(chdir, "show", plan_file, env=env)
+    run_json(chdir, "apply", "-input=false", plan_file, env=env)
