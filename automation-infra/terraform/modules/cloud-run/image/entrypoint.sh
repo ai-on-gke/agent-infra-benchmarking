@@ -27,5 +27,9 @@ mkdir -p /source
 fetch "${SOURCE_URL}/${COMMIT}.tar.gz" | tar -xzf - -C /source
 cd /source
 
-# Nothing to run yet.
-echo "Source of ${COMMIT} is in $(pwd)."
+if [[ ! -d .git ]]; then
+  echo "Error: the tarball of ${COMMIT} has no .git" >&2
+  exit 1
+fi
+# Nothing to run yet. safe.directory, as the files keep the uploader's owner.
+git -c safe.directory=/source log -1
