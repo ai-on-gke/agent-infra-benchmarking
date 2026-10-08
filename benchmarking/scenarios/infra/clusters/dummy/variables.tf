@@ -1,5 +1,6 @@
-# The inputs of common that the orchestrator and tests.yaml's cases pass, so a
-# case can switch infra.cluster.name between the two. Nothing here reaches GCP.
+# The inputs of common that the orchestrator and scenarios.yaml's cases pass,
+# so a case can switch infra.cluster.name between the two. Nothing here
+# reaches GCP.
 
 variable "project_id" {
   description = "Unused; taken for the orchestrator's -var."

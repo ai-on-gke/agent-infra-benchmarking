@@ -14,9 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Runs tests.yaml's dummy case with tools/run-local, passing every other option
-# on unchanged. Its cluster is tests/infra/clusters/dummy, which creates
-# nothing in GCP; automation/infra still does, so --project-id is still
+# Runs scenarios.yaml's dummy case with tools/run-local, passing every other
+# option on unchanged. Its cluster is scenarios/infra/clusters/dummy, which
+# creates nothing in GCP; automation/infra still does, so --project-id is still
 # needed:
 #
 #   ./benchmarking/tools/run-local-dummy --project-id my-project

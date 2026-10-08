@@ -4,7 +4,7 @@
 **/*.tfstate
 **/*.tfstate.*
 **/*.tfvars
-!tests/infra/clusters/common/default.tfvars
+!scenarios/infra/clusters/common/default.tfvars
 **/__pycache__/
 automation/.terraform-plugin-cache/
 automation/local-runs/

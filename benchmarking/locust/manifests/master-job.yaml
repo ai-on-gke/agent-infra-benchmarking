@@ -77,7 +77,7 @@ spec:
             memory: "512Mi"
 ---
 # The account both Jobs run as. Here rather than in worker-job.yaml because this
-# Job is applied first. benchmarking/tests/infra/clusters/common grants
+# Job is applied first. benchmarking/scenarios/infra/clusters/common grants
 # this exact namespace/name pair objectCreator on the bucket through a
 # principal:// subject, so no iam.gke.io annotation is needed here — but the two
 # spellings have to agree or the grant lands on nothing.

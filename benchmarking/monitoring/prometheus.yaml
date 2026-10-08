@@ -143,8 +143,8 @@ data:
             target_label: run_id
           # A run is a case, so its name is the whole of what the pod
           # carries: the load and the worker's flags are both in
-          # benchmarking/tests/tests.yaml under it, and a series of runs is
-          # grouped by this rather than by users or workload.
+          # benchmarking/scenarios/scenarios.yaml under it, and a series of
+          # runs is grouped by this rather than by users or workload.
           - source_labels: [__meta_kubernetes_pod_label_benchmark_test_case]
             action: replace
             target_label: test_case

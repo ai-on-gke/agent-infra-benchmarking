@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The orchestrator's Python: PyYAML to read tests.yaml. requirements.txt is
+# The orchestrator's Python: PyYAML to read scenarios.yaml. requirements.txt is
 # compiled from this with every dependency pinned and hashed, for the image's
 # Python 3.11 on linux/amd64:
 #

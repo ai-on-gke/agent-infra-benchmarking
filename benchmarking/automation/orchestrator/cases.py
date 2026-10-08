@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Reads and checks the cases in tests.yaml."""
+"""Reads and checks the cases in scenarios.yaml."""
 
 from __future__ import annotations
 
@@ -20,11 +20,11 @@ from pathlib import Path
 
 import yaml
 
-from . import TESTS_DIR, benchmark
+from . import SCENARIOS_DIR, benchmark
 
-TESTS_FILE = TESTS_DIR / "tests.yaml"
+TESTS_FILE = SCENARIOS_DIR / "scenarios.yaml"
 # One Terraform config per directory, which a case's infra.cluster.name picks.
-CLUSTERS_DIR = TESTS_DIR / "infra" / "clusters"
+CLUSTERS_DIR = SCENARIOS_DIR / "infra" / "clusters"
 CLUSTER_KEYS = {"name", "tfvars", "tfvars_inline", "variables"}
 SKIP_SUBSTRATE_INSTALL = "skip-substrate-install"
 

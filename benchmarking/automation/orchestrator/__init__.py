@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runs the cases in tests.yaml on infra of their own, with the command lines
-in cli/."""
+"""Runs the cases in scenarios.yaml on infra of their own, with the command
+lines in cli/."""
 
 from pathlib import Path
 
 AUTOMATION_DIR = Path(__file__).resolve().parent.parent
-# tests.yaml and the Terraform configs its cases run on.
-TESTS_DIR = AUTOMATION_DIR.parent / "tests"
+# scenarios.yaml and the Terraform configs its cases run on.
+SCENARIOS_DIR = AUTOMATION_DIR.parent / "scenarios"

@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Applies automation/infra/, runs the cases in tests.yaml one after another
-(every case in the order listed, or the ones --test-case-name names in the
-order given), each on its own infra/clusters/ cluster applied for it and
+"""Applies automation/infra/, runs the cases in scenarios.yaml one after
+another (every case in the order listed, or the ones --test-case-name names in
+the order given), each on its own infra/clusters/ cluster applied for it and
 destroyed after it, and destroys the infra again. With --dev-infra, uses the
 automation/infra and the cluster of that dev infra instead, which outlive the
 execution."""
