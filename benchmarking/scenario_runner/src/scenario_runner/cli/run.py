@@ -32,7 +32,7 @@ from typing import NoReturn
 
 import yaml
 
-from .. import RUNNER_DIR, benchmark, dev_infra, substrate
+from .. import LOCAL_DATA_DIR, benchmark, dev_infra, substrate
 from ..cases import SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases
 from ..cluster import Cluster
 from ..deployment import ORCHESTRATOR_DIR, Deployment, cluster_deployment, files_under, tf_vars
@@ -43,7 +43,7 @@ from ..process import failure
 # terraform/ in its bucket. An execution's are in <name>/: a folder for
 # scenario_runner/infra, orchestrator/, and one per case, tests/<case>/, each
 # with its tfstates/ when the backend is local and its tf-data/ with either.
-LOCAL_TERRAFORM_DIR = RUNNER_DIR / "local-runs" / "terraform"
+LOCAL_TERRAFORM_DIR = LOCAL_DATA_DIR / "runs" / "terraform"
 
 
 def fail(message: str) -> NoReturn:
@@ -158,8 +158,9 @@ def check_requirements(cases: dict[str, dict], cloud_build: bool) -> None:
 def deployment_files(args: argparse.Namespace, *key: str) -> dict:
     """Where an infra of this execution keeps its files: its state under
     <state prefix>/<name>/<key> in GCS, or in
-    local-runs/terraform/<name>/<key>/tfstates/ with the local backend, and its
-    TF_DATA_DIR in local-runs/terraform/<name>/<key>/tf-data/ with either."""
+    .local-data/runs/terraform/<name>/<key>/tfstates/ with the local backend,
+    and its TF_DATA_DIR in .local-data/runs/terraform/<name>/<key>/tf-data/
+    with either."""
     backend_config = None
     if args.state_backend == "gcs":
         backend_config = [f"bucket={args.state_bucket}", f"prefix={'/'.join([args.state_prefix, args.name, *key])}"]

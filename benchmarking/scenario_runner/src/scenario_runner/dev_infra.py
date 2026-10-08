@@ -14,7 +14,7 @@
 
 """Applies, reads and destroys the dev infras: scenario_runner/infra and a
 case's cluster, which the orchestrator's --dev-infra creates and keeps, each
-with every Terraform file of it in .dev-infra/terraform/<name>/<infra>/."""
+with every Terraform file of it in .local-data/dev-infra/terraform/<name>/<infra>/."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ import re
 import shutil
 from pathlib import Path
 
-from . import RUNNER_DIR, substrate
+from . import LOCAL_DATA_DIR, substrate
 from .cluster import Cluster
 from .deployment import (
     ORCHESTRATOR_DIR,
@@ -36,7 +36,7 @@ from .deployment import (
     tf_vars,
 )
 
-DEV_INFRA_DIR = RUNNER_DIR / ".dev-infra" / "terraform"
+DEV_INFRA_DIR = LOCAL_DATA_DIR / "dev-infra" / "terraform"
 # What a dev infra is, written before it is applied so that one whose apply
 # failed can be applied again or destroyed.
 RECORD_FILE = "dev-infra.json"

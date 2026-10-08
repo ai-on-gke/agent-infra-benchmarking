@@ -20,3 +20,5 @@ from pathlib import Path
 RUNNER_DIR = Path(__file__).resolve().parent.parent.parent
 # scenarios.yaml and the Terraform configs its cases run on.
 SCENARIOS_DIR = RUNNER_DIR.parent / "scenarios"
+# The runs' and dev infras' local files, gitignored.
+LOCAL_DATA_DIR = RUNNER_DIR / ".local-data"
