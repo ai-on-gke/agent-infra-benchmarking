@@ -22,7 +22,6 @@ execution."""
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 import signal
 import subprocess
@@ -33,7 +32,7 @@ from typing import NoReturn
 
 import yaml
 
-from . import AUTOMATION_DIR, dev_infra, substrate
+from . import AUTOMATION_DIR, benchmark, dev_infra, substrate
 from .cases import SKIP_SUBSTRATE_INSTALL, TESTS_FILE, load_cases
 from .deployment import ORCHESTRATOR_DIR, Deployment, cluster
 from .log import log
@@ -110,12 +109,11 @@ def failure(exc: subprocess.CalledProcessError) -> str:
     return f"{' '.join(exc.cmd)} failed"
 
 
-def run_case(name: str, case: dict) -> None:
+def run_case(name: str, case: dict, run_id: str, outputs: dict, kubeconfig: Path) -> None:
     if case["type"] == "noop":
         log(f"{name}: noop, nothing to run")
-    else:
-        # Running the case is a no-op for now.
-        log(f"{name}: {json.dumps(case)}")
+        return
+    benchmark.run(name, case, run_id, outputs, kubeconfig)
 
 
 def main() -> None:
@@ -184,12 +182,15 @@ def main() -> None:
         missing = substrate.missing_requirements()
         if missing:
             fail(f"installing substrate requires {', '.join(missing)}")
+    if not all(cases[name]["type"] == "noop" for name in names):
+        missing = benchmark.missing_requirements()
+        if missing:
+            fail(f"running the benchmark requires {', '.join(missing)}")
 
     # Cloud Run stops a task that outlives its timeout with SIGTERM; exiting
     # on it, rather than dying, still destroys the infra.
     signal.signal(signal.SIGTERM, lambda *_: fail("stopped by SIGTERM"))
 
-    json_output = args.terraform_output == "json"
     tf_vars = [
         f"-var=project_id={args.project_id}",
         f"-var=region={args.region}",
@@ -198,10 +199,11 @@ def main() -> None:
     try:
         if args.dev_infra:
             record = prepare_dev_infra(args, cases, names)
+            outputs = dev_infra.cluster_outputs(args.dev_infra)
             for name in names:
                 if not cases[name].get(SKIP_SUBSTRATE_INSTALL):
-                    record = dev_infra.install_substrate(record, json_output)
-                run_case(name, cases[name])
+                    record = dev_infra.install_substrate(record)
+                run_case(name, cases[name], args.name, outputs, dev_infra.kubeconfig(args.dev_infra))
             return
         orchestrator = Deployment(dir=ORCHESTRATOR_DIR, plan_args=tf_vars, **deployment_files(args, "orchestrator"))
         with orchestrator.applied():
@@ -209,9 +211,11 @@ def main() -> None:
                 files = deployment_files(args, "tests", name)
                 case_cluster = cluster(cases[name]["infra"]["cluster"], tf_vars=tf_vars, **files)
                 with case_cluster.applied():
+                    outputs = case_cluster.outputs()
+                    kubeconfig = files["data"] / "kubeconfig"
                     if not cases[name].get(SKIP_SUBSTRATE_INSTALL):
-                        substrate.install(case_cluster.outputs(), files["data"] / "kubeconfig")
-                    run_case(name, cases[name])
+                        substrate.install(outputs, kubeconfig)
+                    run_case(name, cases[name], args.name, outputs, kubeconfig)
     except subprocess.CalledProcessError as exc:
         fail(failure(exc))
 

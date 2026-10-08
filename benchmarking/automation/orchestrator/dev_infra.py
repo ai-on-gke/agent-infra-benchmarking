@@ -65,6 +65,10 @@ def state_file(name: str, infra: str) -> Path:
     return DEV_INFRA_DIR / name / infra / "tfstates" / "terraform.tfstate"
 
 
+def read_state(path: Path) -> dict:
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
 def deployments(record: dict, json_output: bool = False) -> dict[str, Deployment]:
     name = record["name"]
     tf_vars = [
@@ -102,15 +106,20 @@ def apply(record: dict, json_output: bool = False) -> dict:
     return record
 
 
-def install_substrate(record: dict, json_output: bool = False) -> dict:
+def cluster_outputs(name: str) -> dict:
+    return {key: out["value"] for key, out in read_state(state_file(name, "cluster")).get("outputs", {}).items()}
+
+
+def kubeconfig(name: str) -> Path:
+    return DEV_INFRA_DIR / name / "cluster" / "tf-data" / "kubeconfig"
+
+
+def install_substrate(record: dict) -> dict:
     """Installs substrate on the dev infra's cluster unless its record says it
     is, and returns its record."""
     if record.get("substrate_installed"):
         return record
-    deployment = deployments(record, json_output)["cluster"]
-    with deployment.initialized():
-        outputs = deployment.outputs()
-    substrate.install(outputs, deployment.data / "kubeconfig")
+    substrate.install(cluster_outputs(record["name"]), kubeconfig(record["name"]))
     record = {**record, "substrate_installed": True}
     write_record(record)
     return record
@@ -127,10 +136,6 @@ def destroy(record: dict, json_output: bool = False) -> None:
 def fail(message: str) -> NoReturn:
     log(f"dev-infra: {message}", "ERROR")
     sys.exit(1)
-
-
-def read_state(path: Path) -> dict:
-    return json.loads(path.read_text()) if path.exists() else {}
 
 
 def resource_count(path: Path) -> int:

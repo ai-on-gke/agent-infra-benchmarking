@@ -31,7 +31,9 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
-if [[ -f .env.sh ]]; then
+# BENCHMARK_ENV_PROVIDED: the caller exported the settings itself, e.g. the
+# orchestrator for a cluster other than the one .env.sh reads.
+if [[ -f .env.sh && -z "${BENCHMARK_ENV_PROVIDED:-}" ]]; then
   source .env.sh
 fi
 
