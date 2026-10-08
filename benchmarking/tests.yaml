@@ -130,3 +130,65 @@ cases:
     workload-timeout: 120s
     resume-mode: explicit
     max-failure-ratio: 0.01
+
+  openclaw-baseline:
+    suspend-disabled: true
+    repeats: 1
+    worker-count: 100
+    users: 100
+    spawn-rate: 10
+    duration: 3m
+    sandbox-class: gvisor
+    workload-name: openclaw
+    workload-template: openclaw
+    workload-timeout: 120s
+    resume-mode: explicit
+    max-failure-ratio: 0.01
+
+  openclaw-utilization-10:
+    suspend-disabled: false
+    repeats: 1
+    min-wait: 110000ms
+    max-wait: 110000ms
+    worker-count: 100
+    users: 100
+    spawn-rate: 10
+    duration: 3m
+    sandbox-class: gvisor
+    workload-name: openclaw
+    workload-template: openclaw
+    workload-timeout: 120s
+    resume-mode: explicit
+    max-failure-ratio: 0.01
+
+  openclaw-utilization-25:
+    suspend-disabled: false
+    repeats: 1
+    min-wait: 110000ms
+    max-wait: 110000ms
+    worker-count: 100
+    users: 250
+    spawn-rate: 3
+    duration: 10m
+    sandbox-class: gvisor
+    workload-name: openclaw
+    workload-template: openclaw
+    workload-timeout: 120s
+    resume-mode: explicit
+    max-failure-ratio: 0.01
+
+  openclaw-utilization-50:
+    suspend-disabled: false
+    repeats: 1
+    min-wait: 110000ms
+    max-wait: 110000ms
+    worker-count: 100
+    users: 500
+    spawn-rate: 3
+    duration: 10m
+    sandbox-class: gvisor
+    workload-name: openclaw
+    workload-template: openclaw
+    workload-timeout: 120s
+    resume-mode: explicit
+    max-failure-ratio: 0.01

@@ -92,7 +92,7 @@ const (
 	// the teardown. Well under the budget the caller allows for the whole
 	// teardown, so that the actors already created are still removed when an
 	// iteration is wedged rather than merely slow.
-	drainTimeout = 15 * time.Second
+	drainTimeout = 35 * time.Second
 
 	// How long a VU refused by the teardown waits before boomer calls it again.
 	// Boomer keeps the VUs looping until the teardown returns, and without a
