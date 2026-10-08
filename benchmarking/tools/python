@@ -16,7 +16,7 @@
 
 # Runs python with every argument, in a venv beside this script that has
 # scenario_runner/requirements.txt installed, the scenario_runner package
-# importable:
+# importable, and benchmarking/.env.sh sourced if there is one:
 #
 #   ./benchmarking/tools/python -m scenario_runner.cli.dev_infra --help
 
@@ -26,6 +26,12 @@ TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNNER_DIR="$(dirname "${TOOLS_DIR}")/scenario_runner"
 VENV="${TOOLS_DIR}/venv_run"
 REQUIREMENTS="${RUNNER_DIR}/requirements.txt"
+ENV_FILE="$(dirname "${TOOLS_DIR}")/.env.sh"
+
+if [[ -f "${ENV_FILE}" ]]; then
+  # shellcheck source=/dev/null
+  source "${ENV_FILE}"
+fi
 
 # Made afresh once requirements.txt changes, against the copy kept in the venv,
 # which is written last so an install cut short is redone.

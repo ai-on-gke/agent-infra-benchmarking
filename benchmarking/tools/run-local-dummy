@@ -16,8 +16,8 @@
 
 # Runs scenarios.yaml's dummy case with tools/run-local, passing every other
 # option on unchanged. Its cluster is scenarios/infra/clusters/dummy, which
-# creates nothing in GCP; scenario_runner/infra still does, so --project-id is
-# still needed:
+# creates nothing in GCP; scenario_runner/infra still does, so --project-id, or
+# PROJECT_ID in benchmarking/.env.sh, is still needed:
 #
 #   ./benchmarking/tools/run-local-dummy --project-id my-project
 

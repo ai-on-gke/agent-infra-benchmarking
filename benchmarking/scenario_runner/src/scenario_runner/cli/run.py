@@ -22,6 +22,7 @@ the execution."""
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import signal
 import subprocess
@@ -60,7 +61,12 @@ def parse_args() -> argparse.Namespace:
         metavar="NAME",
         help="a case to run; repeat it for more. Default: every case",
     )
-    p.add_argument("--project-id", required=True, help="GCP project to create the infra in")
+    p.add_argument(
+        "--project-id",
+        default=os.environ.get("PROJECT_ID"),
+        required="PROJECT_ID" not in os.environ,
+        help="GCP project to create the infra in. Default: $PROJECT_ID, which benchmarking/.env.sh can set",
+    )
     p.add_argument("--region", default="us-central1", help="default: %(default)s")
     p.add_argument(
         "--state-backend",

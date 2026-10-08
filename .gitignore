@@ -8,6 +8,9 @@
 /.venv/
 /benchmark-charts/build/
 
+# Local settings benchmarking/tools source, from .env.sh.example.
+/benchmarking/.env.sh
+
 # The venv benchmarking/tools/run makes.
 /benchmarking/tools/venv_run/
 
