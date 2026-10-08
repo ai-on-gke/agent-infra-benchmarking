@@ -22,12 +22,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import signal
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NoReturn
 
 import yaml
 
@@ -36,6 +38,26 @@ TESTS_FILE = RUNNER_DIR.parent / "tests.yaml"
 INFRA_DIR = RUNNER_DIR / "infra"
 # Each execution's state is under STATE_PREFIX/<name> in the state bucket.
 STATE_PREFIX = "automation/runner"
+# Relative to INFRA_DIR; in .terraform/, which git and the image leave out.
+PLAN_FILE = ".terraform/run.tfplan"
+# Set by Cloud Run in a job's container.
+ON_CLOUD_RUN = "CLOUD_RUN_JOB" in os.environ
+# terraform -json's @level, as a Cloud Logging severity.
+SEVERITIES = {"trace": "DEBUG", "debug": "DEBUG", "info": "INFO", "warn": "WARNING", "error": "ERROR"}
+
+
+def log(message: str, severity: str = "INFO") -> None:
+    # Cloud Run logs each line as an entry of its own, except a line of JSON,
+    # which is one entry however many lines its message has.
+    if ON_CLOUD_RUN:
+        print(json.dumps({"message": message, "severity": severity}), flush=True)
+    else:
+        print(message, flush=True)
+
+
+def fail(message: str) -> NoReturn:
+    log(f"run_tests: {message}", "ERROR")
+    sys.exit(1)
 
 
 def load_cases(tests_file: Path) -> dict[str, dict]:
@@ -49,14 +71,93 @@ def load_cases(tests_file: Path) -> dict[str, dict]:
     return cases
 
 
-def terraform(*args: str) -> None:
-    subprocess.run(["terraform", f"-chdir={INFRA_DIR}", *args], check=True)
+def format_diagnostic(diag: dict) -> str:
+    """Lays out a terraform -json diagnostic as terraform's text output does."""
+    lines = [f"{diag['severity'].capitalize()}: {diag['summary']}", ""]
+    if diag.get("address"):
+        lines.append(f"  with {diag['address']},")
+    rng, snippet = diag.get("range"), diag.get("snippet")
+    if rng:
+        context = f", in {snippet['context']}" if snippet and snippet.get("context") else ""
+        lines.append(f"  on {rng['filename']} line {rng['start']['line']}{context}:")
+    if snippet:
+        lines.append(f"  {snippet['start_line']}: {snippet['code']}")
+        lines += [f"    {v['traversal']} {v['statement']}" for v in snippet.get("values", [])]
+    if diag.get("detail"):
+        lines += ["", diag["detail"]]
+    return "\n".join(lines).rstrip()
+
+
+def log_terraform_event(line: str) -> None:
+    try:
+        event = json.loads(line)
+    except ValueError:
+        event = None
+    if not isinstance(event, dict):
+        # Whatever terraform writes outside -json, e.g. a crash.
+        log(line)
+        return
+    kind = event.get("type")
+    if kind == "planned_change":
+        # The plan's own entry, from terraform show, has each change in full.
+        return
+    message = event.get("@message", line)
+    if "diagnostic" in event:
+        message = format_diagnostic(event["diagnostic"])
+    elif kind == "outputs":
+        values = [
+            f"{name} = {'(sensitive value)' if out.get('sensitive') else json.dumps(out['value'])}"
+            for name, out in event.get("outputs", {}).items()
+            if "value" in out
+        ]
+        if not values:
+            # Before apply, only how many there are.
+            return
+        message = "\n".join(["Outputs:", *values])
+    log(message, SEVERITIES.get(event.get("@level"), "DEFAULT"))
+
+
+def terraform(command: str, *args: str) -> None:
+    """Runs a terraform command quick enough to wait for, and logs all its
+    output as one entry."""
+    proc = subprocess.run(
+        ["terraform", f"-chdir={INFRA_DIR}", command, "-no-color", *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    log(proc.stdout.strip(), "ERROR" if proc.returncode else "INFO")
+    proc.check_returncode()
+
+
+def terraform_json(command: str, *args: str) -> None:
+    """Runs a terraform command with -json and logs each of its messages, an
+    error with all its detail, as one entry as it comes."""
+    cmd = ["terraform", f"-chdir={INFRA_DIR}", command, "-json", *args]
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as proc:
+        try:
+            for line in proc.stdout:
+                if line.strip():
+                    log_terraform_event(line.rstrip("\n"))
+        except BaseException:
+            # As subprocess.run does, e.g. on SIGTERM.
+            proc.kill()
+            raise
+    if proc.returncode:
+        raise subprocess.CalledProcessError(proc.returncode, cmd)
+
+
+def deploy(*plan_args: str) -> None:
+    """Plans, logs the whole plan as terraform shows it, which -json leaves
+    out, and applies that plan."""
+    terraform_json("plan", "-input=false", f"-out={PLAN_FILE}", *plan_args)
+    terraform("show", PLAN_FILE)
+    terraform_json("apply", "-input=false", PLAN_FILE)
 
 
 def run_case(name: str, case: dict) -> None:
     # A no-op for now.
-    # Flushed to keep it in order with terraform's output when piped.
-    print(f"{name}: {json.dumps(case)}", flush=True)
+    log(f"{name}: {json.dumps(case)}")
 
 
 def main() -> None:
@@ -81,20 +182,20 @@ def main() -> None:
     try:
         cases = load_cases(args.tests_file)
     except (OSError, ValueError, yaml.YAMLError) as exc:
-        sys.exit(f"run_tests: {exc}")
+        fail(str(exc))
 
     # dict.fromkeys drops repeated names, keeping the first.
     names = list(dict.fromkeys(args.test_case_name or cases))
     unknown = [name for name in names if name not in cases]
     if unknown:
-        sys.exit(f"run_tests: no case {', '.join(unknown)} in {args.tests_file}; it has {', '.join(cases)}")
+        fail(f"no case {', '.join(unknown)} in {args.tests_file}; it has {', '.join(cases)}")
 
     if not shutil.which("terraform"):
-        sys.exit("run_tests: terraform is required to apply the infra")
+        fail("terraform is required to apply the infra")
 
     # Cloud Run stops a task that outlives its timeout with SIGTERM; exiting
     # on it, rather than dying, still destroys the infra.
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit("run_tests: stopped by SIGTERM"))
+    signal.signal(signal.SIGTERM, lambda *_: fail("stopped by SIGTERM"))
 
     tf_vars = [
         f"-var=project_id={args.project_id}",
@@ -111,14 +212,14 @@ def main() -> None:
             f"-backend-config=prefix={STATE_PREFIX}/{args.name}",
         )
         try:
-            terraform("apply", "-input=false", "-auto-approve", *tf_vars)
+            deploy(*tf_vars)
             for name in names:
                 run_case(name, cases[name])
         finally:
             # Also after a failed apply, which may have created part of the infra.
-            terraform("destroy", "-input=false", "-auto-approve", *tf_vars)
+            deploy("-destroy", *tf_vars)
     except subprocess.CalledProcessError as exc:
-        sys.exit(f"run_tests: terraform {exc.cmd[2]} failed in {INFRA_DIR}")
+        fail(f"terraform {exc.cmd[2]} failed in {INFRA_DIR}")
 
 
 if __name__ == "__main__":
