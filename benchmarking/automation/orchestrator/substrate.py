@@ -19,10 +19,11 @@ from the cluster's Terraform outputs rather than from .env.sh."""
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
 
-from . import AUTOMATION_DIR, terraform
+from . import AUTOMATION_DIR
+from .cluster import Cluster
 from .log import log
+from .process import stream
 
 SUBSTRATE_DIR = AUTOMATION_DIR.parent.parent / "dependency-repos" / "substrate"
 
@@ -34,25 +35,12 @@ def missing_requirements() -> list[str]:
     return missing
 
 
-def install(outputs: dict, kubeconfig: Path) -> None:
-    """Installs substrate on the cluster of a common config's outputs, its
-    credentials going in kubeconfig."""
+def install(cluster: Cluster) -> None:
+    # With KUBECTL_CONTEXT empty, the installer runs get-credentials itself.
     env = {
+        **cluster.env(),
         # The developer's .ate-dev-env.sh names their own cluster.
         "NO_DEV_ENV": "1",
-        "PROJECT_ID": outputs["project_id"],
-        "CLUSTER_NAME": outputs["cluster_name"],
-        # As .terraform-env.sh has it: the cluster is regional, in the region.
-        "CLUSTER_LOCATION": outputs["region"],
-        "BUCKET_NAME": outputs["bucket_name"],
-        "KO_DOCKER_REPO": outputs["artifact_registry_docker_repo"],
-        "KO_DEFAULTPLATFORMS": "linux/amd64",
-        # Empty, so the installer runs get-credentials, which writes the
-        # cluster's context into kubeconfig rather than the developer's own.
-        "KUBECTL_CONTEXT": "",
-        "KUBECONFIG": str(kubeconfig),
     }
-    log(f"substrate: installing on cluster {outputs['cluster_name']}")
-    terraform.stream(
-        [str(SUBSTRATE_DIR / "hack" / "install-ate.sh"), "--deploy-ate-system"], log, env=env, cwd=SUBSTRATE_DIR
-    )
+    log(f"substrate: installing on cluster {cluster.name}")
+    stream([str(SUBSTRATE_DIR / "hack" / "install-ate.sh"), "--deploy-ate-system"], env=env, cwd=SUBSTRATE_DIR)

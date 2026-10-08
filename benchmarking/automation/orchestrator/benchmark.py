@@ -20,10 +20,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from pathlib import Path
 
-from . import AUTOMATION_DIR, terraform
+from . import AUTOMATION_DIR
+from .cluster import Cluster
 from .log import log
+from .process import stream
 
 ROOT = AUTOMATION_DIR.parent.parent
 RUN_BENCHMARK = ROOT / "benchmarking" / "run_benchmark.sh"
@@ -37,46 +38,33 @@ def missing_requirements() -> list[str]:
     return [tool for tool in tools if not shutil.which(tool)]
 
 
-def get_credentials(outputs: dict, kubeconfig: Path) -> None:
-    terraform.stream(
+def get_credentials(cluster: Cluster) -> None:
+    stream(
         [
             "gcloud",
             "container",
             "clusters",
             "get-credentials",
-            outputs["cluster_name"],
-            # As .terraform-env.sh has it: the cluster is regional, in the region.
-            f"--location={outputs['region']}",
-            f"--project={outputs['project_id']}",
+            cluster.name,
+            f"--location={cluster.location}",
+            f"--project={cluster.outputs['project_id']}",
         ],
-        log,
-        env={"KUBECONFIG": str(kubeconfig)},
+        env={"KUBECONFIG": str(cluster.kubeconfig)},
     )
 
 
-def run(name: str, case: dict, run_id: str, outputs: dict, kubeconfig: Path) -> None:
-    """Runs the case on the cluster of a common config's outputs, reaching it
-    with kubeconfig."""
-    get_credentials(outputs, kubeconfig)
-    # What .env.sh would export for the cluster.
+def run(name: str, case: dict, run_id: str, cluster: Cluster) -> None:
+    get_credentials(cluster)
     env = {
+        **cluster.env(),
         "BENCHMARK_ENV_PROVIDED": "1",
-        "PROJECT_ID": outputs["project_id"],
-        "GCE_REGION": outputs["region"],
-        "CLUSTER_LOCATION": outputs["region"],
-        "CLUSTER_NAME": outputs["cluster_name"],
-        "BUCKET_NAME": outputs["bucket_name"],
+        "GCE_REGION": cluster.outputs["region"],
         # The cluster's own repository, which its nodes are granted to pull from.
-        "DOCKER_REPO": outputs["artifact_registry_docker_repo"],
-        "KO_DOCKER_REPO": outputs["artifact_registry_docker_repo"],
-        "KO_DEFAULTPLATFORMS": "linux/amd64",
-        "KUBECTL_CONTEXT": "",
-        "KUBECONFIG": str(kubeconfig),
+        "DOCKER_REPO": cluster.outputs["artifact_registry_docker_repo"],
     }
-    log(f"{name}: running as {run_id} on cluster {outputs['cluster_name']}")
-    terraform.stream(
+    log(f"{name}: running as {run_id} on cluster {cluster.name}")
+    stream(
         [str(RUN_BENCHMARK), "--test-case-name", name, "--test-case", json.dumps(case), "--run-id", run_id],
-        log,
         env=env,
         cwd=ROOT,
     )

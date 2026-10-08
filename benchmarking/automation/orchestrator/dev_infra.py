@@ -27,9 +27,11 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
-from . import AUTOMATION_DIR, substrate
-from .deployment import ORCHESTRATOR_DIR, Deployment, cluster
+from . import AUTOMATION_DIR, substrate, terraform
+from .cluster import Cluster
+from .deployment import ORCHESTRATOR_DIR, Deployment, cluster_deployment, tf_vars
 from .log import log
+from .process import failure
 
 DEV_INFRA_DIR = AUTOMATION_DIR / ".dev-infra" / "terraform"
 # What a dev infra is, written before it is applied so that one whose apply
@@ -65,20 +67,20 @@ def state_file(name: str, infra: str) -> Path:
     return DEV_INFRA_DIR / name / infra / "tfstates" / "terraform.tfstate"
 
 
+def data_dir(name: str, infra: str) -> Path:
+    return DEV_INFRA_DIR / name / infra / "tf-data"
+
+
 def read_state(path: Path) -> dict:
     return json.loads(path.read_text()) if path.exists() else {}
 
 
 def deployments(record: dict, json_output: bool = False) -> dict[str, Deployment]:
     name = record["name"]
-    tf_vars = [
-        f"-var=project_id={record['project_id']}",
-        f"-var=region={record['region']}",
-        f"-var=default_resource_name={name}",
-    ]
+    variables = tf_vars(record["project_id"], record["region"], name)
 
     def files(infra: str) -> dict:
-        data = DEV_INFRA_DIR / name / infra / "tf-data"
+        data = data_dir(name, infra)
         data.mkdir(parents=True, exist_ok=True)
         return {
             "data": data,
@@ -89,8 +91,8 @@ def deployments(record: dict, json_output: bool = False) -> dict[str, Deployment
         }
 
     return {
-        "orchestrator": Deployment(dir=ORCHESTRATOR_DIR, plan_args=tf_vars, **files("orchestrator")),
-        "cluster": cluster(record["cluster"], tf_vars=tf_vars, **files("cluster")),
+        "orchestrator": Deployment(dir=ORCHESTRATOR_DIR, plan_args=variables, **files("orchestrator")),
+        "cluster": cluster_deployment(record["cluster"], tf_vars=variables, **files("cluster")),
     }
 
 
@@ -106,12 +108,10 @@ def apply(record: dict, json_output: bool = False) -> dict:
     return record
 
 
-def cluster_outputs(name: str) -> dict:
-    return {key: out["value"] for key, out in read_state(state_file(name, "cluster")).get("outputs", {}).items()}
-
-
-def kubeconfig(name: str) -> Path:
-    return DEV_INFRA_DIR / name / "cluster" / "tf-data" / "kubeconfig"
+def cluster(name: str) -> Cluster:
+    """The dev infra's cluster, its outputs read off its state."""
+    outputs = read_state(state_file(name, "cluster")).get("outputs", {})
+    return Cluster({key: out["value"] for key, out in outputs.items()}, data_dir(name, "cluster") / "kubeconfig")
 
 
 def install_substrate(record: dict) -> dict:
@@ -119,7 +119,7 @@ def install_substrate(record: dict) -> dict:
     is, and returns its record."""
     if record.get("substrate_installed"):
         return record
-    substrate.install(cluster_outputs(record["name"]), kubeconfig(record["name"]))
+    substrate.install(cluster(record["name"]))
     record = {**record, "substrate_installed": True}
     write_record(record)
     return record
@@ -152,7 +152,7 @@ def print_outputs(name: str) -> None:
             continue
         print(f"{infra}:")
         for key, out in read_state(path).get("outputs", {}).items():
-            print(f"  {key} = {'(sensitive value)' if out.get('sensitive') else json.dumps(out['value'])}")
+            print(f"  {terraform.format_output(key, out)}")
 
 
 def print_list() -> None:
@@ -202,8 +202,7 @@ def main() -> None:
     try:
         destroy(record, args.terraform_output == "json")
     except subprocess.CalledProcessError as exc:
-        # cmd[1] is -chdir=<the config's directory>.
-        fail(f"terraform {exc.cmd[2]} failed in {exc.cmd[1].removeprefix('-chdir=')}")
+        fail(failure(exc))
 
 
 if __name__ == "__main__":

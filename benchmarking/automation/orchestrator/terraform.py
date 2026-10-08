@@ -22,10 +22,10 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Callable
 
 from . import AUTOMATION_DIR
 from .log import log
+from .process import environ, stream
 
 # Every TF_DATA_DIR the orchestrator uses starts empty, so its providers come
 # from here rather than from a download each.
@@ -52,6 +52,11 @@ def format_diagnostic(diag: dict) -> str:
     return "\n".join(lines).rstrip()
 
 
+def format_output(name: str, out: dict) -> str:
+    """An output as terraform output shows it, a sensitive one hidden."""
+    return f"{name} = {'(sensitive value)' if out.get('sensitive') else json.dumps(out['value'])}"
+
+
 def log_event(line: str) -> None:
     if not line.strip():
         return
@@ -71,11 +76,7 @@ def log_event(line: str) -> None:
     if "diagnostic" in event:
         message = format_diagnostic(event["diagnostic"])
     elif kind == "outputs":
-        values = [
-            f"{name} = {'(sensitive value)' if out.get('sensitive') else json.dumps(out['value'])}"
-            for name, out in event.get("outputs", {}).items()
-            if "value" in out
-        ]
+        values = [format_output(name, out) for name, out in event.get("outputs", {}).items() if "value" in out]
         if not values:
             # Before apply, only how many there are.
             return
@@ -92,11 +93,6 @@ def backend_block(backend: str) -> str:
     return f'terraform {{\n  backend "{backend}" {{}}\n}}\n'
 
 
-def environ(env: dict[str, str] | None) -> dict[str, str] | None:
-    """The process's environment with env added, for subprocess."""
-    return {**os.environ, **env} if env else None
-
-
 def run(chdir: Path, command: str, *args: str, env: dict[str, str] | None = None) -> None:
     """Runs a terraform command quick enough to wait for, and logs all its
     output as one entry."""
@@ -109,25 +105,6 @@ def run(chdir: Path, command: str, *args: str, env: dict[str, str] | None = None
     )
     log(proc.stdout.strip(), "ERROR" if proc.returncode else "INFO")
     proc.check_returncode()
-
-
-def stream(
-    cmd: list[str], log_line: Callable[[str], None], env: dict[str, str] | None = None, cwd: Path | None = None
-) -> None:
-    """Runs a command and passes each line of its output to log_line as it
-    comes."""
-    with subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=environ(env), cwd=cwd
-    ) as proc:
-        try:
-            for line in proc.stdout:
-                log_line(line.rstrip("\n"))
-        except BaseException:
-            # As subprocess.run does, e.g. on SIGTERM.
-            proc.kill()
-            raise
-    if proc.returncode:
-        raise subprocess.CalledProcessError(proc.returncode, cmd)
 
 
 def output(chdir: Path, env: dict[str, str] | None = None) -> dict:
@@ -144,13 +121,13 @@ def output(chdir: Path, env: dict[str, str] | None = None) -> dict:
 def run_text(chdir: Path, command: str, *args: str, env: dict[str, str] | None = None) -> None:
     """Runs a terraform command and logs each line of its output as one entry
     as it comes."""
-    stream(["terraform", f"-chdir={chdir}", command, "-no-color", *args], log, env)
+    stream(["terraform", f"-chdir={chdir}", command, "-no-color", *args], env=env)
 
 
 def run_json(chdir: Path, command: str, *args: str, env: dict[str, str] | None = None) -> None:
     """Runs a terraform command with -json and logs each of its messages, an
     error with all its detail, as one entry as it comes."""
-    stream(["terraform", f"-chdir={chdir}", command, "-json", *args], log_event, env)
+    stream(["terraform", f"-chdir={chdir}", command, "-json", *args], log_event, env=env)
 
 
 def deploy(

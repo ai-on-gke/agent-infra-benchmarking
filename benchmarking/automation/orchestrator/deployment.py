@@ -29,6 +29,11 @@ from .cases import CLUSTERS_DIR
 ORCHESTRATOR_DIR = AUTOMATION_DIR / "infra" / "orchestrator"
 
 
+def tf_vars(project_id: str, region: str, name: str) -> list[str]:
+    """The variables every config takes, name naming its resources."""
+    return [f"-var=project_id={project_id}", f"-var=region={region}", f"-var=default_resource_name={name}"]
+
+
 @dataclass
 class Deployment:
     """A Terraform config, applied with the state backend_config points to."""
@@ -96,7 +101,7 @@ class Deployment:
                 self.deploy("-destroy")
 
 
-def cluster(spec: dict, data: Path, tf_vars: list[str], **deployment) -> Deployment:
+def cluster_deployment(spec: dict, data: Path, tf_vars: list[str], **deployment) -> Deployment:
     """The config a case's infra.cluster names, planned with its tfvars,
     tfvars_inline and variables, then tf_vars, later ones winning. The inline
     tfvars go in data."""
