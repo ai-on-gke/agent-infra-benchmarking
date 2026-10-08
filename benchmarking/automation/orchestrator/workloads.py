@@ -76,10 +76,6 @@ def check_templates(names: list[str]) -> None:
         raise ValueError(f"no workload template {', '.join(unknown)}; there are {', '.join(templates())}")
 
 
-def kubectl(cluster: Cluster, *args: str, namespace: str = NAMESPACE) -> list[str]:
-    return ["kubectl", *args, f"--kubeconfig={cluster.kubeconfig}", f"--namespace={namespace}"]
-
-
 @contextmanager
 def kubectl_ate(cluster: Cluster) -> Iterator[KubectlAte]:
     """Builds kubectl-ate once, as it runs on every poll, and yields what makes
@@ -98,8 +94,7 @@ def pinned_image(cluster: Cluster, name: str) -> str:
 def otlp_endpoint(cluster: Cluster) -> str:
     """The endpoint the control plane sends its telemetry to, so the actors
     follow it on any kind of cluster."""
-    get = kubectl(
-        cluster,
+    get = cluster.kubectl(
         "get",
         "configmap",
         "ate-otel-config",
@@ -124,22 +119,25 @@ def check_worker_pool(cluster: Cluster, sandbox_class: str, timeout: int) -> Non
     """The golden snapshots are taken on the pool's workers."""
     try:
         pool_class = output(
-            kubectl(cluster, "get", "workerpool", worker_pool.NAME, "-o=jsonpath={.spec.sandboxClass}")
+            cluster.kubectl(
+                "get", "workerpool", worker_pool.NAME, "-o=jsonpath={.spec.sandboxClass}", namespace=NAMESPACE
+            )
         ).strip()
     except subprocess.CalledProcessError:
         raise WorkloadError(f"no {worker_pool.NAME} WorkerPool in {NAMESPACE}") from None
     if pool_class != sandbox_class:
         raise WorkloadError(f"the {worker_pool.NAME} WorkerPool is {pool_class}, not {sandbox_class}")
-    stream(kubectl(cluster, "rollout", "status", f"deployment/{worker_pool.NAME}", f"--timeout={timeout}s"))
+    rollout = ["rollout", "status", f"deployment/{worker_pool.NAME}", f"--timeout={timeout}s"]
+    stream(cluster.kubectl(*rollout, namespace=NAMESPACE))
 
 
 def deploy_mock_llm(cluster: Cluster, timeout: int) -> None:
     log("workloads: deploying mock-llm")
     image = pinned_image(cluster, MOCK_LLM_IMAGE)
     manifest = Template((MANIFESTS_DIR / "mock-llm.yaml.tmpl").read_text()).substitute(IMAGE_WITH_DIGEST=image)
-    stream(kubectl(cluster, "apply", "-f", "-"), input=manifest)
+    stream(cluster.kubectl("apply", "-f", "-", namespace=NAMESPACE), input=manifest)
     log(f"workloads: waiting for mock-llm to be ready (timeout: {timeout}s)")
-    stream(kubectl(cluster, "rollout", "status", "deployment/mock-llm", f"--timeout={timeout}s"))
+    stream(cluster.kubectl("rollout", "status", "deployment/mock-llm", f"--timeout={timeout}s", namespace=NAMESPACE))
 
 
 def render_template(cluster: Cluster, name: str, sandbox_class: str, actor_memory: str, otlp: str) -> str:
@@ -259,6 +257,6 @@ def delete(cluster: Cluster, names: list[str] | None = None) -> None:
         if subprocess.run(ate("delete", "atespace", ATESPACE), capture_output=True).returncode:
             log(f"workloads: atespace {ATESPACE} not deleted; it may not exist or not be empty")
     try:
-        stream(kubectl(cluster, "delete", "deployment,service", "mock-llm", "--ignore-not-found"))
+        stream(cluster.kubectl("delete", "deployment,service", "mock-llm", "--ignore-not-found", namespace=NAMESPACE))
     except subprocess.CalledProcessError:
         log("workloads: mock-llm not deleted")

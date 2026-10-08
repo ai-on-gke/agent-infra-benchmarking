@@ -41,22 +41,15 @@ def missing_requirements() -> list[str]:
     return missing
 
 
-def kubectl_flags(cluster: Cluster) -> list[str]:
-    return [f"--kubeconfig={cluster.kubeconfig}", f"--namespace={NAMESPACE}"]
-
-
-def kubectl(cluster: Cluster, *args: str) -> None:
-    stream(["kubectl", *args, *kubectl_flags(cluster)])
-
-
 def delete(cluster: Cluster, timeout: int = DEFAULT_TIMEOUT_SECS) -> None:
     # By name rather than through the manifest, which also carries the namespace.
     log(f"worker pool: deleting any previous {NAME}")
-    kubectl(cluster, "delete", "workerpool", NAME, "--ignore-not-found", "--wait=true")
+    stream(cluster.kubectl("delete", "workerpool", NAME, "--ignore-not-found", "--wait=true", namespace=NAMESPACE))
     # The Deployment is garbage-collected after the pool; a new one of the same
     # name would race it.
+    wait = ["wait", "--for=delete", f"deployment/{NAME}", f"--timeout={timeout}s"]
     try:
-        kubectl(cluster, "wait", "--for=delete", f"deployment/{NAME}", f"--timeout={timeout}s")
+        stream(cluster.kubectl(*wait, namespace=NAMESPACE))
     except subprocess.CalledProcessError:
         pass
 
@@ -67,12 +60,12 @@ def deploy(cluster: Cluster, worker_count: int, sandbox_class: str, timeout: int
 
     log(f"worker pool: deploying {NAME} (replicas={worker_count}, sandbox_class={sandbox_class})")
     manifest = Template(MANIFEST.read_text()).substitute(WORKER_COUNT=worker_count, SANDBOX_CLASS=sandbox_class)
-    log(substrate.ko(cluster, "apply", "-f", "-", "--", *kubectl_flags(cluster), input=manifest).strip())
+    log(substrate.ko(cluster, "apply", "-f", "-", "--", *cluster.kubectl_flags(NAMESPACE), input=manifest).strip())
 
     log(f"worker pool: waiting for the workers to be ready (timeout: {timeout}s)")
-    kubectl(cluster, "wait", "--for=create", f"deployment/{NAME}", f"--timeout={timeout}s")
+    stream(cluster.kubectl("wait", "--for=create", f"deployment/{NAME}", f"--timeout={timeout}s", namespace=NAMESPACE))
     try:
-        kubectl(cluster, "rollout", "status", f"deployment/{NAME}", f"--timeout={timeout}s")
+        stream(cluster.kubectl("rollout", "status", f"deployment/{NAME}", f"--timeout={timeout}s", namespace=NAMESPACE))
     except subprocess.CalledProcessError:
         log(f"worker pool: {NAME} was not ready within {timeout}s. Pending pods and scheduling events:", "ERROR")
         for args in (
@@ -80,7 +73,7 @@ def deploy(cluster: Cluster, worker_count: int, sandbox_class: str, timeout: int
             ["get", "events", "--field-selector=reason=FailedScheduling", "--sort-by=.lastTimestamp"],
         ):
             try:
-                kubectl(cluster, *args)
+                stream(cluster.kubectl(*args, namespace=NAMESPACE))
             except subprocess.CalledProcessError:
                 pass
         raise

@@ -76,6 +76,14 @@ class Cluster:
             "KUBECONFIG": str(self.kubeconfig),
         }
 
+    def kubectl_flags(self, namespace: str | None = None) -> list[str]:
+        flags = [f"--kubeconfig={self.kubeconfig}"]
+        return flags + [f"--namespace={namespace}"] if namespace else flags
+
+    def kubectl(self, *args: str, namespace: str | None = None) -> list[str]:
+        """A kubectl command for the cluster, in namespace if given."""
+        return ["kubectl", *args, *self.kubectl_flags(namespace)]
+
     def get_credentials(self, log_line: Callable[[str], None] = log) -> None:
         """Writes the cluster's context into kubeconfig."""
         stream(

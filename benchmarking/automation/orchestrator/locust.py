@@ -114,14 +114,10 @@ def worker_args(case: dict) -> list[str]:
     return [f"--master-host={MASTER_HOST}", f"--user-class={USER_CLASS}", *flags(case["worker"])]
 
 
-def kubectl(cluster: Cluster, *args: str) -> list[str]:
-    return workloads.kubectl(cluster, *args, namespace=NAMESPACE)
-
-
 def apply(cluster: Cluster, manifest: str) -> None:
     # Without --namespace, which kubectl would refuse worker-job.yaml's
     # RoleBinding in ate-system over.
-    stream(["kubectl", "apply", "-f", "-", f"--kubeconfig={cluster.kubeconfig}"], input=manifest)
+    stream(cluster.kubectl("apply", "-f", "-"), input=manifest)
 
 
 def render(manifest: str, values: dict[str, str]) -> str:
@@ -131,7 +127,7 @@ def render(manifest: str, values: dict[str, str]) -> str:
 def job_status(cluster: Cluster, job: str) -> tuple[int, int]:
     """The Job's succeeded and failed pod counts; none for one not found."""
     proc = subprocess.run(
-        kubectl(cluster, "get", "job", job, "-o=jsonpath={.status.succeeded}|{.status.failed}"),
+        cluster.kubectl("get", "job", job, "-o=jsonpath={.status.succeeded}|{.status.failed}", namespace=NAMESPACE),
         capture_output=True,
         text=True,
     )
@@ -144,12 +140,12 @@ def wait_master_ready(cluster: Cluster) -> None:
     goes in only once this returns."""
     log(f"locust: waiting for the {MASTER_JOB} pod to be ready")
     deadline = time.monotonic() + POD_START_TIMEOUT_SECS
-    ready = kubectl(
-        cluster,
+    ready = cluster.kubectl(
         "get",
         "pods",
         f"--selector=job-name={MASTER_JOB}",
         '-o=jsonpath={.items[0].status.conditions[?(@.type=="Ready")].status}',
+        namespace=NAMESPACE,
     )
     while time.monotonic() < deadline:
         if subprocess.run(ready, capture_output=True, text=True).stdout == "True":
@@ -158,7 +154,7 @@ def wait_master_ready(cluster: Cluster) -> None:
             raise LocustError(f"{MASTER_JOB} ended before it was ready: kubectl logs job/{MASTER_JOB} -n {NAMESPACE}")
         time.sleep(2)
     try:
-        stream(kubectl(cluster, "describe", "job", MASTER_JOB))
+        stream(cluster.kubectl("describe", "job", MASTER_JOB, namespace=NAMESPACE))
     except subprocess.CalledProcessError:
         pass
     raise LocustError(f"the {MASTER_JOB} pod was not ready within {POD_START_TIMEOUT_SECS}s")
@@ -168,7 +164,7 @@ def wait_master_ready(cluster: Cluster) -> None:
 def master_logs(cluster: Cluster) -> Iterator[Callable[[int], None]]:
     """Logs the master's output as it comes, and yields what stops it, after
     giving it up to that many seconds to print its last lines and end."""
-    follow = kubectl(cluster, "logs", "--follow", f"job/{MASTER_JOB}")
+    follow = cluster.kubectl("logs", "--follow", f"job/{MASTER_JOB}", namespace=NAMESPACE)
     proc = subprocess.Popen(follow, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     reader = threading.Thread(target=lambda: [log(line.rstrip("\n")) for line in proc.stdout], daemon=True)
     reader.start()
@@ -241,8 +237,8 @@ def run(
     # A Job's pod template is immutable. Foreground, so their pods are gone too
     # and the job-name lookup only sees this run's.
     log(f"locust: deleting any previous {MASTER_JOB} and {WORKER_JOB}")
-    jobs = ["job", MASTER_JOB, WORKER_JOB]
-    stream(kubectl(cluster, "delete", *jobs, "--ignore-not-found", "--cascade=foreground", "--wait"))
+    delete = ["delete", "job", MASTER_JOB, WORKER_JOB, "--ignore-not-found", "--cascade=foreground", "--wait"]
+    stream(cluster.kubectl(*delete, namespace=NAMESPACE))
 
     worker_pool.deploy(cluster, case["worker-count"], case["sandbox-class"])
     # The golden snapshot is taken on the pool just deployed.
