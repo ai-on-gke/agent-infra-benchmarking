@@ -19,7 +19,7 @@
 # option on unchanged:
 #
 #   ./benchmarking/tools/run-local --project-id my-project \
-#     --test-case-name glutton
+#     --scenario glutton
 
 set -o errexit -o nounset -o pipefail
 

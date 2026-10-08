@@ -13,8 +13,8 @@
 # limitations under the License.
 
 """Applies automation/infra/, runs the cases in scenarios.yaml one after
-another (every case in the order listed, or the ones --test-case-name names in
-the order given), each on its own infra/clusters/ cluster applied for it and
+another (every case in the order listed, or the ones --scenario names in the
+order given), each on its own infra/clusters/ cluster applied for it and
 destroyed after it, and destroys the infra again. With --dev-infra, uses the
 automation/infra and the cluster of that dev infra instead, which outlive the
 execution."""
@@ -33,7 +33,7 @@ from typing import NoReturn
 import yaml
 
 from .. import AUTOMATION_DIR, benchmark, dev_infra, substrate
-from ..cases import SKIP_SUBSTRATE_INSTALL, TESTS_FILE, load_cases
+from ..cases import SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases
 from ..cluster import Cluster
 from ..deployment import ORCHESTRATOR_DIR, Deployment, cluster_deployment, files_under, tf_vars
 from ..log import log
@@ -53,9 +53,9 @@ def fail(message: str) -> NoReturn:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="python3 -m orchestrator.cli.run", description=__doc__)
-    p.add_argument("--tests-file", type=Path, default=TESTS_FILE, help=f"default: {TESTS_FILE}")
+    p.add_argument("--scenarios-file", type=Path, default=SCENARIOS_FILE, help=f"default: {SCENARIOS_FILE}")
     p.add_argument(
-        "--test-case-name",
+        "--scenario",
         action="append",
         metavar="NAME",
         help="a case to run; repeat it for more. Default: every case",
@@ -131,14 +131,14 @@ def parse_args() -> argparse.Namespace:
 def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
     """The cases to run, by name, in the order they run."""
     try:
-        cases = load_cases(args.tests_file)
+        cases = load_cases(args.scenarios_file)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         fail(str(exc))
     # dict.fromkeys drops repeated names, keeping the first.
-    names = list(dict.fromkeys(args.test_case_name or cases))
+    names = list(dict.fromkeys(args.scenario or cases))
     unknown = [name for name in names if name not in cases]
     if unknown:
-        fail(f"no case {', '.join(unknown)} in {args.tests_file}; it has {', '.join(cases)}")
+        fail(f"no case {', '.join(unknown)} in {args.scenarios_file}; it has {', '.join(cases)}")
     return {name: cases[name] for name in names}
 
 

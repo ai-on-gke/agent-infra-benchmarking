@@ -22,34 +22,34 @@ import yaml
 
 from . import SCENARIOS_DIR, benchmark
 
-TESTS_FILE = SCENARIOS_DIR / "scenarios.yaml"
+SCENARIOS_FILE = SCENARIOS_DIR / "scenarios.yaml"
 # One Terraform config per directory, which a case's infra.cluster.name picks.
 CLUSTERS_DIR = SCENARIOS_DIR / "infra" / "clusters"
 CLUSTER_KEYS = {"name", "tfvars", "tfvars_inline", "variables"}
 SKIP_SUBSTRATE_INSTALL = "skip-substrate-install"
 
 
-def load_cases(tests_file: Path) -> dict[str, dict]:
-    with tests_file.open() as f:
+def load_cases(scenarios_file: Path) -> dict[str, dict]:
+    with scenarios_file.open() as f:
         cases = (yaml.safe_load(f) or {}).get("cases")
     if not isinstance(cases, dict) or not cases:
-        raise ValueError(f"{tests_file} has no `cases` mapping")
+        raise ValueError(f"{scenarios_file} has no `cases` mapping")
     for name, case in cases.items():
         if not isinstance(case, dict):
-            raise ValueError(f"{tests_file}: case {name} is not a mapping")
+            raise ValueError(f"{scenarios_file}: case {name} is not a mapping")
         if not isinstance(case.get("type"), str):
-            raise ValueError(f"{tests_file}: case {name} has no `type`")
+            raise ValueError(f"{scenarios_file}: case {name} has no `type`")
         known = ["noop", *benchmark.types()]
         if case["type"] not in known:
-            raise ValueError(f"{tests_file}: case {name}'s `type` must be one of {', '.join(known)}")
+            raise ValueError(f"{scenarios_file}: case {name}'s `type` must be one of {', '.join(known)}")
         if not isinstance(case.get(SKIP_SUBSTRATE_INSTALL, False), bool):
-            raise ValueError(f"{tests_file}: case {name}'s `{SKIP_SUBSTRATE_INSTALL}` must be true or false")
-        check_cluster(f"{tests_file}: case {name}", case)
+            raise ValueError(f"{scenarios_file}: case {name}'s `{SKIP_SUBSTRATE_INSTALL}` must be true or false")
+        check_cluster(f"{scenarios_file}: case {name}", case)
         if case["type"] != "noop":
             try:
                 benchmark.check(name, case)
             except ValueError as exc:
-                raise ValueError(f"{tests_file}: {exc}") from None
+                raise ValueError(f"{scenarios_file}: {exc}") from None
     return cases
 
 

@@ -25,4 +25,4 @@ set -o errexit -o nounset -o pipefail
 
 TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-exec "${TOOLS_DIR}/run-local" --test-case-name dummy "$@"
+exec "${TOOLS_DIR}/run-local" --scenario dummy "$@"

@@ -23,4 +23,4 @@
 
 set -o errexit -o nounset -o pipefail
 
-exec "$(dirname "$0")/trigger" --test-case-name=dummy "$@"
+exec "$(dirname "$0")/trigger" --scenario=dummy "$@"

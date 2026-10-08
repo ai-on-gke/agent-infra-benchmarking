@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Named benchmark runs, each picked by the orchestrator's --test-case-name:
+# Named benchmark runs, each picked by the orchestrator's --scenario:
 #
-#   python3 -m orchestrator.cli.run --test-case-name glutton ...
+#   python3 -m orchestrator.cli.run --scenario glutton ...
 #
 # `type` picks orchestrator/<type>.py, which documents the rest.
 # For locust: `worker-count` and `sandbox-class` shape the WorkerPool, and

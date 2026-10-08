@@ -23,8 +23,8 @@
 # Stopping the script leaves the execution running.
 #
 # Any ORCHESTRATOR_ARG goes to the orchestrator after the job's own arguments,
-# for this execution only, e.g. --test-case-name=glutton. Passing one also
-# needs run.jobs.runWithOverrides, e.g. roles/run.developer.
+# for this execution only, e.g. --scenario=glutton. Passing one also needs
+# run.jobs.runWithOverrides, e.g. roles/run.developer.
 #
 #   trigger --deployment=DEPLOYMENT [ORCHESTRATOR_ARG...]
 
