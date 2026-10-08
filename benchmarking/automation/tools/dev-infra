@@ -14,10 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Lists or destroys the dev infras the orchestrator's --dev-infra creates, with
-# python3 -m orchestrator.dev_infra in tools/python:
+# Lists, shows or destroys the dev infras the orchestrator's --dev-infra
+# creates, or sets a shell up for one's cluster, with python3 -m
+# orchestrator.dev_infra in tools/python:
 #
 #   dev-infra list
+#   dev-infra outputs NAME
+#   eval "$(dev-infra env NAME)"
 #   dev-infra destroy NAME
 
 set -o errexit -o nounset -o pipefail

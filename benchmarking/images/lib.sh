@@ -81,8 +81,8 @@ def sources:
 # without it.
 require_docker_repo() {
   if [[ -z "${DOCKER_REPO:-}" ]]; then
-    echo "Error: DOCKER_REPO must be set to name the images; .terraform-env.sh" >&2
-    echo "exports it, and .env.sh sources that." >&2
+    echo "Error: DOCKER_REPO must be set to name the images. For a dev infra:" >&2
+    echo "  eval \"\$(benchmarking/automation/tools/dev-infra env NAME)\"" >&2
     exit 1
   fi
 }

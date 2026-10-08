@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """Runs a case on its cluster with benchmarking/run_benchmark.sh, configured
-from the cluster's Terraform outputs rather than from .env.sh."""
+from the cluster's Terraform outputs."""
 
 from __future__ import annotations
 
@@ -38,33 +38,11 @@ def missing_requirements() -> list[str]:
     return [tool for tool in tools if not shutil.which(tool)]
 
 
-def get_credentials(cluster: Cluster) -> None:
-    stream(
-        [
-            "gcloud",
-            "container",
-            "clusters",
-            "get-credentials",
-            cluster.name,
-            f"--location={cluster.location}",
-            f"--project={cluster.outputs['project_id']}",
-        ],
-        env={"KUBECONFIG": str(cluster.kubeconfig)},
-    )
-
-
 def run(name: str, case: dict, run_id: str, cluster: Cluster) -> None:
-    get_credentials(cluster)
-    env = {
-        **cluster.env(),
-        "BENCHMARK_ENV_PROVIDED": "1",
-        "GCE_REGION": cluster.outputs["region"],
-        # The cluster's own repository, which its nodes are granted to pull from.
-        "DOCKER_REPO": cluster.outputs["artifact_registry_docker_repo"],
-    }
+    cluster.get_credentials()
     log(f"{name}: running as {run_id} on cluster {cluster.name}")
     stream(
         [str(RUN_BENCHMARK), "--test-case-name", name, "--test-case", json.dumps(case), "--run-id", run_id],
-        env=env,
+        env=cluster.env(),
         cwd=ROOT,
     )

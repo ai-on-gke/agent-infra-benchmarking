@@ -13,8 +13,8 @@
 # limitations under the License.
 
 """Installs substrate on a case's cluster with the submodule's
-hack/install-ate.sh --deploy-ate-system, as README.md's setup does, configured
-from the cluster's Terraform outputs rather than from .env.sh."""
+hack/install-ate.sh --deploy-ate-system, configured from the cluster's
+Terraform outputs."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def install(cluster: Cluster) -> None:
     # With KUBECTL_CONTEXT empty, the installer runs get-credentials itself.
     env = {
         **cluster.env(),
-        # The developer's .ate-dev-env.sh names their own cluster.
+        # A .ate-dev-env.sh in the submodule would name another cluster.
         "NO_DEV_ENV": "1",
     }
     log(f"substrate: installing on cluster {cluster.name}")

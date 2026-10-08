@@ -12,15 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Lists the dev infras, shows their outputs or destroys them: infra/orchestrator and a case's cluster,
-which the orchestrator's --dev-infra creates and keeps, each with every
-Terraform file of it in .dev-infra/terraform/<name>/<infra>/."""
+"""Lists the dev infras, shows their outputs, sets a shell up for their cluster
+or destroys them: infra/orchestrator and a case's cluster, which the
+orchestrator's --dev-infra creates and keeps, each with every Terraform file of
+it in .dev-infra/terraform/<name>/<infra>/."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -30,7 +32,6 @@ from typing import NoReturn
 from . import AUTOMATION_DIR, substrate, terraform
 from .cluster import Cluster
 from .deployment import ORCHESTRATOR_DIR, Deployment, cluster_deployment, tf_vars
-from .log import log
 from .process import failure
 
 DEV_INFRA_DIR = AUTOMATION_DIR / ".dev-infra" / "terraform"
@@ -134,7 +135,8 @@ def destroy(record: dict, json_output: bool = False) -> None:
 
 
 def fail(message: str) -> NoReturn:
-    log(f"dev-infra: {message}", "ERROR")
+    # Not to stdout, which env's caller evaluates.
+    print(f"dev-infra: {message}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -153,6 +155,21 @@ def print_outputs(name: str) -> None:
         print(f"{infra}:")
         for key, out in read_state(path).get("outputs", {}).items():
             print(f"  {terraform.format_output(key, out)}")
+
+
+def print_env(name: str) -> None:
+    """Writes the cluster's credentials into its kubeconfig and prints the
+    exports pointing the benchmarking scripts and kubectl at it."""
+    if not state_file(name, "cluster").exists():
+        fail(f"dev infra {name}'s cluster is not applied")
+    dev_cluster = cluster(name)
+    try:
+        env = dev_cluster.env()
+    except KeyError as exc:
+        fail(f"dev infra {name}'s cluster has no {exc} output")
+    dev_cluster.get_credentials(lambda line: print(line, file=sys.stderr))
+    for key, value in env.items():
+        print(f"export {key}={shlex.quote(value)}")
 
 
 def print_list() -> None:
@@ -180,6 +197,12 @@ def main() -> None:
     commands.add_parser("list", help="list the dev infras, with how many resources each of their infras holds")
     outputs_command = commands.add_parser("outputs", help="show the outputs of a dev infra's infras")
     outputs_command.add_argument("name", type=check_name, metavar="NAME")
+    env_command = commands.add_parser(
+        "env",
+        help="print the exports that point the benchmarking scripts and kubectl at a dev infra's cluster,"
+        ' for eval "$(... env NAME)"',
+    )
+    env_command.add_argument("name", type=check_name, metavar="NAME")
     destroy_command = commands.add_parser("destroy", help="destroy a dev infra and remove its Terraform files")
     destroy_command.add_argument("name", type=check_name, metavar="NAME")
     destroy_command.add_argument(
@@ -197,9 +220,12 @@ def main() -> None:
     if args.command == "outputs":
         print_outputs(args.name)
         return
-    if not shutil.which("terraform"):
-        fail("terraform is required to destroy the dev infra")
     try:
+        if args.command == "env":
+            print_env(args.name)
+            return
+        if not shutil.which("terraform"):
+            fail("terraform is required to destroy the dev infra")
         destroy(record, args.terraform_output == "json")
     except subprocess.CalledProcessError as exc:
         fail(failure(exc))

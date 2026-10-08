@@ -1,6 +1,6 @@
-# Echoes of the inputs, so that a consumer of these outputs - env.sh.terraform.example
-# reads them to build .env.sh - needs nothing but `terraform output` to learn
-# which project and region the deployment landed in.
+# Echoes of the inputs, so that a consumer of these outputs - the orchestrator
+# configures the scripts it runs on the cluster from them - needs nothing but
+# them to learn which project and region the deployment landed in.
 
 output "project_id" {
   description = "GCP project the resources were created in."

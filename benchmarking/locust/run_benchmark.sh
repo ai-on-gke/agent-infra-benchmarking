@@ -31,12 +31,6 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
-# BENCHMARK_ENV_PROVIDED: the caller exported the settings itself, e.g. the
-# orchestrator for a cluster other than the one .env.sh reads.
-if [[ -f .env.sh && -z "${BENCHMARK_ENV_PROVIDED:-}" ]]; then
-  source .env.sh
-fi
-
 source benchmarking/images/lib.sh
 
 MANIFESTS_DIR=benchmarking/locust/manifests
@@ -76,7 +70,8 @@ usage() {
   echo "                         deploying the case's ActorTemplate and taking its golden snapshot."
   echo "                         The WorkerPool is recreated either way."
   echo ""
-  echo "The images are named under DOCKER_REPO; .env.sh is sourced if present."
+  echo "The images are named under DOCKER_REPO, and the reports go to BUCKET_NAME."
+  echo "For a dev infra: eval \"\$(benchmarking/automation/tools/dev-infra env NAME)\"."
   echo "USE_CLOUD_BUILD=1 builds the images on Cloud Build instead of local Docker."
 }
 

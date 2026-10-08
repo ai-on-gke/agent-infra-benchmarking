@@ -29,11 +29,9 @@ if [[ ! -f "${SUBSTRATE_DIR}/go.mod" ]]; then
   exit 1
 fi
 
-# BENCHMARK_ENV_PROVIDED: the caller exported the settings itself, e.g. the
-# orchestrator for a cluster other than the one .env.sh reads.
-if [[ -f .env.sh && -z "${BENCHMARK_ENV_PROVIDED:-}" ]]; then
-  source .env.sh
-fi
+# The nodes' platform, whatever the build host's.
+export KO_DEFAULTPLATFORMS="${KO_DEFAULTPLATFORMS:-linux/amd64}"
+
 source benchmarking/images/lib.sh
 
 # Ensure BUCKET_NAME is set

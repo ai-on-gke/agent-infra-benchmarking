@@ -45,7 +45,7 @@ jobs:
           persist-credentials: false
       - name: shellcheck
         run: |
-          git ls-files '*.sh' .terraform-env.sh env.sh.example \
+          git ls-files '*.sh' \
             | xargs shellcheck --severity=warning
 
   terraform:
