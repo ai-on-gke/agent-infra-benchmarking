@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The Cloud Run job's container: the orchestrator package, its infra/,
-# terraform and tests.yaml. Its build context is benchmarking/automation/, for
-# tests.yaml.
+# The Cloud Run job's container: the orchestrator package, its
+# infra/orchestrator/, terraform and tests.yaml. Its build context is
+# benchmarking/automation/, for tests.yaml.
 #
 # Every base image is pinned by digest, the tag beside it saying which one it
 # was taken from, so a rebuild of the same commit is the same image.
@@ -29,10 +29,10 @@ COPY orchestrator/requirements.txt orchestrator/
 RUN pip install --no-cache-dir --require-hashes -r orchestrator/requirements.txt
 
 COPY tests.yaml .
-COPY orchestrator/infra/ orchestrator/infra/
+COPY infra/orchestrator/ infra/orchestrator/
 # The providers the lock file pins, installed now rather than downloaded by
 # every execution's terraform init.
-RUN terraform -chdir=orchestrator/infra init -backend=false -input=false
+RUN terraform -chdir=infra/orchestrator init -backend=false -input=false
 COPY orchestrator/*.py orchestrator/
 
 ENV PYTHONUNBUFFERED=1

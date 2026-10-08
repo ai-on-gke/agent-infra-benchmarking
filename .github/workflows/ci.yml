@@ -58,8 +58,8 @@ jobs:
         with:
           terraform_version: 1.15.6
       - name: terraform fmt
-        run: terraform fmt -check -recursive benchmarking/automation/infra/common/
+        run: terraform fmt -check -recursive benchmarking/automation/infra/clusters/common/
       - name: terraform validate
         run: |
-          terraform -chdir=benchmarking/automation/infra/common init -backend=false -input=false
-          terraform -chdir=benchmarking/automation/infra/common validate
+          terraform -chdir=benchmarking/automation/infra/clusters/common init -backend=false -input=false
+          terraform -chdir=benchmarking/automation/infra/clusters/common validate

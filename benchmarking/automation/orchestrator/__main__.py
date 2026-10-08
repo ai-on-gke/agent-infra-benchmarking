@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Applies the orchestrator's infra/, runs the cases in tests.yaml one after another
+"""Applies infra/orchestrator/, runs the cases in tests.yaml one after another
 (every case in the order listed, or the ones --test-case-name names in the
 order given), and destroys the infra again."""
 
@@ -33,11 +33,11 @@ import yaml
 from . import terraform
 from .log import log
 
-ORCHESTRATOR_DIR = Path(__file__).resolve().parent
-TESTS_FILE = ORCHESTRATOR_DIR.parent / "tests.yaml"
-INFRA_DIR = ORCHESTRATOR_DIR / "infra"
-# The infra's backend, which each execution writes; infra/.gitignore leaves
-# out *_override.tf.
+AUTOMATION_DIR = Path(__file__).resolve().parent.parent
+TESTS_FILE = AUTOMATION_DIR / "tests.yaml"
+INFRA_DIR = AUTOMATION_DIR / "infra" / "orchestrator"
+# The infra's backend, which each execution writes; the infra's .gitignore
+# leaves out *_override.tf.
 BACKEND_FILE = INFRA_DIR / "backend_override.tf"
 
 

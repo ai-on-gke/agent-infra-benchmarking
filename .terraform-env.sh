@@ -15,17 +15,17 @@
 
 # The settings that describe the deployment itself - the project, the region,
 # the cluster, the bucket and the image repository - read off the Terraform
-# state in benchmarking/automation/infra/common rather than typed in. Sourced
-# by .env.sh.
+# state in benchmarking/automation/infra/clusters/common rather than typed in.
+# Sourced by .env.sh.
 #
 # Nothing here is per-developer and nothing here is edited: every value comes
 # from `terraform output`, so a deployment changes this file's answers without
 # changing the file. The settings that do get edited live in .env.sh, copied
 # from env.sh.example.
 #
-# A cluster that did not come from benchmarking/automation/infra/common has no
-# outputs to read. For that case, replace the line in .env.sh that sources this
-# file with exports of the variables below.
+# A cluster that did not come from benchmarking/automation/infra/clusters/common
+# has no outputs to read. For that case, replace the line in .env.sh that
+# sources this file with exports of the variables below.
 #
 # Requires terraform and jq, and a terraform apply that has already run. The
 # lookup happens once per shell that sources this file.
@@ -38,7 +38,7 @@ if [ -n "${ZSH_VERSION:-}" ]; then
 else
   _TF_SELF="${BASH_SOURCE[0]}"
 fi
-_TF_DIR="$(cd "$(dirname "${_TF_SELF}")" && pwd)/benchmarking/automation/infra/common"
+_TF_DIR="$(cd "$(dirname "${_TF_SELF}")" && pwd)/benchmarking/automation/infra/clusters/common"
 unset _TF_SELF
 
 # One call, reused for every lookup below: terraform output is slow enough that
@@ -72,7 +72,7 @@ _tf_value() {
   if [[ -z "${value}" ]]; then
     echo "Error: Terraform published no ${label}." >&2
     echo "Outputs added since the last apply appear only after the next one:" >&2
-    echo "  terraform -chdir=benchmarking/automation/infra/common apply" >&2
+    echo "  terraform -chdir=benchmarking/automation/infra/clusters/common apply" >&2
     return 1
   fi
   printf '%s\n' "${value}"
