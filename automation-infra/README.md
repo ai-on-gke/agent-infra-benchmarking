@@ -99,7 +99,7 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
      default_resource_name = "$DEPLOYMENT"
 
      state_bucket        = local.state_bucket
-     state_bucket_prefix = "tests"
+     state_bucket_prefix = "terraform"
    }
 
    output "cloud_run" {

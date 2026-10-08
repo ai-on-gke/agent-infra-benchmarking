@@ -21,7 +21,7 @@ module "cloud_run" {
   default_resource_name = "substrate-bench-auto"
 
   state_bucket          = local.state_bucket
-  state_bucket_prefix   = "tests"
+  state_bucket_prefix   = "terraform"
   github_actions_bucket = local.state_bucket
   source_branch         = "add-automation"
 }

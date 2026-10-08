@@ -47,10 +47,11 @@ CLUSTER_KEYS = {"name", "tfvars", "tfvars_inline", "variables"}
 # Every TF_DATA_DIR the orchestrator uses starts empty, so its providers come
 # from here rather than from a download each.
 PLUGIN_CACHE_DIR = Path(os.environ.get("TF_PLUGIN_CACHE_DIR") or AUTOMATION_DIR / ".terraform-plugin-cache")
-# An execution's local files, in <name>/: a folder for infra/orchestrator,
-# orchestrator/, and one per case, tests/<case>/, each with its tfstates/ when
-# the backend is local and its tf-data/ with either.
-LOCAL_RUNS_DIR = AUTOMATION_DIR / "local-runs"
+# The executions' local Terraform files, as the Cloud Run job's state is under
+# terraform/ in its bucket. An execution's are in <name>/: a folder for
+# infra/orchestrator, orchestrator/, and one per case, tests/<case>/, each with
+# its tfstates/ when the backend is local and its tf-data/ with either.
+LOCAL_TERRAFORM_DIR = AUTOMATION_DIR / "local-runs" / "terraform"
 
 
 def fail(message: str) -> NoReturn:
@@ -94,16 +95,17 @@ def check_cluster(where: str, case: dict) -> None:
 
 def backend_config(args: argparse.Namespace, *key: str) -> list[str]:
     """The -backend-config of the state under <state prefix>/<name>/<key> in
-    GCS, or in local-runs/<name>/<key>/tfstates/ with the local backend."""
+    GCS, or in local-runs/terraform/<name>/<key>/tfstates/ with the local
+    backend."""
     if args.state_backend == "gcs":
         return [f"bucket={args.state_bucket}", f"prefix={'/'.join([args.state_prefix, args.name, *key])}"]
-    return [f"path={LOCAL_RUNS_DIR.joinpath(args.name, *key, 'tfstates', 'terraform.tfstate')}"]
+    return [f"path={LOCAL_TERRAFORM_DIR.joinpath(args.name, *key, 'tfstates', 'terraform.tfstate')}"]
 
 
 def data_dir(args: argparse.Namespace, *key: str) -> Path:
-    """local-runs/<name>/<key>/tf-data/, with either backend: a TF_DATA_DIR,
-    which also holds its config's plan."""
-    path = LOCAL_RUNS_DIR.joinpath(args.name, *key, "tf-data")
+    """local-runs/terraform/<name>/<key>/tf-data/, with either backend: a
+    TF_DATA_DIR, which also holds its config's plan."""
+    path = LOCAL_TERRAFORM_DIR.joinpath(args.name, *key, "tf-data")
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -186,7 +188,7 @@ def main() -> None:
     p.add_argument(
         "--state-prefix",
         help="prefix in the state bucket, each execution's state being under <prefix>/<name>; only, and required,"
-        f" with gcs. With local, the state is under {LOCAL_RUNS_DIR}/<name>",
+        f" with gcs. With local, the state is under {LOCAL_TERRAFORM_DIR}/<name>",
     )
     p.add_argument(
         "--name",
