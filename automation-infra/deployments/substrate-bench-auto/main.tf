@@ -1,10 +1,8 @@
 terraform {
   required_version = ">= 1.5"
 
-  backend "gcs" {
-    bucket = "substrate-bench-auto-tfstate"
-    prefix = "automation/cloud-run/substrate-bench-auto"
-  }
+  # Set by backend.hcl: terraform init -backend-config=backend.hcl
+  backend "gcs" {}
 }
 
 module "cloud_run" {

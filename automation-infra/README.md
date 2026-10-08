@@ -82,10 +82,8 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
    terraform {
      required_version = ">= 1.5"
 
-     backend "gcs" {
-       bucket = "$STATE_BUCKET"
-       prefix = "automation/cloud-run/$DEPLOYMENT"
-     }
+     # Set by backend.hcl: terraform init -backend-config=backend.hcl
+     backend "gcs" {}
    }
 
    module "cloud_run" {
@@ -103,13 +101,18 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
    ```
 
    ```bash
+   printf 'bucket = "%s"\nprefix = "automation/cloud-run/%s"\n' "$STATE_BUCKET" "$DEPLOYMENT" \
+     > "automation-infra/deployments/$DEPLOYMENT/backend.hcl"
+   ```
+
+   ```bash
    printf '.terraform/\n' > "automation-infra/deployments/$DEPLOYMENT/.gitignore"
    ```
 
 2. Initialize it, which also writes the lock file that pins the providers:
 
    ```bash
-   terraform -chdir="automation-infra/deployments/$DEPLOYMENT" init
+   terraform -chdir="automation-infra/deployments/$DEPLOYMENT" init -backend-config=backend.hcl
    ```
 
 3. Apply. This also builds the runner image on Cloud Build, which takes a few
@@ -119,7 +122,8 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
    terraform -chdir="automation-infra/deployments/$DEPLOYMENT" apply
    ```
 
-4. Commit the folder: `main.tf`, `.gitignore` and `.terraform.lock.hcl`.
+4. Commit the folder: `main.tf`, `backend.hcl`, `.gitignore` and
+   `.terraform.lock.hcl`.
 
    ```bash
    git add "automation-infra/deployments/$DEPLOYMENT"
