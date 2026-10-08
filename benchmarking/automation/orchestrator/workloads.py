@@ -61,9 +61,7 @@ class WorkloadError(RuntimeError):
 def missing_requirements() -> list[str]:
     missing = [tool for tool in ("kubectl", "go", "git", "gcloud") if not shutil.which(tool)]
     # kubectl-ate and ko are substrate's, built and run in the submodule.
-    if not (substrate.SUBSTRATE_DIR / "go.mod").is_file():
-        missing.append(f"the substrate submodule in {substrate.SUBSTRATE_DIR}")
-    return missing
+    return missing + substrate.missing_submodule()
 
 
 def templates() -> list[str]:

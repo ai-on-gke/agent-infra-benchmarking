@@ -36,9 +36,7 @@ DEFAULT_TIMEOUT_SECS = 300
 def missing_requirements() -> list[str]:
     missing = [tool for tool in ("kubectl", "go", "git") if not shutil.which(tool)]
     # ko resolves the pool's ko:// workerImage, and only works inside the submodule.
-    if not (substrate.SUBSTRATE_DIR / "go.mod").is_file():
-        missing.append(f"the substrate submodule in {substrate.SUBSTRATE_DIR}")
-    return missing
+    return missing + substrate.missing_submodule()
 
 
 def delete(cluster: Cluster, timeout: int = DEFAULT_TIMEOUT_SECS) -> None:

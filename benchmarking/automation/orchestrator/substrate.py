@@ -48,11 +48,12 @@ def ko(cluster: Cluster, *args: str, input: str) -> str:
     )
 
 
+def missing_submodule() -> list[str]:
+    return [] if (SUBSTRATE_DIR / "go.mod").is_file() else [f"the substrate submodule in {SUBSTRATE_DIR}"]
+
+
 def missing_requirements() -> list[str]:
-    missing = [tool for tool in ("go", "gcloud") if not shutil.which(tool)]
-    if not (SUBSTRATE_DIR / "go.mod").is_file():
-        missing.append(f"the substrate submodule in {SUBSTRATE_DIR}")
-    return missing
+    return [tool for tool in ("go", "gcloud") if not shutil.which(tool)] + missing_submodule()
 
 
 def install(cluster: Cluster) -> None:
