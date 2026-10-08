@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   upload:
@@ -22,17 +21,16 @@ jobs:
           submodules: true
           # Otherwise the token ends up in the tarball's .git/config.
           persist-credentials: false
+      # Before auth, which writes the key into the workspace.
+      - name: Pack
+        run: tar -czf "$RUNNER_TEMP/source.tar.gz" -C "$GITHUB_WORKSPACE" .
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
       - name: Upload
         env:
           BUCKET: ${{ secrets.SOURCE_BUCKET }}
           BRANCH: ${{ github.ref_name }}
           COMMIT: ${{ github.sha }}
-        run: |
-          tarball="$RUNNER_TEMP/$COMMIT.tar.gz"
-          tar -czf "$tarball" -C "$GITHUB_WORKSPACE" .
-          gcloud storage cp "$tarball" "gs://$BUCKET/source/$BRANCH/$COMMIT.tar.gz"
+        run: gcloud storage cp "$RUNNER_TEMP/source.tar.gz" "gs://$BUCKET/source/$BRANCH/$COMMIT.tar.gz"
