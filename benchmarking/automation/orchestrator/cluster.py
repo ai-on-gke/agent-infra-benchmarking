@@ -12,16 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A case's applied cluster, and the settings the benchmarking scripts and
-substrate's installer read for it."""
+"""A case's applied cluster."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
-from .log import log
 from .process import stream
 
 
@@ -60,22 +57,6 @@ class Cluster:
         # The variable's default for a state applied before the output existed.
         return self.outputs.get("benchmark_runner_ksa_name", "benchmark-runner")
 
-    def env(self) -> dict[str, str]:
-        return {
-            "PROJECT_ID": self.project_id,
-            "CLUSTER_NAME": self.name,
-            "CLUSTER_LOCATION": self.location,
-            "BUCKET_NAME": self.bucket,
-            "DOCKER_REPO": self.docker_repo,
-            "KO_DOCKER_REPO": self.docker_repo,
-            # The nodes' platform, whatever the build host's.
-            "KO_DEFAULTPLATFORMS": "linux/amd64",
-            # Empty, so the scripts use kubeconfig's current context, the one
-            # get-credentials writes, rather than the developer's own.
-            "KUBECTL_CONTEXT": "",
-            "KUBECONFIG": str(self.kubeconfig),
-        }
-
     def kubectl_flags(self, namespace: str | None = None) -> list[str]:
         flags = [f"--kubeconfig={self.kubeconfig}"]
         return flags + [f"--namespace={namespace}"] if namespace else flags
@@ -84,7 +65,7 @@ class Cluster:
         """A kubectl command for the cluster, in namespace if given."""
         return ["kubectl", *args, *self.kubectl_flags(namespace)]
 
-    def get_credentials(self, log_line: Callable[[str], None] = log) -> None:
+    def get_credentials(self) -> None:
         """Writes the cluster's context into kubeconfig."""
         stream(
             [
@@ -96,6 +77,5 @@ class Cluster:
                 f"--location={self.location}",
                 f"--project={self.outputs['project_id']}",
             ],
-            log_line,
             env={"KUBECONFIG": str(self.kubeconfig)},
         )

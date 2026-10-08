@@ -57,9 +57,18 @@ def missing_requirements() -> list[str]:
 
 
 def install(cluster: Cluster) -> None:
-    # With KUBECTL_CONTEXT empty, the installer runs get-credentials itself.
     env = {
-        **cluster.env(),
+        "PROJECT_ID": cluster.project_id,
+        "CLUSTER_NAME": cluster.name,
+        "CLUSTER_LOCATION": cluster.location,
+        "BUCKET_NAME": cluster.bucket,
+        "KO_DOCKER_REPO": cluster.docker_repo,
+        # The nodes' platform, whatever the build host's.
+        "KO_DEFAULTPLATFORMS": "linux/amd64",
+        # Empty, so the installer runs get-credentials itself and uses the
+        # context it writes into KUBECONFIG, rather than the developer's own.
+        "KUBECTL_CONTEXT": "",
+        "KUBECONFIG": str(cluster.kubeconfig),
         # A .ate-dev-env.sh in the submodule would name another cluster.
         "NO_DEV_ENV": "1",
     }
