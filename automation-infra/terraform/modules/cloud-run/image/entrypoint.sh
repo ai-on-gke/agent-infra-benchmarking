@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 # Extracts the tarball of SOURCE_BRANCH's latest commit, which
-# .github/workflows/upload-source.yml uploads to SOURCE_BUCKET, and cds into
-# it. Ignores its arguments.
+# .github/workflows/upload-source.yml uploads to SOURCE_BUCKET, and runs the
+# runner in it with its arguments.
 
 set -o errexit -o nounset -o pipefail
 
@@ -31,5 +31,8 @@ if [[ ! -d .git ]]; then
   echo "Error: the tarball of ${COMMIT} has no .git" >&2
   exit 1
 fi
-# Nothing to run yet. safe.directory, as the files keep the uploader's owner.
+# safe.directory, as the files keep the uploader's owner.
 git -c safe.directory=/source log -1
+
+# Installs the runner's requirements in a venv of its own and runs it.
+exec benchmarking/automation/tools/run "$@"

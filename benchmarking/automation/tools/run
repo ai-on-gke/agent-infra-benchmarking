@@ -32,7 +32,7 @@ REQUIREMENTS="${AUTOMATION_DIR}/runner/requirements.txt"
 if ! cmp -s "${REQUIREMENTS}" "${VENV}/requirements.txt"; then
   rm -rf "${VENV}"
   python3 -m venv "${VENV}"
-  "${VENV}/bin/pip" install --quiet --require-hashes -r "${REQUIREMENTS}"
+  "${VENV}/bin/pip" install --quiet --disable-pip-version-check --require-hashes -r "${REQUIREMENTS}"
   cp "${REQUIREMENTS}" "${VENV}/requirements.txt"
 fi
 
