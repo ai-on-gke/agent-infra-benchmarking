@@ -27,16 +27,15 @@ from contextlib import contextmanager
 from string import Template
 from typing import Callable, Iterator
 
-from . import AUTOMATION_DIR, substrate, worker_pool
+from . import AUTOMATION_DIR, images, substrate, worker_pool
 from .cluster import Cluster
 from .log import log
 from .process import output, stream
 
-ROOT = AUTOMATION_DIR.parent.parent
 MANIFESTS_DIR = AUTOMATION_DIR.parent / "workloads" / "manifests"
 NAMESPACE = worker_pool.NAMESPACE
 ATESPACE = "benchmark-workloads"
-# Named as in workloads/images.json, which the benchmark builds them from.
+# Of images.WORKLOADS_IMAGES.
 MOCK_LLM_IMAGE = "mock-llm"
 # The templates whose image is neither ko:// nor a literal, but one of ours.
 TEMPLATE_IMAGES = {"openclaw": "openclaw-workload"}
@@ -93,18 +92,8 @@ def kubectl_ate(cluster: Cluster) -> Iterator[KubectlAte]:
 
 
 def pinned_image(cluster: Cluster, name: str) -> str:
-    """The image the benchmark built from this commit, pinned to the digest the
-    registry serves for it now."""
-    commit = output(["git", "rev-parse", "HEAD"], cwd=ROOT).strip()
-    repo = f"{cluster.docker_repo}/{name}"
-    describe = ["gcloud", "artifacts", "docker", "images", "describe", f"{repo}:{commit}"]
-    try:
-        digest = output([*describe, "--format=value(image_summary.digest)"]).strip()
-    except subprocess.CalledProcessError:
-        digest = ""
-    if not digest.startswith("sha256:"):
-        raise WorkloadError(f"cannot resolve {repo}:{commit} to a digest; is it pushed?")
-    return f"{repo}@{digest}"
+    """The image images.build_and_push built from this commit, pinned."""
+    return images.pin(images.ref(cluster.docker_repo, name))
 
 
 def otlp_endpoint(cluster: Cluster) -> str:
