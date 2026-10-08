@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The Cloud Run job's container: run_tests.py, its infra/, terraform and
-# tests.yaml. Its build context is automation/, for tests.yaml.
+# The Cloud Run job's container: run_tests.py and its modules, its infra/,
+# terraform and tests.yaml. Its build context is automation/, for tests.yaml.
 #
 # Every base image is pinned by digest, the tag beside it saying which one it
 # was taken from, so a rebuild of the same commit is the same image.
@@ -32,7 +32,7 @@ COPY runner/infra/ runner/infra/
 # The providers the lock file pins, installed now rather than downloaded by
 # every execution's terraform init.
 RUN terraform -chdir=runner/infra init -backend=false -input=false
-COPY runner/run_tests.py runner/
+COPY runner/*.py runner/
 
 ENV PYTHONUNBUFFERED=1
 # Takes run_tests.py's arguments.
