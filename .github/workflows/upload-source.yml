@@ -1,0 +1,37 @@
+name: Upload source
+
+# Uploads each pushed commit, as a git repo, to
+# gs://<SOURCE_BUCKET>/<branch>/<commit>.tar.gz.
+
+on:
+  push:
+    branches: ['**']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: true
+          # Otherwise the token ends up in the tarball's .git/config.
+          persist-credentials: false
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Upload
+        env:
+          BUCKET: ${{ vars.SOURCE_BUCKET }}
+          BRANCH: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          tarball="$RUNNER_TEMP/$COMMIT.tar.gz"
+          tar -czf "$tarball" -C "$GITHUB_WORKSPACE" .
+          gcloud storage cp "$tarball" "gs://$BUCKET/$BRANCH/$COMMIT.tar.gz"
