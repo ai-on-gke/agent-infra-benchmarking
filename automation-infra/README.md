@@ -75,9 +75,7 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
 
    ```bash
    mkdir -p "automation-infra/deployments/$DEPLOYMENT"
-   ```
 
-   ```bash
    cat > "automation-infra/deployments/$DEPLOYMENT/main.tf" <<EOF
    terraform {
      required_version = ">= 1.5"
@@ -98,14 +96,10 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
      value = module.cloud_run
    }
    EOF
-   ```
 
-   ```bash
    printf 'bucket = "%s"\nprefix = "automation/cloud-run/%s"\n' "$STATE_BUCKET" "$DEPLOYMENT" \
      > "automation-infra/deployments/$DEPLOYMENT/backend.hcl"
-   ```
 
-   ```bash
    printf '.terraform/\n' > "automation-infra/deployments/$DEPLOYMENT/.gitignore"
    ```
 
