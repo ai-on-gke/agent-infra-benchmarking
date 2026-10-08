@@ -4,7 +4,7 @@ variable "project_id" {
 }
 
 variable "region" {
-  description = "Default region for the cluster, the Artifact Registry repo and the bucket. The cluster can override it."
+  description = "Default region for the cluster, the Artifact Registry repo and the bucket."
   type        = string
   default     = "us-central1"
 }
@@ -47,82 +47,25 @@ variable "services_cidr" {
   default     = "10.8.0.0/20"
 }
 
-variable "cluster" {
-  description = "The GKE cluster to deploy. Named var.default_resource_name unless `name` says otherwise."
-  type = object({
-    # Cluster name. Empty takes var.default_resource_name, the same way the
-    # bucket and the Artifact Registry repository do.
-    name = optional(string, "")
+# Bump it deliberately. A floor for the control plane: GKE upgrades it past
+# this, and run.json records the version a run saw. The node pools stay put
+# until the minor version's end of support.
+variable "kubernetes_version" {
+  description = "Kubernetes version of the control plane (GKE's min_master_version) and of both node pools."
+  type        = string
+  default     = "1.35.8-gke.1225000"
+}
 
-    region              = optional(string)
-    autopilot           = optional(bool, false)
-    enable_dataplane_v2 = optional(bool, false)
+variable "zone" {
+  description = "Zone both node pools are pinned to. Must be in var.region."
+  type        = string
+  default     = "us-central1-a"
+}
 
-    # Control-plane version (GKE's min_master_version), and the version of
-    # every node pool that sets none. A floor for the control plane: GKE
-    # upgrades it past this in any channel, and run.json records the version
-    # a run saw. Empty takes the release channel's default.
-    kubernetes_version = optional(string, "1.35.8-gke.1225000")
-
-    # RAPID, REGULAR, STABLE or EXTENDED. UNSPECIFIED (no channel) is
-    # deprecated by GKE and does not stop control-plane upgrades. Empty leaves
-    # the choice to GKE.
-    release_channel = optional(string, "STABLE")
-
-    # Kubernetes beta APIs to enable, e.g.
-    # ["certificates.k8s.io/v1beta1/clustertrustbundles", "certificates.k8s.io/v1beta1/podcertificaterequests"].
-    # Requires the cluster to be running a Kubernetes minor version that
-    # serves these APIs as beta.
-    k8s_beta_apis = optional(list(string), [])
-
-    # Requires Workload Identity (always enabled by this module) and, to
-    # actually use snapshots on a pod, GKE Sandbox (gVisor) on a non-E2
-    # machine type.
-    enable_pod_snapshots = optional(bool, false)
-
-    # Provides the SandboxTemplate/SandboxClaim CRDs used to request and
-    # manage gVisor-sandboxed pods. Requires GKE 1.35.2-gke.1269000+ and a
-    # node pool with sandbox_gvisor = true.
-    enable_agent_sandbox = optional(bool, false)
-
-    # One of "SCOPE_UNSPECIFIED", "NONE", "COLLECTION_AND_INSTRUMENTATION_COMPONENTS".
-    # On by default because substrate's install, the benchmark Job and the
-    # actors all export to the managed collector; without it every one of them
-    # logs a failed export. Substrate's own tools/setup-gcp enables it too.
-    managed_otel_scope = optional(string, "COLLECTION_AND_INSTRUMENTATION_COMPONENTS")
-
-    # Only used when autopilot = false.
-    node_pools = optional(map(object({
-      machine_type   = optional(string, "e2-medium")
-      disk_size_gb   = optional(number, 100)
-      disk_type      = optional(string, "pd-balanced")
-      node_count     = optional(number, 1)
-      min_node_count = optional(number, 1)
-      max_node_count = optional(number, 3)
-      spot           = optional(bool, false)
-      labels         = optional(map(string), {})
-      # Node version. Unset takes kubernetes_version above.
-      version = optional(string)
-      # Off because an upgrade drains the workers, which crashes the actors
-      # still awake on them; see substrate's tools/setup-gcp/README.md.
-      auto_upgrade = optional(bool, false)
-      auto_repair  = optional(bool, true)
-      # Zones the pool's nodes are created in, e.g. ["us-central1-a"] to pin
-      # a pool to a single zone. Defaults to all zones in the cluster's
-      # region when empty.
-      node_locations = optional(list(string), [])
-      taints = optional(list(object({
-        key    = string
-        value  = string
-        effect = string
-      })), [])
-      # Enables GKE Sandbox (gVisor) on this pool's nodes. Forces
-      # image_type = "COS_CONTAINERD". Keep at least one non-sandboxed
-      # pool for GKE-managed system workloads.
-      sandbox_gvisor = optional(bool, false)
-    })), { default = {} })
-  })
-  default = {}
+variable "sandboxed_machine_type" {
+  description = "Machine type of the sandboxed node pool, which runs the workers."
+  type        = string
+  default     = "c2-standard-16"
 }
 
 # Every node pool's ate.dev/substrate-version label, which has to be the
@@ -136,8 +79,6 @@ variable "substrate_version" {
   type        = string
 }
 
-# Separate from cluster.node_pools so a run can size the sandboxed pool with
-# -var alone. They override whatever node_pools.sandboxed sets.
 variable "sandboxed_node_count" {
   description = "Initial node count of the sandboxed node pool."
   type        = number

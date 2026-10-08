@@ -8,7 +8,7 @@ output "project_id" {
 }
 
 output "region" {
-  description = "Default region of the deployment: the Artifact Registry repo, the bucket, and the cluster unless it overrode it."
+  description = "Default region of the deployment: the Artifact Registry repo, the bucket, and the cluster."
   value       = var.region
 }
 

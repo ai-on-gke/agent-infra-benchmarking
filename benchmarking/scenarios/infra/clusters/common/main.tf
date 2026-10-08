@@ -3,7 +3,6 @@ locals {
   artifact_repository_id = var.artifact_repository_id != "" ? var.artifact_repository_id : var.default_resource_name
 
   bucket_location = var.bucket_location != "" ? var.bucket_location : var.region
-  cluster_name    = var.cluster.name != "" ? var.cluster.name : var.default_resource_name
 }
 
 # The APIs everything below needs. Never disabled on destroy: the project is
@@ -39,40 +38,67 @@ locals {
   # the submodule therefore changes a node label, and GKE rolls the pool's nodes
   # to apply it; that is the same node-by-node move the version is there to
   # describe, so it belongs in the plan rather than out of it.
-  node_pools = {
-    for key, pool in var.cluster.node_pools : key => merge(pool, {
-      labels = merge(pool.labels, {
-        "ate.dev/substrate-version" = var.substrate_version
-      })
-      }, key == "sandboxed" ? {
-      node_count     = var.sandboxed_node_count
-      min_node_count = var.sandboxed_min_node_count
-      max_node_count = var.sandboxed_max_node_count
-    } : {})
-  }
+  substrate_version_label = { "ate.dev/substrate-version" = var.substrate_version }
 }
 
 module "cluster" {
   source = "./modules/gke-cluster"
 
   project_id = var.project_id
-  region     = coalesce(var.cluster.region, var.region)
+  region     = var.region
 
-  cluster_name = local.cluster_name
+  cluster_name = var.default_resource_name
 
-  autopilot            = var.cluster.autopilot
-  network              = google_compute_network.this.self_link
-  subnetwork           = google_compute_subnetwork.this.self_link
-  pods_range_name      = "pods"
-  services_range_name  = "services"
-  enable_dataplane_v2  = var.cluster.enable_dataplane_v2
-  node_pools           = local.node_pools
-  kubernetes_version   = var.cluster.kubernetes_version
-  release_channel      = var.cluster.release_channel
-  k8s_beta_apis        = var.cluster.k8s_beta_apis
-  enable_pod_snapshots = var.cluster.enable_pod_snapshots
-  enable_agent_sandbox = var.cluster.enable_agent_sandbox
-  managed_otel_scope   = var.cluster.managed_otel_scope
+  network             = google_compute_network.this.self_link
+  subnetwork          = google_compute_subnetwork.this.self_link
+  pods_range_name     = "pods"
+  services_range_name = "services"
+  kubernetes_version  = var.kubernetes_version
+  release_channel     = "STABLE"
+
+  # Without these, substrate's podcertificate-controller never creates the
+  # ClusterTrustBundles and hack/install-ate.sh waits for them forever.
+  k8s_beta_apis = [
+    "certificates.k8s.io/v1beta1/clustertrustbundles",
+    "certificates.k8s.io/v1beta1/podcertificaterequests",
+  ]
+
+  # Substrate's install, the benchmark Job and the actors all export to the
+  # managed collector; without it every one of them logs a failed export.
+  # Substrate's own tools/setup-gcp enables it too.
+  managed_otel_scope = "COLLECTION_AND_INSTRUMENTATION_COMPONENTS"
+
+  # Both pools leave auto_upgrade off: an upgrade drains the workers, which
+  # crashes the actors still awake on them; see substrate's
+  # tools/setup-gcp/README.md.
+  node_pools = {
+    default = {
+      machine_type   = "c2-standard-16"
+      node_count     = 1
+      min_node_count = 1
+      max_node_count = 1
+      node_locations = [var.zone]
+      labels         = local.substrate_version_label
+    }
+    sandboxed = {
+      machine_type   = var.sandboxed_machine_type
+      node_count     = var.sandboxed_node_count
+      min_node_count = var.sandboxed_min_node_count
+      max_node_count = var.sandboxed_max_node_count
+      node_locations = [var.zone]
+      labels         = merge(local.substrate_version_label, { "benchmarking-worker" = "true" })
+      # worker-pool.yaml.tmpl's WorkerPool already tolerates this taint; without
+      # it actually applied to the nodes, nothing stops substrate's own
+      # control-plane pods (and anything else) from also landing here
+      # alongside the workers, which is how a 100-worker run blows past GKE's
+      # 110-pods-per-node cap on this single pinned node.
+      taints = [{
+        key    = "ate.dev/sandboxClass"
+        value  = "gvisor"
+        effect = "NO_SCHEDULE"
+      }]
+    }
+  }
 
   node_service_account = google_service_account.node.email
 

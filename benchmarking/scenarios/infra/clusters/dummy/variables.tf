@@ -18,6 +18,24 @@ variable "default_resource_name" {
   type        = string
 }
 
+variable "kubernetes_version" {
+  description = "Unused; taken as common takes it."
+  type        = string
+  default     = ""
+}
+
+variable "zone" {
+  description = "Unused; taken as common takes it."
+  type        = string
+  default     = ""
+}
+
+variable "sandboxed_machine_type" {
+  description = "Unused; taken as common takes it."
+  type        = string
+  default     = ""
+}
+
 variable "sandboxed_node_count" {
   description = "Number of fake nodes in the sandboxed pool."
   type        = number
