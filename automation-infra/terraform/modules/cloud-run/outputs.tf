@@ -27,3 +27,13 @@ output "runner_image" {
   description = "The runner image the job runs, by digest."
   value       = data.google_artifact_registry_docker_image.runner.self_link
 }
+
+output "github_workload_identity_provider" {
+  description = "Workload identity provider of google-github-actions/auth, or null when var.github_actions is null."
+  value       = one(google_iam_workload_identity_pool_provider.github[*].name)
+}
+
+output "github_service_account_email" {
+  description = "Service account of google-github-actions/auth, or null when var.github_actions is null."
+  value       = one(google_service_account.github[*].email)
+}

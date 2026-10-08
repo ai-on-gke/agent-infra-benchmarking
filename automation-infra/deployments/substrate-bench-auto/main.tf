@@ -11,6 +11,12 @@ module "cloud_run" {
   project_id            = "akvelon-gke-aieco"
   region                = "us-central1"
   default_resource_name = "substrate-bench-auto"
+
+  github_actions = {
+    repository = "ai-on-gke/agent-infra-benchmarking"
+    # The state bucket, from backend.hcl.
+    bucket = regex("bucket *= *\"([^\"]+)\"", file("${path.module}/backend.hcl"))[0]
+  }
 }
 
 output "cloud_run" {

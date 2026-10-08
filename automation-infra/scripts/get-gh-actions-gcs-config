@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Prints the secrets .github/workflows/upload-source.yml reads to upload to a
+# deployment's state bucket: the bucket, from its backend.hcl, and the workload
+# identity provider and service account its github_actions created, from its
+# Terraform outputs. None of them is a credential. With --set, also stores them
+# as secrets of this repo with gh.
+#
+#   get-gh-actions-gcs-config [--set] DEPLOYMENT
+
+set -o errexit -o nounset -o pipefail
+
+usage() {
+  echo "Usage: $0 [--set] DEPLOYMENT" >&2
+  exit 2
+}
+
+SET=false
+if [[ "${1:-}" == --set ]]; then
+  SET=true
+  shift
+fi
+[[ $# -eq 1 ]] || usage
+
+DEPLOYMENT_DIR="$(cd "$(dirname "$0")/../deployments" && pwd)/$1"
+if [[ ! -f "${DEPLOYMENT_DIR}/backend.hcl" ]]; then
+  echo "Error: no ${DEPLOYMENT_DIR}/backend.hcl" >&2
+  exit 1
+fi
+
+BUCKET="$(sed -n 's/^bucket *= *"\(.*\)"/\1/p' "${DEPLOYMENT_DIR}/backend.hcl")"
+OUTPUTS="$(terraform -chdir="${DEPLOYMENT_DIR}" output -json cloud_run)"
+PROVIDER="$(jq -r '.github_workload_identity_provider // empty' <<<"${OUTPUTS}")"
+SERVICE_ACCOUNT="$(jq -r '.github_service_account_email // empty' <<<"${OUTPUTS}")"
+if [[ -z "${BUCKET}" || -z "${PROVIDER}" || -z "${SERVICE_ACCOUNT}" ]]; then
+  echo "Error: no bucket in backend.hcl, or no github_actions applied in $1" >&2
+  exit 1
+fi
+
+declare -A SECRETS=(
+  [SOURCE_BUCKET]="${BUCKET}"
+  [GCP_WORKLOAD_IDENTITY_PROVIDER]="${PROVIDER}"
+  [GCP_SERVICE_ACCOUNT]="${SERVICE_ACCOUNT}"
+)
+for name in SOURCE_BUCKET GCP_WORKLOAD_IDENTITY_PROVIDER GCP_SERVICE_ACCOUNT; do
+  echo "${name}=${SECRETS[${name}]}"
+  if [[ "${SET}" == true ]]; then
+    # gh takes the repo from the git remote of where it runs.
+    (cd "${DEPLOYMENT_DIR}" && gh secret set "${name}" --body "${SECRETS[${name}]}")
+  fi
+done

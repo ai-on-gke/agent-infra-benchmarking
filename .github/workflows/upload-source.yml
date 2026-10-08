@@ -1,7 +1,8 @@
 name: Upload source
 
 # Uploads each pushed commit, as a git repo, to
-# gs://<SOURCE_BUCKET>/<branch>/<commit>.tar.gz.
+# gs://<SOURCE_BUCKET>/source/<branch>/<commit>.tar.gz. The secrets come from
+# automation-infra/scripts/get-gh-actions-gcs-config.
 
 on:
   push:
@@ -23,15 +24,15 @@ jobs:
           persist-credentials: false
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
       - name: Upload
         env:
-          BUCKET: ${{ vars.SOURCE_BUCKET }}
+          BUCKET: ${{ secrets.SOURCE_BUCKET }}
           BRANCH: ${{ github.ref_name }}
           COMMIT: ${{ github.sha }}
         run: |
           tarball="$RUNNER_TEMP/$COMMIT.tar.gz"
           tar -czf "$tarball" -C "$GITHUB_WORKSPACE" .
-          gcloud storage cp "$tarball" "gs://$BUCKET/$BRANCH/$COMMIT.tar.gz"
+          gcloud storage cp "$tarball" "gs://$BUCKET/source/$BRANCH/$COMMIT.tar.gz"

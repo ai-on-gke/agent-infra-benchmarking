@@ -79,3 +79,12 @@ variable "runner_state_bucket" {
   type        = string
   default     = ""
 }
+
+variable "github_actions" {
+  description = "GitHub repository, as owner/name, whose Actions workflows may write under source/ in bucket, through Workload Identity Federation. Null grants none."
+  type = object({
+    repository = string
+    bucket     = string
+  })
+  default = null
+}
