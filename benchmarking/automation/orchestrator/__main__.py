@@ -47,8 +47,9 @@ CLUSTER_KEYS = {"name", "tfvars", "tfvars_inline", "variables"}
 # Every case's .terraform/ starts empty, so its providers come from here rather
 # than from a download each.
 PLUGIN_CACHE_DIR = Path(os.environ.get("TF_PLUGIN_CACHE_DIR") or AUTOMATION_DIR / ".terraform-plugin-cache")
-# An execution's local files, in <name>/: tfstates/ with the local backend,
-# laid out as the GCS prefix is, and tf-data/ with either.
+# An execution's local files, in <name>/: its own tfstates/ with the local
+# backend, and a folder per case, <name>/tests/<case>/, with that case's
+# tfstates/ and, with either backend, its tf-data/.
 LOCAL_RUNS_DIR = AUTOMATION_DIR / "local-runs"
 
 
@@ -91,12 +92,14 @@ def check_cluster(where: str, case: dict) -> None:
         raise ValueError(f"{where}: `infra.cluster.variables` must be a mapping")
 
 
-def backend_config(args: argparse.Namespace, *key: str) -> list[str]:
-    """The -backend-config of the state under <state prefix>/<name>/<key>, or
-    local-runs/<name>/tfstates/<key> with the local backend."""
+def backend_config(args: argparse.Namespace, case: str | None = None) -> list[str]:
+    """The -backend-config of the execution's state, or given a case that
+    case's: under <state prefix>/<name>[/tests/<case>] in GCS, and in
+    local-runs/<name>[/tests/<case>]/tfstates/ with the local backend."""
+    key = ["tests", case] if case else []
     if args.state_backend == "gcs":
         return [f"bucket={args.state_bucket}", f"prefix={'/'.join([args.state_prefix, args.name, *key])}"]
-    return [f"path={LOCAL_RUNS_DIR.joinpath(args.name, 'tfstates', *key, 'terraform.tfstate')}"]
+    return [f"path={LOCAL_RUNS_DIR.joinpath(args.name, *key, 'tfstates', 'terraform.tfstate')}"]
 
 
 def backend_block(args: argparse.Namespace) -> str:
@@ -112,7 +115,7 @@ def run_case(name: str, case: dict, args: argparse.Namespace, tf_vars: list[str]
     # dir, and an override file sorting after backend_override.tf replaces it.
     override = cluster_dir / f"orchestrator_{args.name}_override.tf"
     # The case's TF_DATA_DIR, which also holds its plan and inline tfvars.
-    data_dir = LOCAL_RUNS_DIR / args.name / "tf-data" / "clusters" / name
+    data_dir = LOCAL_RUNS_DIR / args.name / "tests" / name / "tf-data"
     data_dir.mkdir(parents=True, exist_ok=True)
     PLUGIN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     env = {"TF_DATA_DIR": str(data_dir), "TF_PLUGIN_CACHE_DIR": str(PLUGIN_CACHE_DIR)}
@@ -140,7 +143,7 @@ def run_case(name: str, case: dict, args: argparse.Namespace, tf_vars: list[str]
             cluster_dir,
             "init",
             "-input=false",
-            *(f"-backend-config={c}" for c in backend_config(args, "clusters", name)),
+            *(f"-backend-config={c}" for c in backend_config(args, name)),
             env=env,
         )
         try:
@@ -174,7 +177,7 @@ def main() -> None:
     p.add_argument(
         "--state-prefix",
         help="prefix in the state bucket, each execution's state being under <prefix>/<name>; only, and required,"
-        f" with gcs. With local, the state is in {LOCAL_RUNS_DIR}/<name>/tfstates",
+        f" with gcs. With local, the state is under {LOCAL_RUNS_DIR}/<name>",
     )
     p.add_argument(
         "--name",
