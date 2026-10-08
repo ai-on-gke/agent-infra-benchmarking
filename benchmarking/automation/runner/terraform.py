@@ -22,7 +22,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from log import log
+from .log import log
 
 # Relative to the config's directory; in .terraform/, which git and the image
 # leave out.

@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 # Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,8 +30,8 @@ from typing import NoReturn
 
 import yaml
 
-import terraform
-from log import log
+from . import terraform
+from .log import log
 
 RUNNER_DIR = Path(__file__).resolve().parent
 TESTS_FILE = RUNNER_DIR.parent / "tests.yaml"
@@ -62,7 +60,7 @@ def run_case(name: str, case: dict) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__)
+    p = argparse.ArgumentParser(prog="python3 -m runner", description=__doc__)
     p.add_argument("--tests-file", type=Path, default=TESTS_FILE, help=f"default: {TESTS_FILE}")
     p.add_argument(
         "--test-case-name",

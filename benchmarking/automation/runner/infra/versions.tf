@@ -1,7 +1,7 @@
 terraform {
   required_version = ">= 1.5"
 
-  # run.py gives terraform init the bucket and the execution's prefix.
+  # The runner gives terraform init the bucket and the execution's prefix.
   backend "gcs" {}
 
   required_providers {

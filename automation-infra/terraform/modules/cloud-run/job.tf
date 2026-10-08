@@ -67,7 +67,7 @@ resource "google_cloud_run_v2_job" "job" {
       containers {
         image   = data.google_artifact_registry_docker_image.runner.self_link
         command = var.command
-        # run.py's infra goes in this deployment's project and region,
+        # The runner's infra goes in this deployment's project and region,
         # with its state in the deployment's state bucket.
         args = concat([
           "--project-id=${var.project_id}",

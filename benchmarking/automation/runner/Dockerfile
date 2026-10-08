@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The Cloud Run job's container: run.py and its modules, its infra/,
+# The Cloud Run job's container: the runner package, its infra/,
 # terraform and tests.yaml. Its build context is benchmarking/automation/, for
 # tests.yaml.
 #
@@ -36,5 +36,5 @@ RUN terraform -chdir=runner/infra init -backend=false -input=false
 COPY runner/*.py runner/
 
 ENV PYTHONUNBUFFERED=1
-# Takes run.py's arguments.
-ENTRYPOINT ["python3", "/app/runner/run.py"]
+# Takes the runner's arguments.
+ENTRYPOINT ["python3", "-m", "runner"]

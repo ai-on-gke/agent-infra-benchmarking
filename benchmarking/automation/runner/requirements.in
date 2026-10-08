@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# run.py's Python: PyYAML to read tests.yaml. requirements.txt is
+# The runner's Python: PyYAML to read tests.yaml. requirements.txt is
 # compiled from this with every dependency pinned and hashed, for the image's
 # Python 3.11 on linux/amd64:
 #
