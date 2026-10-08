@@ -12,32 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Creates or destroys the cluster a tests.yaml case runs on, the
-infra/clusters/ config its infra.cluster names, and keeps it until destroyed.
-Every Terraform file of it is in --terraform-dir, its state a local one; create
-records the cluster there, so destroy needs nothing else."""
+"""Applies and destroys the cluster a tests.yaml case runs on, the
+infra/clusters/ config its infra.cluster names."""
 
 from __future__ import annotations
 
-import argparse
 import json
-import shutil
-import subprocess
-import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, NoReturn
+from typing import Iterator
 
-import yaml
-
-from . import AUTOMATION_DIR, terraform
-from .cases import CLUSTERS_DIR, TESTS_FILE, load_cases
-from .log import log
-
-RECORD_FILE = "cluster.json"
-# Where tools/dev-infra keeps each dev cluster's --terraform-dir, by name.
-DEV_INFRA_DIR = AUTOMATION_DIR / ".dev-infra" / "terraform"
+from . import terraform
+from .cases import CLUSTERS_DIR
 
 
 @dataclass
@@ -123,88 +110,3 @@ class Cluster:
                 yield
             finally:
                 self.deploy("-destroy")
-
-
-def fail(message: str) -> NoReturn:
-    log(f"cluster: {message}", "ERROR")
-    sys.exit(1)
-
-
-def local_cluster(terraform_dir: Path, record: dict, json_output: bool) -> Cluster:
-    data = terraform_dir / "tf-data"
-    data.mkdir(parents=True, exist_ok=True)
-    return Cluster(
-        spec=record["cluster"],
-        data=data,
-        backend="local",
-        backend_config=[f"path={terraform_dir / 'tfstates' / 'terraform.tfstate'}"],
-        owner=f"cluster_{record['name']}",
-        tf_vars=[
-            f"-var=project_id={record['project_id']}",
-            f"-var=region={record['region']}",
-            f"-var=default_resource_name={record['name']}",
-        ],
-        json_output=json_output,
-    )
-
-
-def main() -> None:
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument(
-        "--terraform-dir", type=Path, required=True, help="where the cluster's state and Terraform data are"
-    )
-    common.add_argument("--terraform-output", choices=["text", "json"], default="text", help="default: %(default)s")
-
-    p = argparse.ArgumentParser(prog="python3 -m orchestrator.cluster", description=__doc__)
-    commands = p.add_subparsers(dest="command", required=True)
-    create = commands.add_parser("create", parents=[common], help="apply a case's cluster")
-    create.add_argument("--test-case-name", required=True, metavar="NAME", help="the case whose cluster to apply")
-    create.add_argument("--tests-file", type=Path, default=TESTS_FILE, help=f"default: {TESTS_FILE}")
-    create.add_argument("--project-id", required=True, help="GCP project to create the cluster in")
-    create.add_argument("--region", default="us-central1", help="default: %(default)s")
-    create.add_argument("--name", required=True, help="the cluster's resource name")
-    commands.add_parser("destroy", parents=[common], help="destroy the cluster create applied")
-    args = p.parse_args()
-
-    if not shutil.which("terraform"):
-        fail("terraform is required to apply the cluster")
-
-    record_file = args.terraform_dir / RECORD_FILE
-    if args.command == "create":
-        try:
-            cases = load_cases(args.tests_file)
-        except (OSError, ValueError, yaml.YAMLError) as exc:
-            fail(str(exc))
-        if args.test_case_name not in cases:
-            fail(f"no case {args.test_case_name} in {args.tests_file}; it has {', '.join(cases)}")
-        record = {
-            "name": args.name,
-            "test_case": args.test_case_name,
-            "project_id": args.project_id,
-            "region": args.region,
-            "cluster": cases[args.test_case_name]["infra"]["cluster"],
-        }
-        # The same one again re-applies it, e.g. after a failed create.
-        if record_file.exists() and json.loads(record_file.read_text()) != record:
-            fail(f"{args.terraform_dir} already holds another cluster, recorded in {record_file}; destroy it first")
-        args.terraform_dir.mkdir(parents=True, exist_ok=True)
-        # Before applying, so a failed create can be destroyed.
-        record_file.write_text(json.dumps(record, indent=2) + "\n")
-    elif record_file.exists():
-        record = json.loads(record_file.read_text())
-    else:
-        fail(f"no cluster in {args.terraform_dir}: it has no {RECORD_FILE}")
-
-    cluster = local_cluster(args.terraform_dir, record, args.terraform_output == "json")
-    try:
-        if args.command == "create":
-            cluster.apply()
-        else:
-            cluster.destroy()
-    except subprocess.CalledProcessError as exc:
-        # cmd[1] is -chdir=<the config's directory>.
-        fail(f"terraform {exc.cmd[2]} failed in {exc.cmd[1].removeprefix('-chdir=')}")
-
-
-if __name__ == "__main__":
-    main()

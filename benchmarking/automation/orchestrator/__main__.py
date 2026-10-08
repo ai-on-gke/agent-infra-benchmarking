@@ -15,8 +15,8 @@
 """Applies infra/orchestrator/, runs the cases in tests.yaml one after another
 (every case in the order listed, or the ones --test-case-name names in the
 order given), each on its own infra/clusters/ cluster applied for it and
-destroyed after it, or all on the one --dev-infra names, and destroys the infra
-again."""
+destroyed after it, or all on the dev infra --dev-infra names, which outlives
+the execution, and destroys the infra again."""
 
 from __future__ import annotations
 
@@ -33,9 +33,9 @@ from typing import NoReturn
 
 import yaml
 
-from . import AUTOMATION_DIR, terraform
+from . import AUTOMATION_DIR, dev_infra, terraform
 from .cases import TESTS_FILE, load_cases
-from .cluster import DEV_INFRA_DIR, RECORD_FILE, Cluster, local_cluster
+from .cluster import Cluster
 from .log import log
 
 INFRA_DIR = AUTOMATION_DIR / "infra" / "orchestrator"
@@ -72,13 +72,20 @@ def data_dir(args: argparse.Namespace, *key: str) -> Path:
 
 
 def dev_cluster(args: argparse.Namespace, cases: dict[str, dict], names: list[str]) -> Cluster:
-    """The dev cluster --dev-infra names, once it is one every case can run on."""
-    terraform_dir = DEV_INFRA_DIR / args.dev_infra
-    record_file = terraform_dir / RECORD_FILE
-    if not record_file.exists():
-        fail(f"no dev infra {args.dev_infra}: no {record_file}")
-    record = json.loads(record_file.read_text())
-    if record["project_id"] != args.project_id:
+    """The dev infra --dev-infra names, created on the first case's
+    infra.cluster unless it exists, once every case can run on it."""
+    json_output = args.terraform_output == "json"
+    record = dev_infra.read_record(args.dev_infra)
+    new = record is None
+    if new:
+        record = {
+            "name": args.dev_infra,
+            "test_case": names[0],
+            "project_id": args.project_id,
+            "region": args.region,
+            "cluster": cases[names[0]]["infra"]["cluster"],
+        }
+    elif record["project_id"] != args.project_id:
         fail(f"dev infra {args.dev_infra} is in project {record['project_id']}, not {args.project_id}")
     for name in names:
         spec = cases[name]["infra"]["cluster"]
@@ -89,7 +96,10 @@ def dev_cluster(args: argparse.Namespace, cases: dict[str, dict], names: list[st
             )
         if spec != record["cluster"]:
             log(f"run: case {name}'s infra.cluster differs from dev infra {args.dev_infra}'s it runs on", "WARNING")
-    return local_cluster(terraform_dir, record, args.terraform_output == "json")
+    if new:
+        log(f"run: creating dev infra {args.dev_infra} for case {names[0]}")
+        return dev_infra.create(record, json_output)
+    return dev_infra.cluster(record, json_output)
 
 
 def run_case(name: str, case: dict, args: argparse.Namespace, tf_vars: list[str], dev: Cluster | None) -> None:
@@ -148,8 +158,10 @@ def main() -> None:
     )
     p.add_argument(
         "--dev-infra",
+        type=dev_infra.check_name,
         metavar="NAME",
-        help="run every case on this dev cluster, which tools/dev-infra created, rather than on one applied for it",
+        help="run every case on this dev infra, a cluster kept until python3 -m orchestrator.dev_infra destroys it,"
+        " rather than on one applied for it; created on the first case's cluster unless it exists",
     )
     args = p.parse_args()
     if args.state_backend == "gcs" and not (args.state_bucket and args.state_prefix):
@@ -170,7 +182,6 @@ def main() -> None:
 
     if not shutil.which("terraform"):
         fail("terraform is required to apply the infra")
-    dev = dev_cluster(args, cases, names) if args.dev_infra else None
 
     # Cloud Run stops a task that outlives its timeout with SIGTERM; exiting
     # on it, rather than dying, still destroys the infra.
@@ -187,6 +198,7 @@ def main() -> None:
     plan_file = str(orchestrator_data / "run.tfplan")
     BACKEND_FILE.write_text(terraform.backend_block(args.state_backend))
     try:
+        dev = dev_cluster(args, cases, names) if args.dev_infra else None
         terraform.run(
             INFRA_DIR,
             "init",

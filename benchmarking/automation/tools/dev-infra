@@ -14,77 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Creates a dev cluster, the one a tests.yaml case runs on, kept until it is
-# destroyed. NAME also names its resources, and its Terraform files are in
-# benchmarking/automation/.dev-infra/terraform/NAME/. Options go on to
-# python3 -m orchestrator.cluster, e.g. --region:
+# Lists or destroys the dev infras the orchestrator's --dev-infra creates, with
+# python3 -m orchestrator.dev_infra in tools/python:
 #
-#   dev-infra create NAME TEST_CASE --project-id PROJECT [OPTION...]
-#   dev-infra destroy NAME [OPTION...]
 #   dev-infra list
-#
-# A create that fails leaves what it made, for destroy.
+#   dev-infra destroy NAME
 
 set -o errexit -o nounset -o pipefail
 
 TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AUTOMATION_DIR="$(dirname "${TOOLS_DIR}")"
-DEV_INFRA_DIR="${AUTOMATION_DIR}/.dev-infra/terraform"
 
-usage() {
-  echo "Usage: $0 create NAME TEST_CASE --project-id PROJECT [OPTION...]" >&2
-  echo "       $0 destroy NAME [OPTION...]" >&2
-  echo "       $0 list" >&2
-  exit 2
-}
-
-if [[ "${1:-}" == list ]]; then
-  [[ $# -eq 1 ]] || usage
-  # From the cluster.json create writes; RESOURCES counts what the state holds,
-  # e.g. 0 after a create that failed before making anything.
-  exec python3 - "${DEV_INFRA_DIR}" <<'EOF'
-import json, sys
-from pathlib import Path
-
-rows = []
-for record_file in sorted(Path(sys.argv[1]).glob("*/cluster.json")):
-    record = json.loads(record_file.read_text())
-    state_file = record_file.parent / "tfstates" / "terraform.tfstate"
-    state = json.loads(state_file.read_text()) if state_file.exists() else {}
-    resources = sum(len(r.get("instances", [])) for r in state.get("resources", []))
-    rows.append([record["name"], record["test_case"], record["cluster"]["name"],
-                 record["project_id"], record["region"], str(resources)])
-if not rows:
-    sys.exit(f"No dev infra in {sys.argv[1]}")
-rows.insert(0, ["NAME", "TEST_CASE", "CLUSTER", "PROJECT", "REGION", "RESOURCES"])
-widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
-for row in rows:
-    print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
-EOF
-fi
-
-[[ $# -ge 2 ]] || usage
-COMMAND="$1"
-NAME="$2"
-shift 2
-# What GCP takes as a resource name.
-if [[ ! "${NAME}" =~ ^[a-z][-a-z0-9]*$ ]]; then
-  echo "Error: NAME must be lowercase letters, digits and hyphens, starting with a letter" >&2
-  exit 2
-fi
-TERRAFORM_DIR="${DEV_INFRA_DIR}/${NAME}"
-CLUSTER=("${TOOLS_DIR}/python" -m orchestrator.cluster)
-
-case "${COMMAND}" in
-  create)
-    [[ $# -ge 1 ]] || usage
-    exec "${CLUSTER[@]}" create --terraform-dir "${TERRAFORM_DIR}" --name "${NAME}" --test-case-name "$1" "${@:2}"
-    ;;
-  destroy)
-    "${CLUSTER[@]}" destroy --terraform-dir "${TERRAFORM_DIR}" "$@"
-    rm -rf "${TERRAFORM_DIR}"
-    ;;
-  *)
-    usage
-    ;;
-esac
+exec "${TOOLS_DIR}/python" -m orchestrator.dev_infra "$@"

@@ -16,7 +16,7 @@
 
 # Each orchestrator execution's local state and Terraform data.
 /benchmarking/automation/local-runs/
-# The dev clusters' Terraform files, which tools/dev-infra keeps.
+# The dev infras' Terraform files, which the orchestrator's --dev-infra keeps.
 /benchmarking/automation/.dev-infra/
 *.egg-info/
 
