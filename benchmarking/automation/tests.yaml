@@ -16,7 +16,7 @@
 # benchmarking/run_benchmark.sh, and its name the --test-case-name:
 #
 #   ./benchmarking/run_benchmark.sh --test-case-name glutton \
-#     --test-case "$(yq -c '.cases.glutton' automation/tests.yaml)"
+#     --test-case "$(yq -c '.cases.glutton' benchmarking/automation/tests.yaml)"
 #
 # `type` picks benchmarking/<type>/run_benchmark.sh, which documents the rest.
 # For locust: `worker-count` and `sandbox-class` shape the WorkerPool, and

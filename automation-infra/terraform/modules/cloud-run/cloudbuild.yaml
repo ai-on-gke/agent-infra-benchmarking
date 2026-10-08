@@ -1,14 +1,15 @@
-# Builds and pushes the runner image, from automation/ as the source:
+# Builds and pushes the job's image, from image/ as the source:
 #
-#   gcloud builds submit automation --config=automation-infra/terraform/modules/cloud-run/cloudbuild.yaml \
-#     --ignore-file=.dockerignore --substitutions=_IMAGE=IMAGE \
+#   gcloud builds submit automation-infra/terraform/modules/cloud-run/image \
+#     --config=automation-infra/terraform/modules/cloud-run/cloudbuild.yaml \
+#     --substitutions=_IMAGE=IMAGE \
 #     --service-account=SERVICE_ACCOUNT --gcs-source-staging-dir=SOURCE_DIR
 #
 # main.tf runs it whenever the image's sources change.
 
 steps:
   - name: gcr.io/cloud-builders/docker@sha256:40c2fb4fcd0ad51376eef166c2e7b2b40a3508d5776e2bf33db3783ab39d0f2e
-    args: ["build", "--platform=linux/amd64", "-f", "runner/Dockerfile", "-t", "${_IMAGE}", "."]
+    args: ["build", "--platform=linux/amd64", "-t", "${_IMAGE}", "."]
 
 images: ["${_IMAGE}"]
 

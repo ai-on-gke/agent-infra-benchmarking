@@ -1,11 +1,13 @@
 # Automation
 
-Runs the cases in [`tests.yaml`](../automation/tests.yaml) as a Cloud Run job, on a schedule
-or by hand. A deployment is a folder under [`deployments/`](deployments) that
-calls the [`terraform/modules/cloud-run`](terraform/modules/cloud-run) module,
-which deploys the Cloud Run job and builds its image. The Cloud Run job runs
-[`runner/run.py`](../automation/runner/run.py), which creates
-[`runner/infra`](../automation/runner/infra) for each execution and destroys it afterwards.
+A Cloud Run job, run on a schedule or by hand. A deployment is a folder under
+[`deployments/`](deployments) that calls the
+[`terraform/modules/cloud-run`](terraform/modules/cloud-run) module, which
+deploys the Cloud Run job and builds its image.
+
+For now the image is a placeholder,
+[`image/Dockerfile`](terraform/modules/cloud-run/image/Dockerfile), that exits
+successfully and does nothing else.
 
 ## Prerequisites
 
@@ -14,10 +16,6 @@ which deploys the Cloud Run job and builds its image. The Cloud Run job runs
 - **`git`**. The Cloud Run job's image is tagged with the repo's commit.
 - A GCP project with billing, and an account with `Owner` on it. `Editor` is
   not enough, as it cannot set IAM.
-
-### Running `run.py` locally
-
-- **Python 3.11+ with PyYAML**.
 
 ## Preparing
 
@@ -114,7 +112,7 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
    terraform -chdir="automation-infra/deployments/$DEPLOYMENT" init
    ```
 
-3. Apply. This also builds the runner image on Cloud Build, which takes a few
+3. Apply. This also builds the job's image on Cloud Build, which takes a few
    minutes, and again whenever the commit or the image's files change:
 
    ```bash
@@ -131,4 +129,12 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
 
    ```bash
    gcloud run jobs execute "$DEPLOYMENT" --project="$PROJECT_ID" --region="$REGION" --wait
+   ```
+
+   Or with [`scripts/trigger.sh`](scripts/trigger.sh), which starts it through
+   the Cloud Run Admin API, as an external caller would, and prints its log as
+   it comes in. It also needs `jq`:
+
+   ```bash
+   automation-infra/scripts/trigger.sh "$DEPLOYMENT"
    ```

@@ -13,7 +13,8 @@
 # limitations under the License.
 
 # The Cloud Run job's container: run.py and its modules, its infra/,
-# terraform and tests.yaml. Its build context is automation/, for tests.yaml.
+# terraform and tests.yaml. Its build context is benchmarking/automation/, for
+# tests.yaml.
 #
 # Every base image is pinned by digest, the tag beside it saying which one it
 # was taken from, so a rebuild of the same commit is the same image.

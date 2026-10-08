@@ -1,13 +1,8 @@
 locals {
   runner_state_bucket = var.runner_state_bucket != "" ? var.runner_state_bucket : "${var.project_id}-${var.default_resource_name}"
 
-  # automation/, the runner image's build context.
-  runner_context = abspath("${path.module}/../../../../automation")
-  # The files the image is built from, less what .dockerignore leaves out.
-  runner_sources = concat(["tests.yaml", ".dockerignore"], [
-    for f in fileset(local.runner_context, "runner/**") : f
-    if !can(regex("(^|/)(\\.terraform|__pycache__)/|\\.tfstate|\\.tfvars$", f))
-  ])
+  runner_context = abspath("${path.module}/image")
+  runner_sources = fileset(local.runner_context, "**")
   # Rebuilds the image on apply when any of its sources or the build changes,
   # also uncommitted, as the commit it is tagged with does not.
   runner_hash = sha1(join("\n", concat(
@@ -149,7 +144,7 @@ resource "terraform_data" "runner_image" {
   triggers_replace = [local.runner_image, local.runner_hash]
 
   provisioner "local-exec" {
-    command = "gcloud builds submit \"$CONTEXT\" --project=\"$PROJECT\" --config=\"$CONFIG\" --ignore-file=.dockerignore --substitutions=_IMAGE=\"$IMAGE\" --service-account=\"$SERVICE_ACCOUNT\" --gcs-source-staging-dir=\"$SOURCE_DIR\""
+    command = "gcloud builds submit \"$CONTEXT\" --project=\"$PROJECT\" --config=\"$CONFIG\" --substitutions=_IMAGE=\"$IMAGE\" --service-account=\"$SERVICE_ACCOUNT\" --gcs-source-staging-dir=\"$SOURCE_DIR\""
     environment = {
       CONTEXT         = local.runner_context
       PROJECT         = var.project_id
