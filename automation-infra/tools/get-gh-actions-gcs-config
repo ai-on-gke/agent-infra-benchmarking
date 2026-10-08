@@ -22,33 +22,30 @@
 # The account keeps one key: any it had are deleted before the new one is
 # made, so a run is also how the key is rotated.
 #
-#   get-gh-actions-gcs-config [--set] DEPLOYMENT
+#   get-gh-actions-gcs-config --deployment=DEPLOYMENT [--set]
 
 set -o errexit -o nounset -o pipefail
 
+source "$(dirname "$0")/lib.sh"
+
 usage() {
-  echo "Usage: $0 [--set] DEPLOYMENT" >&2
+  echo "Usage: $0 --deployment=DEPLOYMENT [--set]" >&2
   exit 2
 }
 
+parse_deployment "$@"
 SET=false
-if [[ "${1:-}" == --set ]]; then
+for arg in "${ARGS[@]}"; do
+  [[ "${arg}" == --set ]] || usage
   SET=true
-  shift
-fi
-[[ $# -eq 1 ]] || usage
+done
 
-DEPLOYMENT_DIR="$(cd "$(dirname "$0")/../deployments" && pwd)/$1"
-if [[ ! -d "${DEPLOYMENT_DIR}" ]]; then
-  echo "Error: no ${DEPLOYMENT_DIR}" >&2
-  exit 1
-fi
 # The name the workflow derives from the deployment's, the same way.
-SECRET="GCP_CREDENTIALS_$(tr 'a-z-' 'A-Z_' <<<"$1")"
+SECRET="GCP_CREDENTIALS_$(tr 'a-z-' 'A-Z_' <<<"${DEPLOYMENT}")"
 
 SERVICE_ACCOUNT="$(terraform -chdir="${DEPLOYMENT_DIR}" output -json cloud_run | jq -r '.github_service_account_email // empty')"
 if [[ -z "${SERVICE_ACCOUNT}" ]]; then
-  echo "Error: no github_actions_bucket applied in $1" >&2
+  echo "Error: no github_actions_bucket applied in ${DEPLOYMENT}" >&2
   exit 1
 fi
 

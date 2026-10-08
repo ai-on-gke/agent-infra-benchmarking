@@ -140,5 +140,5 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
    it comes in. It also needs `jq`:
 
    ```bash
-   automation-infra/tools/trigger "$DEPLOYMENT"
+   automation-infra/tools/trigger --deployment="$DEPLOYMENT"
    ```
