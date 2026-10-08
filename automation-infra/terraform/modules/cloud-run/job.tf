@@ -72,6 +72,7 @@ resource "google_cloud_run_v2_job" "job" {
         args = concat([
           "--project-id=${var.project_id}",
           "--region=${var.region}",
+          "--state-backend=gcs",
           "--state-bucket=${var.state_bucket}",
           "--state-prefix=${var.state_bucket_prefix}",
         ], var.args)

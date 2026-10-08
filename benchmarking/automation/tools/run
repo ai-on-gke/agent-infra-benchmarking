@@ -18,7 +18,7 @@
 # this script that has orchestrator/requirements.txt installed:
 #
 #   ./benchmarking/automation/tools/run --project-id my-project \
-#     --state-bucket my-bucket --state-prefix tests --test-case-name glutton
+#     --state-backend gcs --state-bucket my-bucket --state-prefix tests --test-case-name glutton
 
 set -o errexit -o nounset -o pipefail
 

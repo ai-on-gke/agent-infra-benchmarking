@@ -36,6 +36,9 @@ from .log import log
 ORCHESTRATOR_DIR = Path(__file__).resolve().parent
 TESTS_FILE = ORCHESTRATOR_DIR.parent / "tests.yaml"
 INFRA_DIR = ORCHESTRATOR_DIR / "infra"
+# The infra's backend, which each execution writes; infra/.gitignore leaves
+# out *_override.tf.
+BACKEND_FILE = INFRA_DIR / "backend_override.tf"
 
 
 def fail(message: str) -> NoReturn:
@@ -70,11 +73,18 @@ def main() -> None:
     )
     p.add_argument("--project-id", required=True, help="GCP project to create the infra in")
     p.add_argument("--region", default="us-central1", help="default: %(default)s")
-    p.add_argument("--state-bucket", required=True, help="GCS bucket holding the infra's Terraform state")
+    p.add_argument(
+        "--state-backend",
+        choices=["local", "gcs"],
+        required=True,
+        help="where the infra's Terraform state goes: a local file or a GCS bucket",
+    )
+    p.add_argument("--state-bucket", help="GCS bucket holding the state; only, and required, with gcs")
     p.add_argument(
         "--state-prefix",
         required=True,
-        help="prefix in the state bucket; each execution's state is under <prefix>/<name>",
+        help="prefix in the state bucket with gcs, a directory with local; each execution's state is under"
+        " <prefix>/<name>",
     )
     p.add_argument(
         "--name",
@@ -89,6 +99,16 @@ def main() -> None:
         " Default: %(default)s",
     )
     args = p.parse_args()
+    if args.state_backend == "gcs":
+        if not args.state_bucket:
+            p.error("--state-backend=gcs requires --state-bucket")
+        backend_config = [f"bucket={args.state_bucket}", f"prefix={args.state_prefix}/{args.name}"]
+    else:
+        if args.state_bucket:
+            p.error("--state-bucket is only for --state-backend=gcs")
+        # Absolute, as terraform takes a relative one from INFRA_DIR.
+        state_file = Path(args.state_prefix).resolve() / args.name / "terraform.tfstate"
+        backend_config = [f"path={state_file}"]
 
     try:
         cases = load_cases(args.tests_file)
@@ -114,15 +134,15 @@ def main() -> None:
         f"-var=region={args.region}",
         f"-var=default_resource_name={args.name}",
     ]
+    BACKEND_FILE.write_text(f'terraform {{\n  backend "{args.state_backend}" {{}}\n}}\n')
     try:
-        # -reconfigure, as the .terraform/ left by the last execution names its prefix.
+        # -reconfigure, as the .terraform/ left by the last execution names its backend.
         terraform.run(
             INFRA_DIR,
             "init",
             "-input=false",
             "-reconfigure",
-            f"-backend-config=bucket={args.state_bucket}",
-            f"-backend-config=prefix={args.state_prefix}/{args.name}",
+            *(f"-backend-config={c}" for c in backend_config),
         )
         try:
             terraform.deploy(INFRA_DIR, *tf_vars, json_output=json_output)

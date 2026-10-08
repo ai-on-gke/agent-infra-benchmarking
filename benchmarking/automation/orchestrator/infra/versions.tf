@@ -1,8 +1,8 @@
 terraform {
   required_version = ">= 1.5"
 
-  # The orchestrator gives terraform init the bucket and the execution's prefix.
-  backend "gcs" {}
+  # The backend, local or gcs, is in the backend_override.tf the orchestrator
+  # writes.
 
   required_providers {
     google = {
