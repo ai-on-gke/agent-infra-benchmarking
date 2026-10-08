@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Lists or destroys the dev infras: the clusters the orchestrator's
---dev-infra creates and keeps, each with every Terraform file of it in
-.dev-infra/terraform/<name>/."""
+"""Lists or destroys the dev infras: infra/orchestrator and a case's cluster,
+which the orchestrator's --dev-infra creates and keeps, each with every
+Terraform file of it in .dev-infra/terraform/<name>/<infra>/."""
 
 from __future__ import annotations
 
@@ -28,17 +28,19 @@ from pathlib import Path
 from typing import NoReturn
 
 from . import AUTOMATION_DIR
-from .cluster import Cluster
+from .deployment import ORCHESTRATOR_DIR, Deployment, cluster
 from .log import log
 
 DEV_INFRA_DIR = AUTOMATION_DIR / ".dev-infra" / "terraform"
 # What a dev infra is, written before it is applied so that one whose apply
-# failed can still be destroyed.
-RECORD_FILE = "cluster.json"
+# failed can be applied again or destroyed.
+RECORD_FILE = "dev-infra.json"
+# In the order they are applied.
+INFRAS = ("orchestrator", "cluster")
 
 
 def check_name(name: str) -> str:
-    # Also the cluster's resource name, so what GCP takes as one.
+    # Also its resources' name, so what GCP takes as one.
     if not re.fullmatch(r"[a-z][-a-z0-9]*", name):
         raise argparse.ArgumentTypeError(f"{name!r}: use lowercase letters, digits and hyphens, starting with a letter")
     return name
@@ -53,32 +55,57 @@ def read_record(name: str) -> dict | None:
     return json.loads(path.read_text()) if path.exists() else None
 
 
-def cluster(record: dict, json_output: bool = False) -> Cluster:
-    terraform_dir = DEV_INFRA_DIR / record["name"]
-    data = terraform_dir / "tf-data"
-    data.mkdir(parents=True, exist_ok=True)
-    return Cluster(
-        spec=record["cluster"],
-        data=data,
-        backend="local",
-        backend_config=[f"path={terraform_dir / 'tfstates' / 'terraform.tfstate'}"],
-        owner=f"dev_infra_{record['name']}",
-        tf_vars=[
-            f"-var=project_id={record['project_id']}",
-            f"-var=region={record['region']}",
-            f"-var=default_resource_name={record['name']}",
-        ],
-        json_output=json_output,
-    )
-
-
-def create(record: dict, json_output: bool = False) -> Cluster:
+def write_record(record: dict) -> None:
     path = record_file(record["name"])
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, indent=2) + "\n")
-    created = cluster(record, json_output)
-    created.apply()
-    return created
+
+
+def state_file(name: str, infra: str) -> Path:
+    return DEV_INFRA_DIR / name / infra / "tfstates" / "terraform.tfstate"
+
+
+def deployments(record: dict, json_output: bool = False) -> dict[str, Deployment]:
+    name = record["name"]
+    tf_vars = [
+        f"-var=project_id={record['project_id']}",
+        f"-var=region={record['region']}",
+        f"-var=default_resource_name={name}",
+    ]
+
+    def files(infra: str) -> dict:
+        data = DEV_INFRA_DIR / name / infra / "tf-data"
+        data.mkdir(parents=True, exist_ok=True)
+        return {
+            "data": data,
+            "backend": "local",
+            "backend_config": [f"path={state_file(name, infra)}"],
+            "owner": f"dev_infra_{name}",
+            "json_output": json_output,
+        }
+
+    return {
+        "orchestrator": Deployment(dir=ORCHESTRATOR_DIR, plan_args=tf_vars, **files("orchestrator")),
+        "cluster": cluster(record["cluster"], tf_vars=tf_vars, **files("cluster")),
+    }
+
+
+def apply(record: dict, json_output: bool = False) -> None:
+    """Applies every infra of the dev infra, which is complete only once all
+    of them are."""
+    record = {**record, "complete": False}
+    write_record(record)
+    for deployment in deployments(record, json_output).values():
+        deployment.apply()
+    write_record({**record, "complete": True})
+
+
+def destroy(record: dict, json_output: bool = False) -> None:
+    for infra, deployment in reversed(deployments(record, json_output).items()):
+        # One never applied has nothing to destroy.
+        if state_file(record["name"], infra).exists():
+            deployment.destroy()
+    shutil.rmtree(DEV_INFRA_DIR / record["name"])
 
 
 def fail(message: str) -> NoReturn:
@@ -86,20 +113,23 @@ def fail(message: str) -> NoReturn:
     sys.exit(1)
 
 
+def resource_count(path: Path) -> int:
+    state = json.loads(path.read_text()) if path.exists() else {}
+    return sum(len(r.get("instances", [])) for r in state.get("resources", []))
+
+
 def print_list() -> None:
     rows = []
     for path in sorted(DEV_INFRA_DIR.glob(f"*/{RECORD_FILE}")):
-        record = json.loads(path.read_text())
-        # How much of it there is, e.g. 0 after an apply that failed early.
-        state_file = path.parent / "tfstates" / "terraform.tfstate"
-        state = json.loads(state_file.read_text()) if state_file.exists() else {}
-        resources = sum(len(r.get("instances", [])) for r in state.get("resources", []))
-        fields = [record["name"], record["test_case"], record["cluster"]["name"], record["project_id"], record["region"]]
-        rows.append([*fields, str(resources)])
+        r = json.loads(path.read_text())
+        fields = [r["name"], r["test_case"], r["cluster"]["name"], r["project_id"], r["region"]]
+        status = "complete" if r.get("complete") else "incomplete"
+        counts = [str(resource_count(state_file(r["name"], infra))) for infra in INFRAS]
+        rows.append([*fields, status, *counts])
     if not rows:
         print(f"No dev infra in {DEV_INFRA_DIR}")
         return
-    rows.insert(0, ["NAME", "TEST_CASE", "CLUSTER", "PROJECT", "REGION", "RESOURCES"])
+    rows.insert(0, ["NAME", "TEST_CASE", "CLUSTER_CONFIG", "PROJECT", "REGION", "STATUS", *map(str.upper, INFRAS)])
     widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
     for row in rows:
         print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
@@ -108,10 +138,12 @@ def print_list() -> None:
 def main() -> None:
     p = argparse.ArgumentParser(prog="python3 -m orchestrator.dev_infra", description=__doc__)
     commands = p.add_subparsers(dest="command", required=True)
-    commands.add_parser("list", help="list the dev infras")
-    destroy = commands.add_parser("destroy", help="destroy a dev infra and remove its Terraform files")
-    destroy.add_argument("name", type=check_name, metavar="NAME")
-    destroy.add_argument("--terraform-output", choices=["text", "json"], default="text", help="default: %(default)s")
+    commands.add_parser("list", help="list the dev infras, with how many resources each of their infras holds")
+    destroy_command = commands.add_parser("destroy", help="destroy a dev infra and remove its Terraform files")
+    destroy_command.add_argument("name", type=check_name, metavar="NAME")
+    destroy_command.add_argument(
+        "--terraform-output", choices=["text", "json"], default="text", help="default: %(default)s"
+    )
     args = p.parse_args()
 
     if args.command == "list":
@@ -124,11 +156,10 @@ def main() -> None:
     if not shutil.which("terraform"):
         fail("terraform is required to destroy the dev infra")
     try:
-        cluster(record, args.terraform_output == "json").destroy()
+        destroy(record, args.terraform_output == "json")
     except subprocess.CalledProcessError as exc:
         # cmd[1] is -chdir=<the config's directory>.
         fail(f"terraform {exc.cmd[2]} failed in {exc.cmd[1].removeprefix('-chdir=')}")
-    shutil.rmtree(DEV_INFRA_DIR / args.name)
 
 
 if __name__ == "__main__":

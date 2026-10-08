@@ -15,8 +15,9 @@
 """Applies infra/orchestrator/, runs the cases in tests.yaml one after another
 (every case in the order listed, or the ones --test-case-name names in the
 order given), each on its own infra/clusters/ cluster applied for it and
-destroyed after it, or all on the dev infra --dev-infra names, which outlives
-the execution, and destroys the infra again."""
+destroyed after it, and destroys the infra again. With --dev-infra, uses the
+infra/orchestrator and the cluster of that dev infra instead, which outlive the
+execution."""
 
 from __future__ import annotations
 
@@ -26,7 +27,6 @@ import shutil
 import signal
 import subprocess
 import sys
-from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn
@@ -35,13 +35,9 @@ import yaml
 
 from . import AUTOMATION_DIR, dev_infra, terraform
 from .cases import TESTS_FILE, load_cases
-from .cluster import Cluster
+from .deployment import ORCHESTRATOR_DIR, Deployment, cluster
 from .log import log
 
-INFRA_DIR = AUTOMATION_DIR / "infra" / "orchestrator"
-# The infra's backend, which each execution writes; the infra's .gitignore
-# leaves out *_override.tf.
-BACKEND_FILE = INFRA_DIR / "backend_override.tf"
 # The executions' local Terraform files, as the Cloud Run job's state is under
 # terraform/ in its bucket. An execution's are in <name>/: a folder for
 # infra/orchestrator, orchestrator/, and one per case, tests/<case>/, each with
@@ -54,30 +50,31 @@ def fail(message: str) -> NoReturn:
     sys.exit(1)
 
 
-def backend_config(args: argparse.Namespace, *key: str) -> list[str]:
-    """The -backend-config of the state under <state prefix>/<name>/<key> in
-    GCS, or in local-runs/terraform/<name>/<key>/tfstates/ with the local
-    backend."""
+def deployment_files(args: argparse.Namespace, *key: str) -> dict:
+    """Where an infra of this execution keeps its files: its state under
+    <state prefix>/<name>/<key> in GCS, or in
+    local-runs/terraform/<name>/<key>/tfstates/ with the local backend, and its
+    TF_DATA_DIR in local-runs/terraform/<name>/<key>/tf-data/ with either."""
     if args.state_backend == "gcs":
-        return [f"bucket={args.state_bucket}", f"prefix={'/'.join([args.state_prefix, args.name, *key])}"]
-    return [f"path={LOCAL_TERRAFORM_DIR.joinpath(args.name, *key, 'tfstates', 'terraform.tfstate')}"]
+        backend_config = [f"bucket={args.state_bucket}", f"prefix={'/'.join([args.state_prefix, args.name, *key])}"]
+    else:
+        backend_config = [f"path={LOCAL_TERRAFORM_DIR.joinpath(args.name, *key, 'tfstates', 'terraform.tfstate')}"]
+    data = LOCAL_TERRAFORM_DIR.joinpath(args.name, *key, "tf-data")
+    data.mkdir(parents=True, exist_ok=True)
+    return {
+        "data": data,
+        "backend": args.state_backend,
+        "backend_config": backend_config,
+        "owner": f"orchestrator_{args.name}",
+        "json_output": args.terraform_output == "json",
+    }
 
 
-def data_dir(args: argparse.Namespace, *key: str) -> Path:
-    """local-runs/terraform/<name>/<key>/tf-data/, with either backend: a
-    TF_DATA_DIR, which also holds its config's plan."""
-    path = LOCAL_TERRAFORM_DIR.joinpath(args.name, *key, "tf-data")
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def dev_cluster(args: argparse.Namespace, cases: dict[str, dict], names: list[str]) -> Cluster:
-    """The dev infra --dev-infra names, created on the first case's
-    infra.cluster unless it exists, once every case can run on it."""
-    json_output = args.terraform_output == "json"
+def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict], names: list[str]) -> None:
+    """Checks every case can run on the dev infra --dev-infra names, and applies
+    it unless it is complete. A new one has the first case's cluster."""
     record = dev_infra.read_record(args.dev_infra)
-    new = record is None
-    if new:
+    if record is None:
         record = {
             "name": args.dev_infra,
             "test_case": names[0],
@@ -85,8 +82,11 @@ def dev_cluster(args: argparse.Namespace, cases: dict[str, dict], names: list[st
             "region": args.region,
             "cluster": cases[names[0]]["infra"]["cluster"],
         }
-    elif record["project_id"] != args.project_id:
-        fail(f"dev infra {args.dev_infra} is in project {record['project_id']}, not {args.project_id}")
+    elif (record["project_id"], record["region"]) != (args.project_id, args.region):
+        fail(
+            f"dev infra {args.dev_infra} is in project {record['project_id']} and region {record['region']},"
+            f" not {args.project_id} and {args.region}"
+        )
     for name in names:
         spec = cases[name]["infra"]["cluster"]
         if spec["name"] != record["cluster"]["name"]:
@@ -96,29 +96,17 @@ def dev_cluster(args: argparse.Namespace, cases: dict[str, dict], names: list[st
             )
         if spec != record["cluster"]:
             log(f"run: case {name}'s infra.cluster differs from dev infra {args.dev_infra}'s it runs on", "WARNING")
-    if new:
-        log(f"run: creating dev infra {args.dev_infra} for case {names[0]}")
-        return dev_infra.create(record, json_output)
-    return dev_infra.cluster(record, json_output)
+    if not record.get("complete"):
+        log(f"run: applying dev infra {args.dev_infra}, which is not complete")
+        dev_infra.apply(record, args.terraform_output == "json")
 
 
-def run_case(name: str, case: dict, args: argparse.Namespace, tf_vars: list[str], dev: Cluster | None) -> None:
-    cluster = dev or Cluster(
-        spec=case["infra"]["cluster"],
-        data=data_dir(args, "tests", name),
-        backend=args.state_backend,
-        backend_config=backend_config(args, "tests", name),
-        owner=f"orchestrator_{args.name}",
-        tf_vars=tf_vars,
-        json_output=args.terraform_output == "json",
-    )
-    # A dev cluster outlives the execution, so is neither applied nor destroyed.
-    with nullcontext() if dev else cluster.applied():
-        if case["type"] == "noop":
-            log(f"{name}: noop, nothing to run")
-        else:
-            # Running the case is a no-op for now.
-            log(f"{name}: {json.dumps(case)}")
+def run_case(name: str, case: dict) -> None:
+    if case["type"] == "noop":
+        log(f"{name}: noop, nothing to run")
+    else:
+        # Running the case is a no-op for now.
+        log(f"{name}: {json.dumps(case)}")
 
 
 def main() -> None:
@@ -160,8 +148,9 @@ def main() -> None:
         "--dev-infra",
         type=dev_infra.check_name,
         metavar="NAME",
-        help="run every case on this dev infra, a cluster kept until python3 -m orchestrator.dev_infra destroys it,"
-        " rather than on one applied for it; created on the first case's cluster unless it exists",
+        help="run every case on this dev infra, an infra/orchestrator and a cluster kept until"
+        " python3 -m orchestrator.dev_infra destroys them, rather than on ones applied for this execution."
+        " Applied unless complete, a new one with the first case's cluster",
     )
     args = p.parse_args()
     if args.state_backend == "gcs" and not (args.state_bucket and args.state_prefix):
@@ -187,32 +176,23 @@ def main() -> None:
     # on it, rather than dying, still destroys the infra.
     signal.signal(signal.SIGTERM, lambda *_: fail("stopped by SIGTERM"))
 
-    json_output = args.terraform_output == "json"
     tf_vars = [
         f"-var=project_id={args.project_id}",
         f"-var=region={args.region}",
         f"-var=default_resource_name={args.name}",
     ]
-    orchestrator_data = data_dir(args, "orchestrator")
-    env = terraform.data_env(orchestrator_data)
-    plan_file = str(orchestrator_data / "run.tfplan")
-    BACKEND_FILE.write_text(terraform.backend_block(args.state_backend))
     try:
-        dev = dev_cluster(args, cases, names) if args.dev_infra else None
-        terraform.run(
-            INFRA_DIR,
-            "init",
-            "-input=false",
-            *(f"-backend-config={c}" for c in backend_config(args, "orchestrator")),
-            env=env,
-        )
-        try:
-            terraform.deploy(INFRA_DIR, *tf_vars, json_output=json_output, env=env, plan_file=plan_file)
+        if args.dev_infra:
+            prepare_dev_infra(args, cases, names)
             for name in names:
-                run_case(name, cases[name], args, tf_vars, dev)
-        finally:
-            # Also after a failed apply, which may have created part of the infra.
-            terraform.deploy(INFRA_DIR, "-destroy", *tf_vars, json_output=json_output, env=env, plan_file=plan_file)
+                run_case(name, cases[name])
+            return
+        orchestrator = Deployment(dir=ORCHESTRATOR_DIR, plan_args=tf_vars, **deployment_files(args, "orchestrator"))
+        with orchestrator.applied():
+            for name in names:
+                files = deployment_files(args, "tests", name)
+                with cluster(cases[name]["infra"]["cluster"], tf_vars=tf_vars, **files).applied():
+                    run_case(name, cases[name])
     except subprocess.CalledProcessError as exc:
         # cmd[1] is -chdir=<the config's directory>.
         fail(f"terraform {exc.cmd[2]} failed in {exc.cmd[1].removeprefix('-chdir=')}")

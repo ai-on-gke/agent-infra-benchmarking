@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Applies and destroys the cluster a tests.yaml case runs on, the
-infra/clusters/ config its infra.cluster names."""
+"""Applies and destroys a Terraform config: infra/orchestrator, or the
+infra/clusters/ one a case's infra.cluster names."""
 
 from __future__ import annotations
 
@@ -23,45 +23,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-from . import terraform
+from . import AUTOMATION_DIR, terraform
 from .cases import CLUSTERS_DIR
+
+ORCHESTRATOR_DIR = AUTOMATION_DIR / "infra" / "orchestrator"
 
 
 @dataclass
-class Cluster:
-    """A case's infra.cluster, applied with the state backend_config points
-    to."""
+class Deployment:
+    """A Terraform config, applied with the state backend_config points to."""
 
-    spec: dict
-    # The TF_DATA_DIR, which also holds the plan and the inline tfvars.
+    dir: Path
+    # The TF_DATA_DIR, which also holds the plan.
     data: Path
     backend: str
     backend_config: list[str]
     # Names the backend override file, so unique to whoever applies it.
     owner: str
-    # -var arguments, which win over the spec's.
-    tf_vars: list[str]
+    plan_args: list[str]
     json_output: bool = False
-
-    @property
-    def dir(self) -> Path:
-        return CLUSTERS_DIR / self.spec["name"]
-
-    def plan_args(self) -> list[str]:
-        # Later ones win: tfvars, tfvars_inline, variables, and last tf_vars.
-        args = []
-        if "tfvars" in self.spec:
-            args.append(f"-var-file={self.dir / self.spec['tfvars']}")
-        if "tfvars_inline" in self.spec:
-            inline = self.data / "inline.tfvars"
-            inline.write_text(self.spec["tfvars_inline"])
-            args.append(f"-var-file={inline}")
-        # A string as it is; anything else as JSON, which terraform reads as HCL.
-        args += [
-            f"-var={key}={value if isinstance(value, str) else json.dumps(value)}"
-            for key, value in self.spec.get("variables", {}).items()
-        ]
-        return args + self.tf_vars
 
     @contextmanager
     def initialized(self) -> Iterator[None]:
@@ -86,7 +66,7 @@ class Cluster:
         terraform.deploy(
             self.dir,
             *args,
-            *self.plan_args(),
+            *self.plan_args,
             json_output=self.json_output,
             env=terraform.data_env(self.data),
             plan_file=str(self.data / "run.tfplan"),
@@ -102,7 +82,7 @@ class Cluster:
 
     @contextmanager
     def applied(self) -> Iterator[None]:
-        """Applies the cluster for the with block, and destroys it after, also
+        """Applies the config for the with block, and destroys it after, also
         after a failed apply, which may have created part of it."""
         with self.initialized():
             try:
@@ -110,3 +90,23 @@ class Cluster:
                 yield
             finally:
                 self.deploy("-destroy")
+
+
+def cluster(spec: dict, data: Path, tf_vars: list[str], **deployment) -> Deployment:
+    """The config a case's infra.cluster names, planned with its tfvars,
+    tfvars_inline and variables, then tf_vars, later ones winning. The inline
+    tfvars go in data."""
+    cluster_dir = CLUSTERS_DIR / spec["name"]
+    args = []
+    if "tfvars" in spec:
+        args.append(f"-var-file={cluster_dir / spec['tfvars']}")
+    if "tfvars_inline" in spec:
+        inline = data / "inline.tfvars"
+        inline.write_text(spec["tfvars_inline"])
+        args.append(f"-var-file={inline}")
+    # A string as it is; anything else as JSON, which terraform reads as HCL.
+    args += [
+        f"-var={key}={value if isinstance(value, str) else json.dumps(value)}"
+        for key, value in spec.get("variables", {}).items()
+    ]
+    return Deployment(dir=cluster_dir, data=data, plan_args=args + tf_vars, **deployment)
