@@ -39,6 +39,9 @@ INFRA_DIR = AUTOMATION_DIR / "infra" / "orchestrator"
 # The infra's backend, which each execution writes; the infra's .gitignore
 # leaves out *_override.tf.
 BACKEND_FILE = INFRA_DIR / "backend_override.tf"
+# One Terraform config per directory, which a case's infra.cluster.name picks.
+CLUSTERS_DIR = AUTOMATION_DIR / "infra" / "clusters"
+CLUSTER_KEYS = {"name", "tfvars", "tfvars_inline", "variables"}
 
 
 def fail(message: str) -> NoReturn:
@@ -54,7 +57,30 @@ def load_cases(tests_file: Path) -> dict[str, dict]:
     for name, case in cases.items():
         if not isinstance(case, dict):
             raise ValueError(f"{tests_file}: case {name} is not a mapping")
+        check_cluster(f"{tests_file}: case {name}", case)
     return cases
+
+
+def check_cluster(where: str, case: dict) -> None:
+    infra = case.get("infra")
+    cluster = infra.get("cluster") if isinstance(infra, dict) else None
+    if not isinstance(cluster, dict):
+        raise ValueError(f"{where} has no `infra.cluster` mapping")
+    unknown = cluster.keys() - CLUSTER_KEYS
+    if unknown:
+        raise ValueError(f"{where}: `infra.cluster` has unknown {', '.join(sorted(unknown))}")
+
+    clusters = sorted(p.name for p in CLUSTERS_DIR.iterdir() if p.is_dir())
+    if cluster.get("name") not in clusters:
+        raise ValueError(f"{where}: `infra.cluster.name` must be one of {', '.join(clusters)}")
+    tfvars = cluster.get("tfvars")
+    # An absolute path stays as it is; a relative one is in the cluster's config.
+    if tfvars is not None and not (isinstance(tfvars, str) and (CLUSTERS_DIR / cluster["name"] / tfvars).is_file()):
+        raise ValueError(f"{where}: `infra.cluster.tfvars` {tfvars!r} is not a file")
+    if not isinstance(cluster.get("tfvars_inline", ""), str):
+        raise ValueError(f"{where}: `infra.cluster.tfvars_inline` must be a string")
+    if not isinstance(cluster.get("variables", {}), dict):
+        raise ValueError(f"{where}: `infra.cluster.variables` must be a mapping")
 
 
 def run_case(name: str, case: dict) -> None:

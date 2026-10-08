@@ -24,6 +24,11 @@
 #
 # `repeats` is how many times the case runs. Nothing reads it yet.
 #
+# `infra.cluster` is the cluster the case runs on, which run_benchmark.sh
+# ignores. `name` picks the Terraform config in infra/clusters/<name>/, and the
+# rest is optional: `tfvars` a tfvars file in that config (or an absolute path),
+# `tfvars_inline` tfvars content, and `variables` values passed as TF_VAR_<key>.
+#
 # Varying the load or the pool means another case, so that every run is
 # reproducible from the name it is recorded under: benchmark-test-case is the
 # pod label, and test_case the Prometheus label relabeled from it.
@@ -31,14 +36,22 @@
 cases:
   glutton:
     type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 10
+          sandboxed_min_node_count = 10
+          sandboxed_max_node_count = 10
     repeats: 3
-    worker-count: 100
+    worker-count: 30
     sandbox-class: gvisor
     master:
-      run-time: 3m
-      users: 100
+      run-time: 1m
+      users: 30
       spawn-rate: 10
-      warm-up: 30s
+      warm-up: 10s
     worker:
       workload-name: glutton
       workload-template: glutton
@@ -46,6 +59,14 @@ cases:
 
   openclaw:
     type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 10
+          sandboxed_min_node_count = 10
+          sandboxed_max_node_count = 10
     repeats: 3
     worker-count: 100
     sandbox-class: gvisor
