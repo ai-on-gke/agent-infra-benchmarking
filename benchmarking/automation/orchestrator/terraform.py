@@ -26,9 +26,6 @@ from typing import Callable
 
 from .log import log
 
-# Relative to the config's directory; in .terraform/, which git and the image
-# leave out.
-PLAN_FILE = ".terraform/run.tfplan"
 # terraform -json's @level, as a Cloud Logging severity.
 SEVERITIES = {"trace": "DEBUG", "debug": "DEBUG", "info": "INFO", "warn": "WARNING", "error": "ERROR"}
 
@@ -132,9 +129,9 @@ def run_json(chdir: Path, command: str, *args: str, env: dict[str, str] | None =
 def deploy(
     chdir: Path,
     *plan_args: str,
+    plan_file: str,
     json_output: bool = False,
     env: dict[str, str] | None = None,
-    plan_file: str = PLAN_FILE,
 ) -> None:
     """Plans and applies that plan. With json_output, also logs the whole plan
     as terraform shows it, which -json leaves out."""

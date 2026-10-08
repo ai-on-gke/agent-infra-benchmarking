@@ -44,12 +44,12 @@ BACKEND_FILE = INFRA_DIR / "backend_override.tf"
 # One Terraform config per directory, which a case's infra.cluster.name picks.
 CLUSTERS_DIR = AUTOMATION_DIR / "infra" / "clusters"
 CLUSTER_KEYS = {"name", "tfvars", "tfvars_inline", "variables"}
-# Every case's .terraform/ starts empty, so its providers come from here rather
-# than from a download each.
+# Every TF_DATA_DIR the orchestrator uses starts empty, so its providers come
+# from here rather than from a download each.
 PLUGIN_CACHE_DIR = Path(os.environ.get("TF_PLUGIN_CACHE_DIR") or AUTOMATION_DIR / ".terraform-plugin-cache")
-# An execution's local files, in <name>/: its own tfstates/ with the local
-# backend, and a folder per case, <name>/tests/<case>/, with that case's
-# tfstates/ and, with either backend, its tf-data/.
+# An execution's local files, in <name>/: a folder for infra/orchestrator,
+# orchestrator/, and one per case, tests/<case>/, each with its tfstates/ when
+# the backend is local and its tf-data/ with either.
 LOCAL_RUNS_DIR = AUTOMATION_DIR / "local-runs"
 
 
@@ -92,14 +92,25 @@ def check_cluster(where: str, case: dict) -> None:
         raise ValueError(f"{where}: `infra.cluster.variables` must be a mapping")
 
 
-def backend_config(args: argparse.Namespace, case: str | None = None) -> list[str]:
-    """The -backend-config of the execution's state, or given a case that
-    case's: under <state prefix>/<name>[/tests/<case>] in GCS, and in
-    local-runs/<name>[/tests/<case>]/tfstates/ with the local backend."""
-    key = ["tests", case] if case else []
+def backend_config(args: argparse.Namespace, *key: str) -> list[str]:
+    """The -backend-config of the state under <state prefix>/<name>/<key> in
+    GCS, or in local-runs/<name>/<key>/tfstates/ with the local backend."""
     if args.state_backend == "gcs":
         return [f"bucket={args.state_bucket}", f"prefix={'/'.join([args.state_prefix, args.name, *key])}"]
     return [f"path={LOCAL_RUNS_DIR.joinpath(args.name, *key, 'tfstates', 'terraform.tfstate')}"]
+
+
+def data_dir(args: argparse.Namespace, *key: str) -> Path:
+    """local-runs/<name>/<key>/tf-data/, with either backend: a TF_DATA_DIR,
+    which also holds its config's plan."""
+    path = LOCAL_RUNS_DIR.joinpath(args.name, *key, "tf-data")
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def data_env(path: Path) -> dict[str, str]:
+    PLUGIN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return {"TF_DATA_DIR": str(path), "TF_PLUGIN_CACHE_DIR": str(PLUGIN_CACHE_DIR)}
 
 
 def backend_block(args: argparse.Namespace) -> str:
@@ -114,12 +125,10 @@ def run_case(name: str, case: dict, args: argparse.Namespace, tf_vars: list[str]
     # backend_override.tf stay that deployment's: the case has its own data
     # dir, and an override file sorting after backend_override.tf replaces it.
     override = cluster_dir / f"orchestrator_{args.name}_override.tf"
-    # The case's TF_DATA_DIR, which also holds its plan and inline tfvars.
-    data_dir = LOCAL_RUNS_DIR / args.name / "tests" / name / "tf-data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    PLUGIN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    env = {"TF_DATA_DIR": str(data_dir), "TF_PLUGIN_CACHE_DIR": str(PLUGIN_CACHE_DIR)}
-    plan_file = str(data_dir / "run.tfplan")
+    # Also holds the inline tfvars.
+    case_data = data_dir(args, "tests", name)
+    env = data_env(case_data)
+    plan_file = str(case_data / "run.tfplan")
 
     # Later ones win: tfvars, tfvars_inline, variables, and last the
     # execution's own project, region and name.
@@ -127,7 +136,7 @@ def run_case(name: str, case: dict, args: argparse.Namespace, tf_vars: list[str]
     if "tfvars" in cluster:
         plan_args.append(f"-var-file={cluster_dir / cluster['tfvars']}")
     if "tfvars_inline" in cluster:
-        inline = data_dir / "inline.tfvars"
+        inline = case_data / "inline.tfvars"
         inline.write_text(cluster["tfvars_inline"])
         plan_args.append(f"-var-file={inline}")
     # A string as it is; anything else as JSON, which terraform reads as HCL.
@@ -143,7 +152,7 @@ def run_case(name: str, case: dict, args: argparse.Namespace, tf_vars: list[str]
             cluster_dir,
             "init",
             "-input=false",
-            *(f"-backend-config={c}" for c in backend_config(args, name)),
+            *(f"-backend-config={c}" for c in backend_config(args, "tests", name)),
             env=env,
         )
         try:
@@ -221,23 +230,25 @@ def main() -> None:
         f"-var=region={args.region}",
         f"-var=default_resource_name={args.name}",
     ]
+    orchestrator_data = data_dir(args, "orchestrator")
+    env = data_env(orchestrator_data)
+    plan_file = str(orchestrator_data / "run.tfplan")
     BACKEND_FILE.write_text(backend_block(args))
     try:
-        # -reconfigure, as the .terraform/ left by the last execution names its backend.
         terraform.run(
             INFRA_DIR,
             "init",
             "-input=false",
-            "-reconfigure",
-            *(f"-backend-config={c}" for c in backend_config(args)),
+            *(f"-backend-config={c}" for c in backend_config(args, "orchestrator")),
+            env=env,
         )
         try:
-            terraform.deploy(INFRA_DIR, *tf_vars, json_output=json_output)
+            terraform.deploy(INFRA_DIR, *tf_vars, json_output=json_output, env=env, plan_file=plan_file)
             for name in names:
                 run_case(name, cases[name], args, tf_vars)
         finally:
             # Also after a failed apply, which may have created part of the infra.
-            terraform.deploy(INFRA_DIR, "-destroy", *tf_vars, json_output=json_output)
+            terraform.deploy(INFRA_DIR, "-destroy", *tf_vars, json_output=json_output, env=env, plan_file=plan_file)
     except subprocess.CalledProcessError as exc:
         # cmd[1] is -chdir=<the config's directory>.
         fail(f"terraform {exc.cmd[2]} failed in {exc.cmd[1].removeprefix('-chdir=')}")
