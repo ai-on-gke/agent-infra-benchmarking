@@ -4,7 +4,7 @@ output "job_name" {
 }
 
 output "service_account_email" {
-  description = "Service account the job runs as. Grant it the roles the job's container needs."
+  description = "Service account the job runs as, and so the one runner/infra is applied as."
   value       = google_service_account.job.email
 }
 

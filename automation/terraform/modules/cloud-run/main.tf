@@ -36,8 +36,6 @@ resource "google_project_service" "services" {
   disable_on_destroy = false
 }
 
-# Holds only the runner state bucket here: grant it whatever else the job's
-# container needs.
 resource "google_service_account" "job" {
   project      = var.project_id
   account_id   = var.default_resource_name
@@ -67,6 +65,18 @@ resource "google_storage_bucket_iam_member" "job_runner_state" {
   bucket = google_storage_bucket.runner_state.name
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.job.email}"
+}
+
+# What runner/infra creates in the project.
+resource "google_project_iam_member" "job" {
+  for_each = toset([
+    "roles/serviceusage.serviceUsageAdmin",
+    "roles/artifactregistry.admin",
+  ])
+
+  project = var.project_id
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.job.email}"
 }
 
 resource "google_artifact_registry_repository" "images" {
