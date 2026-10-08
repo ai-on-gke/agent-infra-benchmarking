@@ -21,6 +21,8 @@
 # `type` picks benchmarking/<type>/run_benchmark.sh, which documents the rest.
 # For locust: `worker-count` and `sandbox-class` shape the WorkerPool, and
 # every key in `master` and `worker` becomes `--key=value` on that process.
+# `noop` is the orchestrator's alone: it applies and destroys the case's
+# cluster, and runs nothing on it.
 #
 # `repeats` is how many times the case runs. Nothing reads it yet.
 #
@@ -84,6 +86,7 @@ cases:
   # The orchestrator's Terraform path on infra/clusters/dummy, which creates no
   # GCP resources and so has nothing to benchmark on.
   dummy:
+    type: noop
     infra:
       cluster:
         name: dummy

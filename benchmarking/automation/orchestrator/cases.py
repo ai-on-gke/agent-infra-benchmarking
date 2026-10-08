@@ -36,6 +36,8 @@ def load_cases(tests_file: Path) -> dict[str, dict]:
     for name, case in cases.items():
         if not isinstance(case, dict):
             raise ValueError(f"{tests_file}: case {name} is not a mapping")
+        if not isinstance(case.get("type"), str):
+            raise ValueError(f"{tests_file}: case {name} has no `type`")
         check_cluster(f"{tests_file}: case {name}", case)
     return cases
 

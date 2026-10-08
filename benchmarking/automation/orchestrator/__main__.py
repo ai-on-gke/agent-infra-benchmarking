@@ -80,8 +80,11 @@ def run_case(name: str, case: dict, args: argparse.Namespace, tf_vars: list[str]
         json_output=args.terraform_output == "json",
     )
     with cluster.applied():
-        # The case itself is a no-op for now.
-        log(f"{name}: {json.dumps(case)}")
+        if case["type"] == "noop":
+            log(f"{name}: noop, nothing to run")
+        else:
+            # Running the case is a no-op for now.
+            log(f"{name}: {json.dumps(case)}")
 
 
 def main() -> None:
