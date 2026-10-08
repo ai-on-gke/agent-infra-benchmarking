@@ -12,8 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Applies and destroys a Terraform config: scenario_runner/infra, or the
-infra/clusters/ one a case's infra.cluster names."""
+"""A deployment of a Terraform config, scenario_runner/infra or the
+infra/clusters/ one a case's infra.cluster names, kept whole in a root folder:
+
+    config/    a copy of the config, with its backend and variables in it
+    tf-data/   its TF_DATA_DIR
+    tfstates/  its state, with the local backend
+
+Every path in it is relative, so the folder can be moved, and terraform runs
+on it by hand from config/ as well:
+
+    TF_DATA_DIR=../tf-data terraform plan
+"""
 
 from __future__ import annotations
 
@@ -24,118 +34,128 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-from . import LOCAL_DATA_DIR, RUNNER_DIR, terraform
+from . import RUNNER_DIR, terraform
 from .cases import CLUSTERS_DIR
 
 ORCHESTRATOR_DIR = RUNNER_DIR / "infra"
-# The copies of the configs terraform runs on, each at its deployment's path
-# under LOCAL_DATA_DIR, and kept only after a failure.
-ACTIVE_DIR = LOCAL_DATA_DIR / "active"
+# The config's own deployments' files, e.g. one applied by hand, which would
+# change this one's backend, variables or state.
+FOREIGN_FILES = (
+    ".terraform",
+    "override.tf",
+    "override.tf.json",
+    "*_override.tf",
+    "*_override.tf.json",
+    "terraform.tfvars",
+    "terraform.tfvars.json",
+    "*.auto.tfvars",
+    "*.auto.tfvars.json",
+    "*.tfstate",
+    "*.tfstate.*",
+)
+# terraform reads them in this order, later ones winning.
+TFVARS_FILE = "00-tfvars.auto.tfvars"
+TFVARS_INLINE_FILE = "10-inline.auto.tfvars"
+VARIABLES_FILE = "20-variables.auto.tfvars.json"
+STATE_FILE = "terraform.tfstate"
 
 
-def state_file_under(root: Path) -> Path:
-    return root / "tfstates" / "terraform.tfstate"
-
-
-def data_dir_under(root: Path) -> Path:
-    return root / "tf-data"
-
-
-def files_under(
-    root: Path, json_output: bool, backend: str = "local", backend_config: list[str] | None = None
-) -> dict:
-    """A Deployment's arguments for one keeping its files under root, in
-    LOCAL_DATA_DIR: its TF_DATA_DIR in tf-data/ and, by default, its state in
-    tfstates/."""
-    data = data_dir_under(root)
-    data.mkdir(parents=True, exist_ok=True)
-    return {
-        "copy": ACTIVE_DIR / root.relative_to(LOCAL_DATA_DIR),
-        "data": data,
-        "backend": backend,
-        "backend_config": backend_config or [f"path={state_file_under(root)}"],
-        "json_output": json_output,
-    }
-
-
-def is_override(name: str) -> bool:
-    return name in ("override.tf", "override.tf.json") or name.endswith(("_override.tf", "_override.tf.json"))
-
-
-def tf_vars(project_id: str, region: str, name: str) -> list[str]:
+def tf_vars(project_id: str, region: str, name: str) -> dict:
     """The variables every config takes, name naming its resources."""
-    return [f"-var=project_id={project_id}", f"-var=region={region}", f"-var=default_resource_name={name}"]
+    return {"project_id": project_id, "region": region, "default_resource_name": name}
 
 
-@dataclass
+@dataclass(frozen=True)
 class Deployment:
-    """A Terraform config, applied with the state backend_config points to."""
-
-    dir: Path
-    # The copy of the config terraform runs on, made by init.
-    copy: Path
-    # The TF_DATA_DIR, which also holds the plan.
-    data: Path
-    backend: str
-    backend_config: list[str]
-    plan_args: list[str]
+    root: Path
     json_output: bool = False
 
+    @property
+    def config(self) -> Path:
+        return self.root / "config"
+
+    @property
+    def data(self) -> Path:
+        """The TF_DATA_DIR, which also holds the plan."""
+        return self.root / "tf-data"
+
+    @property
+    def state_file(self) -> Path:
+        """The state, with the local backend."""
+        return self.root / "tfstates" / STATE_FILE
+
+    @property
+    def created(self) -> bool:
+        return self.config.is_dir()
+
+    @classmethod
+    def create(
+        cls,
+        root: Path,
+        source: Path,
+        variables: dict,
+        *,
+        tfvars_file: Path | None = None,
+        tfvars_inline: str | None = None,
+        backend: str = "local",
+        backend_config: dict[str, str] | None = None,
+        json_output: bool = False,
+    ) -> Deployment:
+        """Copies source into root's config/, replacing any copy already
+        there, with the backend and the variables it is applied with:
+        tfvars_file's, then tfvars_inline's, then variables, later ones
+        winning. Any tf-data/ and tfstates/ already in root are kept."""
+        deployment = cls(root, json_output)
+        shutil.rmtree(deployment.config, ignore_errors=True)
+        shutil.copytree(source, deployment.config, ignore=shutil.ignore_patterns(*FOREIGN_FILES))
+        if backend_config is None:
+            # Relative to config/, where terraform runs.
+            backend_config = {"path": str(Path("..") / deployment.state_file.relative_to(root))}
+        (deployment.config / "backend_override.tf").write_text(terraform.backend_block(backend, backend_config))
+        if tfvars_file is not None:
+            name = TFVARS_FILE + (".json" if tfvars_file.suffix == ".json" else "")
+            shutil.copyfile(tfvars_file, deployment.config / name)
+        if tfvars_inline is not None:
+            (deployment.config / TFVARS_INLINE_FILE).write_text(tfvars_inline)
+        (deployment.config / VARIABLES_FILE).write_text(json.dumps(variables, indent=2) + "\n")
+        deployment.data.mkdir(parents=True, exist_ok=True)
+        return deployment
+
+    def env(self) -> dict[str, str]:
+        return terraform.data_env(self.data)
+
     def init(self) -> None:
-        # The config is also applied by hand, so terraform runs on a copy of
-        # it without its .terraform/ and override files, which are that
-        # deployment's, and with this one's backend.
-        shutil.rmtree(self.copy, ignore_errors=True)
-        shutil.copytree(
-            self.dir, self.copy, ignore=lambda _, names: [n for n in names if n == ".terraform" or is_override(n)]
-        )
-        (self.copy / "backend_override.tf").write_text(terraform.backend_block(self.backend))
-        terraform.run(
-            self.copy,
-            "init",
-            "-input=false",
-            # The state is where backend_config says, even if the data dir
-            # was initialized with another path, e.g. before a move.
-            "-reconfigure",
-            *(f"-backend-config={c}" for c in self.backend_config),
-            env=terraform.data_env(self.data),
-        )
+        # create may have replaced the backend tf-data/ was initialized with.
+        terraform.run(self.config, "init", "-input=false", "-reconfigure", env=self.env())
 
     def deploy(self, *args: str) -> None:
         terraform.deploy(
-            self.copy,
+            self.config,
             *args,
-            *self.plan_args,
             json_output=self.json_output,
-            env=terraform.data_env(self.data),
+            env=self.env(),
             plan_file=str(self.data / "run.tfplan"),
         )
 
     def outputs(self) -> dict:
         """Its outputs, by name; only after init."""
-        return terraform.output(self.copy, env=terraform.data_env(self.data))
+        return terraform.output(self.config, env=self.env())
 
-    def remove_copy(self) -> None:
-        """Removes the copy, and its parents up to ACTIVE_DIR once empty."""
-        shutil.rmtree(self.copy)
-        for parent in self.copy.parents:
-            if parent == ACTIVE_DIR:
-                break
-            try:
-                parent.rmdir()
-            except OSError:
-                # Not empty: another deployment's copy is in it.
-                break
+    def state(self) -> dict:
+        """The local backend's state, empty before the first apply."""
+        return json.loads(self.state_file.read_text()) if self.state_file.exists() else {}
+
+    def state_outputs(self) -> dict:
+        """Its outputs, by name, read off the local backend's state."""
+        return {key: out["value"] for key, out in self.state().get("outputs", {}).items()}
 
     def apply(self) -> None:
         self.init()
         self.deploy()
-        self.remove_copy()
 
     def destroy(self) -> None:
         self.init()
         self.deploy("-destroy")
-        self.remove_copy()
 
     @contextmanager
     def applied(self) -> Iterator[None]:
@@ -147,28 +167,23 @@ class Deployment:
             yield
         finally:
             self.deploy("-destroy")
-            self.remove_copy()
 
 
-def cluster_deployment(
-    spec: dict, data: Path, tf_vars: list[str], substrate_version: str | None, **deployment
-) -> Deployment:
-    """The config a case's infra.cluster names, planned with its tfvars,
-    tfvars_inline and variables, then substrate_version unless None and
-    tf_vars, later ones winning. The inline tfvars go in data."""
+def cluster_deployment(spec: dict, root: Path, tf_vars: dict, substrate_version: str | None, **create) -> Deployment:
+    """Creates the deployment of the config a case's infra.cluster names, with
+    its tfvars, tfvars_inline and variables, then substrate_version unless
+    None and tf_vars, later ones winning."""
     cluster_dir = CLUSTERS_DIR / spec["name"]
-    args = []
-    if "tfvars" in spec:
-        args.append(f"-var-file={cluster_dir / spec['tfvars']}")
-    if "tfvars_inline" in spec:
-        inline = data / "inline.tfvars"
-        inline.write_text(spec["tfvars_inline"])
-        args.append(f"-var-file={inline}")
-    # A string as it is; anything else as JSON, which terraform reads as HCL.
-    args += [
-        f"-var={key}={value if isinstance(value, str) else json.dumps(value)}"
-        for key, value in spec.get("variables", {}).items()
-    ]
+    variables = dict(spec.get("variables", {}))
     if substrate_version is not None:
-        args.append(f"-var=substrate_version={substrate_version}")
-    return Deployment(dir=cluster_dir, data=data, plan_args=args + tf_vars, **deployment)
+        variables["substrate_version"] = substrate_version
+    variables.update(tf_vars)
+    return Deployment.create(
+        root,
+        cluster_dir,
+        variables,
+        # An absolute path stays as it is.
+        tfvars_file=cluster_dir / spec["tfvars"] if "tfvars" in spec else None,
+        tfvars_inline=spec.get("tfvars_inline"),
+        **create,
+    )

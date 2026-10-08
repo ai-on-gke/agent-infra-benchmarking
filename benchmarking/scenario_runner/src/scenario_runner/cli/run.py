@@ -35,14 +35,14 @@ import yaml
 from .. import LOCAL_DATA_DIR, benchmark, dev_infra, substrate
 from ..cases import SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases
 from ..cluster import Cluster
-from ..deployment import ORCHESTRATOR_DIR, Deployment, cluster_deployment, files_under, tf_vars
+from ..deployment import ORCHESTRATOR_DIR, Deployment, cluster_deployment, tf_vars
 from ..log import log
 from ..process import failure
 
-# The executions' local Terraform files, as the Cloud Run job's state is under
-# terraform/ in its bucket. An execution's are in <name>/: a folder for
-# scenario_runner/infra, orchestrator/, and one per case, tests/<case>/, each
-# with its tfstates/ when the backend is local and its tf-data/ with either.
+# The executions' Deployments, kept after they are destroyed, as the Cloud Run
+# job's state is under terraform/ in its bucket. An execution's are in <name>/:
+# orchestrator/ for scenario_runner/infra, and tests/<case>/ for each case's
+# cluster.
 LOCAL_TERRAFORM_DIR = LOCAL_DATA_DIR / "runs" / "terraform"
 
 
@@ -160,21 +160,19 @@ def check_requirements(cases: dict[str, dict], cloud_build: bool) -> None:
         fail(f"running the benchmark requires {', '.join(missing)}")
 
 
-def deployment_files(args: argparse.Namespace, *key: str) -> dict:
-    """Where an infra of this execution keeps its files: its state under
-    <state prefix>/<name>/<key> in GCS, or in
-    .local-data/runs/terraform/<name>/<key>/tfstates/ with the local backend,
-    and its TF_DATA_DIR in .local-data/runs/terraform/<name>/<key>/tf-data/
-    with either."""
-    backend_config = None
+def deployment_args(args: argparse.Namespace, *key: str) -> dict:
+    """Deployment.create's arguments for an infra of this execution: its root
+    .local-data/runs/terraform/<name>/<key>/, and its state there with the
+    local backend or under <state prefix>/<name>/<key> in GCS."""
+    backend = {}
     if args.state_backend == "gcs":
-        backend_config = [f"bucket={args.state_bucket}", f"prefix={'/'.join([args.state_prefix, args.name, *key])}"]
-    return files_under(
-        LOCAL_TERRAFORM_DIR.joinpath(args.name, *key),
-        args.terraform_output == "json",
-        args.state_backend,
-        backend_config,
-    )
+        prefix = "/".join([args.state_prefix, args.name, *key])
+        backend = {"backend": "gcs", "backend_config": {"bucket": args.state_bucket, "prefix": prefix}}
+    return {
+        "root": LOCAL_TERRAFORM_DIR.joinpath(args.name, *key),
+        "json_output": args.terraform_output == "json",
+        **backend,
+    }
 
 
 def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
@@ -239,13 +237,17 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
 
 def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     variables = tf_vars(args.project_id, args.region, args.name)
-    orchestrator = Deployment(dir=ORCHESTRATOR_DIR, plan_args=variables, **deployment_files(args, "orchestrator"))
+    orchestrator = Deployment.create(
+        source=ORCHESTRATOR_DIR, variables=variables, **deployment_args(args, "orchestrator")
+    )
     with orchestrator.applied():
         for name, case in cases.items():
-            files = deployment_files(args, "tests", name)
             version = None if case.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
             deployment = cluster_deployment(
-                case["infra"]["cluster"], tf_vars=variables, substrate_version=version, **files
+                case["infra"]["cluster"],
+                tf_vars=variables,
+                substrate_version=version,
+                **deployment_args(args, "tests", name),
             )
             with deployment.applied():
                 cluster = Cluster(deployment.outputs(), deployment.data / "kubeconfig")

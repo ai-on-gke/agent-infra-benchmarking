@@ -22,23 +22,12 @@ import json
 import shutil
 import subprocess
 import sys
-from pathlib import Path
 from typing import NoReturn
 
 from .. import terraform
-from ..dev_infra import (
-    DEV_INFRA_DIR,
-    INFRAS,
-    RECORD_FILE,
-    check_name,
-    destroy,
-    read_record,
-    read_state,
-    record_file,
-    state_file,
-)
+from ..deployment import Deployment
+from ..dev_infra import DEV_INFRA_DIR, INFRAS, RECORD_FILE, check_name, deployment, destroy, read_record, record_file
 from ..process import failure
-from ..substrate import SubstrateError
 
 
 def fail(message: str) -> NoReturn:
@@ -46,20 +35,20 @@ def fail(message: str) -> NoReturn:
     sys.exit(1)
 
 
-def resource_count(path: Path) -> int:
-    return sum(len(r.get("instances", [])) for r in read_state(path).get("resources", []))
+def resource_count(infra: Deployment) -> int:
+    return sum(len(r.get("instances", [])) for r in infra.state().get("resources", []))
 
 
 def print_outputs(name: str) -> None:
     """Each infra's outputs, read off its state, sensitive ones hidden as
     terraform output hides them."""
     for infra in INFRAS:
-        path = state_file(name, infra)
-        if not path.exists():
+        infra_deployment = deployment(name, infra)
+        if not infra_deployment.state_file.exists():
             print(f"{infra}: not applied")
             continue
         print(f"{infra}:")
-        for key, out in read_state(path).get("outputs", {}).items():
+        for key, out in infra_deployment.state().get("outputs", {}).items():
             print(f"  {terraform.format_output(key, out)}")
 
 
@@ -70,7 +59,7 @@ def print_list() -> None:
         fields = [r["name"], r["test_case"], r["cluster"]["name"], r["project_id"], r["region"]]
         status = "complete" if r.get("complete") else "incomplete"
         installed = "installed" if r.get("substrate_installed") else "-"
-        counts = [str(resource_count(state_file(r["name"], infra))) for infra in INFRAS]
+        counts = [str(resource_count(deployment(r["name"], infra))) for infra in INFRAS]
         rows.append([*fields, status, installed, *counts])
     if not rows:
         print(f"No dev infra in {DEV_INFRA_DIR}")
@@ -108,11 +97,9 @@ def main() -> None:
     if not shutil.which("terraform"):
         fail("terraform is required to destroy the dev infra")
     try:
-        destroy(record, args.terraform_output == "json")
+        destroy(args.name, args.terraform_output == "json")
     except subprocess.CalledProcessError as exc:
         fail(failure(exc))
-    except SubstrateError as exc:
-        fail(str(exc))
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@
 
 """Applies, reads and destroys the dev infras: scenario_runner/infra and a
 case's cluster, which the orchestrator's --dev-infra creates and keeps, each
-with every Terraform file of it in .local-data/dev-infra/terraform/<name>/<infra>/."""
+a Deployment in .local-data/dev-infra/terraform/<name>/<infra>/."""
 
 from __future__ import annotations
 
@@ -27,15 +27,7 @@ from pathlib import Path
 from . import LOCAL_DATA_DIR, substrate
 from .cases import SKIP_SUBSTRATE_INSTALL
 from .cluster import Cluster
-from .deployment import (
-    ORCHESTRATOR_DIR,
-    Deployment,
-    cluster_deployment,
-    data_dir_under,
-    files_under,
-    state_file_under,
-    tf_vars,
-)
+from .deployment import ORCHESTRATOR_DIR, Deployment, cluster_deployment, tf_vars
 
 DEV_INFRA_DIR = LOCAL_DATA_DIR / "dev-infra" / "terraform"
 # What a dev infra is, written before it is applied so that one whose apply
@@ -67,41 +59,33 @@ def write_record(record: dict) -> None:
     path.write_text(json.dumps(record, indent=2) + "\n")
 
 
-def state_file(name: str, infra: str) -> Path:
-    return state_file_under(DEV_INFRA_DIR / name / infra)
+def deployment(name: str, infra: str, json_output: bool = False) -> Deployment:
+    """The deployment of the dev infra's infra, created or not."""
+    return Deployment(DEV_INFRA_DIR / name / infra, json_output)
 
 
-def data_dir(name: str, infra: str) -> Path:
-    return data_dir_under(DEV_INFRA_DIR / name / infra)
-
-
-def read_state(path: Path) -> dict:
-    return json.loads(path.read_text()) if path.exists() else {}
-
-
-def deployments(record: dict, json_output: bool = False) -> dict[str, Deployment]:
-    name = record["name"]
-    variables = tf_vars(record["project_id"], record["region"], name)
+def create_deployment(record: dict, infra: str, json_output: bool = False) -> Deployment:
+    """Creates the deployment of the record's infra, its config copied from
+    the source as it is now."""
+    root = DEV_INFRA_DIR / record["name"] / infra
+    variables = tf_vars(record["project_id"], record["region"], record["name"])
+    if infra == "orchestrator":
+        return Deployment.create(root, ORCHESTRATOR_DIR, variables, json_output=json_output)
     version = None if record.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
-
-    def files(infra: str) -> dict:
-        return files_under(DEV_INFRA_DIR / name / infra, json_output)
-
-    return {
-        "orchestrator": Deployment(dir=ORCHESTRATOR_DIR, plan_args=variables, **files("orchestrator")),
-        "cluster": cluster_deployment(
-            record["cluster"], tf_vars=variables, substrate_version=version, **files("cluster")
-        ),
-    }
+    return cluster_deployment(record["cluster"], root, variables, version, json_output=json_output)
 
 
 def apply(record: dict, json_output: bool = False) -> dict:
     """Applies every infra of the dev infra, which is complete only once all
-    of them are, and returns its record."""
+    of them are, and returns its record. An infra created by an earlier apply
+    keeps its config."""
     record = {**record, "complete": False}
     write_record(record)
-    for deployment in deployments(record, json_output).values():
-        deployment.apply()
+    for infra in INFRAS:
+        infra_deployment = deployment(record["name"], infra, json_output)
+        if not infra_deployment.created:
+            infra_deployment = create_deployment(record, infra, json_output)
+        infra_deployment.apply()
     record["complete"] = True
     write_record(record)
     return record
@@ -109,8 +93,8 @@ def apply(record: dict, json_output: bool = False) -> dict:
 
 def cluster(name: str) -> Cluster:
     """The dev infra's cluster, its outputs read off its state."""
-    outputs = read_state(state_file(name, "cluster")).get("outputs", {})
-    return Cluster({key: out["value"] for key, out in outputs.items()}, data_dir(name, "cluster") / "kubeconfig")
+    infra = deployment(name, "cluster")
+    return Cluster(infra.state_outputs(), infra.data / "kubeconfig")
 
 
 def install_substrate(record: dict) -> dict:
@@ -124,9 +108,10 @@ def install_substrate(record: dict) -> dict:
     return record
 
 
-def destroy(record: dict, json_output: bool = False) -> None:
-    for infra, deployment in reversed(deployments(record, json_output).items()):
+def destroy(name: str, json_output: bool = False) -> None:
+    for infra in reversed(INFRAS):
+        infra_deployment = deployment(name, infra, json_output)
         # One never applied has nothing to destroy.
-        if state_file(record["name"], infra).exists():
-            deployment.destroy()
-    shutil.rmtree(DEV_INFRA_DIR / record["name"])
+        if infra_deployment.state_file.exists():
+            infra_deployment.destroy()
+    shutil.rmtree(DEV_INFRA_DIR / name)

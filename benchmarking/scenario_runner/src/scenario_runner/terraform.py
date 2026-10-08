@@ -89,8 +89,10 @@ def data_env(path: Path) -> dict[str, str]:
     return {"TF_DATA_DIR": str(path), "TF_PLUGIN_CACHE_DIR": str(PLUGIN_CACHE_DIR)}
 
 
-def backend_block(backend: str) -> str:
-    return f'terraform {{\n  backend "{backend}" {{}}\n}}\n'
+def backend_block(backend: str, settings: dict[str, str]) -> str:
+    # A JSON string is an HCL one too.
+    lines = [f"    {key} = {json.dumps(value)}" for key, value in settings.items()]
+    return "\n".join(["terraform {", f'  backend "{backend}" {{', *lines, "  }", "}"]) + "\n"
 
 
 def run(chdir: Path, command: str, *args: str, env: dict[str, str] | None = None) -> None:
