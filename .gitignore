@@ -10,4 +10,7 @@
 # What `pip install ./benchmark-charts` leaves behind.
 /.venv/
 /benchmark-charts/build/
+
+# The venv benchmarking/automation/tools/run makes.
+/benchmarking/automation/tools/venv_run/
 *.egg-info/
