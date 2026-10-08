@@ -42,15 +42,19 @@ class Cluster:
         # The cluster is regional, in the region.
         return self.outputs["region"]
 
+    @property
+    def docker_repo(self) -> str:
+        # The cluster's own repository, which its nodes are granted to pull from.
+        return self.outputs["artifact_registry_docker_repo"]
+
     def env(self) -> dict[str, str]:
         return {
             "PROJECT_ID": self.outputs["project_id"],
             "CLUSTER_NAME": self.name,
             "CLUSTER_LOCATION": self.location,
             "BUCKET_NAME": self.outputs["bucket_name"],
-            # The cluster's own repository, which its nodes are granted to pull from.
-            "DOCKER_REPO": self.outputs["artifact_registry_docker_repo"],
-            "KO_DOCKER_REPO": self.outputs["artifact_registry_docker_repo"],
+            "DOCKER_REPO": self.docker_repo,
+            "KO_DOCKER_REPO": self.docker_repo,
             # The nodes' platform, whatever the build host's.
             "KO_DEFAULTPLATFORMS": "linux/amd64",
             # Empty, so the scripts use kubeconfig's current context, the one

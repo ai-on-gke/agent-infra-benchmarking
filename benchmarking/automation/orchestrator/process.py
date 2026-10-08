@@ -34,13 +34,23 @@ def stream(
     log_line: Callable[[str], None] = log,
     env: dict[str, str] | None = None,
     cwd: Path | None = None,
+    input: str | None = None,
 ) -> None:
-    """Runs a command and passes each line of its output to log_line as it
-    comes."""
+    """Runs a command, with input on its stdin, and passes each line of its
+    output to log_line as it comes."""
     with subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=environ(env), cwd=cwd
+        cmd,
+        stdin=subprocess.PIPE if input is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=environ(env),
+        cwd=cwd,
     ) as proc:
         try:
+            if input is not None:
+                proc.stdin.write(input)
+                proc.stdin.close()
             for line in proc.stdout:
                 log_line(line.rstrip("\n"))
         except BaseException:
