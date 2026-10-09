@@ -178,7 +178,7 @@ def check_requirements(cases: dict[str, dict], cloud_build: bool) -> None:
     if not shutil.which("terraform"):
         fail("terraform is required to apply the infra")
     if not all(case.get(SKIP_SUBSTRATE_INSTALL) for case in cases.values()):
-        missing = substrate.missing_requirements()
+        missing = substrate.missing_requirements(cloud_build)
         if missing:
             fail(f"installing substrate requires {', '.join(missing)}")
         # Its cluster's nodes are labeled with it.
@@ -241,12 +241,14 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
             )
         if spec != record["cluster"]:
             log(f"run: case {name}'s infra.cluster differs from dev infra {args.dev_infra}'s it runs on", "WARNING")
+    json_output = args.terraform_output == "json"
+    login = not args.no_docker_login
     if args.dev_infra_update:
         log(f"run: updating dev infra {args.dev_infra} from the source")
-        record = dev_infra.apply(record, args.terraform_output == "json", update=True)
+        record = dev_infra.apply(record, json_output, update=True, cloud_build=args.cloud_build, login=login)
     elif not record.get("complete"):
         log(f"run: applying dev infra {args.dev_infra}, which is not complete")
-        record = dev_infra.apply(record, args.terraform_output == "json")
+        record = dev_infra.apply(record, json_output, cloud_build=args.cloud_build, login=login)
     return record
 
 
@@ -291,7 +293,7 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     cluster = dev_infra.cluster(args.dev_infra)
     for name, case in cases.items():
         if not case.get(SKIP_SUBSTRATE_INSTALL):
-            record = dev_infra.install_substrate(record)
+            record = dev_infra.install_substrate(record, args.cloud_build, not args.no_docker_login)
         run_repeats(name, case, lambda run_name: run_case(args, run_name, case, cluster))
 
 
@@ -307,10 +309,11 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     variables = names.infra_vars(args.project_id, args.region, args.name)
     runner_infra = deployment(args, "scenario-runner").create(RUNNER_INFRA_DIR, variables)
 
-    def run_on_cluster(case: dict, record: str) -> None:
+    def run_on_cluster(case: dict, record: str, substrate_repository: str) -> None:
         version = None if case.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
         uncreated = deployment(args, "scenarios", record)
-        case_infra = cluster_deployment(case["infra"]["cluster"], uncreated, case_vars[record], version)
+        spec = case["infra"]["cluster"]
+        case_infra = cluster_deployment(spec, uncreated, case_vars[record], version, substrate_repository)
         with case_infra.applied():
             cluster = Cluster(case_infra.outputs(), case_infra.data / "kubeconfig")
             if not case.get(SKIP_SUBSTRATE_INSTALL):
@@ -318,8 +321,15 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
             run_case(args, record, case, cluster)
 
     with runner_infra.applied():
+        outputs = runner_infra.outputs()
+        # Once, into the runner infra's repository, which every case's cluster
+        # installs substrate from.
+        if not all(case.get(SKIP_SUBSTRATE_INSTALL) for case in cases.values()):
+            login = not args.no_docker_login
+            substrate.build_images(outputs["docker_repo"], args.project_id, args.cloud_build, login)
+        repository = outputs["artifact_registry_repository"]
         for name, case in cases.items():
-            run_repeats(name, case, lambda record: run_on_cluster(case, record))
+            run_repeats(name, case, lambda record: run_on_cluster(case, record, repository))
 
 
 def main() -> None:

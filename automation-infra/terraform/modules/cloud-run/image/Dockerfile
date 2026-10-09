@@ -12,7 +12,7 @@ COPY --from=go /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:$PATH
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git gnupg \
+  && apt-get install -y --no-install-recommends ca-certificates curl git gnupg make zstd \
   && curl -sSfL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
     | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
   && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \

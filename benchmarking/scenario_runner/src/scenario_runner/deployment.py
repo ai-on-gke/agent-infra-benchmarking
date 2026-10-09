@@ -43,6 +43,7 @@ from google.cloud import storage
 from . import RUNNER_DIR, terraform
 from .cases import CLUSTERS_DIR
 from .log import log
+from .process import retry
 
 RUNNER_INFRA_DIR = RUNNER_DIR / "infra"
 # The config's own deployments' files, e.g. one applied by hand, which would
@@ -145,21 +146,25 @@ class Deployment:
 
     def init(self) -> None:
         # create may have replaced the backend tf-data/ was initialized with.
-        terraform.run(self.config, "init", "-input=false", "-reconfigure", env=self.env())
+        retry(str(self.root), lambda: terraform.run(self.config, "init", "-input=false", "-reconfigure", env=self.env()))
 
     def deploy(self, *args: str) -> None:
         """Plans and applies, with -destroy a destroy, which flags it destroyed
-        once it succeeds."""
+        once it succeeds. A failed plan or apply is planned again from the
+        state it left."""
         destroying = "-destroy" in args
         if not destroying:
             # Unflagged before, as even an apply that fails may create part of it.
             self.destroyed_flag.unlink(missing_ok=True)
-        terraform.deploy(
-            self.config,
-            *args,
-            json_output=self.json_output,
-            env=self.env(),
-            plan_file=str(self.data / "run.tfplan"),
+        retry(
+            str(self.root),
+            lambda: terraform.deploy(
+                self.config,
+                *args,
+                json_output=self.json_output,
+                env=self.env(),
+                plan_file=str(self.data / "run.tfplan"),
+            ),
         )
         if destroying:
             self.destroyed_flag.touch()
@@ -278,14 +283,18 @@ class GcsDeployment(Deployment):
         super().destroy()
 
 
-def cluster_deployment(spec: dict, deployment: Deployment, tf_vars: dict, substrate_version: str | None) -> Deployment:
+def cluster_deployment(
+    spec: dict, deployment: Deployment, tf_vars: dict, substrate_version: str | None, substrate_repository: str | None
+) -> Deployment:
     """Creates deployment of the config a case's infra.cluster names, with its
-    tfvars, tfvars_inline and variables, then substrate_version unless None
-    and tf_vars, later ones winning."""
+    tfvars, tfvars_inline and variables, then substrate_version and the
+    substrate_repository its images are installed from unless None, and
+    tf_vars, later ones winning."""
     cluster_dir = CLUSTERS_DIR / spec["name"]
     variables = dict(spec.get("variables", {}))
     if substrate_version is not None:
         variables["substrate_version"] = substrate_version
+        variables["substrate_image_repository"] = substrate_repository
     variables.update(tf_vars)
     return deployment.create(
         cluster_dir,
