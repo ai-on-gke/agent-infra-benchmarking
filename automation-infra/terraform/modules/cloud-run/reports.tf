@@ -141,6 +141,82 @@ resource "google_bigquery_table" "steady_window" {
   }
 }
 
+locals {
+  # The panels of benchmark-charts, a view each, for charting in Looker Studio.
+  # A row a second, its elapsed_secs counted from the repeat's locust start
+  # in all three, so their charts line up.
+  dataset_ref = var.reports_bucket == null ? "" : "${var.project_id}.${google_bigquery_dataset.reports[0].dataset_id}"
+  chart_start = <<-SQL
+    start AS (
+      SELECT run_id, test_case, MIN(time) AS first
+      FROM `${local.dataset_ref}.locust_stats_history`
+      GROUP BY run_id, test_case
+    )
+  SQL
+  chart_views = {
+    # Each request's latency percentiles and throughput. locust writes 0 for a
+    # second whose window held no requests, which is null here so a line
+    # breaks there rather than dropping to zero.
+    latency_chart = <<-SQL
+      WITH ${local.chart_start}
+      SELECT
+        run_id, test_case, scenario, name AS request, time,
+        TIMESTAMP_DIFF(time, start.first, SECOND) AS elapsed_secs, steady, user_count,
+        ${join(", ", [for p in local.percentiles : "NULLIF(${p.name}, 0) AS ${p.name}"])},
+        requests_per_sec, failures_per_sec,
+        requests_per_sec - failures_per_sec AS successful_per_sec
+      FROM `${local.dataset_ref}.locust_stats_history`
+      JOIN start USING (run_id, test_case)
+      WHERE name != 'Aggregated'
+    SQL
+    # Each worker-pool node's CPU and memory utilization, by the last two parts
+    # of its name, as GKE's gke-<cluster>-<pool>-<hash>-<id>.
+    pool_chart = <<-SQL
+      WITH ${local.chart_start}
+      SELECT
+        run_id, test_case, scenario, REGEXP_EXTRACT(type, r'([^-]+-[^-]+)$') AS node, time,
+        TIMESTAMP_DIFF(time, ANY_VALUE(start.first), SECOND) AS elapsed_secs, steady,
+        MAX(IF(name = 'CPUUtilizationPercent', value, NULL)) AS cpu_percent,
+        MAX(IF(name = 'MemoryUtilizationPercent', value, NULL)) AS memory_percent
+      FROM `${local.dataset_ref}.cluster_vitals_history`
+      JOIN start USING (run_id, test_case)
+      WHERE pool = 'worker'
+      GROUP BY run_id, test_case, scenario, node, time, steady
+    SQL
+    # Every actor, which is locust's user count, and the worker's active and
+    # idle ones.
+    actors_chart = <<-SQL
+      WITH ${local.chart_start}
+      SELECT
+        run_id, test_case, scenario, time,
+        TIMESTAMP_DIFF(time, ANY_VALUE(start.first), SECOND) AS elapsed_secs, steady,
+        ANY_VALUE(user_count) AS actors,
+        MAX(IF(name = 'ActiveActors', value, NULL)) AS active_actors,
+        MAX(IF(name = 'IdleActors', value, NULL)) AS idle_actors
+      FROM `${local.dataset_ref}.custom_stats_history`
+      JOIN start USING (run_id, test_case)
+      GROUP BY run_id, test_case, scenario, time, steady
+    SQL
+  }
+}
+
+resource "google_bigquery_table" "charts" {
+  for_each = var.reports_bucket == null ? {} : local.chart_views
+
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.reports[0].dataset_id
+  table_id            = each.key
+  description         = "benchmark-charts' ${trimsuffix(each.key, "_chart")} panel, a row a second, for Looker Studio."
+  deletion_protection = false
+
+  view {
+    use_legacy_sql = false
+    query          = each.value
+  }
+
+  depends_on = [google_bigquery_table.reports]
+}
+
 resource "google_bigquery_table" "reports" {
   for_each = var.reports_bucket == null ? {} : local.report_csvs
 
