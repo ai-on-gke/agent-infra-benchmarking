@@ -14,10 +14,10 @@
 
 """Applies scenario_runner/infra/, runs the cases in scenarios.yaml one after
 another (every case in the order listed, or the ones --scenario names in the
-order given), each on its own infra/clusters/ cluster applied for it and
-destroyed after it, and destroys the infra again. With --dev-infra, uses the
-scenario_runner/infra and the cluster of that dev infra instead, which outlive
-the execution."""
+order given), each of a case's repeats on its own infra/clusters/ cluster
+applied for it and destroyed after it, and destroys the infra again. With
+--dev-infra, uses the scenario_runner/infra and the cluster of that dev infra
+instead, which outlive the execution."""
 
 from __future__ import annotations
 
@@ -29,12 +29,12 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import NoReturn
+from typing import Callable, NoReturn
 
 import yaml
 
 from .. import LOCAL_DATA_DIR, benchmark, dev_infra, names, substrate
-from ..cases import SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases
+from ..cases import SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases, record_names
 from ..cluster import Cluster
 from ..deployment import RUNNER_INFRA_DIR, Deployment, GcsDeployment, cluster_deployment
 from ..log import log
@@ -42,11 +42,14 @@ from ..process import failure
 
 # The executions' Deployments, kept after they are destroyed, and with gcs in
 # the state bucket under <state prefix>/ too. An execution's are in <name>/:
-# scenario-runner/ for scenario_runner/infra, and scenarios/<case>/ for each
-# case's cluster.
+# scenario-runner/ for scenario_runner/infra, and scenarios/<record>/ for each
+# repeat's cluster, <record> being what the repeat is recorded under.
 LOCAL_TERRAFORM_DIR = LOCAL_DATA_DIR / "runs" / "terraform"
 
 STATE_BACKENDS = ["local", "gcs"]
+
+# What a failed repeat raises, its infra's apply included.
+RUN_ERRORS = (subprocess.CalledProcessError, *benchmark.ERRORS, substrate.SubstrateError)
 
 
 def fail(message: str) -> NoReturn:
@@ -263,30 +266,60 @@ def run_case(args: argparse.Namespace, name: str, case: dict, cluster: Cluster) 
     )
 
 
+def run_repeats(name: str, case: dict, run: Callable[[str], None]) -> None:
+    """Calls run with each of the case's record names. A failed repeat does not
+    stop the ones after it; the case fails once they have run."""
+    records = record_names(name, case)
+    if len(records) == 1:
+        run(name)
+        return
+    failed = []
+    for n, record in enumerate(records, 1):
+        log(f"{name}: repeat {n} of {len(records)}, as {record}")
+        try:
+            run(record)
+        except RUN_ERRORS as exc:
+            log(f"{record}: {failure(exc) if isinstance(exc, subprocess.CalledProcessError) else exc}", "ERROR")
+            failed.append(record)
+    if failed:
+        fail(f"{len(failed)} of {len(records)} repeats of {name} failed: {', '.join(failed)}")
+
+
 def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
+    """A case's repeats run one after another on the dev infra's cluster."""
     record = prepare_dev_infra(args, cases)
     cluster = dev_infra.cluster(args.dev_infra)
     for name, case in cases.items():
         if not case.get(SKIP_SUBSTRATE_INSTALL):
             record = dev_infra.install_substrate(record)
-        run_case(args, name, case, cluster)
+        run_repeats(name, case, lambda run_name: run_case(args, run_name, case, cluster))
 
 
 def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
-    # Every case's, before anything is applied, so a name that can't be fails first.
-    case_vars = {name: names.infra_vars(args.project_id, args.region, args.name, name) for name in cases}
+    """Each of a case's repeats runs on a cluster of its own, applied for it and
+    destroyed after it."""
+    # Every repeat's, before anything is applied, so a name that can't be fails first.
+    case_vars = {
+        record: names.infra_vars(args.project_id, args.region, args.name, record)
+        for name, case in cases.items()
+        for record in record_names(name, case)
+    }
     variables = names.infra_vars(args.project_id, args.region, args.name)
     runner_infra = deployment(args, "scenario-runner").create(RUNNER_INFRA_DIR, variables)
+
+    def run_on_cluster(case: dict, record: str) -> None:
+        version = None if case.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
+        uncreated = deployment(args, "scenarios", record)
+        case_infra = cluster_deployment(case["infra"]["cluster"], uncreated, case_vars[record], version)
+        with case_infra.applied():
+            cluster = Cluster(case_infra.outputs(), case_infra.data / "kubeconfig")
+            if not case.get(SKIP_SUBSTRATE_INSTALL):
+                substrate.install(cluster)
+            run_case(args, record, case, cluster)
+
     with runner_infra.applied():
         for name, case in cases.items():
-            version = None if case.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
-            uncreated = deployment(args, "scenarios", name)
-            case_infra = cluster_deployment(case["infra"]["cluster"], uncreated, case_vars[name], version)
-            with case_infra.applied():
-                cluster = Cluster(case_infra.outputs(), case_infra.data / "kubeconfig")
-                if not case.get(SKIP_SUBSTRATE_INSTALL):
-                    substrate.install(cluster)
-                run_case(args, name, case, cluster)
+            run_repeats(name, case, lambda record: run_on_cluster(case, record))
 
 
 def main() -> None:
@@ -305,7 +338,7 @@ def main() -> None:
             run_on_own_infra(args, cases)
     except subprocess.CalledProcessError as exc:
         fail(failure(exc))
-    except (*benchmark.ERRORS, substrate.SubstrateError, names.NamingError) as exc:
+    except (*RUN_ERRORS, names.NamingError) as exc:
         fail(str(exc))
 
 

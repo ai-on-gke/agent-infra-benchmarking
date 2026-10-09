@@ -44,13 +44,25 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
             raise ValueError(f"{scenarios_file}: case {name}'s `type` must be one of {', '.join(known)}")
         if not isinstance(case.get(SKIP_SUBSTRATE_INSTALL, False), bool):
             raise ValueError(f"{scenarios_file}: case {name}'s `{SKIP_SUBSTRATE_INSTALL}` must be true or false")
+        repeats = case.get("repeats", 1)
+        if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats < 1:
+            raise ValueError(f"{scenarios_file}: case {name}'s `repeats` must be a whole number from 1, got {repeats!r}")
         check_cluster(f"{scenarios_file}: case {name}", case)
         if case["type"] != "noop":
             try:
-                benchmark.check(name, case)
+                # As each repeat runs under its own name.
+                for record in record_names(name, case):
+                    benchmark.check(record, case)
             except ValueError as exc:
                 raise ValueError(f"{scenarios_file}: {exc}") from None
     return cases
+
+
+def record_names(name: str, case: dict) -> list[str]:
+    """What each of the case's repeats is recorded under: <name>-1 to <name>-N
+    above 1."""
+    repeats = case.get("repeats", 1)
+    return [f"{name}-{n}" for n in range(1, repeats + 1)] if repeats > 1 else [name]
 
 
 def check_cluster(where: str, case: dict) -> None:
