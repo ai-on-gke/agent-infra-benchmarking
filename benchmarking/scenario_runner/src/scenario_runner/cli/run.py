@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -33,7 +34,7 @@ from typing import Callable, NoReturn
 
 import yaml
 
-from .. import LOCAL_DATA_DIR, benchmark, dev_infra, names, substrate
+from .. import LOCAL_DATA_DIR, benchmark, dev_infra, locust, names, substrate
 from ..cases import SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases, record_names
 from ..cluster import Cluster
 from ..deployment import RUNNER_INFRA_DIR, Deployment, GcsDeployment, cluster_deployment
@@ -90,6 +91,16 @@ def parse_args() -> argparse.Namespace:
         help="prefix in the state bucket, each execution's Terraform deployments being under <prefix>/<name>; only,"
         f" and required, with gcs. With local, they are only under {LOCAL_TERRAFORM_DIR}/<name>."
         " Default: $STATE_PREFIX",
+    )
+    p.add_argument(
+        "--report-bucket",
+        help="GCS bucket the cases' reports go to, under --report-prefix. Default: each case's cluster's own"
+        " bucket, which is destroyed with it",
+    )
+    p.add_argument(
+        "--report-prefix",
+        default=locust.REPORT_PREFIX,
+        help="folder in the report bucket the reports go under, as <prefix>/<name>/<record>/. Default: %(default)s",
     )
     p.add_argument(
         "--name",
@@ -153,6 +164,8 @@ def parse_args() -> argparse.Namespace:
     # A cluster applied for the execution has neither yet.
     if not args.dev_infra and (args.no_build or args.no_deploy_workloads or args.dev_infra_update):
         p.error("--no-build, --no-deploy-workloads and --dev-infra-update are only for --dev-infra")
+    if not re.fullmatch(r"[^/]+(/[^/]+)*", args.report_prefix):
+        p.error("--report-prefix must not be empty, nor start or end with a slash")
     if args.state_backend == "gcs" and not (args.state_bucket and args.state_prefix):
         p.error("--state-backend=gcs requires --state-bucket and --state-prefix, or STATE_BUCKET and STATE_PREFIX")
     if args.state_backend == "local" and (args.state_bucket or args.state_prefix):
@@ -265,6 +278,8 @@ def run_case(args: argparse.Namespace, name: str, case: dict, cluster: Cluster) 
         docker_login=not args.no_docker_login,
         build=not args.no_build,
         deploy_workloads=not args.no_deploy_workloads,
+        report_bucket=args.report_bucket,
+        report_prefix=args.report_prefix,
     )
 
 

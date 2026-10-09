@@ -61,14 +61,14 @@ locals {
   # The scenario-runner's infra goes in this deployment's project and region,
   # with its state in the deployment's state bucket. The image has no Docker,
   # so the benchmark images build on Cloud Build.
-  module_args = [
+  module_args = concat([
     "--project-id=${var.project_id}",
     "--region=${var.region}",
     "--state-backend=gcs",
     "--state-bucket=${var.state_bucket}",
     "--state-prefix=${var.state_bucket_prefix}",
     "--cloud-build",
-  ]
+  ], var.reports_bucket == null ? [] : ["--report-bucket=${var.reports_bucket}", "--report-prefix=${var.reports_prefix}"])
 }
 
 resource "google_cloud_run_v2_job" "job" {
