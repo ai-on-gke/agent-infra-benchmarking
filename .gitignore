@@ -1,13 +1,23 @@
-# Per-developer environment settings, copied from env.sh.example.
-.env.sh
-
 **/__pycache__/
 
-# Reports run_locust_job.sh downloads from the bucket.
+# Reports downloaded from the bucket.
 /reports/*
 !/reports/20261001t184243z/
 
 # What `pip install ./benchmark-charts` leaves behind.
 /.venv/
 /benchmark-charts/build/
+
+# Local settings benchmarking/tools source, from .env.sh.example.
+/benchmarking/.env.sh
+
+# The venv benchmarking/tools/run makes.
+/benchmarking/tools/venv_run/
+
+# Each scenario-runner execution's Terraform deployments in runs/, and the dev
+# infras', which the scenario-runner's --dev-infra keeps, in dev-infra/.
+/benchmarking/scenario_runner/.local-data/
 *.egg-info/
+
+# The providers the scenario-runner's cluster applies share.
+/benchmarking/scenario_runner/.terraform-plugin-cache/

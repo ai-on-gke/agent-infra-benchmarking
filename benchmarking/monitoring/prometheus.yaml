@@ -114,7 +114,7 @@ data:
     global:
       scrape_interval: 10s
     scrape_configs:
-      # Port 8001 of the benchmark Job's pod: the boomer worker's /metrics,
+      # Port 8001 of the worker Job's pod: the boomer worker's /metrics,
       # where every request row a report reads comes from.
       - job_name: 'boomer-worker'
         kubernetes_sd_configs:
@@ -127,7 +127,7 @@ data:
               - __meta_kubernetes_pod_label_app
               - __meta_kubernetes_pod_container_port_number
             action: keep
-            regex: locust-job;8001
+            regex: boomer-worker;8001
           - source_labels: [__meta_kubernetes_pod_name]
             action: replace
             target_label: pod
@@ -141,10 +141,10 @@ data:
           - source_labels: [__meta_kubernetes_pod_label_benchmark_run_id]
             action: replace
             target_label: run_id
-          # A run is a case, read inside the pod, so its name is the whole of
-          # what the pod carries: the load and the worker's flags are both in
-          # benchmarking/tests.yaml under it, and a series of runs is grouped
-          # by this rather than by users or workload.
+          # A run is a case, so its name is the whole of what the pod
+          # carries: the load and the worker's flags are both in
+          # benchmarking/scenarios/scenarios.yaml under it, and a series of
+          # runs is grouped by this rather than by users or workload.
           - source_labels: [__meta_kubernetes_pod_label_benchmark_test_case]
             action: replace
             target_label: test_case
@@ -242,7 +242,7 @@ data:
             regex: container_(memory_working_set_bytes|cpu_usage_seconds_total);$
 ---
 # Where the tsdb lives, so the runs it recorded survive a restart of its pod.
-# It goes with deploy-benchmarking.sh --delete, like everything else here.
+# It goes with the cluster, like everything else here.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -276,6 +276,14 @@ spec:
         app: prometheus
     spec:
       serviceAccountName: prometheus
+      # The monitoring pool in scenarios/infra/clusters/common/main.tf.
+      nodeSelector:
+        benchmarking-monitoring: "true"
+      tolerations:
+      - key: benchmarking-monitoring
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -290,9 +298,7 @@ spec:
         args:
           - "--config.file=/etc/prometheus/prometheus.yml"
           - "--storage.tsdb.path=/prometheus/"
-          # At least runner.py's PRIOR_RUN_LOOKBACK, so an earlier run under a
-          # reused run id is still found. The size bound keeps a full volume
-          # from stopping ingestion mid-run.
+          # The size bound keeps a full volume from stopping ingestion mid-run.
           - "--storage.tsdb.retention.time=30d"
           - "--storage.tsdb.retention.size=18GB"
         ports:

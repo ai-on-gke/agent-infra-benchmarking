@@ -13,15 +13,14 @@ spec:
       labels:
         app: mock-llm
     spec:
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-            - matchExpressions:
-              - key: benchmarking-worker
-                operator: NotIn
-                values:
-                - "true"
+      # The mock-llm pool of scenarios/infra/clusters/common/openclaw.tfvars.
+      nodeSelector:
+        benchmarking-mock-llm: "true"
+      tolerations:
+      - key: benchmarking-mock-llm
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
       containers:
       - name: mock-llm
         image: ${IMAGE_WITH_DIGEST}

@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Prints the secret .github/workflows/upload-source.yml reads to upload to a
+# deployment's state bucket: GCP_CREDENTIALS_<DEPLOYMENT>, a new key of the
+# service account its github_actions_bucket created. With --set, stores it as
+# a secret of this repo with gh instead, printing nothing.
+#
+# The account keeps one key: any it had are deleted before the new one is
+# made, so a run is also how the key is rotated.
+#
+#   get-gh-actions-gcs-config --deployment=DEPLOYMENT [--set]
+
+set -o errexit -o nounset -o pipefail
+
+source "$(dirname "$0")/lib.sh"
+
+usage() {
+  echo "Usage: $0 --deployment=DEPLOYMENT [--set]" >&2
+  exit 2
+}
+
+parse_deployment "$@"
+SET=false
+for arg in "${ARGS[@]}"; do
+  [[ "${arg}" == --set ]] || usage
+  SET=true
+done
+
+# The name the workflow derives from the deployment's, the same way.
+SECRET="GCP_CREDENTIALS_$(tr 'a-z-' 'A-Z_' <<<"${DEPLOYMENT}")"
+
+SERVICE_ACCOUNT="$(terraform -chdir="${DEPLOYMENT_DIR}" output -json cloud_run | jq -r '.github_service_account_email // empty')"
+if [[ -z "${SERVICE_ACCOUNT}" ]]; then
+  echo "Error: no github_actions_bucket applied in ${DEPLOYMENT}" >&2
+  exit 1
+fi
+
+mapfile -t OLD_KEYS < <(gcloud iam service-accounts keys list --iam-account="${SERVICE_ACCOUNT}" \
+  --managed-by=user --format='value(name.basename())')
+for key in "${OLD_KEYS[@]}"; do
+  gcloud iam service-accounts keys delete "${key}" --iam-account="${SERVICE_ACCOUNT}" --quiet
+done
+
+KEY_FILE="$(mktemp)"
+trap 'rm -f "${KEY_FILE}"' EXIT
+gcloud iam service-accounts keys create "${KEY_FILE}" --iam-account="${SERVICE_ACCOUNT}" --quiet
+# One line, as a secret's value is pasted.
+CREDENTIALS="$(jq -c . "${KEY_FILE}")"
+
+if [[ "${SET}" == true ]]; then
+  # gh takes the repo from the git remote of where it runs, and a value on
+  # stdin, keeping the key out of the process list.
+  (cd "${DEPLOYMENT_DIR}" && gh secret set "${SECRET}" <<<"${CREDENTIALS}")
+else
+  echo "${SECRET}=${CREDENTIALS}"
+fi

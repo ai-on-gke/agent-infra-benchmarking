@@ -1,0 +1,15 @@
+{
+  "locust-master": {
+    "description": "The locust master.",
+    "dockerfile": "benchmarking/locust/master-image/Dockerfile",
+    "context": "benchmarking/locust/master-image"
+  },
+  "boomer-worker": {
+    "description": "The boomer worker. go.mod replaces the substrate module with the submodule, which the build reads as a second context.",
+    "dockerfile": "benchmarking/locust/go/Dockerfile",
+    "context": "benchmarking/locust/go",
+    "build_contexts": {
+      "substrate": "dependency-repos/substrate"
+    }
+  }
+}

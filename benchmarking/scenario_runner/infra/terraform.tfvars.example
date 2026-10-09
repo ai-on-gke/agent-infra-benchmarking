@@ -1,0 +1,4 @@
+project_id = "<YOUR_PROJECT_ID>"
+region     = "us-central1"
+
+default_resource_name = "<PICK_YOUR_NAME>"

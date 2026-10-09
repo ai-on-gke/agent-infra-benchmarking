@@ -13,7 +13,7 @@ containers:
     value: "true"
   - name: MOCK_LLM_BASE_URL
     value: "http://mock-llm.benchmark-workloads.svc.cluster.local/v1"
-  readyz:
+  wakeupProbe:
     httpGet:
       path: /readyz
       port: 80
@@ -21,8 +21,7 @@ resources:
   limits:
   - name: memory
     quantity: 2Gi
-snapshotsConfig:
-  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+snapshotConfig:
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/openclaw/
 sandboxConfig:

@@ -1,0 +1,12 @@
+{
+  "openclaw-workload": {
+    "description": "The actor the openclaw workload drives. The Dockerfile installs openclaw from npm and copies one script, so its context is its own directory.",
+    "dockerfile": "benchmarking/workloads/images/openclaw/Dockerfile",
+    "context": "benchmarking/workloads/images/openclaw"
+  },
+  "mock-llm": {
+    "description": "The mock LLM deployed beside the workloads.",
+    "dockerfile": "benchmarking/workloads/images/mock-llm/Dockerfile",
+    "context": "benchmarking/workloads/images/mock-llm"
+  }
+}
