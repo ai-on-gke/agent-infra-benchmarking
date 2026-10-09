@@ -41,3 +41,8 @@ parse_deployment() {
     exit 1
   fi
 }
+
+# Prints the argument NAME of the deployment's main.tf, where it is a string.
+module_arg() {
+  sed -n "s/^ *$1 *= *\"\(.*\)\"/\1/p" "${DEPLOYMENT_DIR}/main.tf"
+}

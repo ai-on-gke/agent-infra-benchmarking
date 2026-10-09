@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Destroys the infra a deployment's executions left in its state bucket, such
+# as one killed before its own destroy, with benchmarking/tools/runs. Only runs
+# labeled with the deployment's job and an execution that has ended are
+# destroyed: one still running, or a run of anything else sharing the bucket,
+# is skipped. The destroy runs here as the gcloud account, which needs what the
+# job's account has.
+#
+# With --dry-run, only prints what it would destroy.
+#
+#   destroy-leftovers --deployment=DEPLOYMENT [--dry-run]
+
+set -o errexit -o nounset -o pipefail
+
+source "$(dirname "$0")/lib.sh"
+
+usage() {
+  echo "Usage: $0 --deployment=DEPLOYMENT [--dry-run]" >&2
+  exit 2
+}
+
+parse_deployment "$@"
+DRY_RUN=false
+for arg in "${ARGS[@]}"; do
+  case "${arg}" in
+    --dry-run) DRY_RUN=true ;;
+    *) usage ;;
+  esac
+done
+
+PROJECT_ID="$(module_arg project_id)"
+REGION="$(module_arg region)"
+JOB="$(module_arg default_resource_name)"
+STATE_BUCKET="$(module_arg state_bucket)"
+STATE_PREFIX="$(module_arg state_bucket_prefix)"
+if [[ -z "${PROJECT_ID}" || -z "${REGION}" || -z "${JOB}" || -z "${STATE_BUCKET}" || -z "${STATE_PREFIX}" ]]; then
+  echo "Error: ${DEPLOYMENT_DIR}/main.tf does not set project_id, region, default_resource_name," \
+    "state_bucket and state_bucket_prefix" >&2
+  exit 1
+fi
+
+RUNS=("$(dirname "$0")/../../benchmarking/tools/runs" --state-bucket="${STATE_BUCKET}" --state-prefix="${STATE_PREFIX}")
+TOKEN="$(gcloud auth print-access-token)"
+JOB_URL="https://run.googleapis.com/v2/projects/${PROJECT_ID}/locations/${REGION}/jobs/${JOB}"
+
+# Prints running, ended, or gone once Cloud Run no longer keeps it.
+execution_status() {
+  curl --silent --show-error -H "Authorization: Bearer ${TOKEN}" "${JOB_URL}/executions/$1" | jq -r '
+    if .error.code == 404 then "gone"
+    elif .error then error(.error.message)
+    elif .completionTime then "ended"
+    else "running" end'
+}
+
+LEFTOVERS="$("${RUNS[@]}" list --json)"
+RUN_IDS=()
+while IFS=$'\t' read -r run_id deployment execution; do
+  if [[ "${deployment}" != "${JOB}" ]]; then
+    echo "Skipping ${run_id}: not of ${JOB}, but ${deployment:-unlabeled}."
+    continue
+  fi
+  if [[ -z "${execution}" ]]; then
+    echo "Skipping ${run_id}: no execution label."
+    continue
+  fi
+  status="$(execution_status "${execution}")"
+  if [[ "${status}" == running ]]; then
+    echo "Skipping ${run_id}: ${execution} is still running."
+    continue
+  fi
+  echo "${run_id}: left by ${execution} (${status})."
+  RUN_IDS+=("${run_id}")
+done < <(jq -r '.[] | [.run_id, .labels["benchmark-deployment"] // "", .labels["benchmark-execution"] // ""] | @tsv' \
+  <<<"${LEFTOVERS}")
+
+if [[ ${#RUN_IDS[@]} -eq 0 ]]; then
+  echo "Nothing to destroy."
+  exit 0
+fi
+if [[ "${DRY_RUN}" == true ]]; then
+  echo "Would destroy ${RUN_IDS[*]}."
+  exit 0
+fi
+exec "${RUNS[@]}" destroy "${RUN_IDS[@]}"
