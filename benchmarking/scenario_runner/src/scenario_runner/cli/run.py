@@ -46,6 +46,8 @@ from ..process import failure
 # case's cluster.
 LOCAL_TERRAFORM_DIR = LOCAL_DATA_DIR / "runs" / "terraform"
 
+STATE_BACKENDS = ["local", "gcs"]
+
 
 def fail(message: str) -> NoReturn:
     log(f"run: {message}", "ERROR")
@@ -70,15 +72,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--region", default="us-central1", help="default: %(default)s")
     p.add_argument(
         "--state-backend",
-        choices=["local", "gcs"],
-        required=True,
-        help="where the infra's Terraform state goes: a local file or a GCS bucket",
+        choices=STATE_BACKENDS,
+        default=os.environ.get("STATE_BACKEND"),
+        required="STATE_BACKEND" not in os.environ,
+        help="where the infra's Terraform state goes: a local file or a GCS bucket. Default: $STATE_BACKEND, which"
+        " benchmarking/.env.sh can set",
     )
-    p.add_argument("--state-bucket", help="GCS bucket holding the state; only, and required, with gcs")
+    p.add_argument(
+        "--state-bucket",
+        help="GCS bucket holding the state; only, and required, with gcs. Default: $STATE_BUCKET",
+    )
     p.add_argument(
         "--state-prefix",
         help="prefix in the state bucket, each execution's Terraform deployments being under <prefix>/<name>; only,"
-        f" and required, with gcs. With local, they are only under {LOCAL_TERRAFORM_DIR}/<name>",
+        f" and required, with gcs. With local, they are only under {LOCAL_TERRAFORM_DIR}/<name>."
+        " Default: $STATE_PREFIX",
     )
     p.add_argument(
         "--name",
@@ -124,11 +132,19 @@ def parse_args() -> argparse.Namespace:
         " --dev-infra. The worker pool is recreated either way",
     )
     args = p.parse_args()
+    # argparse checks choices only against what is given, not the default.
+    if args.state_backend not in STATE_BACKENDS:
+        p.error(f"STATE_BACKEND must be one of {', '.join(STATE_BACKENDS)}, not {args.state_backend!r}")
+    # Taken from the environment only with gcs, so a .env.sh set up for gcs
+    # still lets --state-backend=local run.
+    if args.state_backend == "gcs":
+        args.state_bucket = args.state_bucket or os.environ.get("STATE_BUCKET")
+        args.state_prefix = args.state_prefix or os.environ.get("STATE_PREFIX")
     # A cluster applied for the execution has neither yet.
     if not args.dev_infra and (args.no_build or args.no_deploy_workloads):
         p.error("--no-build and --no-deploy-workloads are only for --dev-infra")
     if args.state_backend == "gcs" and not (args.state_bucket and args.state_prefix):
-        p.error("--state-backend=gcs requires --state-bucket and --state-prefix")
+        p.error("--state-backend=gcs requires --state-bucket and --state-prefix, or STATE_BUCKET and STATE_PREFIX")
     if args.state_backend == "local" and (args.state_bucket or args.state_prefix):
         p.error("--state-bucket and --state-prefix are only for --state-backend=gcs")
     return args
