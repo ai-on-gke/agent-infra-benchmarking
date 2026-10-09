@@ -216,7 +216,9 @@ def deploy(
         f"workloads: deploying {', '.join(names)} (sandbox_class={sandbox_class}, actor_memory={actor_memory},"
         f" otlp_endpoint={otlp}, bucket=gs://{cluster.bucket}/{ATESPACE}/, substrate={substrate.revision()})"
     )
-    openclaw.deploy_mock_llm(cluster, timeout)
+    # The openclaw actors call it rather than a real LLM.
+    if "openclaw" in names:
+        openclaw.deploy_mock_llm(cluster, timeout)
 
     with kubectl_ate(cluster) as ate:
         # The store wants a template's atespace to exist when it is created.
@@ -238,7 +240,7 @@ def deploy(
 
 def delete(cluster: Cluster, names: list[str] | None = None) -> None:
     """Deletes the named templates, by default all, then their atespace unless
-    other templates are left in it, and mock-llm."""
+    other templates are left in it, and mock-llm with openclaw's."""
     check_templates(names or [])
     log("workloads: deleting")
     with kubectl_ate(cluster) as ate:
@@ -246,4 +248,5 @@ def delete(cluster: Cluster, names: list[str] | None = None) -> None:
             delete_template(ate, name)
         if subprocess.run(ate("delete", "atespace", ATESPACE), capture_output=True).returncode:
             log(f"workloads: atespace {ATESPACE} not deleted; it may not exist or not be empty")
-    openclaw.delete_mock_llm(cluster)
+    if "openclaw" in (names or templates()):
+        openclaw.delete_mock_llm(cluster)
