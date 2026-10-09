@@ -27,7 +27,7 @@ from pathlib import Path
 from . import LOCAL_DATA_DIR, substrate
 from .cases import SKIP_SUBSTRATE_INSTALL
 from .cluster import Cluster
-from .deployment import RUNNER_INFRA_DIR, Deployment, cluster_deployment, tf_vars
+from .deployment import RUNNER_INFRA_DIR, VARIABLES_FILE, Deployment, cluster_deployment, tf_vars
 
 DEV_INFRA_DIR = LOCAL_DATA_DIR / "dev-infra" / "terraform"
 # What a dev infra is, written before it is applied so that one whose apply
@@ -75,17 +75,29 @@ def create_deployment(record: dict, infra: str, json_output: bool = False) -> De
     return cluster_deployment(record["cluster"], uncreated, variables, version)
 
 
-def apply(record: dict, json_output: bool = False) -> dict:
+def substrate_version(name: str) -> str | None:
+    """The substrate version the dev infra's cluster config labels its nodes
+    with, None before it is created or when it skips substrate."""
+    variables = deployment(name, "cluster").config / VARIABLES_FILE
+    return json.loads(variables.read_text()).get("substrate_version") if variables.exists() else None
+
+
+def apply(record: dict, json_output: bool = False, update: bool = False) -> dict:
     """Applies every infra of the dev infra, which is complete only once all
     of them are, and returns its record. An infra created by an earlier apply
-    keeps its config."""
+    keeps its config unless update, which copies it from the source again."""
     record = {**record, "complete": False}
+    installed_version = substrate_version(record["name"])
     write_record(record)
     for infra in INFRAS:
         infra_deployment = deployment(record["name"], infra, json_output)
-        if not infra_deployment.created:
+        if update or not infra_deployment.created:
             infra_deployment = create_deployment(record, infra, json_output)
         infra_deployment.apply()
+    # The nodes now carry a version the installed dataplane is not, so no
+    # worker would schedule until substrate is installed again.
+    if substrate_version(record["name"]) != installed_version:
+        record.pop("substrate_installed", None)
     record["complete"] = True
     write_record(record)
     return record

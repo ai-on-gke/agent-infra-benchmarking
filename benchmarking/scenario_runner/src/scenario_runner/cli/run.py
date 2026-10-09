@@ -110,6 +110,12 @@ def parse_args() -> argparse.Namespace:
         " Applied unless complete, a new one with the first case's cluster",
     )
     p.add_argument(
+        "--dev-infra-update",
+        action="store_true",
+        help="copy the dev infra's configs from the source again, with the first case's cluster, and apply them even"
+        " if it is complete, reinstalling substrate if its version changed; only with --dev-infra",
+    )
+    p.add_argument(
         "--cloud-build",
         action="store_true",
         help="build the benchmark images on Cloud Build rather than with local Docker",
@@ -141,8 +147,8 @@ def parse_args() -> argparse.Namespace:
         args.state_bucket = args.state_bucket or os.environ.get("STATE_BUCKET")
         args.state_prefix = args.state_prefix or os.environ.get("STATE_PREFIX")
     # A cluster applied for the execution has neither yet.
-    if not args.dev_infra and (args.no_build or args.no_deploy_workloads):
-        p.error("--no-build and --no-deploy-workloads are only for --dev-infra")
+    if not args.dev_infra and (args.no_build or args.no_deploy_workloads or args.dev_infra_update):
+        p.error("--no-build, --no-deploy-workloads and --dev-infra-update are only for --dev-infra")
     if args.state_backend == "gcs" and not (args.state_bucket and args.state_prefix):
         p.error("--state-backend=gcs requires --state-bucket and --state-prefix, or STATE_BUCKET and STATE_PREFIX")
     if args.state_backend == "local" and (args.state_bucket or args.state_prefix):
@@ -196,12 +202,25 @@ def deployment(args: argparse.Namespace, *key: str) -> Deployment:
 
 def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
     """Checks every case can run on the dev infra --dev-infra names, applies it
-    unless it is complete, and returns its record. A new one has the first
-    case's cluster."""
+    unless it is complete or with --dev-infra-update, and returns its record. A
+    new or updated one has the first case's cluster."""
     record = dev_infra.read_record(args.dev_infra)
-    if record is None:
-        first = next(iter(cases))
+    first = next(iter(cases))
+    if record is not None:
+        if (record["project_id"], record["region"]) != (args.project_id, args.region):
+            fail(
+                f"dev infra {args.dev_infra} is in project {record['project_id']} and region {record['region']},"
+                f" not {args.project_id} and {args.region}"
+            )
+        # Another config under the same state would replace every resource.
+        if args.dev_infra_update and cases[first]["infra"]["cluster"]["name"] != record["cluster"]["name"]:
+            fail(
+                f"case {first} runs on infra/clusters/{cases[first]['infra']['cluster']['name']}, but dev infra"
+                f" {args.dev_infra} is infra/clusters/{record['cluster']['name']}; destroy it rather than update it"
+            )
+    if record is None or args.dev_infra_update:
         record = {
+            **(record or {}),
             "name": args.dev_infra,
             "test_case": first,
             "project_id": args.project_id,
@@ -209,11 +228,6 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
             "cluster": cases[first]["infra"]["cluster"],
             SKIP_SUBSTRATE_INSTALL: cases[first].get(SKIP_SUBSTRATE_INSTALL, False),
         }
-    elif (record["project_id"], record["region"]) != (args.project_id, args.region):
-        fail(
-            f"dev infra {args.dev_infra} is in project {record['project_id']} and region {record['region']},"
-            f" not {args.project_id} and {args.region}"
-        )
     for name, case in cases.items():
         spec = case["infra"]["cluster"]
         if spec["name"] != record["cluster"]["name"]:
@@ -223,7 +237,10 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
             )
         if spec != record["cluster"]:
             log(f"run: case {name}'s infra.cluster differs from dev infra {args.dev_infra}'s it runs on", "WARNING")
-    if not record.get("complete"):
+    if args.dev_infra_update:
+        log(f"run: updating dev infra {args.dev_infra} from the source")
+        record = dev_infra.apply(record, args.terraform_output == "json", update=True)
+    elif not record.get("complete"):
         log(f"run: applying dev infra {args.dev_infra}, which is not complete")
         record = dev_infra.apply(record, args.terraform_output == "json")
     return record
