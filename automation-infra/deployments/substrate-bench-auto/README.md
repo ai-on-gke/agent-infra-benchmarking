@@ -12,6 +12,14 @@ To run it now with one case rather than waiting for the schedule:
 automation-infra/tools/trigger --deployment=substrate-bench-auto --scenario=glutton
 ```
 
+Every run's reports can be queried in BigQuery, as in
+[Querying the reports](#querying-the-reports):
+
+```bash
+bq query --project_id=akvelon-gke-aieco --use_legacy_sql=false \
+  'SELECT run_id, test_case, requests_per_sec, p50_ms, p95_ms FROM substrate_bench_auto.locust_stats_steady WHERE name = "CycleTime" ORDER BY 1, 2'
+```
+
 How the deployment was created, and how to make another, is in the
 [automation README](../../README.md).
 
@@ -82,21 +90,99 @@ gcloud logging read 'resource.type="cloud_run_job" AND labels."run.googleapis.co
 
 ## Querying the reports
 
-Each repeat's reports stay in `gs://substrate-bench-auto-tfstate/data/<run-id>/<record>/`.
-The BigQuery dataset `substrate_bench_auto` has a view of each report file
-across every run, with `run_id`, `test_case` (the record, e.g. `glutton-2`)
-and `scenario` (the case) columns to filter or chart by. The views of the
-per-second histories also have `time`, `elapsed_secs` since the repeat's
-first row, and `steady`, whether the row is in locust's steady-state window.
-For example:
+Each repeat's reports stay in `gs://substrate-bench-auto-tfstate/data/<run-id>/<record>/`,
+`<record>` being the case's name, or `<case>-<n>` for each of its repeats. The
+BigQuery dataset `substrate_bench_auto` reads them where they are, so a run's
+reports can be queried as soon as it has written them, with nothing to load.
+
+### Where the data is
+
+In the console, open [BigQuery Studio](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco)
+and, in the Explorer, `akvelon-gke-aieco` → `substrate_bench_auto`. Query the
+views, one per report file across every run:
+
+| View | Rows | From |
+|---|---|---|
+| `locust_stats_history` | One a second per request name, and `Aggregated` | `locust_stats_history.csv` |
+| `locust_stats` | One per request name, over the whole run | `locust_stats.csv` |
+| `locust_stats_steady` | One per request name, over the steady-state window | `locust_stats_steady.csv` |
+| `custom_stats_history` | One a second per worker gauge: `ActiveActors`, `IdleActors` | `custom_stats_history.csv` |
+| `cluster_vitals_history` | One a second per node metric, `type` being the node | `cluster_vitals_history.csv` |
+| `locust_steady_window` | One per repeat: its steady-state window's `start` and `end` | `locust_steady_window.json` |
+
+The `*_files` tables beside them are the files as written, every column a
+string, which the views cast.
+
+Every view has these columns to filter or group by:
+
+| Column | What |
+|---|---|
+| `run_id` | The execution, e.g. `run-20261009t191551z` |
+| `test_case` | The record, e.g. `glutton-2` |
+| `scenario` | The case in `scenarios.yaml`, e.g. `glutton`, so a case's repeats can be compared |
+
+The per-second views also have `time`, `elapsed_secs` since the repeat's first
+row, which lines repeats up against each other, and `steady`, whether the row
+is in the steady-state window. A run without a `locust_steady_window.json`
+has `steady` null. Response times are in milliseconds, e.g. `p50_ms`, and a
+value locust wrote as `N/A` is null.
+
+### Example queries
+
+To list the runs there are, with how long each repeat ran and how much of it
+was steady:
 
 ```bash
 bq query --project_id=akvelon-gke-aieco --use_legacy_sql=false \
-  'SELECT run_id, test_case, elapsed_secs, value FROM substrate_bench_auto.custom_stats_history WHERE name = "ActiveActors" ORDER BY 1, 2, 3'
+  'SELECT run_id, test_case, COUNT(*) AS secs, COUNTIF(steady) AS steady_secs
+   FROM substrate_bench_auto.locust_stats_history WHERE name = "Aggregated" GROUP BY 1, 2 ORDER BY 1, 2'
 ```
 
-The views read the files as they are queried, so a new run shows up without
-loading anything. A view errors until at least one run has written its file.
+To compare a case's repeats over their steady-state windows:
+
+```bash
+bq query --project_id=akvelon-gke-aieco --use_legacy_sql=false \
+  'SELECT run_id, test_case, request_count, failure_count, requests_per_sec, p50_ms, p95_ms, p99_ms
+   FROM substrate_bench_auto.locust_stats_steady WHERE scenario = "glutton" AND name = "CycleTime" ORDER BY 1, 2'
+```
+
+To follow the worker's active actors through each repeat, second by second:
+
+```bash
+bq query --project_id=akvelon-gke-aieco --use_legacy_sql=false \
+  'SELECT run_id, test_case, elapsed_secs, value AS active_actors
+   FROM substrate_bench_auto.custom_stats_history WHERE name = "ActiveActors" ORDER BY 1, 2, 3'
+```
+
+### Charting and switching between tests
+
+For a quick chart of a query, run it in BigQuery Studio and open the **Chart**
+tab under the results. For a dashboard to switch between tests in, choose
+**Open in** → **Looker Studio** on the results, then add a drop-down list
+control on `run_id`, `test_case` or `scenario`. Every chart on the page follows
+it. To overlay repeats, put `elapsed_secs` on the x-axis and `test_case` as the
+breakdown dimension.
+
+### Access
+
+The views read the files with the querying user's own credentials. Besides
+seeing the dataset, that takes `roles/bigquery.jobUser` on the project and
+read access to the files in `gs://substrate-bench-auto-tfstate/data/`. The
+project's owners and editors have both.
+
+### Adding reports from elsewhere
+
+A run's reports from somewhere else, such as a local run's `reports/` folder,
+can be added by copying them in under the same layout. They show up in the
+views on the next query:
+
+```bash
+gcloud storage cp -r --no-clobber reports/<run-id> gs://substrate-bench-auto-tfstate/data/
+```
+
+The views take the CSVs' columns by position, as locust 2.32 writes them
+with its default percentiles. A view errors until at least one run has
+written its file.
 
 ## Changing it
 
