@@ -15,9 +15,9 @@
 """Upload reports to the deployment's GCS bucket.
 
 The pod's filesystem goes when the Job's TTL expires, so the bucket is where
-a report outlives the run that produced it. Credentials come from Workload
-Identity on the benchmark-runner ServiceAccount; see the deployment notes in
-the repo README.
+a report outlives the run that produced it, until the scenario-runner copies
+it. Credentials come from Workload Identity on the benchmark-runner
+ServiceAccount, which benchmarking/scenarios/infra/clusters/common grants.
 """
 
 import mimetypes
@@ -49,8 +49,9 @@ def upload(
     `root`. Returns (path, gs_uri, error) per file.
 
     The benchmark-runner account has objectCreator and nothing more, so an
-    object that already exists is a failure rather than an overwrite. A run
-    runs each test case once, which is what keeps that from happening.
+    object that already exists is a failure rather than an overwrite. The
+    scenario-runner refuses a run id a case was already recorded under, which
+    is what keeps that from happening.
     """
     try:
         bucket = storage.Client().bucket(bucket_name)

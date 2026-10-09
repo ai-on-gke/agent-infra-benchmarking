@@ -25,15 +25,15 @@ from pathlib import Path
 # Aggregated row.
 STATS_HISTORY = "locust_stats_history.csv"
 
-# runner.py's custom-history report, from Prometheus: the worker's actor gauges,
+# The master's custom-history report, from Prometheus: the worker's actor gauges,
 # one row per second per gauge.
 CUSTOM_HISTORY = "custom_stats_history.csv"
 
-# runner.py's cluster-vitals report, from Prometheus: one row per second per
+# The master's cluster-vitals report, from Prometheus: one row per second per
 # metric, for each node and for the cluster as a whole.
 CLUSTER_VITALS = "cluster_vitals_history.csv"
 
-# runner.py's record of the run, read here for its steady-state window and
+# The master's record of the run (run_master.py), read here for its steady-state window and
 # which repeat it was.
 RUN_JSON = "run.json"
 

@@ -20,10 +20,12 @@ deletes them."""
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
 import time
+import urllib.parse
 from contextlib import contextmanager
 from string import Template
 from typing import Callable, Iterator
@@ -48,6 +50,12 @@ SANDBOX_CONFIGS = {
 # The smallest microvm admits, so actors don't get kata's 2 GiB and its page
 # cache in every snapshot.
 DEFAULT_ACTOR_MEMORY = "256Mi"
+# The least memory a workload's actors can do their work in. openclaw's
+# Node.js agent is OOM-killed at 256Mi, so a template deployed that way fails
+# every instruction.
+MIN_ACTOR_MEMORY_MIB = {"openclaw": 1024}
+# Kubernetes quantity suffixes, in bytes.
+QUANTITY_UNITS = {"": 1, "k": 10**3, "M": 10**6, "G": 10**9, "T": 10**12, "Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40}
 DEFAULT_TIMEOUT_SECS = 300
 POLL_SECS = 5
 PROGRESS_EVERY_SECS = 30
@@ -212,8 +220,11 @@ def deploy(
     check_templates(names)
     check_worker_pool(cluster, sandbox_class, timeout)
     otlp = otlp or otlp_endpoint(cluster)
+    # A template that sets its own limit, as openclaw's does, ignores actor_memory.
+    sized = [n for n in names if "${ACTOR_MEMORY}" in (MANIFESTS_DIR / f"{n}-template.yaml.tmpl").read_text()]
     log(
-        f"workloads: deploying {', '.join(names)} (sandbox_class={sandbox_class}, actor_memory={actor_memory},"
+        f"workloads: deploying {', '.join(names)} (sandbox_class={sandbox_class},"
+        f" actor_memory={actor_memory} for {', '.join(sized) or 'none of them'},"
         f" otlp_endpoint={otlp}, bucket=gs://{cluster.bucket}/{ATESPACE}/, substrate={substrate.revision()})"
     )
     # The openclaw actors call it rather than a real LLM.
@@ -236,6 +247,53 @@ def deploy(
             log(f"workloads: [{i}/{len(names)}] waiting for the {ATESPACE}/{name} golden snapshot (timeout {timeout}s)")
             wait_golden_snapshot(ate, cluster, name, timeout)
     log(f"workloads: all {len(names)} golden snapshots ready")
+
+
+def deployed_template(cluster: Cluster, name: str) -> dict:
+    """The ActorTemplate as substrate holds it."""
+    with kubectl_ate(cluster) as ate:
+        try:
+            return json.loads(output(ate("get", "actor-template", name, "-a", ATESPACE, "-o", "json")))
+        except subprocess.CalledProcessError:
+            raise WorkloadError(f"no actor template {ATESPACE}/{name}; deploy the workloads first") from None
+
+
+def egress_hosts(template: dict) -> list[str]:
+    """The hosts of the URLs in the template's container env: what its actors
+    are configured to call, such as the OTLP collector and openclaw's mock-llm.
+    Substrate refuses every connection from an actor without an egress policy,
+    and the worker gives each one a policy that allows these."""
+    hosts = set()
+    for container in template.get("containers") or []:
+        for env in container.get("env") or []:
+            url = urllib.parse.urlsplit(env.get("value") or "")
+            if url.scheme and url.hostname:
+                hosts.add(url.hostname)
+    return sorted(hosts)
+
+
+def memory_mib(quantity: str) -> float | None:
+    """A Kubernetes memory quantity in MiB, or None if it cannot be read."""
+    match = re.fullmatch(r"([0-9.]+)([A-Za-z]*)", quantity or "")
+    if not match or match[2] not in QUANTITY_UNITS:
+        return None
+    return float(match[1]) * QUANTITY_UNITS[match[2]] / 2**20
+
+
+def check_deployed(template: dict, name: str, sandbox_class: str, workload: str) -> None:
+    """Refuses a deployed template the case cannot run on: one of another
+    sandbox class, whose actors never schedule on the case's pool, or with
+    less memory than the workload needs. Matters when the templates were not
+    deployed by this run (--no-deploy-workloads)."""
+    want = SANDBOX_CONFIGS[sandbox_class][1]
+    have = (template.get("sandboxConfig") or {}).get("sandboxClass")
+    if have != want:
+        raise WorkloadError(f"actor template {ATESPACE}/{name} is {have or 'of no sandbox class'}, not {want}; deploy it again")
+    need = MIN_ACTOR_MEMORY_MIB.get(workload)
+    limits = (template.get("resources") or {}).get("limits") or []
+    quantity = next((limit.get("quantity") for limit in limits if limit.get("name") == "memory"), None)
+    if need and quantity and (memory_mib(quantity) or 0) < need:
+        raise WorkloadError(f"actor template {ATESPACE}/{name} limits actors to {quantity}; {workload} needs {need}Mi")
 
 
 def delete(cluster: Cluster, names: list[str] | None = None) -> None:

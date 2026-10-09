@@ -24,6 +24,10 @@
 # `noop` is the scenario-runner's alone: it applies and destroys the case's
 # cluster, and runs nothing on it.
 #
+# `max-failure-ratio` is the share of requests, 0 to 1, that may fail before a
+# run of the case counts as failed, 0.01 by default; a run that makes no
+# requests fails too.
+#
 # `repeats` is how many times the case runs, 1 by default, each on its own
 # cluster applied for it, or one after another on a --dev-infra's. Above 1,
 # they are recorded as <case>-1 to <case>-N.
@@ -107,6 +111,8 @@ cases:
     worker:
       workload-name: openclaw
       workload-template: openclaw
+      # Above the template's OPENCLAW_TIMEOUT_SECS (100), so the actor's own
+      # timeout reports a slow turn first.
       workload-timeout: 120s
       resume-mode: explicit
 

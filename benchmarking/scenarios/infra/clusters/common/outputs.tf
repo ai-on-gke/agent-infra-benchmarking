@@ -38,13 +38,13 @@ output "sandbox_class" {
 }
 
 output "network_name" {
-  description = "Name of the dedicated VPC network created for this deployment."
-  value       = google_compute_network.this.name
+  description = "Name of the VPC network the cluster is on: the dedicated one, or var.existing_network's."
+  value       = reverse(split("/", local.network))[0]
 }
 
 output "subnetwork_name" {
   description = "Name of the subnetwork nodes, Pods and Services were allocated from."
-  value       = google_compute_subnetwork.this.name
+  value       = reverse(split("/", local.subnetwork))[0]
 }
 
 output "artifact_registry_repository" {

@@ -50,15 +50,27 @@ def stream(
         env=environ(env),
         cwd=cwd,
     ) as proc:
+        lines = proc.stderr if stdout else proc.stdout
         try:
             if input is not None:
                 proc.stdin.write(input)
                 proc.stdin.close()
-            for line in proc.stderr if stdout else proc.stdout:
+            for line in lines:
                 log_line(line.rstrip("\n"))
-        except BaseException:
-            # As subprocess.run does, e.g. on SIGTERM.
-            proc.kill()
+        except BaseException as exc:
+            # Stopped, not killed: terraform killed mid-apply leaves what it was
+            # creating out of its state, and a GCS state lock behind. A Ctrl-C
+            # reached it from the terminal too; anything else, such as cli.run's
+            # SIGTERM, did not. Its output is read on until it exits, so a full
+            # pipe cannot hold it up, and a second interrupt kills it.
+            if not isinstance(exc, KeyboardInterrupt):
+                proc.terminate()
+            try:
+                for line in lines:
+                    log_line(line.rstrip("\n"))
+                proc.wait()
+            except BaseException:
+                proc.kill()
             raise
     if proc.returncode:
         raise subprocess.CalledProcessError(proc.returncode, cmd)

@@ -50,10 +50,10 @@ module "cluster" {
 
   cluster_name = var.default_resource_name
 
-  network             = google_compute_network.this.self_link
-  subnetwork          = google_compute_subnetwork.this.self_link
-  pods_range_name     = "pods"
-  services_range_name = "services"
+  network             = local.network
+  subnetwork          = local.subnetwork
+  pods_range_name     = local.pods_range_name
+  services_range_name = local.services_range_name
   kubernetes_version  = var.kubernetes_version
   release_channel     = "REGULAR"
   block_upgrades      = true
@@ -75,7 +75,7 @@ module "cluster" {
   # tools/setup-gcp/README.md.
   node_pools = merge({
     default = {
-      machine_type   = "c2-standard-16"
+      machine_type   = var.default_machine_type
       node_count     = 1
       min_node_count = 1
       max_node_count = 1

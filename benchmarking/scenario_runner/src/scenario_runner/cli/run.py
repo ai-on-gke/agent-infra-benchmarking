@@ -33,11 +33,11 @@ from typing import Callable, NoReturn
 
 import yaml
 
-from .. import LOCAL_DATA_DIR, benchmark, dev_infra, names, substrate
+from .. import LOCAL_DATA_DIR, benchmark, dev_infra, locust, names, substrate, summary
 from ..cases import SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases, record_names
 from ..cluster import Cluster
 from ..deployment import RUNNER_INFRA_DIR, Deployment, GcsDeployment, cluster_deployment
-from ..log import log
+from ..log import ON_CLOUD_RUN, log
 from ..process import failure
 
 # The executions' Deployments, kept after they are destroyed, and with gcs in
@@ -50,6 +50,10 @@ STATE_BACKENDS = ["local", "gcs"]
 
 # What a failed repeat raises, its infra's apply included.
 RUN_ERRORS = (subprocess.CalledProcessError, *benchmark.ERRORS, substrate.SubstrateError)
+
+
+class CaseFailed(RuntimeError):
+    """Some of a case's repeats failed; the cases after it still run."""
 
 
 def fail(message: str) -> NoReturn:
@@ -250,12 +254,12 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
     return record
 
 
-def run_case(args: argparse.Namespace, name: str, case: dict, cluster: Cluster) -> None:
+def run_case(args: argparse.Namespace, record: str, case: dict, cluster: Cluster, name: str, repeat: int) -> None:
     if case["type"] == "noop":
-        log(f"{name}: noop, nothing to run")
+        log(f"{record}: noop, nothing to run")
         return
     benchmark.run(
-        name,
+        record,
         case,
         args.name,
         cluster,
@@ -263,41 +267,74 @@ def run_case(args: argparse.Namespace, name: str, case: dict, cluster: Cluster) 
         docker_login=not args.no_docker_login,
         build=not args.no_build,
         deploy_workloads=not args.no_deploy_workloads,
+        test_case=name,
+        repeat=repeat,
     )
 
 
-def run_repeats(name: str, case: dict, run: Callable[[str], None]) -> None:
-    """Calls run with each of the case's record names. A failed repeat does not
-    stop the ones after it; the case fails once they have run."""
+def describe(exc: BaseException) -> str:
+    return failure(exc) if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+
+
+def run_repeats(name: str, case: dict, run: Callable[[str, int], None]) -> None:
+    """Calls run with each of the case's record names and repeat numbers, 0 for
+    a case run once. A failed repeat does not stop the ones after it; the case
+    fails once they have run. A run that timed out does: it is still going."""
     records = record_names(name, case)
     if len(records) == 1:
-        run(name)
+        run(name, 0)
         return
     failed = []
     for n, record in enumerate(records, 1):
         log(f"{name}: repeat {n} of {len(records)}, as {record}")
         try:
-            run(record)
+            run(record, n)
+        except locust.LocustTimeout:
+            raise
         except RUN_ERRORS as exc:
-            log(f"{record}: {failure(exc) if isinstance(exc, subprocess.CalledProcessError) else exc}", "ERROR")
+            log(f"{record}: {describe(exc)}", "ERROR")
             failed.append(record)
     if failed:
-        fail(f"{len(failed)} of {len(records)} repeats of {name} failed: {', '.join(failed)}")
+        raise CaseFailed(f"{len(failed)} of {len(records)} repeats of {name} failed: {', '.join(failed)}")
 
 
-def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
-    """A case's repeats run one after another on the dev infra's cluster."""
+def run_cases(args: argparse.Namespace, cases: dict[str, dict], run: Callable[[str, dict], None]) -> list[str]:
+    """Calls run with each case, and returns the ones that failed. A failed case
+    does not stop the ones after it; a timed-out run or an interrupt does."""
+    failed = []
+    for name, case in cases.items():
+        try:
+            run(name, case)
+        except locust.LocustTimeout:
+            raise
+        except (CaseFailed, *RUN_ERRORS) as exc:
+            log(f"{name}: {describe(exc)}", "ERROR")
+            failed.append(name)
+        # From what was downloaded, so not on Cloud Run.
+        records = record_names(name, case)
+        if len(records) > 1 and case["type"] != "noop" and not ON_CLOUD_RUN:
+            summary.write(locust.REPORTS_DIR / args.name, name, records)
+    return failed
+
+
+def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[str]:
+    """A case's repeats run one after another on the dev infra's cluster.
+    Returns the cases that failed."""
     record = prepare_dev_infra(args, cases)
     cluster = dev_infra.cluster(args.dev_infra)
-    for name, case in cases.items():
+
+    def run(name: str, case: dict) -> None:
+        nonlocal record
         if not case.get(SKIP_SUBSTRATE_INSTALL):
             record = dev_infra.install_substrate(record)
-        run_repeats(name, case, lambda run_name: run_case(args, run_name, case, cluster))
+        run_repeats(name, case, lambda run_name, repeat: run_case(args, run_name, case, cluster, name, repeat))
+
+    return run_cases(args, cases, run)
 
 
-def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
+def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[str]:
     """Each of a case's repeats runs on a cluster of its own, applied for it and
-    destroyed after it."""
+    destroyed after it. Returns the cases that failed."""
     # Every repeat's, before anything is applied, so a name that can't be fails first.
     case_vars = {
         record: names.infra_vars(args.project_id, args.region, args.name, record)
@@ -307,7 +344,7 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     variables = names.infra_vars(args.project_id, args.region, args.name)
     runner_infra = deployment(args, "scenario-runner").create(RUNNER_INFRA_DIR, variables)
 
-    def run_on_cluster(case: dict, record: str) -> None:
+    def run_on_cluster(name: str, case: dict, record: str, repeat: int) -> None:
         version = None if case.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
         uncreated = deployment(args, "scenarios", record)
         case_infra = cluster_deployment(case["infra"]["cluster"], uncreated, case_vars[record], version)
@@ -315,11 +352,14 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
             cluster = Cluster(case_infra.outputs(), case_infra.data / "kubeconfig")
             if not case.get(SKIP_SUBSTRATE_INSTALL):
                 substrate.install(cluster)
-            run_case(args, record, case, cluster)
+            run_case(args, record, case, cluster, name, repeat)
 
     with runner_infra.applied():
-        for name, case in cases.items():
-            run_repeats(name, case, lambda record: run_on_cluster(case, record))
+        return run_cases(
+            args,
+            cases,
+            lambda name, case: run_repeats(name, case, lambda record, repeat: run_on_cluster(name, case, record, repeat)),
+        )
 
 
 def main() -> None:
@@ -333,13 +373,23 @@ def main() -> None:
 
     try:
         if args.dev_infra:
-            run_on_dev_infra(args, cases)
+            failed = run_on_dev_infra(args, cases)
         else:
-            run_on_own_infra(args, cases)
+            failed = run_on_own_infra(args, cases)
+    except KeyboardInterrupt:
+        # The infra applied for the execution is destroyed on the way out, but
+        # an interrupt during that destroy leaves some of it behind.
+        where = f"its state is in {LOCAL_TERRAFORM_DIR / args.name}" + (
+            f" and gs://{args.state_bucket}/{args.state_prefix}/{args.name}" if args.state_backend == "gcs" else ""
+        )
+        log(f"run: interrupted. If a destroy was cut short, what it left is still up; {where}", "ERROR")
+        sys.exit(130)
     except subprocess.CalledProcessError as exc:
         fail(failure(exc))
     except (*RUN_ERRORS, names.NamingError) as exc:
         fail(str(exc))
+    if failed:
+        fail(f"{len(failed)} of {len(cases)} cases failed: {', '.join(failed)}")
 
 
 if __name__ == "__main__":
