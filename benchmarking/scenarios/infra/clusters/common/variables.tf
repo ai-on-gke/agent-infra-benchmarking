@@ -23,6 +23,18 @@ variable "default_resource_name" {
   type        = string
 }
 
+variable "short_resource_name" {
+  description = "Name for the resources whose names are capped below var.default_resource_name's: the node service account, <name>-node, so at most 25 characters. Defaults to var.default_resource_name, cut to fit, when empty."
+  type        = string
+  default     = ""
+}
+
+variable "labels" {
+  description = "Labels put on every resource this config creates that takes labels."
+  type        = map(string)
+  default     = {}
+}
+
 variable "network_name" {
   description = "Name of the dedicated VPC network (and its one subnetwork) created for this deployment. Defaults to var.default_resource_name when empty, the same way the bucket and the Artifact Registry repository do."
   type        = string
@@ -100,7 +112,7 @@ variable "sandboxed_max_node_count" {
 # pools substrate runs on get, so give one a taint unless substrate's workers
 # are meant to land there.
 variable "additional_node_pools" {
-  description = "Node pools to create besides default, sandboxed and monitoring. name is the pool's name suffix."
+  description = "Node pools to create besides default, sandboxed and monitoring. name is the pool's name."
   type = list(object({
     name           = string
     machine_type   = optional(string, "e2-standard-4")

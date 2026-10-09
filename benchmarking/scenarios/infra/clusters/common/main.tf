@@ -263,7 +263,7 @@ resource "google_storage_bucket_iam_member" "ate_api_server_bucket_viewer" {
 
 resource "google_service_account" "node" {
   project      = var.project_id
-  account_id   = substr("${var.default_resource_name}-node", 0, 30)
+  account_id   = var.short_resource_name != "" ? "${var.short_resource_name}-node" : substr("${var.default_resource_name}-node", 0, 30)
   display_name = "GKE nodes for ${var.default_resource_name}"
   description  = "Runs the node pools of the ${var.default_resource_name} deployment's cluster. Holds the minimum GKE requires, plus read on this deployment's Artifact Registry repository and snapshot bucket."
 }

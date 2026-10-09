@@ -18,3 +18,9 @@ variable "default_resource_name" {
     error_message = "default_resource_name must be 1-63 characters of lowercase letters, digits and hyphens, starting with a letter and not ending with a hyphen."
   }
 }
+
+variable "labels" {
+  description = "Labels put on every resource this config creates."
+  type        = map(string)
+  default     = {}
+}

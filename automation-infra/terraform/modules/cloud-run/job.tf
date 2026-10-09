@@ -77,8 +77,10 @@ resource "google_cloud_run_v2_job" "job" {
           "--state-prefix=${var.state_bucket_prefix}",
         ], var.args)
 
+        # The scenario-runner labels the infra with BENCHMARK_TRIGGER, which
+        # the scheduler's run overrides with scheduled.
         dynamic "env" {
-          for_each = merge(var.github_actions_bucket == null ? {} : {
+          for_each = merge({ BENCHMARK_TRIGGER = "manual" }, var.github_actions_bucket == null ? {} : {
             SOURCE_BUCKET = var.github_actions_bucket
             SOURCE_BRANCH = var.source_branch
           }, var.env)
@@ -137,6 +139,11 @@ resource "google_cloud_scheduler_job" "trigger" {
   http_target {
     http_method = "POST"
     uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.job.name}:run"
+    # Merged into the job's env, unlike args, which an override replaces.
+    body = base64encode(jsonencode({
+      overrides = { containerOverrides = [{ env = [{ name = "BENCHMARK_TRIGGER", value = "scheduled" }] }] }
+    }))
+    headers = { "Content-Type" = "application/json" }
 
     oauth_token {
       service_account_email = google_service_account.scheduler[0].email

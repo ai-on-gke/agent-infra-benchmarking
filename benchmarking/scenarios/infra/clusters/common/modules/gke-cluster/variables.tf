@@ -109,7 +109,7 @@ variable "managed_otel_scope" {
 # Only used when autopilot = false. Keyed map so pools can be added/removed
 # independently without shifting other pools (as a list would on index changes).
 variable "node_pools" {
-  description = "Map of node pools to create (Standard mode only). Key is used as the pool name suffix."
+  description = "Map of node pools to create (Standard mode only). Key is used as the pool name."
   type = map(object({
     machine_type   = optional(string, "e2-medium")
     disk_size_gb   = optional(number, 100)

@@ -33,10 +33,10 @@ from typing import NoReturn
 
 import yaml
 
-from .. import LOCAL_DATA_DIR, benchmark, dev_infra, substrate
+from .. import LOCAL_DATA_DIR, benchmark, dev_infra, names, substrate
 from ..cases import SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases
 from ..cluster import Cluster
-from ..deployment import RUNNER_INFRA_DIR, Deployment, GcsDeployment, cluster_deployment, tf_vars
+from ..deployment import RUNNER_INFRA_DIR, Deployment, GcsDeployment, cluster_deployment
 from ..log import log
 from ..process import failure
 
@@ -92,7 +92,8 @@ def parse_args() -> argparse.Namespace:
         "--name",
         type=benchmark.check_run_id,
         default=datetime.now(timezone.utc).strftime("run-%Y%m%dt%H%M%Sz"),
-        help="this execution's infra and state prefix; unique to it. Default: run-<UTC timestamp>",
+        help="this execution's run id and state prefix, which its infra's names start with; unique to it."
+        " Default: run-<UTC timestamp>",
     )
     p.add_argument(
         "--terraform-output",
@@ -272,13 +273,15 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
 
 
 def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
-    variables = tf_vars(args.project_id, args.region, args.name)
+    # Every case's, before anything is applied, so a name that can't be fails first.
+    case_vars = {name: names.infra_vars(args.project_id, args.region, args.name, name) for name in cases}
+    variables = names.infra_vars(args.project_id, args.region, args.name)
     runner_infra = deployment(args, "scenario-runner").create(RUNNER_INFRA_DIR, variables)
     with runner_infra.applied():
         for name, case in cases.items():
             version = None if case.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
             uncreated = deployment(args, "scenarios", name)
-            case_infra = cluster_deployment(case["infra"]["cluster"], uncreated, variables, version)
+            case_infra = cluster_deployment(case["infra"]["cluster"], uncreated, case_vars[name], version)
             with case_infra.applied():
                 cluster = Cluster(case_infra.outputs(), case_infra.data / "kubeconfig")
                 if not case.get(SKIP_SUBSTRATE_INSTALL):
@@ -302,7 +305,7 @@ def main() -> None:
             run_on_own_infra(args, cases)
     except subprocess.CalledProcessError as exc:
         fail(failure(exc))
-    except (*benchmark.ERRORS, substrate.SubstrateError) as exc:
+    except (*benchmark.ERRORS, substrate.SubstrateError, names.NamingError) as exc:
         fail(str(exc))
 
 

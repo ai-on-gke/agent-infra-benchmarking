@@ -148,7 +148,9 @@ locals {
 resource "google_container_node_pool" "this" {
   for_each = var.autopilot ? {} : var.node_pools
 
-  name     = "${var.cluster_name}-${each.key}"
+  # Unique only within the cluster, so the cluster's name can take all 40
+  # characters a pool's name can.
+  name     = each.key
   location = var.region
   project  = var.project_id
   cluster  = local.cluster_name

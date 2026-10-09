@@ -18,6 +18,24 @@ variable "default_resource_name" {
   type        = string
 }
 
+variable "short_resource_name" {
+  description = "Unused; taken as common takes it."
+  type        = string
+  default     = ""
+}
+
+variable "bucket_name" {
+  description = "Unused; taken as common takes it."
+  type        = string
+  default     = ""
+}
+
+variable "labels" {
+  description = "Unused; taken as common takes it."
+  type        = map(string)
+  default     = {}
+}
+
 variable "kubernetes_version" {
   description = "Unused; taken as common takes it."
   type        = string
