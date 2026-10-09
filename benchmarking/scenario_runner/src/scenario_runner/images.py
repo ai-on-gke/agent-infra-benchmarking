@@ -183,7 +183,9 @@ def cloud_build_submit(steps: list[dict], pushed: list[str], paths: list[str], p
     """Runs steps as one Cloud Build, which pushes the pushed images only once
     all have succeeded. It uploads only paths, at their repo-relative paths, so
     the steps' arguments are the local ones unchanged."""
-    config = {"steps": steps, "images": pushed, "timeout": "3600s", "options": {"machineType": "E2_HIGHCPU_8"}}
+    # Cloud Logging, as streaming from the default logs bucket needs project Viewer.
+    options = {"machineType": "E2_HIGHCPU_8", "logging": "CLOUD_LOGGING_ONLY"}
+    config = {"steps": steps, "images": pushed, "timeout": "3600s", "options": options}
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "source.tgz"
         with tarfile.open(source, "w:gz") as tar:

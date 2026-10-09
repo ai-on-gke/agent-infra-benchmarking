@@ -48,6 +48,8 @@ resource "google_project_iam_member" "job" {
     "roles/resourcemanager.projectIamAdmin",
     "roles/storage.admin",
     "roles/cloudbuild.builds.editor",
+    # For gcloud builds submit to stream the build's log.
+    "roles/logging.viewer",
   ])
 
   project = var.project_id
