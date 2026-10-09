@@ -3,7 +3,7 @@
 Runs every case in
 [`scenarios.yaml`](../../../benchmarking/scenarios/scenarios.yaml) once a day,
 at 3am UTC, in the GCP project `akvelon-gke-aieco` (`us-central1`). Each
-execution runs the latest commit pushed to the `add-scheduler` branch, and each
+execution runs the latest commit pushed to the `main` branch, and each
 repeat of a case gets a cluster of its own, destroyed after it.
 
 To run it now with one case rather than waiting for the schedule:
@@ -35,7 +35,7 @@ deployment. It holds:
 | Prefix | What |
 |---|---|
 | `automation/cloud-run/substrate-bench-auto/` | This deployment's Terraform state |
-| `source/add-scheduler/` | The commits the job runs, uploaded by the Upload source workflow on every push |
+| `source/main/` | The commits the job runs, uploaded by the Upload source workflow on every push |
 | `terraform/<run-id>/` | Each execution's scenario-runner state, for its runner infra and every repeat's cluster |
 
 ## Running it by hand
@@ -84,7 +84,7 @@ cluster. So for now the log is all an execution leaves behind.
 
 ## Changing it
 
-The job runs whatever is on `add-scheduler`, so a change to the scenarios or
+The job runs whatever is on `main`, so a change to the scenarios or
 the scenario-runner only needs a push. Wait for the Upload source workflow to
 finish before the next execution starts.
 
