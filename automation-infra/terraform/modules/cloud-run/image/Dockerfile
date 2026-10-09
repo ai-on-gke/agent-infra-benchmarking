@@ -9,6 +9,9 @@ COPY --from=terraform /bin/terraform /usr/local/bin/terraform
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl git \
   && rm -rf /var/lib/apt/lists/*
+# The extracted source keeps the uploader's owner, which git otherwise refuses
+# to work in, in the repo and its submodules alike.
+RUN git config --system --add safe.directory '*'
 
 ENV PYTHONUNBUFFERED=1
 COPY entrypoint.sh /entrypoint.sh
