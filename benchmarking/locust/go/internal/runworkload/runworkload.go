@@ -55,7 +55,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// The atespace scenario_runner/src/scenario_runner/workloads.py creates its
+// The atespace scenario_runner/src/scenario_runner/workloads/ creates its
 // ActorTemplates in. Mirrored from it rather than imported.
 const templateAtespace = "benchmark-workloads"
 

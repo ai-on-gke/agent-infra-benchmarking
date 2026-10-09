@@ -31,7 +31,7 @@ import (
 const (
 	gluttonWorkloadName = "glutton"
 
-	// The ActorTemplate scenario_runner/src/scenario_runner/workloads.py creates
+	// The ActorTemplate scenario_runner/src/scenario_runner/workloads/ creates
 	// for glutton.
 	gluttonTemplate = "glutton"
 

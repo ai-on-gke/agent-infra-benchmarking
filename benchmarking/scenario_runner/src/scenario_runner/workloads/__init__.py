@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Deploys mock-llm and the benchmark ActorTemplates of
-workloads/manifests/<name>-template.yaml.tmpl onto the worker pool, and waits
-for their golden snapshots; or deletes them."""
+"""Deploys the benchmark ActorTemplates of
+workloads/manifests/<name>-template.yaml.tmpl onto the worker pool, with what
+they call (openclaw's mock-llm), and waits for their golden snapshots; or
+deletes them."""
 
 from __future__ import annotations
 
@@ -27,15 +28,15 @@ from contextlib import contextmanager
 from string import Template
 from typing import Callable, Iterator
 
-from . import RUNNER_DIR, images, substrate, worker_pool
-from .cluster import Cluster
-from .log import log
-from .process import output, stream
+from .. import RUNNER_DIR, images, substrate, worker_pool
+from ..cluster import Cluster
+from ..log import log
+from ..process import output, stream
+from . import openclaw
 
 MANIFESTS_DIR = RUNNER_DIR.parent / "workloads" / "manifests"
 NAMESPACE = worker_pool.NAMESPACE
 ATESPACE = "benchmark-workloads"
-MOCK_LLM_IMAGE = "mock-llm"
 # The templates whose image is neither ko:// nor a literal, but one of ours.
 TEMPLATE_IMAGES = {"openclaw": "openclaw-workload"}
 # Pinned rather than defaulted, so a stale SandboxConfig fails loudly. The
@@ -129,15 +130,6 @@ def check_worker_pool(cluster: Cluster, sandbox_class: str, timeout: int) -> Non
     stream(cluster.kubectl(*rollout, namespace=NAMESPACE))
 
 
-def deploy_mock_llm(cluster: Cluster, timeout: int) -> None:
-    log("workloads: deploying mock-llm")
-    image = pinned_image(cluster, MOCK_LLM_IMAGE)
-    manifest = Template((MANIFESTS_DIR / "mock-llm.yaml.tmpl").read_text()).substitute(IMAGE_WITH_DIGEST=image)
-    stream(cluster.kubectl("apply", "-f", "-", namespace=NAMESPACE), input=manifest)
-    log(f"workloads: waiting for mock-llm to be ready (timeout: {timeout}s)")
-    stream(cluster.kubectl("rollout", "status", "deployment/mock-llm", f"--timeout={timeout}s", namespace=NAMESPACE))
-
-
 def render_template(cluster: Cluster, name: str, sandbox_class: str, actor_memory: str, otlp: str) -> str:
     config_name, class_enum = SANDBOX_CONFIGS[sandbox_class]
     values = {
@@ -224,7 +216,7 @@ def deploy(
         f"workloads: deploying {', '.join(names)} (sandbox_class={sandbox_class}, actor_memory={actor_memory},"
         f" otlp_endpoint={otlp}, bucket=gs://{cluster.bucket}/{ATESPACE}/, substrate={substrate.revision()})"
     )
-    deploy_mock_llm(cluster, timeout)
+    openclaw.deploy_mock_llm(cluster, timeout)
 
     with kubectl_ate(cluster) as ate:
         # The store wants a template's atespace to exist when it is created.
@@ -254,7 +246,4 @@ def delete(cluster: Cluster, names: list[str] | None = None) -> None:
             delete_template(ate, name)
         if subprocess.run(ate("delete", "atespace", ATESPACE), capture_output=True).returncode:
             log(f"workloads: atespace {ATESPACE} not deleted; it may not exist or not be empty")
-    try:
-        stream(cluster.kubectl("delete", "deployment,service", "mock-llm", "--ignore-not-found", namespace=NAMESPACE))
-    except subprocess.CalledProcessError:
-        log("workloads: mock-llm not deleted")
+    openclaw.delete_mock_llm(cluster)
