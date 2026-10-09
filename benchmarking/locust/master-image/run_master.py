@@ -13,8 +13,8 @@
 # limitations under the License.
 
 """The master image's entrypoint: runs locust with this process's arguments,
-writes custom_history's CSV beside locust's, then uploads every file in
-LOCUST_CSV's folder to
+writes custom_history's and cluster_vitals' CSVs beside locust's, then
+uploads every file in LOCUST_CSV's folder to
 gs://<REPORT_BUCKET>/reports/<BENCHMARK_RUN_ID>/<BENCHMARK_TEST_CASE>/.
 
 An empty REPORT_BUCKET leaves the files on the pod. Exits with locust's
@@ -28,10 +28,29 @@ import sys
 import time
 from pathlib import Path
 
+import cluster_vitals
 import custom_history
 import upload
 
 UPLOAD_FAILED_EXIT = 3
+
+
+def write_reports(csv_prefix: Path, started: float) -> None:
+    """Writes the reports Prometheus holds the data of, once the run's last
+    scrape is in. Each is a by-product of the run rather than its verdict, so
+    one not written fails nothing, the others included."""
+    time.sleep(custom_history.SETTLE_SECS)
+    ended = time.time()
+    run_id, test_case = os.environ.get("BENCHMARK_RUN_ID", ""), os.environ.get("BENCHMARK_TEST_CASE", "")
+    reports = {
+        custom_history.FILENAME: lambda: custom_history.write(csv_prefix, run_id, test_case, started, ended),
+        cluster_vitals.FILENAME: lambda: cluster_vitals.write(csv_prefix, started, ended),
+    }
+    for filename, write in reports.items():
+        try:
+            print(f"Wrote {write()}", flush=True)
+        except (OSError, KeyError, ValueError) as exc:
+            print(f"No {filename}: {exc}", flush=True)
 
 
 def main() -> int:
@@ -58,13 +77,7 @@ def main() -> int:
         status = 128 - status
     print(f"locust exited with {status}", flush=True)
 
-    # A by-product of the run rather than its verdict, so one not written
-    # fails nothing.
-    try:
-        run_id, test_case = os.environ["BENCHMARK_RUN_ID"], os.environ["BENCHMARK_TEST_CASE"]
-        print(f"Wrote {custom_history.write(csv_prefix, run_id, test_case, started)}", flush=True)
-    except (OSError, KeyError, ValueError) as exc:
-        print(f"No {custom_history.FILENAME}: {exc}", flush=True)
+    write_reports(csv_prefix, started)
 
     if not bucket:
         print(f"REPORT_BUCKET is empty; the reports stay in {report_dir} on the pod.", flush=True)
