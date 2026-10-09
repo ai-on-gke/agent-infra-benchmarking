@@ -23,7 +23,11 @@ module "cloud_run" {
   state_bucket          = local.state_bucket
   state_bucket_prefix   = "terraform"
   github_actions_bucket = local.state_bucket
-  source_branch         = "add-automation"
+  source_branch         = "add-scheduler"
+
+  # The dummy case, which creates no cluster, to check the schedule.
+  schedule      = "*/2 * * * *"
+  schedule_args = ["--scenario=dummy"]
 }
 
 output "cloud_run" {

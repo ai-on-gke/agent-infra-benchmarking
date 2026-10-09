@@ -67,6 +67,12 @@ variable "schedule" {
   default     = null
 }
 
+variable "schedule_args" {
+  description = "Arguments the scheduled runs pass in place of args, e.g. [\"--scenario=dummy\"]. Null passes args."
+  type        = list(string)
+  default     = null
+}
+
 variable "time_zone" {
   description = "Time zone the schedule is read in."
   type        = string

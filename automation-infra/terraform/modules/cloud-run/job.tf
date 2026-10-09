@@ -46,6 +46,18 @@ resource "google_project_iam_member" "job" {
   member  = "serviceAccount:${google_service_account.job.email}"
 }
 
+locals {
+  # The scenario-runner's infra goes in this deployment's project and region,
+  # with its state in the deployment's state bucket.
+  module_args = [
+    "--project-id=${var.project_id}",
+    "--region=${var.region}",
+    "--state-backend=gcs",
+    "--state-bucket=${var.state_bucket}",
+    "--state-prefix=${var.state_bucket_prefix}",
+  ]
+}
+
 resource "google_cloud_run_v2_job" "job" {
   project  = var.project_id
   name     = var.default_resource_name
@@ -67,15 +79,7 @@ resource "google_cloud_run_v2_job" "job" {
       containers {
         image   = data.google_artifact_registry_docker_image.runner.self_link
         command = var.command
-        # The scenario-runner's infra goes in this deployment's project and
-        # region, with its state in the deployment's state bucket.
-        args = concat([
-          "--project-id=${var.project_id}",
-          "--region=${var.region}",
-          "--state-backend=gcs",
-          "--state-bucket=${var.state_bucket}",
-          "--state-prefix=${var.state_bucket_prefix}",
-        ], var.args)
+        args    = concat(local.module_args, var.args)
 
         # The scenario-runner labels the infra with BENCHMARK_TRIGGER, which
         # the scheduler's run overrides with scheduled.
@@ -118,8 +122,9 @@ resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
   project  = var.project_id
   name     = google_cloud_run_v2_job.job.name
   location = google_cloud_run_v2_job.job.location
-  role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.scheduler[0].email}"
+  # Not run.invoker, which lacks run.jobs.runWithOverrides.
+  role   = "roles/run.jobsExecutorWithOverrides"
+  member = "serviceAccount:${google_service_account.scheduler[0].email}"
 }
 
 resource "google_cloud_scheduler_job" "trigger" {
@@ -139,9 +144,13 @@ resource "google_cloud_scheduler_job" "trigger" {
   http_target {
     http_method = "POST"
     uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.job.name}:run"
-    # Merged into the job's env, unlike args, which an override replaces.
+    # env is merged into the job's, while args replace its own, hence the
+    # module's again.
     body = base64encode(jsonencode({
-      overrides = { containerOverrides = [{ env = [{ name = "BENCHMARK_TRIGGER", value = "scheduled" }] }] }
+      overrides = { containerOverrides = [merge(
+        { env = [{ name = "BENCHMARK_TRIGGER", value = "scheduled" }] },
+        var.schedule_args == null ? {} : { args = concat(local.module_args, var.schedule_args) },
+      )] }
     }))
     headers = { "Content-Type" = "application/json" }
 
