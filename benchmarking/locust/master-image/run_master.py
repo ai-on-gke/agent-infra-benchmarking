@@ -13,7 +13,8 @@
 # limitations under the License.
 
 """The master image's entrypoint: runs locust with this process's arguments,
-then uploads every file in LOCUST_CSV's folder to
+writes custom_history's CSV beside locust's, then uploads every file in
+LOCUST_CSV's folder to
 gs://<REPORT_BUCKET>/reports/<BENCHMARK_RUN_ID>/<BENCHMARK_TEST_CASE>/.
 
 An empty REPORT_BUCKET leaves the files on the pod. Exits with locust's
@@ -24,21 +25,25 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+import custom_history
 import upload
 
 UPLOAD_FAILED_EXIT = 3
 
 
 def main() -> int:
-    report_dir = Path(os.environ["LOCUST_CSV"]).parent
+    csv_prefix = Path(os.environ["LOCUST_CSV"])
+    report_dir = csv_prefix.parent
     bucket = os.environ.get("REPORT_BUCKET", "")
     # Read before the run, so a missing one fails it before it starts.
     folder = f"{os.environ['BENCHMARK_RUN_ID']}/{os.environ['BENCHMARK_TEST_CASE']}" if bucket else ""
 
     # locust does not create the folder its CSVs go in.
     report_dir.mkdir(parents=True, exist_ok=True)
+    started = time.time()
     locust = subprocess.Popen([sys.executable, "-m", "locust", *sys.argv[1:]])
 
     # As PID 1 this gets the pod's SIGTERM, which locust needs to stop its
@@ -52,6 +57,14 @@ def main() -> int:
     if status < 0:
         status = 128 - status
     print(f"locust exited with {status}", flush=True)
+
+    # A by-product of the run rather than its verdict, so one not written
+    # fails nothing.
+    try:
+        run_id, test_case = os.environ["BENCHMARK_RUN_ID"], os.environ["BENCHMARK_TEST_CASE"]
+        print(f"Wrote {custom_history.write(csv_prefix, run_id, test_case, started)}", flush=True)
+    except (OSError, KeyError, ValueError) as exc:
+        print(f"No {custom_history.FILENAME}: {exc}", flush=True)
 
     if not bucket:
         print(f"REPORT_BUCKET is empty; the reports stay in {report_dir} on the pod.", flush=True)
