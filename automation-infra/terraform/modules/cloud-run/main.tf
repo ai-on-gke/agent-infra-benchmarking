@@ -21,6 +21,7 @@ resource "google_project_service" "services" {
   for_each = toset(concat(
     ["run.googleapis.com", "storage.googleapis.com", "artifactregistry.googleapis.com", "cloudbuild.googleapis.com"],
     var.schedule == null ? [] : ["cloudscheduler.googleapis.com"],
+    var.reports_bucket == null ? [] : ["bigquery.googleapis.com"],
   ))
 
   project = var.project_id

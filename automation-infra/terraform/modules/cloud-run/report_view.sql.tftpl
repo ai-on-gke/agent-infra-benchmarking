@@ -1,0 +1,22 @@
+-- Rows of ${files}, with the run and test case from the file's path,
+-- <prefix>/<run-id>/<record>/<file>.
+WITH csv AS (
+  SELECT
+    REGEXP_EXTRACT(_FILE_NAME, r'/([^/]+)/[^/]+/[^/]+$') AS run_id,
+    REGEXP_EXTRACT(_FILE_NAME, r'/([^/]+)/[^/]+$') AS test_case,
+    -- A case's repeats are recorded as <case>-1 to <case>-N.
+    REGEXP_REPLACE(REGEXP_EXTRACT(_FILE_NAME, r'/([^/]+)/[^/]+$'), r'-[0-9]+$', '') AS scenario,
+    ${join(",\n    ", [for c in columns : "SAFE_CAST(`${c.name}` AS ${c.type}) AS `${c.name}`"])}
+  FROM `${files}`
+)
+%{ if steady_window == null ~}
+SELECT * FROM csv
+%{ else ~}
+SELECT
+  csv.* EXCEPT (unix_secs),
+  TIMESTAMP_SECONDS(unix_secs) AS time,
+  unix_secs - MIN(unix_secs) OVER (PARTITION BY run_id, test_case) AS elapsed_secs,
+  TIMESTAMP_SECONDS(unix_secs) BETWEEN w.start AND w.`end` AS steady
+FROM csv
+LEFT JOIN `${steady_window}` AS w USING (run_id, test_case)
+%{ endif ~}

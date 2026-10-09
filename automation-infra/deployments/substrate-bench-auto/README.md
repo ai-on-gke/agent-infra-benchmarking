@@ -28,6 +28,7 @@ names to differ:
 | Service account the job, and so the scenario-runner, runs as | `substrate-bench-auto` |
 | Service accounts of the scheduler, the image's build and GitHub Actions | `substrate-bench-auto-sched`, `-build`, `-gh` |
 | Bucket Cloud Build stages the image's source in | `substrate-bench-auto-build-source` |
+| BigQuery dataset of the reports' views | `substrate_bench_auto` |
 
 The bucket `substrate-bench-auto-tfstate` was created by hand, before the
 deployment. It holds:
@@ -37,6 +38,7 @@ deployment. It holds:
 | `automation/cloud-run/substrate-bench-auto/` | This deployment's Terraform state |
 | `source/main/` | The commits the job runs, uploaded by the Upload source workflow on every push |
 | `terraform/<run-id>/` | Each execution's scenario-runner state, for its runner infra and every repeat's cluster |
+| `data/<run-id>/<record>/` | Each repeat's reports: locust's CSVs, the custom and cluster-vitals histories, and the Jobs' logs |
 
 ## Running it by hand
 
@@ -78,9 +80,23 @@ gcloud logging read 'resource.type="cloud_run_job" AND labels."run.googleapis.co
   --project=akvelon-gke-aieco --order=asc --format='value(textPayload)'
 ```
 
-The scenario-runner copies the reports to `reports/` inside the container,
-which goes when the execution ends, and the case's bucket is destroyed with its
-cluster. So for now the log is all an execution leaves behind.
+## Querying the reports
+
+Each repeat's reports stay in `gs://substrate-bench-auto-tfstate/data/<run-id>/<record>/`.
+The BigQuery dataset `substrate_bench_auto` has a view of each report file
+across every run, with `run_id`, `test_case` (the record, e.g. `glutton-2`)
+and `scenario` (the case) columns to filter or chart by. The views of the
+per-second histories also have `time`, `elapsed_secs` since the repeat's
+first row, and `steady`, whether the row is in locust's steady-state window.
+For example:
+
+```bash
+bq query --project_id=akvelon-gke-aieco --use_legacy_sql=false \
+  'SELECT run_id, test_case, elapsed_secs, value FROM substrate_bench_auto.custom_stats_history WHERE name = "ActiveActors" ORDER BY 1, 2, 3'
+```
+
+The views read the files as they are queried, so a new run shows up without
+loading anything. A view errors until at least one run has written its file.
 
 ## Changing it
 

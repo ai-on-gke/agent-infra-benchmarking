@@ -23,7 +23,9 @@ module "cloud_run" {
   state_bucket          = local.state_bucket
   state_bucket_prefix   = "terraform"
   github_actions_bucket = local.state_bucket
-  source_branch         = "main"
+  reports_bucket        = local.state_bucket
+  reports_prefix        = "data"
+  source_branch         = "add-big-query"
 
   # Every case in scenarios.yaml, each repeat on a cluster of its own. Daily,
   # so an execution ends before the next starts rather than running beside it.
