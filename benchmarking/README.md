@@ -57,26 +57,114 @@ without creating a cluster:
 ./benchmarking/tools/run-local-dummy
 ```
 
-## Running scenarios
+## Running scenarios from your machine
 
 ```bash
 ./benchmarking/tools/run --scenario glutton
 ```
 
-To run more than one case, repeat `--scenario`. Without it, every case in
-`scenarios.yaml` runs, in the order listed. Each repeat of a case gets a fresh
-cluster. Reports are copied to `reports/<run-id>/<case>/` at the repo root.
+To run more than one case, repeat `--scenario`; they run in the order given.
+Without it, every case in `scenarios.yaml` runs, in the order listed. A case
+with `repeats: N` runs N times, recorded as `<case>-1` to `<case>-N`, each on a
+fresh cluster. A failed repeat doesn't stop the ones after it.
 
 Useful flags (`--help` lists them all):
 
 | Flag | |
 |---|---|
 | `--scenario NAME` | case to run; repeatable |
-| `--name RUN_ID` | run id, default `run-<UTC timestamp>` |
+| `--name RUN_ID` | run id, default `run-<UTC timestamp>`. It starts the names of the GCP resources, so keep it lowercase |
+| `--project-id ID` | overrides `PROJECT_ID` |
+| `--region REGION` | default `us-central1` |
+| `--state-backend local\|gcs` | overrides `STATE_BACKEND`, see [Terraform state](#terraform-state) |
 | `--cloud-build` | build images on Cloud Build rather than local Docker |
+| `--no-docker-login` | push with Docker's own registry credentials rather than gcloud's access token |
+| `--scenarios-file PATH` | another scenarios file, e.g. a local copy with a smaller load |
 | `--terraform-output json` | log Terraform as JSON |
 
 `tools/run-local` is `tools/run --state-backend local`.
+
+### What a run does
+
+1. Applies `scenario_runner/infra`: an Artifact Registry repository for the
+   run.
+2. For each repeat of each case:
+   1. Applies the case's cluster from `scenarios/infra/clusters/<name>/`: a
+      GKE cluster, its node pools, a GCS bucket for the reports and the IAM
+      the benchmark needs.
+   2. Builds substrate from the submodule with ko and installs it, unless the
+      case sets `skip-substrate-install`.
+   3. Builds and pushes the locust and workload images
+      (`locust/images.json`, `workloads/images.json`).
+   4. Deploys Prometheus, the worker pool and the case's workload, then the
+      locust master and boomer worker Jobs, and waits for both to end.
+   5. Uploads both Jobs' logs to the bucket beside the master's CSVs, and
+      copies everything to `reports/<run-id>/<record>/`.
+   6. Destroys the cluster, and its bucket with it.
+3. Destroys `scenario_runner/infra`.
+
+Most of a repeat's time is the cluster's apply and destroy. The `common`
+cluster uses `c2-standard-16` nodes for the sandboxed
+pool, so check the project's C2 CPU quota in the region before raising
+`sandboxed_node_count`.
+
+### Where things end up
+
+| What | Where |
+|---|---|
+| Reports and Job logs | `reports/<run-id>/<record>/` at the repo root. The bucket is destroyed with the cluster, so this is the only copy left |
+| Terraform deployments | `scenario_runner/.local-data/runs/terraform/<run-id>/`: `scenario-runner/` and `scenarios/<record>/`, each with `config/`, `tf-data/` and, with the local backend, `tfstates/` |
+| The cluster's kubeconfig | `tf-data/kubeconfig` in the repeat's deployment |
+| GCP resources | labeled `benchmark-run-id=<run-id>` and `benchmark-test-case=<record>` |
+
+Both `.local-data/` and `reports/` are gitignored; a report worth committing,
+like the example below, needs an exception in `.gitignore`.
+
+To look at the cluster while a repeat runs:
+
+```bash
+export KUBECONFIG=benchmarking/scenario_runner/.local-data/runs/terraform/<run-id>/scenarios/<record>/tf-data/kubeconfig
+kubectl -n benchmarking get pods
+kubectl -n benchmarking port-forward deploy/prometheus 9090
+```
+
+### Images and versions
+
+The images are tagged with the repo's `HEAD` commit, but built from the
+working tree as it is, uncommitted changes included. Commit before a run whose
+results you want to tie to a commit. The images are built for `linux/amd64`,
+the nodes' platform, whatever the build host's; on an ARM machine that needs
+Docker's emulation, or `--cloud-build`.
+
+Substrate is built from `dependency-repos/substrate` as checked out, and its
+version is `git describe --tags --always --dirty` there, or `VERSION` if set.
+The cluster's nodes are labeled with it.
+
+### Terraform state
+
+With `local`, each deployment's state is a file under
+`.local-data/runs/terraform/<run-id>/`, so only this machine can destroy what
+a run left behind. With `gcs`, it is in `gs://<state bucket>/<state prefix>/<run-id>/`
+together with a copy of the rest of the deployment, so a destroy needs nothing
+but the bucket. Use `gcs` for long runs, or when several people share the
+project.
+
+### When a run fails or is stopped
+
+A failed apply, install or benchmark still destroys the repeat's cluster, and
+the run destroys `scenario_runner/infra` before it exits. So does Ctrl-C;
+press it once and let the destroy finish.
+
+If a destroy itself fails, the resources stay. Run it again by hand from the
+deployment's `config/`:
+
+```bash
+cd benchmarking/scenario_runner/.local-data/runs/terraform/<run-id>/scenarios/<record>/config
+TF_DATA_DIR=../tf-data terraform destroy
+```
+
+Destroy the repeats' clusters before `scenario-runner/`. Anything still left
+can be found in the console by the `benchmark-run-id` label.
 
 ### Dev infra
 
@@ -89,10 +177,19 @@ because a dev infra keeps the cluster of the case it was first created for:
 ./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton
 # reuse the images and workloads already deployed
 ./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton --no-build --no-deploy-workloads
+# reapply the cluster config after changing it, reinstalling substrate if its version changed
+./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton --dev-infra-update
 
 ./benchmarking/tools/dev-infra list
+./benchmarking/tools/dev-infra outputs glutton-dev
 ./benchmarking/tools/dev-infra destroy glutton-dev
 ```
+
+A dev infra's state is always local, in
+`scenario_runner/.local-data/dev-infra/terraform/<name>/`, and its kubeconfig
+in `cluster/tf-data/kubeconfig` there. It keeps costing money until it is
+destroyed. `--no-build` needs the images of the current `HEAD` already pushed
+to it.
 
 ### Adding a case
 
