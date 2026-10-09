@@ -51,13 +51,13 @@ variable "services_cidr" {
 # this, and run.json records the version a run saw. The node pools stay put
 # until the minor version's end of support.
 variable "kubernetes_version" {
-  description = "Kubernetes version of the control plane (GKE's min_master_version) and of both node pools."
+  description = "Kubernetes version of the control plane (GKE's min_master_version) and of every node pool."
   type        = string
   default     = "1.35.8-gke.1225000"
 }
 
 variable "zone" {
-  description = "Zone both node pools are pinned to. Must be in var.region."
+  description = "Zone every node pool is pinned to. Must be in var.region."
   type        = string
   default     = "us-central1-a"
 }

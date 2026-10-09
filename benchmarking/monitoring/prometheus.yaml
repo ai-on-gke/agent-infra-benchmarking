@@ -276,6 +276,14 @@ spec:
         app: prometheus
     spec:
       serviceAccountName: prometheus
+      # The monitoring pool in scenarios/infra/clusters/common/main.tf.
+      nodeSelector:
+        benchmarking-monitoring: "true"
+      tolerations:
+      - key: benchmarking-monitoring
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534

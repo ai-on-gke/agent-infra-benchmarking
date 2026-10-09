@@ -34,10 +34,11 @@ locals {
   # auto-repair, an upgrade — which are born with their pool's labels and would
   # otherwise host no workers.
   #
-  # Every pool gets it, which is what the installer does to every node. Bumping
-  # the submodule therefore changes a node label, and GKE rolls the pool's nodes
-  # to apply it; that is the same node-by-node move the version is there to
-  # describe, so it belongs in the plan rather than out of it.
+  # Every pool substrate runs on gets it, which is what the installer does to
+  # every node. Bumping the submodule therefore changes a node label, and GKE
+  # rolls the pool's nodes to apply it; that is the same node-by-node move the
+  # version is there to describe, so it belongs in the plan rather than out of
+  # it. The monitoring pool goes without, so a bump leaves Prometheus running.
   substrate_version_label = { "ate.dev/substrate-version" = var.substrate_version }
 }
 
@@ -68,7 +69,7 @@ module "cluster" {
   # Substrate's own tools/setup-gcp enables it too.
   managed_otel_scope = "COLLECTION_AND_INSTRUMENTATION_COMPONENTS"
 
-  # Both pools leave auto_upgrade off: an upgrade drains the workers, which
+  # Every pool leaves auto_upgrade off: an upgrade drains the workers, which
   # crashes the actors still awake on them; see substrate's
   # tools/setup-gcp/README.md.
   node_pools = {
@@ -95,6 +96,23 @@ module "cluster" {
       taints = [{
         key    = "ate.dev/sandboxClass"
         value  = "gvisor"
+        effect = "NO_SCHEDULE"
+      }]
+    }
+    # Prometheus alone, so it neither takes from what it measures nor gets
+    # starved by a heavy run. The taint keeps mock-llm off, whose only rule is
+    # to avoid the workers, and atelet, which tolerates just the sandbox taint.
+    # Pinned to var.zone with the rest, since its data volume is a zonal disk.
+    monitoring = {
+      machine_type   = "e2-standard-4"
+      node_count     = 1
+      min_node_count = 1
+      max_node_count = 1
+      node_locations = [var.zone]
+      labels         = { "benchmarking-monitoring" = "true" }
+      taints = [{
+        key    = "benchmarking-monitoring"
+        value  = "true"
         effect = "NO_SCHEDULE"
       }]
     }
