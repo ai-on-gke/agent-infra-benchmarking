@@ -13,6 +13,7 @@
 # limitations under the License.
 
 # Sourced by the tools, not run.
+# shellcheck shell=bash
 
 # Takes the required --deployment=NAME, or --deployment NAME, from anywhere in
 # the arguments, setting DEPLOYMENT, DEPLOYMENT_DIR and ARGS, the arguments

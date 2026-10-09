@@ -41,7 +41,8 @@ jobs:
           echo "credentials_secret=GCP_CREDENTIALS_$(tr 'a-z-' 'A-Z_' <<<"$DEPLOYMENT")" >> "$GITHUB_OUTPUT"
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          credentials_json: ${{ secrets[steps.deployment.outputs.credentials_secret] }}
+          # Named per deployment, so looked up in the whole secrets context.
+          credentials_json: ${{ secrets[steps.deployment.outputs.credentials_secret] }} # zizmor: ignore[overprovisioned-secrets]
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
       - name: Upload
         env:
@@ -83,7 +84,7 @@ jobs:
           echo "credentials_secret=GCP_CREDENTIALS_$(tr 'a-z-' 'A-Z_' <<<"$DEPLOYMENT")" >> "$GITHUB_OUTPUT"
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          credentials_json: ${{ secrets[steps.deployment.outputs.credentials_secret] }}
+          credentials_json: ${{ secrets[steps.deployment.outputs.credentials_secret] }} # zizmor: ignore[overprovisioned-secrets]
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
       - name: Update latest
         env:
