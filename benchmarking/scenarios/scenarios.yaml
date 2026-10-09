@@ -70,17 +70,17 @@ cases:
         name: common
         tfvars: openclaw.tfvars
         tfvars_inline: |
-          sandboxed_node_count     = 10
-          sandboxed_min_node_count = 10
-          sandboxed_max_node_count = 10
+          sandboxed_node_count     = 1
+          sandboxed_min_node_count = 1
+          sandboxed_max_node_count = 1
     repeats: 3
-    worker-count: 100
+    worker-count: 10
     sandbox-class: gvisor
     master:
-      run-time: 3m
-      users: 100
+      run-time: 1m
+      users: 10
       spawn-rate: 10
-      warm-up: 30s
+      warm-up: 10s
     worker:
       workload-name: openclaw
       workload-template: openclaw
