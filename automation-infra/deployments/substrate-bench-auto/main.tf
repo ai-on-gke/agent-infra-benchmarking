@@ -25,9 +25,9 @@ module "cloud_run" {
   github_actions_bucket = local.state_bucket
   source_branch         = "add-scheduler"
 
-  # The dummy case, which creates no cluster, to check the schedule.
-  schedule      = "*/2 * * * *"
-  schedule_args = ["--scenario=dummy"]
+  # Every case in scenarios.yaml, each repeat on a cluster of its own. Daily,
+  # so an execution ends before the next starts rather than running beside it.
+  schedule = "0 3 * * *"
 }
 
 output "cloud_run" {
