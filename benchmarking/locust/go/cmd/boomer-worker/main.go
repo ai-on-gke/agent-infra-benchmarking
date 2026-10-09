@@ -87,7 +87,7 @@ func main() {
 		workloadTimeout = flag.Duration("workload-timeout", 0,
 			fmt.Sprintf("runworkload only: deadline on each control-plane call and instruction; one that runs past it counts as a failure. Unset selects %s.", runworkload.DefaultTimeout))
 		actorEgressAllow = flag.String("actor-egress-allow", "",
-			"runworkload only: comma-separated hosts or IPv4 addresses every actor may connect to, resolved once at startup. Unset gives actors no egress policy, so they can reach nothing.")
+			"runworkload only: comma-separated hostnames every actor may reach over cleartext HTTP or gRPC, on any port, each as the actor dials it. Unset gives actors no egress policy, so they can reach nothing.")
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.

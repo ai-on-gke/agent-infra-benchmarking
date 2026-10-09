@@ -103,4 +103,7 @@ def install(cluster: Cluster) -> None:
         "NO_DEV_ENV": "1",
     }
     log(f"substrate: installing on cluster {cluster.name}")
-    stream([str(SUBSTRATE_DIR / "hack" / "install-ate.sh"), "--deploy-ate-system"], env=env, cwd=SUBSTRATE_DIR)
+    # Egress credential injection is off: no workload needs the bundled
+    # provider, and the installer requires a choice either way.
+    install_ate = [str(SUBSTRATE_DIR / "hack" / "install-ate.sh"), "--deploy-ate-system", '--credential-provider={"enabled":false}']
+    stream(install_ate, env=env, cwd=SUBSTRATE_DIR)

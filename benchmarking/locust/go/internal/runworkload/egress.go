@@ -17,9 +17,9 @@ package runworkload
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/netip"
 	"slices"
+	"strings"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
@@ -31,52 +31,42 @@ import (
 // The name ateapi requires of an actor's one egress policy.
 const egressPolicyName = "default"
 
-// resolveEgress turns the hosts in --actor-egress-allow into the /32 prefixes
-// an egress policy's CIDR rule takes. Resolved once, here, because the
-// gateway authorizes the address an actor dials and never a name; a Service's
-// ClusterIP does not change while the Service exists. Actor networking is
-// IPv4 only, so only IPv4 addresses are kept.
-func resolveEgress(ctx context.Context, resolver *net.Resolver, hosts []string) ([]string, error) {
-	var cidrs []string
+// egressHosts checks the hosts in --actor-egress-allow once, at startup. The
+// gateway authorizes the name an actor dials, so each has to be that name as
+// the actor writes it; an address matches nothing and ateapi rejects it. The
+// rest of the hostname syntax is left to ateapi.
+func egressHosts(hosts []string) ([]string, error) {
+	var names []string
 	for _, host := range hosts {
-		addrs := []netip.Addr{}
-		if addr, err := netip.ParseAddr(host); err == nil {
-			addrs = append(addrs, addr)
-		} else {
-			resolved, err := resolver.LookupNetIP(ctx, "ip4", host)
-			if err != nil {
-				return nil, fmt.Errorf("resolving %q: %w", host, err)
-			}
-			addrs = resolved
+		if _, err := netip.ParseAddr(host); err == nil {
+			return nil, fmt.Errorf("%q is an address; egress policies allow hostnames only", host)
 		}
-		for _, addr := range addrs {
-			addr = addr.Unmap()
-			if !addr.Is4() {
-				return nil, fmt.Errorf("%q: %s is not an IPv4 address", host, addr)
-			}
-			cidrs = append(cidrs, netip.PrefixFrom(addr, 32).String())
-		}
+		names = append(names, strings.ToLower(host))
 	}
-	slices.Sort(cidrs)
-	return slices.Compact(cidrs), nil
+	slices.Sort(names)
+	return slices.Compact(names), nil
 }
 
-// allowEgress gives the actor an egress policy that lets it reach cidrs and
-// nothing else. Without one, substrate's egress gateway refuses every
-// connection the actor opens, including the telemetry its SDK exports and a
-// workload's calls to its own backends.
+// allowEgress gives the actor an egress policy that lets it reach hosts over
+// cleartext HTTP, gRPC included, on any port, and nothing else. Without one,
+// substrate's egress gateway refuses every connection the actor opens,
+// including the telemetry its SDK exports and a workload's calls to its own
+// backends.
 //
 // It runs between CreateActor and the first resume, because the gateway
 // caches an actor's lack of a policy for a while and the actor may connect as
 // soon as it runs. The policy is deleted with the actor.
-func (u *runWorkloadUser) allowEgress(ctx context.Context, cidrs []string) error {
+func (u *runWorkloadUser) allowEgress(ctx context.Context, hosts []string) error {
 	return u.tracedCall(ctx, "CreateActorEgressPolicy", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActorEgressPolicy(callCtx, &ateapipb.CreateActorEgressPolicyRequest{
 			Actor: u.ref(),
 			EgressPolicy: &ateapipb.EgressPolicy{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: egressPolicyName},
 				Rules: []*ateapipb.EgressRule{{
-					Cidrs: &ateapipb.CIDRRule{Cidrs: cidrs},
+					Http: &ateapipb.HTTPRule{
+						Hostnames: hosts,
+						Ports:     &ateapipb.Ports{All: &ateapipb.AllPorts{}},
+					},
 				}},
 			},
 		}, grpc.Trailer(tr))

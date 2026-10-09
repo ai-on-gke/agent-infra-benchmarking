@@ -34,7 +34,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
-	"net"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -200,19 +199,19 @@ func initRunWorkload(cfg *userclass.Config) (taskFn func(), shutdown func(contex
 		slog.Error("fatal: cannot select the workload", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	egressCIDRs, err := resolveEgress(context.Background(), net.DefaultResolver, configured.EgressAllow)
+	hosts, err := egressHosts(configured.EgressAllow)
 	if err != nil {
-		slog.Error("fatal: cannot resolve --actor-egress-allow", slog.String("err", err.Error()))
+		slog.Error("fatal: invalid --actor-egress-allow", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	if len(egressCIDRs) > 0 {
-		slog.Info("actors may connect to", slog.Any("cidrs", egressCIDRs))
+	if len(hosts) > 0 {
+		slog.Info("actors may connect to", slog.Any("hosts", hosts))
 	}
 	opts := configured
 	if opts.Timeout == 0 {
 		opts.Timeout = DefaultTimeout
 	}
-	rt := &runWorkloadRuntime{cfg: cfg, opts: opts, workload: wl, egressCIDRs: egressCIDRs}
+	rt := &runWorkloadRuntime{cfg: cfg, opts: opts, workload: wl, egressHosts: hosts}
 	return rt.iterate, rt.shutdown
 }
 
@@ -222,8 +221,8 @@ type runWorkloadRuntime struct {
 	workload workload
 	users    sync.Map // goroutineID -> *runWorkloadUser
 
-	// The /32 prefixes of Options.EgressAllow; empty creates no egress policy.
-	egressCIDRs []string
+	// Options.EgressAllow, checked; empty creates no egress policy.
+	egressHosts []string
 
 	// Gates the task function so the teardown can wait for the iterations
 	// boomer leaves running when it returns. See inflight.go.
@@ -341,8 +340,8 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, opts Options) (*runW
 		bmetrics.UpdateUsers(runWorkloadUserClass, -1)
 		return nil, err
 	}
-	if len(r.egressCIDRs) > 0 {
-		if err := u.allowEgress(ctx, r.egressCIDRs); err != nil {
+	if len(r.egressHosts) > 0 {
+		if err := u.allowEgress(ctx, r.egressHosts); err != nil {
 			// Not yet resumed, so still SUSPENDED and deletable as it is.
 			if delErr := u.delete(ctx, false); delErr != nil {
 				slog.Warn("actor without an egress policy was left behind",

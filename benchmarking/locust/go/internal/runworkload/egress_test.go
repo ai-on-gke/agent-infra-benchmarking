@@ -17,12 +17,11 @@ package runworkload
 import (
 	"context"
 	"errors"
-	"net"
 	"slices"
 	"testing"
 )
 
-func TestResolveEgress(t *testing.T) {
+func TestEgressHosts(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		hosts   []string
@@ -30,18 +29,17 @@ func TestResolveEgress(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "none", hosts: nil, want: nil},
-		{name: "addresses", hosts: []string{"10.0.0.2", "10.0.0.1", "10.0.0.2"}, want: []string{"10.0.0.1/32", "10.0.0.2/32"}},
-		{name: "name", hosts: []string{"localhost"}, want: []string{"127.0.0.1/32"}},
+		{name: "names", hosts: []string{"b.svc", "A.svc", "b.svc"}, want: []string{"a.svc", "b.svc"}},
+		{name: "ipv4", hosts: []string{"10.0.0.1"}, wantErr: true},
 		{name: "ipv6", hosts: []string{"2001:db8::1"}, wantErr: true},
-		{name: "unresolvable", hosts: []string{"no-such-host.invalid"}, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveEgress(context.Background(), net.DefaultResolver, tc.hosts)
+			got, err := egressHosts(tc.hosts)
 			if (err != nil) != tc.wantErr {
-				t.Fatalf("resolveEgress: got err %v, want error %v", err, tc.wantErr)
+				t.Fatalf("egressHosts: got err %v, want error %v", err, tc.wantErr)
 			}
 			if !tc.wantErr && !slices.Equal(got, tc.want) {
-				t.Errorf("resolveEgress: got %v, want %v", got, tc.want)
+				t.Errorf("egressHosts: got %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -52,16 +50,16 @@ func TestResolveEgress(t *testing.T) {
 func TestEgressPolicyIsCreatedBeforeTheFirstResume(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		cidrs []string
+		hosts []string
 		want  []string
 	}{
-		{name: "allowed", cidrs: []string{"10.0.0.1/32"}, want: []string{"CreateAtespace", "CreateActor", "CreateActorEgressPolicy", "ResumeActor"}},
-		{name: "none", cidrs: nil, want: []string{"CreateAtespace", "CreateActor", "ResumeActor"}},
+		{name: "allowed", hosts: []string{"collector.svc"}, want: []string{"CreateAtespace", "CreateActor", "CreateActorEgressPolicy", "ResumeActor"}},
+		{name: "none", hosts: nil, want: []string{"CreateAtespace", "CreateActor", "ResumeActor"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := &fakeControlClient{}
 			rt := newTestRuntime(t, ctrl)
-			rt.egressCIDRs = tc.cidrs
+			rt.egressHosts = tc.hosts
 
 			rt.iterate()
 			rt.iterate()
@@ -70,7 +68,7 @@ func TestEgressPolicyIsCreatedBeforeTheFirstResume(t *testing.T) {
 			if len(calls) < len(tc.want) || !slices.Equal(calls[:len(tc.want)], tc.want) {
 				t.Fatalf("calls: got %v, want them to start %v", calls, tc.want)
 			}
-			if tc.cidrs == nil {
+			if tc.hosts == nil {
 				return
 			}
 			policy := ctrl.recordedEgressPolicy()
@@ -78,8 +76,8 @@ func TestEgressPolicyIsCreatedBeforeTheFirstResume(t *testing.T) {
 				t.Errorf("policy name: got %q, want %q", got, egressPolicyName)
 			}
 			rules := policy.GetRules()
-			if len(rules) != 1 || !slices.Equal(rules[0].GetCidrs().GetCidrs(), tc.cidrs) {
-				t.Errorf("rules: got %v, want one CIDR rule for %v", rules, tc.cidrs)
+			if len(rules) != 1 || !slices.Equal(rules[0].GetHttp().GetHostnames(), tc.hosts) || rules[0].GetHttp().GetPorts().GetAll() == nil {
+				t.Errorf("rules: got %v, want one HTTP rule for %v on all ports", rules, tc.hosts)
 			}
 		})
 	}
@@ -90,7 +88,7 @@ func TestEgressPolicyIsCreatedBeforeTheFirstResume(t *testing.T) {
 func TestActorWithoutItsEgressPolicyIsDeleted(t *testing.T) {
 	ctrl := &fakeControlClient{egressErr: errors.New("refused")}
 	rt := newTestRuntime(t, ctrl)
-	rt.egressCIDRs = []string{"10.0.0.1/32"}
+	rt.egressHosts = []string{"collector.svc"}
 
 	if _, err := rt.startUser(context.Background(), rt.opts); err == nil {
 		t.Fatal("startUser: got nil error, want the policy's")
