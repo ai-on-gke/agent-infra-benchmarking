@@ -96,7 +96,7 @@ cases:
           sandboxed_node_count     = 1
           sandboxed_min_node_count = 1
           sandboxed_max_node_count = 1
-    repeats: 3
+    repeats: 1
     worker-count: 10
     sandbox-class: gvisor
     master:
