@@ -210,6 +210,29 @@ def wait_for_jobs(cluster: Cluster, stop_logs: Callable[[int], None]) -> None:
     raise LocustError(f"timed out after {WAIT_TIMEOUT_SECS}s; the Jobs are left running")
 
 
+def upload_logs(cluster: Cluster, run_id: str, name: str) -> None:
+    """Puts each Job's log, as <job>.log, beside what the master uploaded.
+    Taken from the pods rather than uploaded by them so a crash is in it too.
+    Best-effort: a log not uploaded is still on its pod until the Job's TTL."""
+    prefix = f"{REPORT_PREFIX}/{run_id}/{name}"
+    for job in (MASTER_JOB, WORKER_JOB):
+        proc = subprocess.run(
+            cluster.kubectl("logs", f"job/{job}", namespace=NAMESPACE), capture_output=True, text=True
+        )
+        if proc.returncode != 0:
+            log(f"locust: no log of {job} to upload: {proc.stderr.strip()}", "WARNING")
+            continue
+        uri = f"gs://{cluster.bucket}/{prefix}/{job}.log"
+        try:
+            storage.Client().bucket(cluster.bucket).blob(f"{prefix}/{job}.log").upload_from_string(
+                proc.stdout, content_type="text/plain"
+            )
+        except Exception as exc:
+            log(f"locust: could not upload {uri}: {exc}", "WARNING")
+        else:
+            log(f"locust: uploaded {uri}")
+
+
 def download_reports(cluster: Cluster, run_id: str, name: str) -> None:
     """Copies what the master uploaded into REPORTS_DIR/<run_id>/<name>/, while
     the bucket, which goes with the case's infra, is still there. Best-effort:
@@ -307,6 +330,7 @@ def run(
             apply(cluster, render("worker-job.yaml", values))
             wait_for_jobs(cluster, stop_logs)
     finally:
+        upload_logs(cluster, run_id, name)
         # A failed run's reports are kept too. On Cloud Run they'd go with the
         # container, so they stay only in the bucket.
         if ON_CLOUD_RUN:
