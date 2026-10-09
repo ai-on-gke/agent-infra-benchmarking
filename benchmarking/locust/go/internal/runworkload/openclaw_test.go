@@ -24,7 +24,8 @@ import (
 	"testing"
 )
 
-// openclawServer is a stand-in for demos/openclaw/openclaw_actor.py. It
+// openclawServer is a stand-in for
+// benchmarking/workloads/images/openclaw/openclaw_actor.py. It
 // reproduces that script's routing decisions rather than its behavior: which
 // paths exist, and which request body runs the agent turn the benchmark
 // measures. If the actor's

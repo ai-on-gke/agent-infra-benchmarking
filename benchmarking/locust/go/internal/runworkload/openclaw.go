@@ -21,7 +21,8 @@ import (
 	"strings"
 )
 
-// The openclaw actor's surface, mirrored from demos/openclaw/openclaw_actor.py.
+// The openclaw actor's surface, mirrored from
+// benchmarking/workloads/images/openclaw/openclaw_actor.py.
 // Mirrored rather than shared because that actor is a Python program: there is
 // no package to import, so the coupling is to its wire contract and these
 // constants are where it is written down.
@@ -46,9 +47,10 @@ func init() {
 	registerWorkload(openclawWorkload{})
 }
 
-// openclawWorkload drives the openclaw actor from demos/openclaw. Its /invoke
-// route wraps a headless coding agent. We send a prompt that triggers a
-// mock agent loop simulating a multi-turn LLM interaction.
+// openclawWorkload drives the openclaw actor from
+// benchmarking/workloads/images/openclaw. Its /invoke route wraps a headless
+// coding agent. We send a prompt that triggers a mock agent loop simulating a
+// multi-turn LLM interaction.
 //
 // Unlike glutton's ping, the reply carries no per-request nonce, so it proves
 // the actor's handler ran but not that the answer is fresh. The actor's
