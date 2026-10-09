@@ -1,46 +1,47 @@
 # Automation
 
-A Cloud Run job, run on a schedule or by hand. A deployment is a folder under
-[`deployments/`](deployments) that calls the
-[`terraform/modules/cloud-run`](terraform/modules/cloud-run) module, which
-deploys the Cloud Run job and builds its image.
+A Cloud Run job that runs the scenario-runner (`benchmarking/tools/run`), on a
+schedule or by hand. Each run uses the latest commit of one branch, which
+[`.github/workflows/upload-source.yml`](../.github/workflows/upload-source.yml)
+uploads to a bucket on every push.
 
-For now the image is a placeholder,
-[`image/Dockerfile`](terraform/modules/cloud-run/image/Dockerfile), that exits
-successfully and does nothing else.
+A deployment is a folder under [`deployments/`](deployments) that calls the
+[`terraform/modules/cloud-run`](terraform/modules/cloud-run) module. The module
+deploys the job and builds its image. See
+[`deployments/substrate-bench-auto`](deployments/substrate-bench-auto) for an
+example.
 
 ## Prerequisites
 
-- **Terraform 1.5+**. The lock files pin the providers.
-- **`gcloud`**.
-- **`git`**. The Cloud Run job's image is tagged with the repo's commit.
+- Terraform 1.5+
+- gcloud, git, jq
+- gh, logged in with permission to set this repo's Actions secrets
 - A GCP project with billing, and an account with `Owner` on it. `Editor` is
-  not enough, as it cannot set IAM.
+  not enough, because it cannot set IAM.
 
 ## Preparing
 
-1. Log in to `gcloud`:
+1. Log in to gcloud:
 
    ```bash
    gcloud auth login
    ```
 
-2. Log in once more for Terraform, which reads the application-default
-   credentials:
+2. Log in for Application Default Credentials, which Terraform uses:
 
    ```bash
    gcloud auth application-default login
    ```
 
-3. Set the values the steps below use: the GCP project and the deployment's
-   name, which you fill in, the region, and the bucket that will hold the
-   deployment's Terraform state, named after it. The deployment's name is also
-   the name of the resources it creates: 6-30 lowercase letters, digits and
-   hyphens, starting with a letter.
+3. Set the variables the steps below use. Fill in the project, the deployment's
+   name and the branch the job runs. The deployment's name is also the name of
+   the resources it creates: 6-30 lowercase letters, digits and hyphens,
+   starting with a letter.
 
    ```bash
    PROJECT_ID='<YOUR_PROJECT>' \
    DEPLOYMENT='<DEPLOYMENT_NAME>' \
+   SOURCE_BRANCH='<BRANCH>' \
    REGION=us-central1 \
    STATE_BUCKET="$DEPLOYMENT-tfstate"
    ```
@@ -51,12 +52,14 @@ successfully and does nothing else.
    gcloud services enable serviceusage.googleapis.com iam.googleapis.com --project="$PROJECT_ID"
    ```
 
-5. Create the bucket for the deployment's state, with versioning to recover
-   an overwritten state:
+5. Create the bucket that holds the deployment's Terraform state and the
+   uploaded source:
 
    ```bash
    gcloud storage buckets create "gs://$STATE_BUCKET" --project="$PROJECT_ID" --location="$REGION" --uniform-bucket-level-access
    ```
+
+6. Turn on versioning for the bucket, so an overwritten state can be recovered:
 
    ```bash
    gcloud storage buckets update "gs://$STATE_BUCKET" --versioning
@@ -64,13 +67,12 @@ successfully and does nothing else.
 
 ## Creating a deployment
 
-In the same shell, with the variables from [Preparing](#preparing) still set:
+Run these from the repo root, in the same shell as [Preparing](#preparing):
 
-1. Create the deployment's folder, with its state in the bucket under its own
-   prefix, and the state of the infra each test run creates under
-   `state_bucket_prefix`. Any other variable of the module, see its
-   [`variables.tf`](terraform/modules/cloud-run/variables.tf), goes in the
-   `module` block, e.g. `schedule = "0 3 * * *"` to run every day at 3am UTC:
+1. Create the deployment's folder. To set other module variables, see its
+   [`variables.tf`](terraform/modules/cloud-run/variables.tf) and add them to the
+   `module` block. For example, `schedule = "0 3 * * *"` runs the job every day
+   at 3am UTC.
 
    ```bash
    mkdir -p "automation-infra/deployments/$DEPLOYMENT"
@@ -98,8 +100,10 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
      region                = "$REGION"
      default_resource_name = "$DEPLOYMENT"
 
-     state_bucket        = local.state_bucket
-     state_bucket_prefix = "terraform"
+     state_bucket          = local.state_bucket
+     state_bucket_prefix   = "terraform"
+     github_actions_bucket = local.state_bucket
+     source_branch         = "$SOURCE_BRANCH"
    }
 
    output "cloud_run" {
@@ -110,35 +114,50 @@ In the same shell, with the variables from [Preparing](#preparing) still set:
    printf '.terraform/\n' > "automation-infra/deployments/$DEPLOYMENT/.gitignore"
    ```
 
-2. Initialize it, which also writes the lock file that pins the providers:
+2. Initialize the deployment. This writes the lock file that pins the providers:
 
    ```bash
    terraform -chdir="automation-infra/deployments/$DEPLOYMENT" init
    ```
 
 3. Apply. This also builds the job's image on Cloud Build, which takes a few
-   minutes, and again whenever the commit or the image's files change:
+   minutes. The image is rebuilt whenever the commit or the image's files change:
 
    ```bash
    terraform -chdir="automation-infra/deployments/$DEPLOYMENT" apply
    ```
 
-4. Commit the folder: `main.tf`, `.gitignore` and `.terraform.lock.hcl`.
+4. Store the key that GitHub Actions uploads the source with as the repo secret
+   `GCP_CREDENTIALS_<DEPLOYMENT>`. Running this again rotates the key:
 
    ```bash
-   git add "automation-infra/deployments/$DEPLOYMENT"
+   automation-infra/tools/get-gh-actions-gcs-config --deployment="$DEPLOYMENT" --set
    ```
 
-5. Run it once, now, and wait for it to finish:
+5. Add the deployment to the `deployment` matrix of both jobs in
+   `upload-source.yml`:
 
    ```bash
-   gcloud run jobs execute "$DEPLOYMENT" --project="$PROJECT_ID" --region="$REGION" --wait
+   sed -i "s/deployment: \[\(.*\)\]/deployment: [\1, $DEPLOYMENT]/" .github/workflows/upload-source.yml
    ```
 
-   Or with [`tools/trigger`](tools/trigger), which starts it through
-   the Cloud Run Admin API, as an external caller would, and prints its log as
-   it comes in. It also needs `jq`:
+6. Commit the deployment's folder (`main.tf`, `.gitignore` and
+   `.terraform.lock.hcl`) and the workflow, then push to `$SOURCE_BRANCH`. The
+   push uploads the source that the job runs. Wait for the Upload source
+   workflow to finish.
+
+7. Run the `dummy` case to check the deployment. It creates no cluster:
 
    ```bash
-   automation-infra/tools/trigger --deployment="$DEPLOYMENT"
+   automation-infra/tools/trigger-dummy --deployment="$DEPLOYMENT"
    ```
+
+## Running the job
+
+[`tools/trigger`](tools/trigger) starts one execution and prints its log as it
+comes in. Any other argument is passed to the scenario-runner, for that
+execution only:
+
+```bash
+automation-infra/tools/trigger --deployment="$DEPLOYMENT" --scenario=glutton
+```
