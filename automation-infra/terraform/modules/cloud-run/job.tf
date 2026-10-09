@@ -34,11 +34,20 @@ resource "google_storage_bucket_iam_member" "job_source" {
   }
 }
 
-# What scenario_runner/infra creates in the project.
+# What scenario_runner/infra creates in the project, and what the run does on
+# it: substrate's install on the cluster and the images' Cloud Build.
 resource "google_project_iam_member" "job" {
   for_each = toset([
     "roles/serviceusage.serviceUsageAdmin",
     "roles/artifactregistry.admin",
+    "roles/container.admin",
+    "roles/compute.networkAdmin",
+    "roles/compute.securityAdmin",
+    "roles/iam.serviceAccountAdmin",
+    "roles/iam.serviceAccountUser",
+    "roles/resourcemanager.projectIamAdmin",
+    "roles/storage.admin",
+    "roles/cloudbuild.builds.editor",
   ])
 
   project = var.project_id
@@ -48,13 +57,15 @@ resource "google_project_iam_member" "job" {
 
 locals {
   # The scenario-runner's infra goes in this deployment's project and region,
-  # with its state in the deployment's state bucket.
+  # with its state in the deployment's state bucket. The image has no Docker,
+  # so the benchmark images build on Cloud Build.
   module_args = [
     "--project-id=${var.project_id}",
     "--region=${var.region}",
     "--state-backend=gcs",
     "--state-bucket=${var.state_bucket}",
     "--state-prefix=${var.state_bucket_prefix}",
+    "--cloud-build",
   ]
 }
 
