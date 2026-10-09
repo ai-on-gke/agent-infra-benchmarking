@@ -29,12 +29,18 @@ from datetime import datetime, timezone
 from string import Template
 from typing import Callable, Iterator
 
+from google.cloud import storage
+
 from . import RUNNER_DIR, images, worker_pool, workloads
 from .cluster import Cluster
-from .log import log
+from .log import ON_CLOUD_RUN, log
 from .process import stream
 
 MANIFESTS_DIR = RUNNER_DIR.parent / "locust" / "manifests"
+# Where a local run copies the master's uploads to, as <run-id>/<case>/ beneath
+# it, as they are under REPORT_PREFIX in the bucket.
+REPORTS_DIR = RUNNER_DIR.parent.parent / "reports"
+REPORT_PREFIX = "reports"
 # Have to match metadata.name and namespace in the manifests.
 MASTER_JOB = "locust-master"
 WORKER_JOB = "boomer-worker"
@@ -204,6 +210,29 @@ def wait_for_jobs(cluster: Cluster, stop_logs: Callable[[int], None]) -> None:
     raise LocustError(f"timed out after {WAIT_TIMEOUT_SECS}s; the Jobs are left running")
 
 
+def download_reports(cluster: Cluster, run_id: str, name: str) -> None:
+    """Copies what the master uploaded into REPORTS_DIR/<run_id>/<name>/, while
+    the bucket, which goes with the case's infra, is still there. Best-effort:
+    a failed copy loses only the local one."""
+    prefix = f"{REPORT_PREFIX}/{run_id}/{name}/"
+    dest = REPORTS_DIR / run_id / name
+    log(f"locust: downloading the reports in gs://{cluster.bucket}/{prefix} to {dest}")
+    try:
+        blobs = list(storage.Client().list_blobs(cluster.bucket, prefix=prefix))
+        for blob in blobs:
+            path = dest / blob.name.removeprefix(prefix)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            blob.download_to_filename(path)
+            log(f"locust: downloaded {path}")
+    except Exception as exc:
+        log(f"locust: could not download gs://{cluster.bucket}/{prefix}: {exc}", "WARNING")
+        return
+    if blobs:
+        log(f"locust: downloaded {len(blobs)} report files to {dest}")
+    else:
+        log(f"locust: no reports in gs://{cluster.bucket}/{prefix} to download", "WARNING")
+
+
 def run(
     cluster: Cluster,
     name: str,
@@ -263,10 +292,18 @@ def run(
         f"locust: running {name} (run {run_id}):\n"
         f"  master: {values['LOCUST_IMAGE']} {values['LOCUST_MASTER_ARGS']}\n"
         f"  worker: {values['BOOMER_IMAGE']} {values['BOOMER_WORKER_ARGS']}\n"
-        f"  reports: gs://{cluster.bucket}/reports/{run_id}/{name}/"
+        f"  reports: gs://{cluster.bucket}/{REPORT_PREFIX}/{run_id}/{name}/"
     )
     apply(cluster, render("master-job.yaml", values))
-    wait_master_ready(cluster)
-    with master_logs(cluster) as stop_logs:
-        apply(cluster, render("worker-job.yaml", values))
-        wait_for_jobs(cluster, stop_logs)
+    try:
+        wait_master_ready(cluster)
+        with master_logs(cluster) as stop_logs:
+            apply(cluster, render("worker-job.yaml", values))
+            wait_for_jobs(cluster, stop_logs)
+    finally:
+        # A failed run's reports are kept too. On Cloud Run they'd go with the
+        # container, so they stay only in the bucket.
+        if ON_CLOUD_RUN:
+            log(f"locust: on Cloud Run, so the reports stay only in gs://{cluster.bucket}/{REPORT_PREFIX}/{run_id}/{name}/")
+        else:
+            download_reports(cluster, run_id, name)
