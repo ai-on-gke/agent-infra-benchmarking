@@ -24,10 +24,10 @@ import re
 import shutil
 from pathlib import Path
 
-from . import LOCAL_DATA_DIR, substrate
+from . import LOCAL_DATA_DIR, names, substrate
 from .cases import SKIP_SUBSTRATE_INSTALL
 from .cluster import Cluster
-from .deployment import RUNNER_INFRA_DIR, VARIABLES_FILE, Deployment, cluster_deployment, tf_vars
+from .deployment import RUNNER_INFRA_DIR, VARIABLES_FILE, Deployment, cluster_deployment
 
 DEV_INFRA_DIR = LOCAL_DATA_DIR / "dev-infra" / "terraform"
 # What a dev infra is, written before it is applied so that one whose apply
@@ -68,7 +68,7 @@ def create_deployment(record: dict, infra: str, json_output: bool = False) -> De
     """Creates the deployment of the record's infra, its config copied from
     the source as it is now."""
     uncreated = deployment(record["name"], infra, json_output)
-    variables = tf_vars(record["project_id"], record["region"], record["name"])
+    variables = names.dev_infra_vars(record["project_id"], record["region"], record["name"], infra == "cluster")
     if infra == "scenario-runner":
         return uncreated.create(RUNNER_INFRA_DIR, variables)
     version = None if record.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
