@@ -43,6 +43,7 @@ from google.cloud import storage
 from . import RUNNER_DIR, terraform
 from .cases import CLUSTERS_DIR
 from .log import log
+from .process import retry
 
 RUNNER_INFRA_DIR = RUNNER_DIR / "infra"
 # The config's own deployments' files, e.g. one applied by hand, which would
@@ -145,21 +146,25 @@ class Deployment:
 
     def init(self) -> None:
         # create may have replaced the backend tf-data/ was initialized with.
-        terraform.run(self.config, "init", "-input=false", "-reconfigure", env=self.env())
+        retry(str(self.root), lambda: terraform.run(self.config, "init", "-input=false", "-reconfigure", env=self.env()))
 
     def deploy(self, *args: str) -> None:
         """Plans and applies, with -destroy a destroy, which flags it destroyed
-        once it succeeds."""
+        once it succeeds. A failed plan or apply is planned again from the
+        state it left."""
         destroying = "-destroy" in args
         if not destroying:
             # Unflagged before, as even an apply that fails may create part of it.
             self.destroyed_flag.unlink(missing_ok=True)
-        terraform.deploy(
-            self.config,
-            *args,
-            json_output=self.json_output,
-            env=self.env(),
-            plan_file=str(self.data / "run.tfplan"),
+        retry(
+            str(self.root),
+            lambda: terraform.deploy(
+                self.config,
+                *args,
+                json_output=self.json_output,
+                env=self.env(),
+                plan_file=str(self.data / "run.tfplan"),
+            ),
         )
         if destroying:
             self.destroyed_flag.touch()

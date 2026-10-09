@@ -29,7 +29,7 @@ import subprocess
 from . import RUNNER_DIR, images
 from .cluster import Cluster
 from .log import log
-from .process import output, stream
+from .process import output, retry, stream
 
 SUBSTRATE_DIR = RUNNER_DIR.parent.parent / "dependency-repos" / "substrate"
 SUBSTRATE_PATH = SUBSTRATE_DIR.relative_to(images.ROOT).as_posix()
@@ -159,7 +159,12 @@ def missing_requirements(cloud_build: bool = False) -> list[str]:
 
 
 def install(cluster: Cluster) -> None:
-    """From the images build_images pushed, so the installer builds nothing."""
+    """From the images build_images pushed, so the installer builds nothing.
+    A failed install runs again from the start."""
+    retry(f"substrate on cluster {cluster.name}", lambda: install_once(cluster))
+
+
+def install_once(cluster: Cluster) -> None:
     env = {
         "PROJECT_ID": cluster.project_id,
         "CLUSTER_NAME": cluster.name,
