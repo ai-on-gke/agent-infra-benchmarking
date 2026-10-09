@@ -22,21 +22,25 @@ from __future__ import annotations
 import functools
 import os
 import re
+import shlex
 import shutil
 import subprocess
 
 from . import RUNNER_DIR, images
 from .cluster import Cluster
 from .log import log
-from .process import stream
+from .process import output, stream
 
 SUBSTRATE_DIR = RUNNER_DIR.parent.parent / "dependency-repos" / "substrate"
+SUBSTRATE_PATH = SUBSTRATE_DIR.relative_to(images.ROOT).as_posix()
+# Of the go.mod's Go version, with make and git.
+GO_BUILDER = "golang:1.27.2"
 LABEL_VALUE = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?")
 # What workloads/manifests name by ko:// reference that a pre-built install
 # doesn't take.
 WORKLOAD_PACKAGES = ["./cmd/benchmarking/glutton"]
 KO_REF = re.compile(r"ko://github\.com/agent-substrate/substrate/([^\s\"',\]}]+)")
-ENVOY_DATAPLANE_DIR = (SUBSTRATE_DIR / "cmd" / "dataplane" / "envoy").relative_to(images.ROOT).as_posix()
+ENVOY_DATAPLANE_DIR = f"{SUBSTRATE_PATH}/cmd/dataplane/envoy"
 ENVOY_DATAPLANE = images.Image(
     name="envoy-dataplane", dockerfile=f"{ENVOY_DATAPLANE_DIR}/Dockerfile", context=ENVOY_DATAPLANE_DIR
 )
@@ -78,25 +82,52 @@ def build_images(repo: str, project_id: str, cloud_build: bool = False, login: b
     """Builds and pushes to repo, tagged build_version(), what install and
     resolve take: every image of a pre-built install, which is the Makefile's
     build-images and envoy-dataplane, and the ones workloads/manifests name.
-    ko builds here either way; envoy-dataplane, from a Dockerfile, with local
-    Docker or on Cloud Build. Without login, ko uses the registry credentials
-    Docker's configuration already has."""
+    With cloud_build all of them on Cloud Build, else with ko and Docker here,
+    which without login use the registry credentials Docker's configuration
+    already has."""
     version = build_version()
     log(f"substrate: building the {version} images into {repo}")
+    make = ["make", "build-images", f"KO_DOCKER_REPO={repo}", f"VERSION={version}", f"KO_TAGS=--tags={version}"]
+    makes = [make, [*make, f"IMAGES={' '.join(WORKLOAD_PACKAGES)}"]]
+    env = {"KO_DEFAULTPLATFORMS": images.DEFAULT_PLATFORM}
+    if cloud_build:
+        cloud_build_images(makes, env, repo, version, project_id)
+        return
     if login:
-        # ko login, as ko pushes even with cloud_build, where there may be no docker.
+        # ko login, as ko doesn't push with docker.
         host = repo.split("/", 1)[0]
         ko = [str(SUBSTRATE_DIR / "hack" / "run-tool.sh"), "ko", "login", host]
         token = images.access_token(host)
         stream([*ko, "--username=oauth2accesstoken", "--password-stdin"], cwd=SUBSTRATE_DIR, input=token)
-    make =["make", "build-images", f"KO_DOCKER_REPO={repo}", f"VERSION={version}", f"KO_TAGS=--tags={version}"]
-    env = {"KO_DEFAULTPLATFORMS": images.DEFAULT_PLATFORM}
-    stream(make, env=env, cwd=SUBSTRATE_DIR)
-    stream([*make, f"IMAGES={' '.join(WORKLOAD_PACKAGES)}"], env=env, cwd=SUBSTRATE_DIR)
-    if cloud_build:
-        images.cloud_build_and_push([ENVOY_DATAPLANE], repo, version, images.DEFAULT_PLATFORM, project_id)
-    else:
-        images.docker_build_and_push([ENVOY_DATAPLANE], repo, version, images.DEFAULT_PLATFORM, login)
+    for args in makes:
+        stream(args, env=env, cwd=SUBSTRATE_DIR)
+    images.docker_build_and_push([ENVOY_DATAPLANE], repo, version, images.DEFAULT_PLATFORM, login)
+
+
+def cloud_build_images(makes: list[list[str]], env: dict, repo: str, version: str, project_id: str) -> None:
+    """Runs the makes alongside envoy-dataplane's docker build as one Cloud
+    Build, uploading the submodule's files git doesn't ignore. ko pushes as the
+    build's service account, through its Google keychain."""
+    envoy = images.ref(repo, ENVOY_DATAPLANE.name, version)
+    # hack/run-tool.sh finds the tools from the repo's top level, and the
+    # upload has no .git. Its files keep the uploader's owner, not root.
+    git = ["git config --global --add safe.directory '*'", "git init -q"]
+    ko = {
+        "id": "ko",
+        "name": GO_BUILDER,
+        "dir": SUBSTRATE_PATH,
+        "entrypoint": "bash",
+        "args": ["-c", " && ".join([*git, *map(shlex.join, makes)])],
+        # VCS stamping fails in a repository without commits.
+        "env": [f"{key}={value}" for key, value in env.items()] + ["GOFLAGS=-buildvcs=false"],
+        "waitFor": ["-"],
+    }
+    files = output(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=SUBSTRATE_DIR)
+    # Not the ones deleted in the working tree.
+    paths = [f"{SUBSTRATE_PATH}/{file}" for file in files.split("\0") if file and os.path.lexists(SUBSTRATE_DIR / file)]
+    log(f"substrate: building on Cloud Build, envoy-dataplane as {envoy}")
+    envoy_step = images.cloud_build_step(ENVOY_DATAPLANE, envoy, images.DEFAULT_PLATFORM)
+    images.cloud_build_submit([ko, envoy_step], [envoy], paths, project_id)
 
 
 def image_repo(cluster: Cluster) -> str:
@@ -122,7 +153,8 @@ def missing_submodule() -> list[str]:
 
 
 def missing_requirements(cloud_build: bool = False) -> list[str]:
-    missing = [tool for tool in ("make", "go", "gcloud") if not shutil.which(tool)]
+    tools = ["go", "gcloud"] + ([] if cloud_build else ["make"])
+    missing = [tool for tool in tools if not shutil.which(tool)]
     return list(dict.fromkeys(missing + images.missing_requirements(cloud_build) + missing_submodule()))
 
 
