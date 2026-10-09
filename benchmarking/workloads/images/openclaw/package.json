@@ -1,0 +1,10 @@
+{
+  "name": "openclaw-workload",
+  "private": true,
+  "dependencies": {
+    "openclaw": "2026.9.7"
+  },
+  "allowScripts": {
+    "openclaw@2026.9.7": true
+  }
+}

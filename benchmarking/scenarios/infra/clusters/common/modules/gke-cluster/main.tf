@@ -161,8 +161,8 @@ resource "google_container_node_pool" "this" {
   node_count = each.value.node_count
 
   autoscaling {
-    min_node_count = each.value.min_node_count
-    max_node_count = each.value.max_node_count
+    min_node_count = coalesce(each.value.min_node_count, each.value.node_count)
+    max_node_count = coalesce(each.value.max_node_count, each.value.node_count)
   }
 
   node_config {

@@ -99,17 +99,38 @@ const (
 	refusedWait = 100 * time.Millisecond
 )
 
-// A call the control plane refuses with Aborted lost a race with a
-// concurrent update of the same actor, which clears once that update lands;
-// upstream's own router retries it the same way. tracedCall repeats it up to
-// abortedAttempts times, waiting abortedRetryDelay longer each time.
-const (
-	abortedAttempts   = 3
-	abortedRetryDelay = 25 * time.Millisecond
+// Two refusals clear on their own once another operation on the same actor
+// lands, which can take seconds when that operation takes a snapshot: a
+// control-plane call refused with Aborted because the actor is busy, and an
+// instruction answered 421 because the router sent it to a worker the actor
+// was not active on yet. Both are retried, waiting retryInitialDelay and
+// doubling up to retryMaxDelay, until retryBudget is spent; upstream's router
+// retries Aborted the same way. Variables so that tests can shorten them.
+var (
+	retryInitialDelay = 100 * time.Millisecond
+	retryMaxDelay     = time.Second
+	retryBudget       = 5 * time.Second
 )
 
-// How many times executeInstruction sends an instruction that came back 421.
-const staleAssignmentAttempts = 3
+// retry calls do until it returns an error retryable does not accept, nil,
+// or retryBudget runs out, and returns how many calls it made and the last
+// error. A cancelled ctx ends the wait between calls.
+func retry(ctx context.Context, retryable func(error) bool, do func() error) (int, error) {
+	start := time.Now()
+	delay := retryInitialDelay
+	for attempt := 1; ; attempt++ {
+		err := do()
+		if err == nil || !retryable(err) || time.Since(start)+delay > retryBudget {
+			return attempt, err
+		}
+		select {
+		case <-ctx.Done():
+			return attempt, err
+		case <-time.After(delay):
+		}
+		delay = min(2*delay, retryMaxDelay)
+	}
+}
 
 // Resume modes. Explicit issues a ResumeActor before the instruction;
 // implicit leaves the wake to the router.
@@ -578,9 +599,8 @@ func (u *runWorkloadUser) recordWindow(span trace.Span, name string, total time.
 // row. There are no retries: the actor is resumed before this runs, so a
 // command it will not serve is a fault to surface rather than a state to wait
 // out. The workload's retryable verdict is therefore ignored, with one
-// exception: a 421 says the router used a worker assignment that had just gone
-// stale, and the resend is routed afresh, so it is sent again up to
-// staleAssignmentAttempts times.
+// exception: a 421 says the router used a worker assignment that was stale
+// or not live yet, and is retried as retry describes.
 //
 // A non-nil error leaves the actor in a state the run cannot reason about: it
 // is the signal to discard the actor, not merely a failed sample.
@@ -591,13 +611,10 @@ func (u *runWorkloadUser) executeInstruction(ctx context.Context) error {
 	defer cancel()
 
 	start := time.Now()
-	var err error
-	for attempt := 1; ; attempt++ {
-		_, err = u.workload.SendInstruction(ctx, u.actor())
-		if !errors.Is(err, errStaleAssignment) || attempt == staleAssignmentAttempts {
-			break
-		}
-	}
+	_, err := retry(ctx, func(err error) bool { return errors.Is(err, errStaleAssignment) }, func() error {
+		_, err := u.workload.SendInstruction(ctx, u.actor())
+		return err
+	})
 	service := time.Since(start)
 
 	boomerutil.LogSampledTrace(span, executionTimeMetric, service, boomerutil.SourceClient, err)
@@ -696,6 +713,11 @@ func (u *runWorkloadUser) delete(ctx context.Context, anyState bool) error {
 			Actor:    u.ref(),
 			AnyState: anyState,
 		}, grpc.Trailer(tr))
+		// Already gone, which is what the call is for: the teardown and a VU
+		// discarding the same actor can both get to it.
+		if status.Code(err) == codes.NotFound {
+			return nil
+		}
 		return err
 	})
 
@@ -726,22 +748,16 @@ func (u *runWorkloadUser) tracedCall(ctx context.Context, name string, do func(c
 
 	start := time.Now()
 	var tr metadata.MD
-	var err error
-	attempt := 1
-	for ; ; attempt++ {
+	attempts, err := retry(ctx, func(err error) bool { return status.Code(err) == codes.Aborted }, func() error {
 		tr = nil
-		err = do(ctx, &tr)
-		if status.Code(err) != codes.Aborted || attempt == abortedAttempts {
-			break
-		}
-		time.Sleep(time.Duration(attempt) * abortedRetryDelay)
-	}
+		return do(ctx, &tr)
+	})
 	clientLatency := time.Since(start)
 
 	latency, source := boomerutil.ElapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, clientLatency)
 	// The server's elapsed trailer is the last attempt's alone, and would hide
 	// the conflicts the client waited through before it.
-	if attempt > 1 {
+	if attempts > 1 {
 		latency, source = clientLatency, boomerutil.SourceClient
 	}
 	if source == boomerutil.SourceServer {
