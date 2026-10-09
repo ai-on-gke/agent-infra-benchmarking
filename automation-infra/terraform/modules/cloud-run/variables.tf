@@ -26,7 +26,7 @@ variable "command" {
 }
 
 variable "args" {
-  description = "Arguments passed to the entrypoint after --project-id, --region, --state-backend, --state-bucket and --state-prefix, which the module passes itself."
+  description = "Arguments passed to the entrypoint after --project-id, --region, --state-backend, --state-bucket, --state-prefix and --cloud-build, which the module passes itself."
   type        = list(string)
   default     = []
 }
@@ -64,6 +64,12 @@ variable "max_retries" {
 variable "schedule" {
   description = "Cron schedule the job runs on. Null creates no Cloud Scheduler job, leaving the job to be run by hand."
   type        = string
+  default     = null
+}
+
+variable "schedule_args" {
+  description = "Arguments the scheduled runs pass in place of args, e.g. [\"--scenario=dummy\"]. Null passes args."
+  type        = list(string)
   default     = null
 }
 

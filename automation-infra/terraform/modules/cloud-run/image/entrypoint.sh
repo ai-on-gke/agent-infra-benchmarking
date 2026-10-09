@@ -31,8 +31,7 @@ if [[ ! -d .git ]]; then
   echo "Error: the tarball of ${COMMIT} has no .git" >&2
   exit 1
 fi
-# safe.directory, as the files keep the uploader's owner.
-git -c safe.directory=/source log -1
+git log -1
 
 # Installs the scenario-runner's requirements in a venv of its own and runs it.
 exec benchmarking/tools/run "$@"
