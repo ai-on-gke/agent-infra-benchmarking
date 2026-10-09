@@ -242,7 +242,7 @@ data:
             regex: container_(memory_working_set_bytes|cpu_usage_seconds_total);$
 ---
 # Where the tsdb lives, so the runs it recorded survive a restart of its pod.
-# It goes with deploy-benchmarking.sh --delete, like everything else here.
+# It goes with the cluster, like everything else here.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

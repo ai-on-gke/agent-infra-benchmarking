@@ -18,13 +18,13 @@ from __future__ import annotations
 
 import argparse
 
-from . import images, locust, workloads
+from . import images, locust, monitoring, workloads
 from .cluster import Cluster
 from .log import log
 
 RUNNERS = {"locust": locust}
 # What a failed run raises besides CalledProcessError.
-ERRORS = (locust.LocustError, workloads.WorkloadError, images.ImageError)
+ERRORS = (locust.LocustError, workloads.WorkloadError, images.ImageError, monitoring.MonitoringError)
 
 
 def types() -> list[str]:
@@ -54,4 +54,6 @@ def run(name: str, case: dict, run_id: str, cluster: Cluster, **options: bool) -
     """options are those of its type's run, e.g. locust.run's build."""
     cluster.get_credentials()
     log(f"{name}: running as {run_id} on cluster {cluster.name}")
+    # First, so it is watching before the run deploys anything to watch.
+    monitoring.deploy(cluster)
     RUNNERS[case["type"]].run(cluster, name, case, run_id, **options)
