@@ -12,8 +12,9 @@ To run it now with one case rather than waiting for the schedule:
 automation-infra/tools/trigger --deployment=substrate-bench-auto --scenario=glutton
 ```
 
-Every run's reports can be queried in BigQuery, as in
-[Querying the reports](#querying-the-reports):
+Every run's reports can be queried in BigQuery, in the dataset
+[`substrate_bench_auto`](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco&p=akvelon-gke-aieco&d=substrate_bench_auto&page=dataset),
+as in [Querying the reports](#querying-the-reports):
 
 ```bash
 bq query --project_id=akvelon-gke-aieco --use_legacy_sql=false \
@@ -36,7 +37,7 @@ names to differ:
 | Service account the job, and so the scenario-runner, runs as | `substrate-bench-auto` |
 | Service accounts of the scheduler, the image's build and GitHub Actions | `substrate-bench-auto-sched`, `-build`, `-gh` |
 | Bucket Cloud Build stages the image's source in | `substrate-bench-auto-build-source` |
-| BigQuery dataset of the reports' views | `substrate_bench_auto` |
+| BigQuery dataset of the reports' views | [`substrate_bench_auto`](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco&p=akvelon-gke-aieco&d=substrate_bench_auto&page=dataset) |
 
 The bucket `substrate-bench-auto-tfstate` was created by hand, before the
 deployment. It holds:
@@ -98,17 +99,20 @@ reports can be queried as soon as it has written them, with nothing to load.
 ### Where the data is
 
 In the console, open [BigQuery Studio](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco)
-and, in the Explorer, `akvelon-gke-aieco` → `substrate_bench_auto`. Query the
-views, one per report file across every run:
+and, in the Explorer, `akvelon-gke-aieco` → `substrate_bench_auto`, or go
+straight to
+[the dataset](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco&p=akvelon-gke-aieco&d=substrate_bench_auto&page=dataset).
+Each view's name below links to it. Query the views, one per report file
+across every run:
 
 | View | Rows | From |
 |---|---|---|
-| `locust_stats_history` | One a second per request name, and `Aggregated` | `locust_stats_history.csv` |
-| `locust_stats` | One per request name, over the whole run | `locust_stats.csv` |
-| `locust_stats_steady` | One per request name, over the steady-state window | `locust_stats_steady.csv` |
-| `custom_stats_history` | One a second per worker gauge: `ActiveActors`, `IdleActors` | `custom_stats_history.csv` |
-| `cluster_vitals_history` | One a second per node metric, `type` being the node | `cluster_vitals_history.csv` |
-| `locust_steady_window` | One per repeat: its steady-state window's `start` and `end` | `locust_steady_window.json` |
+| [`locust_stats_history`](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco&p=akvelon-gke-aieco&d=substrate_bench_auto&t=locust_stats_history&page=table) | One a second per request name, and `Aggregated` | `locust_stats_history.csv` |
+| [`locust_stats`](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco&p=akvelon-gke-aieco&d=substrate_bench_auto&t=locust_stats&page=table) | One per request name, over the whole run | `locust_stats.csv` |
+| [`locust_stats_steady`](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco&p=akvelon-gke-aieco&d=substrate_bench_auto&t=locust_stats_steady&page=table) | One per request name, over the steady-state window | `locust_stats_steady.csv` |
+| [`custom_stats_history`](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco&p=akvelon-gke-aieco&d=substrate_bench_auto&t=custom_stats_history&page=table) | One a second per worker gauge: `ActiveActors`, `IdleActors` | `custom_stats_history.csv` |
+| [`cluster_vitals_history`](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco&p=akvelon-gke-aieco&d=substrate_bench_auto&t=cluster_vitals_history&page=table) | One a second per node metric, `type` being the node | `cluster_vitals_history.csv` |
+| [`locust_steady_window`](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco&p=akvelon-gke-aieco&d=substrate_bench_auto&t=locust_steady_window&page=table) | One per repeat: its steady-state window's `start` and `end` | `locust_steady_window.json` |
 
 The `*_files` tables beside them are the files as written, every column a
 string, which the views cast.
@@ -153,6 +157,68 @@ bq query --project_id=akvelon-gke-aieco --use_legacy_sql=false \
   'SELECT run_id, test_case, elapsed_secs, value AS active_actors
    FROM substrate_bench_auto.custom_stats_history WHERE name = "ActiveActors" ORDER BY 1, 2, 3'
 ```
+
+### Charting the panels of benchmark-charts
+
+Three more views have what each panel of
+[benchmark-charts](../../../benchmark-charts) draws, a row a second, with the
+same `run_id`, `test_case` and `scenario`, and `steady`:
+
+| View | Panel | Columns to chart |
+|---|---|---|
+| [`latency_chart`](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco&p=akvelon-gke-aieco&d=substrate_bench_auto&t=latency_chart&page=table) | A request's latency and throughput; `request` picks it, e.g. `TTFI`, `ExecutionTime`, `CycleTime` | `p50_ms` to `p100_ms`, `requests_per_sec`, `successful_per_sec`, `failures_per_sec` |
+| [`pool_chart`](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco&p=akvelon-gke-aieco&d=substrate_bench_auto&t=pool_chart&page=table) | Each worker-pool node's utilization; `node` is the last two parts of its name | `cpu_percent`, `memory_percent` |
+| [`actors_chart`](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco&p=akvelon-gke-aieco&d=substrate_bench_auto&t=actors_chart&page=table) | All actors, which is locust's user count, and the worker's active and idle ones | `actors`, `active_actors`, `idle_actors` |
+
+In all three, `elapsed_secs` counts from the repeat's locust start, so their
+charts line up. A latency is null for a second with no requests, as locust
+writes 0 for it, so the line breaks there rather than dropping to zero.
+
+To chart one, run a query in BigQuery Studio, open the **Chart** tab under the
+results, and pick a line chart with `elapsed_secs` as the dimension and the
+columns as measures. The **Query** button on a view leaves the column list
+empty, so put the columns in, as in these. Change `run_id` and `test_case` to
+chart another repeat.
+
+A request's latency and throughput, with `request` set to the one to chart:
+
+```sql
+SELECT elapsed_secs, p50_ms, p95_ms, p99_ms, requests_per_sec, successful_per_sec, failures_per_sec
+FROM substrate_bench_auto.latency_chart
+WHERE run_id = 'run-20261009t191551z' AND test_case = 'glutton-1' AND request = 'TTFI'
+ORDER BY elapsed_secs
+```
+
+The worker pool's CPU, a line per node with `node` as the chart's series:
+
+```sql
+SELECT elapsed_secs, node, cpu_percent, memory_percent
+FROM substrate_bench_auto.pool_chart
+WHERE run_id = 'run-20261009t191551z' AND test_case = 'glutton-1'
+ORDER BY elapsed_secs
+```
+
+The actors:
+
+```sql
+SELECT elapsed_secs, actors, active_actors, idle_actors
+FROM substrate_bench_auto.actors_chart
+WHERE run_id = 'run-20261009t191551z' AND test_case = 'glutton-1'
+ORDER BY elapsed_secs
+```
+
+A case's repeats against each other, a line per repeat with `test_case` as the
+series:
+
+```sql
+SELECT elapsed_secs, test_case, p50_ms
+FROM substrate_bench_auto.latency_chart
+WHERE scenario = 'glutton' AND request = 'TTFI'
+ORDER BY elapsed_secs
+```
+
+The steady-state window isn't shaded as in benchmark-charts; add `AND steady`
+to chart only that part.
 
 ### Charting and switching between tests
 
