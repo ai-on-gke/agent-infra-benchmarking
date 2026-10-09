@@ -57,6 +57,11 @@ class Cluster:
         # The variable's default for a state applied before the output existed.
         return self.outputs.get("benchmark_runner_ksa_name", "benchmark-runner")
 
+    @property
+    def sandbox_class(self) -> str:
+        # The variable's default for a state applied before the output existed.
+        return self.outputs.get("sandbox_class", "gvisor")
+
     def kubectl_flags(self, namespace: str | None = None) -> list[str]:
         flags = [f"--kubeconfig={self.kubeconfig}"]
         return flags + [f"--namespace={namespace}"] if namespace else flags

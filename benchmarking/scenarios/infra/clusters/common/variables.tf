@@ -79,6 +79,20 @@ variable "sandboxed_machine_type" {
   type        = string
 }
 
+# microvm guests boot on /dev/kvm, which only nested virtualization exposes,
+# and GCE offers it on no E2 machine type, so sandboxed_machine_type has to be
+# n2/c2/c3 or similar.
+variable "sandbox_class" {
+  description = "Sandbox class of the sandboxed node pool's workers: its ate.dev/sandboxClass taint, and nested virtualization for microvm."
+  type        = string
+  default     = "gvisor"
+
+  validation {
+    condition     = contains(["gvisor", "microvm"], var.sandbox_class)
+    error_message = "sandbox_class must be gvisor or microvm."
+  }
+}
+
 # Every node pool's ate.dev/substrate-version label, which has to be the
 # version hack/install-ate.sh stamps on the atelet DaemonSet: a worker pod
 # schedules only onto a node whose label matches the dataplane's. The

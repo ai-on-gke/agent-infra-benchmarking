@@ -250,6 +250,12 @@ def run(
     local build uses the registry credentials Docker already has. Expects the
     cluster's credentials in its kubeconfig."""
     case = check_case(name, case, deploy_workloads)
+    # The workers would never schedule past the sandboxed pool's taint.
+    if case["sandbox-class"] != cluster.sandbox_class:
+        raise LocustError(
+            f"case {name} is {case['sandbox-class']}, but cluster {cluster.name}'s sandboxed pool is"
+            f" {cluster.sandbox_class}; set the cluster's sandbox_class to match"
+        )
     run_id = run_id or f"{datetime.now(timezone.utc):%Y%m%dt%H%M%Sz}-{images.tag()}"
     if not LABEL_RE.fullmatch(run_id):
         raise ValueError(f"run id {run_id!r} is not a valid label value")
