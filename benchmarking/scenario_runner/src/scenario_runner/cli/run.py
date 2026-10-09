@@ -42,7 +42,7 @@ from ..process import failure
 
 # The executions' Deployments, kept after they are destroyed, and with gcs in
 # the state bucket under <state prefix>/ too. An execution's are in <name>/:
-# scenario-runner/ for scenario_runner/infra, and tests/<case>/ for each
+# scenario-runner/ for scenario_runner/infra, and scenarios/<case>/ for each
 # case's cluster.
 LOCAL_TERRAFORM_DIR = LOCAL_DATA_DIR / "runs" / "terraform"
 
@@ -260,7 +260,7 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     with runner_infra.applied():
         for name, case in cases.items():
             version = None if case.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
-            uncreated = deployment(args, "tests", name)
+            uncreated = deployment(args, "scenarios", name)
             case_infra = cluster_deployment(case["infra"]["cluster"], uncreated, variables, version)
             with case_infra.applied():
                 cluster = Cluster(case_infra.outputs(), case_infra.data / "kubeconfig")
