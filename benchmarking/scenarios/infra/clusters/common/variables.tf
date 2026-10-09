@@ -59,9 +59,13 @@ variable "services_cidr" {
   default     = "10.8.0.0/20"
 }
 
-# Bump it deliberately. A floor for the control plane: GKE upgrades it past
-# this, and run.json records the version a run saw. The node pools stay put
-# until the minor version's end of support.
+# Bump it deliberately, to one the REGULAR channel offers in var.region:
+#   gcloud container get-server-config --location=<region> \
+#     --flatten=channels --filter=channels.channel=REGULAR \
+#     --format="value(channels.validVersions)"
+# The cluster's upgrade exclusion keeps it on this minor version and the node
+# pools where they are until end of support; GKE still patches the control
+# plane.
 variable "kubernetes_version" {
   description = "Kubernetes version of the control plane (GKE's min_master_version) and of every node pool."
   type        = string

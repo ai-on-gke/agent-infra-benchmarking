@@ -136,7 +136,40 @@ resource "google_container_cluster" "standard" {
     }
   }
 
+  # Keeps the cluster on its minor version and its nodes where they are until
+  # that version's end of support. GKE still applies control-plane patches, in
+  # the daily window, which GKE requires alongside an exclusion.
+  dynamic "maintenance_policy" {
+    for_each = var.block_upgrades ? [1] : []
+    content {
+      daily_maintenance_window {
+        start_time = "03:00"
+      }
+      maintenance_exclusion {
+        exclusion_name = "pinned-version"
+        start_time     = time_static.upgrade_exclusion[0].rfc3339
+        exclusion_options {
+          scope             = "NO_MINOR_OR_NODE_UPGRADES"
+          end_time_behavior = "UNTIL_END_OF_SUPPORT"
+        }
+      }
+    }
+  }
+
   deletion_protection = false
+
+  lifecycle {
+    precondition {
+      condition     = !var.block_upgrades || contains(["RAPID", "REGULAR", "STABLE", "EXTENDED"], var.release_channel)
+      error_message = "block_upgrades needs release_channel set to RAPID, REGULAR, STABLE or EXTENDED: GKE takes this exclusion only on a cluster in a channel."
+    }
+  }
+}
+
+# The exclusion's start, fixed when it is first created so that later plans
+# leave it alone.
+resource "time_static" "upgrade_exclusion" {
+  count = !var.autopilot && var.block_upgrades ? 1 : 0
 }
 
 locals {
