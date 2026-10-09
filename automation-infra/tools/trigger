@@ -41,10 +41,6 @@ parse_deployment "$@"
 set -- "${ARGS[@]}"
 MAIN_TF="${DEPLOYMENT_DIR}/main.tf"
 
-# The module's arguments, as main.tf sets them.
-module_arg() {
-  sed -n "s/^ *$1 *= *\"\(.*\)\"/\1/p" "${MAIN_TF}"
-}
 PROJECT_ID="$(module_arg project_id)"
 REGION="$(module_arg region)"
 JOB="$(module_arg default_resource_name)"

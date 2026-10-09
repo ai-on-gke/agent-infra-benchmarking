@@ -38,15 +38,16 @@ variable "env" {
 }
 
 variable "cpu" {
-  description = "CPU limit of the container."
+  description = "CPU limit of the container. Cloud Run needs at least 8 for more than 24Gi of memory."
   type        = string
-  default     = "2"
+  default     = "8"
 }
 
+# ko's Go module and build caches for substrate's images outgrow 4Gi.
 variable "memory" {
   description = "Memory limit of the container. The container's filesystem is in memory and counts against it."
   type        = string
-  default     = "4Gi"
+  default     = "32Gi"
 }
 
 variable "task_timeout" {
