@@ -68,6 +68,16 @@ Without it, every case in `scenarios.yaml` runs, in the order listed. A case
 with `repeats: N` runs N times, recorded as `<case>-1` to `<case>-N`, each on a
 fresh cluster. A failed repeat doesn't stop the ones after it.
 
+Creating and destroying a cluster takes most of a run's time. While you are
+changing a case or the code it runs, keep one cluster up instead:
+
+```bash
+./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton
+```
+
+See [Keeping a cluster between runs](#keeping-a-cluster-between-runs) for
+reusing it and destroying it afterwards.
+
 Useful flags (`--help` lists them all):
 
 | Flag | |
@@ -103,8 +113,7 @@ Useful flags (`--help` lists them all):
    6. Destroys the cluster, and its bucket with it.
 3. Destroys `scenario_runner/infra`.
 
-Most of a repeat's time is the cluster's apply and destroy. The `common`
-cluster uses `c2-standard-16` nodes for the sandboxed
+The `common` cluster uses `c2-standard-16` nodes for the sandboxed
 pool, so check the project's C2 CPU quota in the region before raising
 `sandboxed_node_count`.
 
@@ -166,7 +175,7 @@ TF_DATA_DIR=../tf-data terraform destroy
 Destroy the repeats' clusters before `scenario-runner/`. Anything still left
 can be found in the console by the `benchmark-run-id` label.
 
-### Dev infra
+### Keeping a cluster between runs
 
 To iterate without creating a cluster on every run, use `--dev-infra NAME`. It
 keeps the runner infra and cluster between executions, and repeats run one
@@ -179,17 +188,28 @@ because a dev infra keeps the cluster of the case it was first created for:
 ./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton --no-build --no-deploy-workloads
 # reapply the cluster config after changing it, reinstalling substrate if its version changed
 ./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton --dev-infra-update
-
-./benchmarking/tools/dev-infra list
-./benchmarking/tools/dev-infra outputs glutton-dev
-./benchmarking/tools/dev-infra destroy glutton-dev
 ```
+
+`--no-build` needs the images of the current `HEAD` already pushed to it.
 
 A dev infra's state is always local, in
 `scenario_runner/.local-data/dev-infra/terraform/<name>/`, and its kubeconfig
-in `cluster/tf-data/kubeconfig` there. It keeps costing money until it is
-destroyed. `--no-build` needs the images of the current `HEAD` already pushed
-to it.
+in `cluster/tf-data/kubeconfig` there. `tools/dev-infra` manages them:
+
+```bash
+# every dev infra on this machine, its case, project and whether it is complete
+./benchmarking/tools/dev-infra list
+# its Terraform outputs: cluster name, bucket, image repository
+./benchmarking/tools/dev-infra outputs glutton-dev
+```
+
+A dev infra keeps costing money until it is destroyed, so destroy it once you
+are done iterating. This destroys its cluster and runner infra and removes its
+local files:
+
+```bash
+./benchmarking/tools/dev-infra destroy glutton-dev
+```
 
 ### Adding a case
 
