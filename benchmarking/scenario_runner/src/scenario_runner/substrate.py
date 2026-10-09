@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Installs substrate on a case's cluster with the submodule's
-hack/install-ate.sh --deploy-ate-system, and hack/install-microvm-deps.sh
---install on a microvm one, configured from the cluster's Terraform outputs."""
+"""Builds the submodule's images once per execution, and installs substrate
+from them on a case's cluster with its hack/install-ate.sh --deploy-ate-system,
+and hack/install-microvm-deps.sh --install on a microvm one, configured from
+the cluster's Terraform outputs."""
 
 from __future__ import annotations
 
@@ -24,13 +25,21 @@ import re
 import shutil
 import subprocess
 
-from . import RUNNER_DIR
+from . import RUNNER_DIR, images
 from .cluster import Cluster
 from .log import log
-from .process import output, stream
+from .process import stream
 
 SUBSTRATE_DIR = RUNNER_DIR.parent.parent / "dependency-repos" / "substrate"
 LABEL_VALUE = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?")
+# What workloads/manifests name by ko:// reference that a pre-built install
+# doesn't take.
+WORKLOAD_PACKAGES = ["./cmd/benchmarking/glutton"]
+KO_REF = re.compile(r"ko://github\.com/agent-substrate/substrate/([^\s\"',\]}]+)")
+ENVOY_DATAPLANE_DIR = (SUBSTRATE_DIR / "cmd" / "dataplane" / "envoy").relative_to(images.ROOT).as_posix()
+ENVOY_DATAPLANE = images.Image(
+    name="envoy-dataplane", dockerfile=f"{ENVOY_DATAPLANE_DIR}/Dockerfile", context=ENVOY_DATAPLANE_DIR
+)
 
 
 class SubstrateError(RuntimeError):
@@ -65,36 +74,69 @@ def build_version() -> str:
     return version
 
 
-def ko(cluster: Cluster, *args: str, input: str) -> str:
-    """Runs substrate's ko with input on its stdin and returns its stdout. Only
-    in the submodule do its ko:// references resolve."""
-    # ko has no flag for the registry. The platform is the nodes', whatever the
-    # build host's.
-    return output(
-        [str(SUBSTRATE_DIR / "hack" / "run-tool.sh"), "ko", *args],
-        env={"KO_DOCKER_REPO": cluster.docker_repo, "KO_DEFAULTPLATFORMS": "linux/amd64"},
-        cwd=SUBSTRATE_DIR,
-        input=input,
-    )
+def build_images(repo: str, project_id: str, cloud_build: bool = False, login: bool = True) -> None:
+    """Builds and pushes to repo, tagged build_version(), what install and
+    resolve take: every image of a pre-built install, which is the Makefile's
+    build-images and envoy-dataplane, and the ones workloads/manifests name.
+    ko builds here either way; envoy-dataplane, from a Dockerfile, with local
+    Docker or on Cloud Build. Without login, ko uses the registry credentials
+    Docker's configuration already has."""
+    version = build_version()
+    log(f"substrate: building the {version} images into {repo}")
+    if login:
+        # ko login, as ko pushes even with cloud_build, where there may be no docker.
+        host = repo.split("/", 1)[0]
+        ko = [str(SUBSTRATE_DIR / "hack" / "run-tool.sh"), "ko", "login", host]
+        token = images.access_token(host)
+        stream([*ko, "--username=oauth2accesstoken", "--password-stdin"], cwd=SUBSTRATE_DIR, input=token)
+    make =["make", "build-images", f"KO_DOCKER_REPO={repo}", f"VERSION={version}", f"KO_TAGS=--tags={version}"]
+    env = {"KO_DEFAULTPLATFORMS": images.DEFAULT_PLATFORM}
+    stream(make, env=env, cwd=SUBSTRATE_DIR)
+    stream([*make, f"IMAGES={' '.join(WORKLOAD_PACKAGES)}"], env=env, cwd=SUBSTRATE_DIR)
+    if cloud_build:
+        images.cloud_build_and_push([ENVOY_DATAPLANE], repo, version, images.DEFAULT_PLATFORM, project_id)
+    else:
+        images.docker_build_and_push([ENVOY_DATAPLANE], repo, version, images.DEFAULT_PLATFORM, login)
+
+
+def image_repo(cluster: Cluster) -> str:
+    """Where the cluster's substrate images are, which build_images pushed to."""
+    if not cluster.substrate_docker_repo:
+        raise SubstrateError(
+            f"cluster {cluster.name} names no repository of substrate images; a dev infra applied before it did"
+            " needs --dev-infra-update"
+        )
+    return cluster.substrate_docker_repo
+
+
+def resolve(cluster: Cluster, manifest: str) -> str:
+    """The manifest with each ko:// reference to substrate replaced by the
+    image build_images pushed of it, pinned to its digest."""
+    repo = image_repo(cluster)
+    # ko names an image after the last element of its package, as the Makefile has it.
+    return KO_REF.sub(lambda ref: images.pin(f"{repo}/{ref[1].rsplit('/', 1)[-1]}:{build_version()}"), manifest)
 
 
 def missing_submodule() -> list[str]:
     return [] if (SUBSTRATE_DIR / "go.mod").is_file() else [f"the substrate submodule in {SUBSTRATE_DIR}"]
 
 
-def missing_requirements() -> list[str]:
-    return [tool for tool in ("go", "gcloud") if not shutil.which(tool)] + missing_submodule()
+def missing_requirements(cloud_build: bool = False) -> list[str]:
+    missing = [tool for tool in ("make", "go", "gcloud") if not shutil.which(tool)]
+    return list(dict.fromkeys(missing + images.missing_requirements(cloud_build) + missing_submodule()))
 
 
 def install(cluster: Cluster) -> None:
+    """From the images build_images pushed, so the installer builds nothing."""
     env = {
         "PROJECT_ID": cluster.project_id,
         "CLUSTER_NAME": cluster.name,
         "CLUSTER_LOCATION": cluster.location,
         "BUCKET_NAME": cluster.bucket,
-        "KO_DOCKER_REPO": cluster.docker_repo,
+        "ATE_IMAGE_REPO": image_repo(cluster),
+        "ATE_IMAGE_TAG": build_version(),
         # The nodes' platform, whatever the build host's.
-        "KO_DEFAULTPLATFORMS": "linux/amd64",
+        "KO_DEFAULTPLATFORMS": images.DEFAULT_PLATFORM,
         # Empty, so the installer runs get-credentials itself and uses the
         # context it writes into KUBECONFIG, rather than the developer's own.
         "KUBECTL_CONTEXT": "",

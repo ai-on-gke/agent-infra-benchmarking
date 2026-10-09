@@ -130,17 +130,22 @@ def pin(image: str) -> str:
     return f"{head}/{last.split(':', 1)[0]}@{digest}"
 
 
-def docker_login(host: str) -> None:
-    """Rather than relying on gcloud auth configure-docker having been run for
-    the host, which docker looks credentials up by."""
+def access_token(host: str) -> str:
+    """gcloud's access token, to log in to host with as oauth2accesstoken."""
     token = subprocess.run(["gcloud", "auth", "print-access-token"], capture_output=True, text=True)
     if token.returncode or not token.stdout.strip():
         raise ImageError(f"cannot get an access token from gcloud for {host}; run gcloud auth login")
     account = subprocess.run(["gcloud", "config", "get-value", "account"], capture_output=True, text=True)
     log(f"images: authenticating to {host} as {account.stdout.strip() or 'an unknown account'}")
+    return token.stdout.strip()
+
+
+def docker_login(host: str) -> None:
+    """Rather than relying on gcloud auth configure-docker having been run for
+    the host, which docker looks credentials up by."""
     stream(
         ["docker", "login", "--username=oauth2accesstoken", "--password-stdin", f"https://{host}"],
-        input=token.stdout.strip(),
+        input=access_token(host),
     )
 
 

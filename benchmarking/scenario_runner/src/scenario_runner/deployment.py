@@ -278,14 +278,18 @@ class GcsDeployment(Deployment):
         super().destroy()
 
 
-def cluster_deployment(spec: dict, deployment: Deployment, tf_vars: dict, substrate_version: str | None) -> Deployment:
+def cluster_deployment(
+    spec: dict, deployment: Deployment, tf_vars: dict, substrate_version: str | None, substrate_repository: str | None
+) -> Deployment:
     """Creates deployment of the config a case's infra.cluster names, with its
-    tfvars, tfvars_inline and variables, then substrate_version unless None
-    and tf_vars, later ones winning."""
+    tfvars, tfvars_inline and variables, then substrate_version and the
+    substrate_repository its images are installed from unless None, and
+    tf_vars, later ones winning."""
     cluster_dir = CLUSTERS_DIR / spec["name"]
     variables = dict(spec.get("variables", {}))
     if substrate_version is not None:
         variables["substrate_version"] = substrate_version
+        variables["substrate_image_repository"] = substrate_repository
     variables.update(tf_vars)
     return deployment.create(
         cluster_dir,
