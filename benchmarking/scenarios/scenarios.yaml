@@ -66,7 +66,7 @@ cases:
     infra:
       cluster:
         name: common
-        tfvars: default.tfvars
+        tfvars: openclaw.tfvars
         tfvars_inline: |
           sandboxed_node_count     = 10
           sandboxed_min_node_count = 10

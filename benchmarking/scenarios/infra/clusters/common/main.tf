@@ -72,7 +72,7 @@ module "cluster" {
   # Every pool leaves auto_upgrade off: an upgrade drains the workers, which
   # crashes the actors still awake on them; see substrate's
   # tools/setup-gcp/README.md.
-  node_pools = {
+  node_pools = merge({
     default = {
       machine_type   = "c2-standard-16"
       node_count     = 1
@@ -116,7 +116,20 @@ module "cluster" {
         effect = "NO_SCHEDULE"
       }]
     }
-  }
+    }, {
+    for pool in var.additional_node_pools : pool.name => {
+      machine_type   = pool.machine_type
+      disk_size_gb   = pool.disk_size_gb
+      disk_type      = pool.disk_type
+      node_count     = pool.node_count
+      min_node_count = pool.min_node_count
+      max_node_count = pool.max_node_count
+      spot           = pool.spot
+      node_locations = [var.zone]
+      labels         = pool.labels
+      taints         = pool.taints
+    }
+  })
 
   node_service_account = google_service_account.node.email
 

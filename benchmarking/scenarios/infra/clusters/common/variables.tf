@@ -96,6 +96,38 @@ variable "sandboxed_max_node_count" {
   default     = 1
 }
 
+# Pinned to var.zone like the rest, and without the substrate version label the
+# pools substrate runs on get, so give one a taint unless substrate's workers
+# are meant to land there.
+variable "additional_node_pools" {
+  description = "Node pools to create besides default, sandboxed and monitoring. name is the pool's name suffix."
+  type = list(object({
+    name           = string
+    machine_type   = optional(string, "e2-standard-4")
+    disk_size_gb   = optional(number, 100)
+    disk_type      = optional(string, "pd-balanced")
+    node_count     = optional(number, 1)
+    min_node_count = optional(number, 1)
+    max_node_count = optional(number, 1)
+    spot           = optional(bool, false)
+    labels         = optional(map(string), {})
+    taints = optional(list(object({
+      key    = string
+      value  = string
+      effect = string
+    })), [])
+  }))
+  default = []
+
+  validation {
+    condition = (
+      length(distinct(var.additional_node_pools[*].name)) == length(var.additional_node_pools)
+      && length(setintersection(var.additional_node_pools[*].name, ["default", "sandboxed", "monitoring"])) == 0
+    )
+    error_message = "additional_node_pools names must be unique and not default, sandboxed or monitoring."
+  }
+}
+
 variable "artifact_repository_id" {
   description = "ID of the Artifact Registry repository. Defaults to var.default_resource_name when empty. Set it only when that name is already taken in this project."
   type        = string

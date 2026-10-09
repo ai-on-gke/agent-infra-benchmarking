@@ -22,6 +22,21 @@ spec:
                 operator: NotIn
                 values:
                 - "true"
+          # The mock-llm pool of scenarios/infra/clusters/common/openclaw.tfvars,
+          # where the cluster has one.
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: benchmarking-mock-llm
+                operator: In
+                values:
+                - "true"
+      tolerations:
+      - key: benchmarking-mock-llm
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
       containers:
       - name: mock-llm
         image: ${IMAGE_WITH_DIGEST}
