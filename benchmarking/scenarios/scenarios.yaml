@@ -100,8 +100,8 @@ cases:
     worker-count: 10
     sandbox-class: gvisor
     master:
-      run-time: 1m
-      users: 10
+      run-time: 2m
+      users: 3
       spawn-rate: 10
       warm-up: 10s
     worker:
@@ -109,6 +109,8 @@ cases:
       workload-template: openclaw
       workload-timeout: 120s
       resume-mode: explicit
+      # Without an egress policy the actors can't reach mock-llm.
+      actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
   # The scenario-runner's Terraform path on infra/clusters/dummy, which creates
   # no GCP resources and so has nothing to benchmark on.
