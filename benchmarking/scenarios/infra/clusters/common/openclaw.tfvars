@@ -6,9 +6,9 @@ bucket_force_destroy = true
 
 sandboxed_machine_type = "c2-standard-16"
 
-# mock-llm alone, which mock-llm.yaml.tmpl prefers and tolerates, so the LLM
-# the openclaw actors call shares no node with substrate's control plane. Its
-# 10 replicas ask for 500m CPU each.
+# mock-llm alone, which mock-llm.yaml.tmpl is pinned to, so the LLM the
+# openclaw actors call shares no node with substrate's control plane. Its 10
+# replicas ask for 500m CPU each.
 additional_node_pools = [{
   name         = "mock-llm"
   machine_type = "e2-standard-8"

@@ -100,8 +100,8 @@ module "cluster" {
       }]
     }
     # Prometheus alone, so it neither takes from what it measures nor gets
-    # starved by a heavy run. The taint keeps mock-llm off, whose only rule is
-    # to avoid the workers, and atelet, which tolerates just the sandbox taint.
+    # starved by a heavy run. The taint keeps atelet off, which tolerates just
+    # the sandbox taint.
     # Pinned to var.zone with the rest, since its data volume is a zonal disk.
     monitoring = {
       machine_type   = "e2-standard-4"
