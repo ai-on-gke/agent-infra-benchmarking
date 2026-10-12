@@ -17,7 +17,9 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -34,6 +36,17 @@ RETRY_DELAY = 30
 def environ(env: dict[str, str] | None) -> dict[str, str] | None:
     """The process's environment with env added, for subprocess."""
     return {**os.environ, **env} if env else None
+
+
+def reached_by_ctrl_c(proc: subprocess.Popen) -> bool:
+    """Whether a Ctrl-C at the terminal reached proc too, as it does when proc
+    is in the terminal's foreground process group."""
+    for f in (sys.stdin, sys.stderr):
+        try:
+            return os.tcgetpgrp(f.fileno()) == os.getpgid(proc.pid)
+        except (OSError, AttributeError, ValueError):
+            continue
+    return False
 
 
 def stream(
@@ -65,12 +78,16 @@ def stream(
                 log_line(line.rstrip("\n"))
         except BaseException as exc:
             # Stopped, not killed: terraform killed mid-apply leaves what it was
-            # creating out of its state, and a GCS state lock behind. A Ctrl-C
-            # reached it from the terminal too; anything else, such as cli.run's
-            # SIGTERM, did not. Its output is read on until it exits, so a full
-            # pipe cannot hold it up, and a second interrupt kills it.
+            # creating out of its state, and a GCS state lock behind. It gets
+            # one SIGINT: from the terminal along with this process, or else
+            # from here, as a second makes terraform quit at once. Anything
+            # else, such as cli.run's SIGTERM, is passed on as SIGTERM. Its
+            # output is read on until it exits, so a full pipe cannot hold it
+            # up, and a second interrupt kills it.
             if not isinstance(exc, KeyboardInterrupt):
                 proc.terminate()
+            elif not reached_by_ctrl_c(proc):
+                proc.send_signal(signal.SIGINT)
             try:
                 for line in lines:
                     log_line(line.rstrip("\n"))
