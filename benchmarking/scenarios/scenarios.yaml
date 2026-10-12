@@ -24,6 +24,10 @@
 # `noop` is the scenario-runner's alone: it applies and destroys the case's
 # cluster, and runs nothing on it.
 #
+# `max-failure-ratio` is the share of requests, 0 to 1, that may fail before a
+# run of the case counts as failed, 0.01 by default; a run that makes no
+# requests, or whose load generator raises any exception, fails too.
+#
 # `repeats` is how many times the case runs, 1 by default, each on its own
 # cluster applied for it, or one after another on a --dev-infra's. Above 1,
 # they are recorded as <case>-1 to <case>-N.
@@ -201,6 +205,34 @@ cases:
     worker:
       workload-name: openclaw
       workload-template: openclaw
+      # Above the template's OPENCLAW_TIMEOUT_SECS (100), so the actor's own
+      # timeout reports a slow turn first.
+      workload-timeout: 120s
+      resume-mode: explicit
+      actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
+
+  openclaw-microvm:
+    type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: openclaw.tfvars
+        tfvars_inline: |
+          sandbox_class            = "microvm"
+          sandboxed_node_count     = 1
+          sandboxed_min_node_count = 1
+          sandboxed_max_node_count = 1
+    repeats: 1
+    worker-count: 10
+    sandbox-class: microvm
+    master:
+      run-time: 2m
+      users: 3
+      spawn-rate: 10
+      warm-up: 10s
+    worker:
+      workload-name: openclaw
+      workload-template: openclaw
       workload-timeout: 120s
       resume-mode: explicit
       actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
@@ -227,7 +259,7 @@ cases:
       workload-timeout: 120s
       resume-mode: explicit
       suspend-disabled: true
-      actor-egress-allow: "mock-llm.benchmark-workloads.svc.cluster.local"
+      actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
   openclaw-utilization-10:
     type: locust
@@ -253,7 +285,7 @@ cases:
       suspend-disabled: false
       min-wait: 106000ms
       max-wait: 106000ms
-      actor-egress-allow: "mock-llm.benchmark-workloads.svc.cluster.local"
+      actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
   openclaw-utilization-25:
     type: locust
@@ -279,7 +311,7 @@ cases:
       suspend-disabled: false
       min-wait: 106000ms
       max-wait: 106000ms
-      actor-egress-allow: "mock-llm.benchmark-workloads.svc.cluster.local"
+      actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
   openclaw-utilization-50:
     type: locust
@@ -306,7 +338,7 @@ cases:
       min-wait: 106000ms
       max-wait: 106000ms
       # Without an egress policy the actors can't reach mock-llm.
-      actor-egress-allow: "mock-llm.benchmark-workloads.svc.cluster.local"
+      actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
   # The scenario-runner's Terraform path on infra/clusters/dummy, which creates
   # no GCP resources and so has nothing to benchmark on.

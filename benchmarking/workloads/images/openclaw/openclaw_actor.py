@@ -1,7 +1,16 @@
 import sys
+import os
+import signal
 import subprocess
 import json
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+# How long one `openclaw agent exec` may run. Kept below the benchmark worker's
+# deadline for the call (the case's workload-timeout), so a slow turn ends here
+# with a 504 that says so, and its processes are gone before the worker
+# suspends the actor.
+EXEC_TIMEOUT_SECS = float(os.environ.get("OPENCLAW_TIMEOUT_SECS", "100"))
 
 # MAIN ACTOR SERVER (Runs on port 80)
 # ==========================================
@@ -33,7 +42,6 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                import os
                 import base64
 
                 env = os.environ.copy()
@@ -72,30 +80,31 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                     # Use `openclaw agent exec` to run an isolated headless agent turn.
                     cmd = ["openclaw", "agent", "exec", "--isolated", "--model", "google-vertex/gemini-2.5-flash-lite", post_data]
 
-                result = subprocess.run(
+                # Its own session, so a timeout can kill openclaw together with
+                # every process it started.
+                start = time.monotonic()
+                proc = subprocess.Popen(
                     cmd,
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
-                    timeout=120, # AI agents can be slow, giving it 2 minutes
-                    env=env
+                    env=env,
+                    start_new_session=True,
                 )
+                try:
+                    stdout, stderr = proc.communicate(timeout=EXEC_TIMEOUT_SECS)
+                except subprocess.TimeoutExpired:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    proc.communicate()
+                    self.reply(504, f"OpenClaw execution timed out after {EXEC_TIMEOUT_SECS:g}s", start)
+                    return
 
-                output = result.stdout + result.stderr
-                if result.returncode != 0:
-                    output = f"OpenClaw exited with code {result.returncode}.\nOutput:\n{output}"
-
-                status_code = 200 if result.returncode == 0 else 500
-
-                self.send_response(status_code)
-                self.send_header("Content-type", "text/plain")
-                self.end_headers()
-                self.wfile.write(output.encode("utf-8"))
-
-            except subprocess.TimeoutExpired:
-                self.send_response(504)
-                self.send_header("Content-type", "text/plain")
-                self.end_headers()
-                self.wfile.write(b"OpenClaw execution timed out")
+                output = stdout + stderr
+                if proc.returncode != 0:
+                    self.reply(500, f"OpenClaw exited with code {proc.returncode} after "
+                               f"{time.monotonic() - start:.1f}s.\nOutput:\n{output}", start)
+                    return
+                self.reply(200, output, start)
             except Exception as e:
                 self.send_response(500)
                 self.send_header("Content-type", "text/plain")
@@ -104,6 +113,15 @@ class OpenClawHandler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+
+    def reply(self, status, body, start):
+        """Answers an /invoke, with how long openclaw ran in X-Openclaw-Exec-Ms."""
+        self.send_response(status)
+        self.send_header("Content-type", "text/plain")
+        self.send_header("X-Openclaw-Exec-Ms", str(round((time.monotonic() - start) * 1000)))
+        self.end_headers()
+        self.wfile.write(body.encode("utf-8"))
+
 
 if __name__ == "__main__":
     print("Starting OpenClaw HTTP wrapper on port 80...")

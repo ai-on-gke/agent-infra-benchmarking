@@ -44,8 +44,7 @@ containers:
   - name: OTEL_EXPORTER_OTLP_ENDPOINT
     value: "${OTLP_ENDPOINT}"
   # The telemetry meter counts by service.name. Thus this value keeps the
-  # actor volume separate from the volume of the control plane. See
-  # benchmarking/telemetry/README.md.
+  # actor volume separate from the volume of the control plane.
   - name: OTEL_RESOURCE_ATTRIBUTES
     value: "service.name=glutton-actor"
   # Hold ResumeActor open until port 80 actually answers.
@@ -53,8 +52,8 @@ containers:
     httpGet:
       path: /readyz
       port: 80
-# See the note on the sleep template: unset means the 2 GiB microvm default,
-# which the benchmarks should not silently inherit. Raise ${ACTOR_MEMORY}
+# Unset means the 2 GiB microvm default, which the benchmarks should not
+# silently inherit. Raise ${ACTOR_MEMORY}
 # for suites that exercise glutton's WriteRAM path.
 resources:
   limits:

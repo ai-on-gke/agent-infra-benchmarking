@@ -41,6 +41,17 @@ variable "network_name" {
   default     = ""
 }
 
+variable "existing_network" {
+  description = "An existing VPC to deploy into instead of creating a dedicated one. network and subnetwork take a name or a self link; the subnetwork has to be in the cluster's region and carry secondary ranges for Pods and Services, named by pods_range_name and services_range_name. Its firewall rules are left to whoever owns the network: nodes, Pods and Services need to reach each other. Null, the default, creates the VPC from network_name and the CIDRs below, which are then unused."
+  type = object({
+    network             = string
+    subnetwork          = string
+    pods_range_name     = string
+    services_range_name = string
+  })
+  default = null
+}
+
 variable "subnet_cidr" {
   description = "Primary IP CIDR range of the deployment's subnetwork, allocated to nodes."
   type        = string
@@ -76,6 +87,12 @@ variable "zone" {
   description = "Zone every node pool is pinned to. Must be in var.region."
   type        = string
   default     = "us-central1-a"
+}
+
+variable "default_machine_type" {
+  description = "Machine type of the default pool, which runs GKE's system workloads and substrate's control plane."
+  type        = string
+  default     = "c2-standard-16"
 }
 
 variable "sandboxed_machine_type" {

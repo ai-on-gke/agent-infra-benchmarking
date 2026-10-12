@@ -27,7 +27,7 @@ FROM gcr.io/distroless/python3-debian12:latest@sha256:2fdb05402a2cf21cf78fdb3ba4
 WORKDIR /app
 COPY --from=pydeps /app/deps /app/deps
 COPY tests/ /app/tests/
-COPY run_master.py upload.py custom_history.py cluster_vitals.py /app/
+COPY run_master.py upload.py custom_history.py cluster_vitals.py readme.py /app/
 
 ENV PYTHONPATH=/app/deps
 ENV PYTHONUNBUFFERED=1

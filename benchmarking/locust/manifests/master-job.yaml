@@ -40,9 +40,12 @@ spec:
       serviceAccountName: ${BENCHMARK_RUNNER_KSA}
       # The master needs no Kubernetes API.
       automountServiceAccountToken: false
-      # Time for the locustfile's stop_workers to wait out the worker's actor
-      # teardown before the master quits it.
-      terminationGracePeriodSeconds: 90
+      # Time for a stopped run to wind down as one that ran its course does:
+      # the locustfile's stop_workers waits out the worker's actor teardown
+      # (up to 60s), then run_master.py waits for the last scrape (15s) and
+      # uploads the reports. scenario_runner's locust.STOP_TIMEOUT_SECS waits
+      # a little longer than this.
+      terminationGracePeriodSeconds: 120
       containers:
       - name: locust
         image: ${LOCUST_IMAGE}
@@ -59,6 +62,21 @@ spec:
           value: "${BENCHMARK_RUN_ID}"
         - name: BENCHMARK_TEST_CASE
           value: "${BENCHMARK_RECORD_NAME}"
+        # The case this is a run of, and which repeat; 0 for a case run once.
+        # run_master.py writes both into run.json.
+        - name: BENCHMARK_CASE
+          value: "${BENCHMARK_CASE}"
+        - name: BENCHMARK_REPEAT
+          value: "${BENCHMARK_REPEAT}"
+        # The share of requests that may fail before run_master.py fails the
+        # run; locust itself exits 0 whatever failed (--exit-code-on-error 0).
+        - name: MAX_FAILURE_RATIO
+          value: "${MAX_FAILURE_RATIO}"
+        # What the scenario-runner knows about the run (the case, the cluster
+        # and nodes, the templates, the images by digest, the commits), as
+        # base64 JSON. run_master.py writes it into run.json.
+        - name: BENCHMARK_RUN_INFO
+          value: "${BENCHMARK_RUN_INFO}"
         # locust's own --only-summary. "false" is spelled out because locust
         # rejects an empty value instead of reading it as unset.
         - name: LOCUST_ONLY_SUMMARY

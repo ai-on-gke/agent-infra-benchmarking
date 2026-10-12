@@ -19,6 +19,7 @@ on that process, or `--key` for true."""
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import subprocess
@@ -31,10 +32,10 @@ from typing import Callable, Iterator
 
 from google.cloud import storage
 
-from . import RUNNER_DIR, images, worker_pool, workloads
+from . import RUNNER_DIR, images, run_info, worker_pool, workloads
 from .cluster import Cluster
 from .log import ON_CLOUD_RUN, log
-from .process import stream
+from .process import output, stream
 
 MANIFESTS_DIR = RUNNER_DIR.parent / "locust" / "manifests"
 # Where a local run copies the master's uploads to, as <run-id>/<case>/ beneath
@@ -51,12 +52,30 @@ MASTER_HOST = f"{MASTER_JOB}.{NAMESPACE}.svc.cluster.local"
 USER_CLASS = "runworkload"
 POD_START_TIMEOUT_SECS = 300
 WAIT_TIMEOUT_SECS = 3600
+# How long a stopped run's master gets to stop the worker, write its CSVs and
+# upload them: its terminationGracePeriodSeconds and a margin.
+STOP_TIMEOUT_SECS = 150
+# The share of requests, 0 to 1, a case may fail before its run counts as
+# failed, unless it states its own `max-failure-ratio`. With
+# --exit-code-on-error 0 one failed request no longer fails the run; this does.
+DEFAULT_MAX_FAILURE_RATIO = 0.01
+# The worker's --atespace default, which its actors are created in unless the
+# case's `worker` sets `atespace`.
+ACTOR_ATESPACE = "benchmark"
+# How long after the run its actors get to be gone before the ones left are
+# recorded in cleanup.json.
+ACTOR_DELETE_WAIT_SECS = 60
 # The run id and case name end up as label values.
 LABEL_RE = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?")
 
 
 class LocustError(RuntimeError):
     pass
+
+
+class LocustTimeout(LocustError):
+    """The run outlived WAIT_TIMEOUT_SECS and is still going. On a dev infra
+    the next run would recreate the pool under it, so a series stops here."""
 
 
 def missing_requirements(cloud_build: bool = False) -> list[str]:
@@ -87,6 +106,9 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     count = case.get("worker-count", 1)
     if not isinstance(count, int) or isinstance(count, bool) or count < 0:
         raise ValueError(f"case {name}'s `worker-count` must be a whole number, got {count!r}")
+    ratio = case.get("max-failure-ratio", DEFAULT_MAX_FAILURE_RATIO)
+    if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 <= ratio <= 1:
+        raise ValueError(f"case {name}'s `max-failure-ratio` must be a number from 0 to 1, got {ratio!r}")
     if case.get("sandbox-class", "gvisor") not in workloads.SANDBOX_CONFIGS:
         raise ValueError(f"case {name}'s `sandbox-class` must be one of {', '.join(workloads.SANDBOX_CONFIGS)}")
     if deploy_workloads:
@@ -98,6 +120,7 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     return {
         "worker-count": 1,
         "sandbox-class": "gvisor",
+        "max-failure-ratio": DEFAULT_MAX_FAILURE_RATIO,
         **case,
         "master": {**master, "spawn-rate": master.get("spawn-rate", master["users"])},
         "worker": worker,
@@ -114,6 +137,9 @@ def master_args(case: dict) -> list[str]:
         "1",
         "--expect-workers-max-wait",
         str(POD_START_TIMEOUT_SECS),
+        # run_master.py judges the run by its max-failure-ratio instead.
+        "--exit-code-on-error",
+        "0",
         *flags(case["master"]),
     ]
 
@@ -209,7 +235,99 @@ def wait_for_jobs(cluster: Cluster, stop_logs: Callable[[int], None]) -> None:
             log(f"locust: {MASTER_JOB} and {WORKER_JOB} completed: kubectl logs job/{MASTER_JOB} -n {NAMESPACE}")
             return
         time.sleep(5)
-    raise LocustError(f"timed out after {WAIT_TIMEOUT_SECS}s; the Jobs are left running")
+    raise LocustTimeout(f"timed out after {WAIT_TIMEOUT_SECS}s; the Jobs are left running")
+
+
+def stop_run(cluster: Cluster) -> bool:
+    """Stops a run the scenario-runner was interrupted in, and returns whether
+    both Jobs are gone. Deleting the master Job sends its pod SIGTERM:
+    run_master.py stops locust, which stops the worker and has it delete its
+    actors, then writes and uploads the reports before the pod goes. The worker
+    Job ends once its master is gone."""
+    log(f"locust: interrupted; stopping {MASTER_JOB} so it can upload what it recorded")
+    delete = ["delete", "job", MASTER_JOB, "--ignore-not-found", "--cascade=foreground", "--wait",
+              f"--timeout={STOP_TIMEOUT_SECS}s"]  # fmt: skip
+    stopped = True
+    for cmd in (delete, [*delete[:2], WORKER_JOB, *delete[3:]]):
+        proc = subprocess.run(cluster.kubectl(*cmd, namespace=NAMESPACE), capture_output=True, text=True)
+        if proc.returncode:
+            stopped = False
+            log(f"locust: {' '.join(cmd[:3])} failed: {proc.stderr.strip()}", "WARNING")
+    return stopped
+
+
+def refuse_reused(bucket: str, report_prefix: str, run_id: str, name: str) -> None:
+    """Refuses a run id the case was already recorded under, whose reports
+    the bucket or the local copy hold: they would be mixed with this run's."""
+    prefix = f"{report_prefix}/{run_id}/{name}/"
+    local = REPORTS_DIR / run_id / name
+    if local.is_dir() and any(local.iterdir()):
+        raise LocustError(f"{local} already holds reports of {name} under run {run_id}; pick another run id")
+    try:
+        found = next(iter(storage.Client().list_blobs(bucket, prefix=prefix, max_results=1)), None)
+    except Exception as exc:
+        raise LocustError(f"cannot check gs://{bucket}/{prefix} for an earlier run: {exc}") from None
+    if found is not None:
+        raise LocustError(f"gs://{bucket}/{prefix} already holds reports; pick another run id")
+
+
+def record_cleanup(cluster: Cluster, atespace: str, bucket: str, report_prefix: str, run_id: str, name: str) -> None:
+    """Deletes the actors a run left in its atespace and writes what it found
+    as cleanup.json beside the reports, in the bucket and locally. The worker
+    deletes its own actors as the run ends; one it lost track of, or one stuck
+    DELETING (a substrate fault no delete clears), would otherwise go unrecorded
+    and, on a dev infra, hold a worker the next run cannot use."""
+    record = {
+        "atespace": atespace,
+        "listed": False,
+        "deleted": 0,
+        # Actor name -> the error its delete was refused with.
+        "delete_failed": {},
+        "wait_secs": ACTOR_DELETE_WAIT_SECS,
+        "left": [],
+    }
+    try:
+        with workloads.kubectl_ate(cluster) as ate:
+
+            def actors() -> list[dict]:
+                listed = json.loads(output(ate("get", "actors", "-a", atespace, "-o", "json")))
+                return [
+                    {"name": a["metadata"]["name"], "state": (a.get("status") or {}).get("state", "ACTOR_STATE_UNKNOWN")}
+                    for a in listed.get("actors") or []
+                ]
+
+            # Kept current, so a list that fails later leaves the last one seen.
+            left = record["left"] = actors()
+            record["listed"] = True
+            for actor in left:
+                proc = subprocess.run(ate("delete", "actor", actor["name"], "-a", atespace, "--any-state"),
+                                      capture_output=True, text=True)  # fmt: skip
+                if proc.returncode:
+                    record["delete_failed"][actor["name"]] = proc.stderr.strip()
+            record["deleted"] = len(left) - len(record["delete_failed"])
+            deadline = time.monotonic() + ACTOR_DELETE_WAIT_SECS
+            while left and time.monotonic() < deadline:
+                time.sleep(5)
+                left = record["left"] = actors()
+    except (subprocess.CalledProcessError, OSError, ValueError, KeyError) as exc:
+        log(f"locust: could not list the actors left in {atespace}: {exc}", "WARNING")
+    for actor, error in record["delete_failed"].items():
+        log(f"locust: could not delete actor {actor} in {atespace}: {error}", "WARNING")
+    if record["left"]:
+        names = ", ".join(f"{a['name']} ({a['state']})" for a in record["left"])
+        log(f"locust: {len(record['left'])} actor(s) still in {atespace} {ACTOR_DELETE_WAIT_SECS}s after"
+            f" deleting them: {names}", "WARNING")  # fmt: skip
+    elif record["listed"]:
+        log(f"locust: no actors left in {atespace} ({record['deleted']} deleted)")
+    body = json.dumps(record, indent=2) + "\n"
+    try:
+        storage.Client().bucket(bucket).blob(f"{report_prefix}/{run_id}/{name}/cleanup.json").upload_from_string(body)
+    except Exception as exc:
+        log(f"locust: could not upload cleanup.json: {exc}", "WARNING")
+    if not ON_CLOUD_RUN:
+        local = REPORTS_DIR / run_id / name
+        local.mkdir(parents=True, exist_ok=True)
+        (local / "cleanup.json").write_text(body)
 
 
 def upload_logs(cluster: Cluster, bucket: str, report_prefix: str, run_id: str, name: str) -> None:
@@ -270,14 +388,17 @@ def run(
     docker_login: bool = True,
     report_bucket: str | None = None,
     report_prefix: str = REPORT_PREFIX,
+    test_case: str | None = None,
+    repeat: int = 0,
 ) -> None:
     """Runs the case, recorded under name, as part of run_id, by default a UTC
-    timestamp and the commit. Without build, uses the images already pushed;
-    without deploy_workloads, the mock-llm and ActorTemplates already
-    deployed. The worker pool is recreated either way. Without docker_login, a
-    local build uses the registry credentials Docker already has. The reports
-    go under report_prefix in report_bucket, by default the cluster's own.
-    Expects the cluster's credentials in its kubeconfig."""
+    timestamp and the commit. test_case and repeat say which case it is a
+    repeat of; repeat is 0 for a case run once. Without build, uses the images
+    already pushed; without deploy_workloads, the mock-llm and ActorTemplates
+    already deployed. The worker pool is recreated either way. Without
+    docker_login, a local build uses the registry credentials Docker already
+    has. The reports go under report_prefix in report_bucket, by default the
+    cluster's own. Expects the cluster's credentials in its kubeconfig."""
     case = check_case(name, case, deploy_workloads)
     # The workers would never schedule past the sandboxed pool's taint.
     if case["sandbox-class"] != cluster.sandbox_class:
@@ -288,15 +409,20 @@ def run(
     run_id = run_id or f"{datetime.now(timezone.utc):%Y%m%dt%H%M%Sz}-{images.tag()}"
     if not LABEL_RE.fullmatch(run_id):
         raise ValueError(f"run id {run_id!r} is not a valid label value")
-    # The images the manifests name, with or without a build.
-    locust_image = images.image_ref(images.LOCUST_IMAGES, cluster.docker_repo, "locust-master")
-    boomer_image = images.image_ref(images.LOCUST_IMAGES, cluster.docker_repo, "boomer-worker")
     bucket = report_bucket or cluster.bucket
+    # Before the build, which is the slow part.
+    refuse_reused(bucket, report_prefix, run_id, name)
 
     if build:
         # The workload images are only read when the workloads are deployed.
         files = [images.LOCUST_IMAGES] + ([images.WORKLOADS_IMAGES] if deploy_workloads else [])
         images.build_and_push(cluster, files, cloud_build=cloud_build, login=docker_login)
+    # By digest, so the Jobs run exactly the images built from this commit even
+    # if the tag is pushed again meanwhile; run.json records them.
+    image_refs = {
+        image: images.pin(images.image_ref(images.LOCUST_IMAGES, cluster.docker_repo, image))
+        for image in ("locust-master", "boomer-worker")
+    }
 
     apply(cluster, f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {NAMESPACE}\n")
     # A Job's pod template is immutable. Foreground, so their pods are gone too
@@ -306,18 +432,36 @@ def run(
     stream(cluster.kubectl(*delete, namespace=NAMESPACE))
 
     worker_pool.deploy(cluster, case["worker-count"], case["sandbox-class"])
+    template_name = case["worker"].get("workload-template") or case["worker"].get("workload-name")
+    workload = case["worker"].get("workload-name") or template_name
     # The golden snapshot is taken on the pool just deployed.
     if deploy_workloads:
-        template = case["worker"].get("workload-template") or case["worker"]["workload-name"]
-        workloads.deploy(cluster, [template], case["sandbox-class"])
+        workloads.deploy(cluster, [template_name], case["sandbox-class"])
+    template = None
+    if template_name:
+        template = workloads.deployed_template(cluster, template_name)
+        workloads.check_deployed(template, template_name, case["sandbox-class"], workload)
+        # A case may state its own allow-list; otherwise the actors may call
+        # what their template is configured to, and nothing else.
+        if "actor-egress-allow" not in case["worker"]:
+            hosts = workloads.egress_hosts(template)
+            if hosts:
+                case = {**case, "worker": {**case["worker"], "actor-egress-allow": ",".join(hosts)}}
+        log(f"locust: actors may connect to {case['worker'].get('actor-egress-allow') or 'nothing'}")
 
+    info = run_info.collect(cluster, case, template_name, template, image_refs, bucket)
     values = {
-        "LOCUST_IMAGE": locust_image,
-        "BOOMER_IMAGE": boomer_image,
+        "LOCUST_IMAGE": image_refs["locust-master"],
+        "BOOMER_IMAGE": image_refs["boomer-worker"],
         "BENCHMARK_RUNNER_KSA": cluster.runner_ksa,
         "BENCHMARK_RUN_ID": run_id,
         "BENCHMARK_RECORD_NAME": name,
+        "BENCHMARK_CASE": test_case or name,
+        "BENCHMARK_REPEAT": str(repeat),
         "BENCHMARK_ONLY_SUMMARY": "false",
+        "MAX_FAILURE_RATIO": str(case["max-failure-ratio"]),
+        # What the master writes into run.json; base64, as it is JSON in YAML.
+        "BENCHMARK_RUN_INFO": base64.b64encode(json.dumps(info).encode()).decode(),
         # Where the master uploads its CSVs once it exits.
         "BENCHMARK_REPORT_BUCKET": bucket,
         "BENCHMARK_REPORT_PREFIX": report_prefix,
@@ -332,12 +476,26 @@ def run(
         f"  reports: gs://{bucket}/{report_prefix}/{run_id}/{name}/"
     )
     apply(cluster, render("master-job.yaml", values))
+    # The actors are the run's to delete while it is still going.
+    still_running = False
     try:
         wait_master_ready(cluster)
         with master_logs(cluster) as stop_logs:
             apply(cluster, render("worker-job.yaml", values))
             wait_for_jobs(cluster, stop_logs)
+    except LocustTimeout:
+        still_running = True
+        raise
+    except (KeyboardInterrupt, SystemExit):
+        # Ctrl-C, or SIGTERM through cli.run's handler: stop the run so it
+        # uploads what it recorded before the cluster goes. Once both Jobs
+        # are gone, the actors they left are cleaned up as after any run.
+        still_running = not stop_run(cluster)
+        raise
     finally:
+        if not still_running:
+            atespace = case["worker"].get("atespace") or ACTOR_ATESPACE
+            record_cleanup(cluster, atespace, bucket, report_prefix, run_id, name)
         upload_logs(cluster, bucket, report_prefix, run_id, name)
         # A failed run's reports are kept too. On Cloud Run they'd go with the
         # container, so they stay only in the bucket.

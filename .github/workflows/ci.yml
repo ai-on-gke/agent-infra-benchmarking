@@ -44,9 +44,19 @@ jobs:
         with:
           persist-credentials: false
       - name: shellcheck
+        # The tools/ scripts have no .sh extension.
         run: |
-          git ls-files '*.sh' \
-            | xargs shellcheck --severity=warning
+          git ls-files '*.sh' benchmarking/tools automation-infra/tools \
+            | sort -u | xargs shellcheck --severity=warning
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: compile
+        run: python3 -m compileall -q benchmarking/scenario_runner/src benchmarking/locust/master-image benchmark-charts
 
   terraform:
     runs-on: ubuntu-latest
@@ -58,8 +68,11 @@ jobs:
         with:
           terraform_version: 1.15.6
       - name: terraform fmt
-        run: terraform fmt -check -recursive benchmarking/scenarios/infra/clusters/common/
+        run: terraform fmt -check -recursive benchmarking/scenarios/infra/ benchmarking/scenario_runner/infra/
       - name: terraform validate
         run: |
-          terraform -chdir=benchmarking/scenarios/infra/clusters/common init -backend=false -input=false
-          terraform -chdir=benchmarking/scenarios/infra/clusters/common validate
+          for config in benchmarking/scenarios/infra/clusters/common benchmarking/scenarios/infra/clusters/dummy \
+              benchmarking/scenario_runner/infra; do
+            terraform -chdir="$config" init -backend=false -input=false
+            terraform -chdir="$config" validate
+          done
