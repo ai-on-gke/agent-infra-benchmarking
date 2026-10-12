@@ -273,7 +273,15 @@ def record_cleanup(cluster: Cluster, atespace: str, bucket: str, report_prefix: 
     deletes its own actors as the run ends; one it lost track of, or one stuck
     DELETING (a substrate fault no delete clears), would otherwise go unrecorded
     and, on a dev infra, hold a worker the next run cannot use."""
-    record = {"atespace": atespace, "listed": False, "deleted": 0, "wait_secs": ACTOR_DELETE_WAIT_SECS, "left": []}
+    record = {
+        "atespace": atespace,
+        "listed": False,
+        "deleted": 0,
+        # Actor name -> the error its delete was refused with.
+        "delete_failed": {},
+        "wait_secs": ACTOR_DELETE_WAIT_SECS,
+        "left": [],
+    }
     try:
         with workloads.kubectl_ate(cluster) as ate:
 
@@ -288,15 +296,19 @@ def record_cleanup(cluster: Cluster, atespace: str, bucket: str, report_prefix: 
             left = record["left"] = actors()
             record["listed"] = True
             for actor in left:
-                subprocess.run(ate("delete", "actor", actor["name"], "-a", atespace, "--any-state"),
-                               capture_output=True)  # fmt: skip
-            record["deleted"] = len(left)
+                proc = subprocess.run(ate("delete", "actor", actor["name"], "-a", atespace, "--any-state"),
+                                      capture_output=True, text=True)  # fmt: skip
+                if proc.returncode:
+                    record["delete_failed"][actor["name"]] = proc.stderr.strip()
+            record["deleted"] = len(left) - len(record["delete_failed"])
             deadline = time.monotonic() + ACTOR_DELETE_WAIT_SECS
             while left and time.monotonic() < deadline:
                 time.sleep(5)
                 left = record["left"] = actors()
     except (subprocess.CalledProcessError, OSError, ValueError, KeyError) as exc:
         log(f"locust: could not list the actors left in {atespace}: {exc}", "WARNING")
+    for actor, error in record["delete_failed"].items():
+        log(f"locust: could not delete actor {actor} in {atespace}: {error}", "WARNING")
     if record["left"]:
         names = ", ".join(f"{a['name']} ({a['state']})" for a in record["left"])
         log(f"locust: {len(record['left'])} actor(s) still in {atespace} {ACTOR_DELETE_WAIT_SECS}s after"
