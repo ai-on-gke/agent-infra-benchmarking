@@ -238,18 +238,22 @@ def wait_for_jobs(cluster: Cluster, stop_logs: Callable[[int], None]) -> None:
     raise LocustTimeout(f"timed out after {WAIT_TIMEOUT_SECS}s; the Jobs are left running")
 
 
-def stop_run(cluster: Cluster) -> None:
-    """Stops a run the scenario-runner was interrupted in. Deleting the master
-    Job sends its pod SIGTERM: run_master.py stops locust, which stops the
-    worker and has it delete its actors, then writes and uploads the reports
-    before the pod goes. The worker Job ends once its master is gone."""
+def stop_run(cluster: Cluster) -> bool:
+    """Stops a run the scenario-runner was interrupted in, and returns whether
+    both Jobs are gone. Deleting the master Job sends its pod SIGTERM:
+    run_master.py stops locust, which stops the worker and has it delete its
+    actors, then writes and uploads the reports before the pod goes. The worker
+    Job ends once its master is gone."""
     log(f"locust: interrupted; stopping {MASTER_JOB} so it can upload what it recorded")
     delete = ["delete", "job", MASTER_JOB, "--ignore-not-found", "--cascade=foreground", "--wait",
               f"--timeout={STOP_TIMEOUT_SECS}s"]  # fmt: skip
+    stopped = True
     for cmd in (delete, [*delete[:2], WORKER_JOB, *delete[3:]]):
         proc = subprocess.run(cluster.kubectl(*cmd, namespace=NAMESPACE), capture_output=True, text=True)
         if proc.returncode:
+            stopped = False
             log(f"locust: {' '.join(cmd[:3])} failed: {proc.stderr.strip()}", "WARNING")
+    return stopped
 
 
 def refuse_reused(bucket: str, report_prefix: str, run_id: str, name: str) -> None:
@@ -484,9 +488,9 @@ def run(
         raise
     except (KeyboardInterrupt, SystemExit):
         # Ctrl-C, or SIGTERM through cli.run's handler: stop the run so it
-        # uploads what it recorded before the cluster goes.
-        still_running = True
-        stop_run(cluster)
+        # uploads what it recorded before the cluster goes. Once both Jobs
+        # are gone, the actors they left are cleaned up as after any run.
+        still_running = not stop_run(cluster)
         raise
     finally:
         if not still_running:
