@@ -59,7 +59,8 @@ STOP_TIMEOUT_SECS = 150
 # failed, unless it states its own `max-failure-ratio`. With
 # --exit-code-on-error 0 one failed request no longer fails the run; this does.
 DEFAULT_MAX_FAILURE_RATIO = 0.01
-# The worker's --atespace default, which its actors are created in.
+# The worker's --atespace default, which its actors are created in unless the
+# case's `worker` sets `atespace`.
 ACTOR_ATESPACE = "benchmark"
 # How long after the run its actors get to be gone before the ones left are
 # recorded in cleanup.json.
@@ -266,18 +267,18 @@ def refuse_reused(bucket: str, report_prefix: str, run_id: str, name: str) -> No
         raise LocustError(f"gs://{bucket}/{prefix} already holds reports; pick another run id")
 
 
-def record_cleanup(cluster: Cluster, bucket: str, report_prefix: str, run_id: str, name: str) -> None:
+def record_cleanup(cluster: Cluster, atespace: str, bucket: str, report_prefix: str, run_id: str, name: str) -> None:
     """Deletes the actors a run left in its atespace and writes what it found
     as cleanup.json beside the reports, in the bucket and locally. The worker
     deletes its own actors as the run ends; one it lost track of, or one stuck
     DELETING (a substrate fault no delete clears), would otherwise go unrecorded
     and, on a dev infra, hold a worker the next run cannot use."""
-    record = {"listed": False, "deleted": 0, "wait_secs": ACTOR_DELETE_WAIT_SECS, "left": []}
+    record = {"atespace": atespace, "listed": False, "deleted": 0, "wait_secs": ACTOR_DELETE_WAIT_SECS, "left": []}
     try:
         with workloads.kubectl_ate(cluster) as ate:
 
             def actors() -> list[dict]:
-                listed = json.loads(output(ate("get", "actors", "-a", ACTOR_ATESPACE, "-o", "json")))
+                listed = json.loads(output(ate("get", "actors", "-a", atespace, "-o", "json")))
                 return [
                     {"name": a["metadata"]["name"], "state": (a.get("status") or {}).get("state", "ACTOR_STATE_UNKNOWN")}
                     for a in listed.get("actors") or []
@@ -287,7 +288,7 @@ def record_cleanup(cluster: Cluster, bucket: str, report_prefix: str, run_id: st
             left = record["left"] = actors()
             record["listed"] = True
             for actor in left:
-                subprocess.run(ate("delete", "actor", actor["name"], "-a", ACTOR_ATESPACE, "--any-state"),
+                subprocess.run(ate("delete", "actor", actor["name"], "-a", atespace, "--any-state"),
                                capture_output=True)  # fmt: skip
             record["deleted"] = len(left)
             deadline = time.monotonic() + ACTOR_DELETE_WAIT_SECS
@@ -295,13 +296,13 @@ def record_cleanup(cluster: Cluster, bucket: str, report_prefix: str, run_id: st
                 time.sleep(5)
                 left = record["left"] = actors()
     except (subprocess.CalledProcessError, OSError, ValueError, KeyError) as exc:
-        log(f"locust: could not list the actors left in {ACTOR_ATESPACE}: {exc}", "WARNING")
+        log(f"locust: could not list the actors left in {atespace}: {exc}", "WARNING")
     if record["left"]:
         names = ", ".join(f"{a['name']} ({a['state']})" for a in record["left"])
-        log(f"locust: {len(record['left'])} actor(s) still in {ACTOR_ATESPACE} {ACTOR_DELETE_WAIT_SECS}s after"
+        log(f"locust: {len(record['left'])} actor(s) still in {atespace} {ACTOR_DELETE_WAIT_SECS}s after"
             f" deleting them: {names}", "WARNING")  # fmt: skip
     elif record["listed"]:
-        log(f"locust: no actors left in {ACTOR_ATESPACE} ({record['deleted']} deleted)")
+        log(f"locust: no actors left in {atespace} ({record['deleted']} deleted)")
     body = json.dumps(record, indent=2) + "\n"
     try:
         storage.Client().bucket(bucket).blob(f"{report_prefix}/{run_id}/{name}/cleanup.json").upload_from_string(body)
@@ -477,7 +478,8 @@ def run(
         raise
     finally:
         if not still_running:
-            record_cleanup(cluster, bucket, report_prefix, run_id, name)
+            atespace = case["worker"].get("atespace") or ACTOR_ATESPACE
+            record_cleanup(cluster, atespace, bucket, report_prefix, run_id, name)
         upload_logs(cluster, bucket, report_prefix, run_id, name)
         # A failed run's reports are kept too. On Cloud Run they'd go with the
         # container, so they stay only in the bucket.
