@@ -20,8 +20,8 @@ REPORT_PREFIX being reports when unset or empty.
 
 An empty REPORT_BUCKET leaves the files on the pod. Exits with locust's
 status; TOO_MANY_FAILURES_EXIT for a run whose failed requests are more than
-MAX_FAILURE_RATIO of them, or that made none; UPLOAD_FAILED_EXIT for a run
-that passed but did not all upload.
+MAX_FAILURE_RATIO of them, that made none, or whose load generator raised an
+exception; UPLOAD_FAILED_EXIT for a run that passed but did not all upload.
 """
 
 import base64

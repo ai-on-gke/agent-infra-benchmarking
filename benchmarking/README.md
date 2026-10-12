@@ -232,7 +232,8 @@ project.
 ### When a run fails or is stopped
 
 A run fails when more than its case's `max-failure-ratio` of requests fail
-(0.01 by default), or when it makes no requests. A failed case does not stop
+(0.01 by default), when it makes no requests, or when the load generator
+raises any exception (`locust_exceptions.csv`). A failed case does not stop
 the ones after it; the execution exits non-zero at the end, naming them. A run
 that outlives the hour the scenario-runner waits for it does stop the
 execution, as it is still going.

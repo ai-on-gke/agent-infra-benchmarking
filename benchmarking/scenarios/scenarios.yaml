@@ -26,7 +26,7 @@
 #
 # `max-failure-ratio` is the share of requests, 0 to 1, that may fail before a
 # run of the case counts as failed, 0.01 by default; a run that makes no
-# requests fails too.
+# requests, or whose load generator raises any exception, fails too.
 #
 # `repeats` is how many times the case runs, 1 by default, each on its own
 # cluster applied for it, or one after another on a --dev-infra's. Above 1,
