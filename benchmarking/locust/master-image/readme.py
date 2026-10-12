@@ -1,0 +1,430 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""README.md for a run's folder: run.json summarized for a reader, and what
+each file beside it holds. render_summary does the same for a case's repeats,
+for the scenario-runner, which loads this file from here.
+
+Standard library only, for that reason. Anything run.json lacks is shown as
+"-" rather than failing the README.
+"""
+
+import datetime
+import signal
+
+UNKNOWN = "-"
+
+# Every file a run's folder can hold, in the order a reader wants them.
+FILES = (
+    (
+        "locust_stats_steady.csv",
+        "the run's latency percentiles: locust's own totals per request name over the steady-state "
+        "window only. Failed requests included, rounded to 1 ms below 100 ms, 10 ms below 1 s, "
+        "100 ms below 10 s and 1 s above.",
+    ),
+    ("locust_stats.csv", "the same over the whole run, including the ramp, the warm-up and the teardown."),
+    ("locust_stats_history.csv", "the same, one row per second per request name, with the user count at that second."),
+    ("locust_failures.csv", "failed requests, grouped by error."),
+    ("locust_exceptions.csv", "errors raised inside the load generator."),
+    ("custom_stats_history.csv", "active and idle actors over the run, from Prometheus."),
+    ("cluster_vitals_history.csv", "CPU and memory of every node over the run; worker nodes have Pool=worker."),
+    ("locust_steady_window.json", "the steady-state window's bounds, as the master measured them."),
+    (
+        "run.json",
+        "everything above in full: the resolved case, the cluster and its nodes, the WorkerPool, "
+        "ActorTemplate and SandboxConfig, every image by digest, and the commits.",
+    ),
+    (
+        "cleanup.json",
+        "written by the scenario-runner after the run: the actors it found left and deleted, and any "
+        "still there a minute later.",
+    ),
+)
+
+
+def render(info: dict) -> str:
+    sections = [
+        _header(info),
+        _case(info),
+        _hardware(info),
+        _workers(info),
+        _versions(info),
+        _files(),
+    ]
+    return "\n\n".join(s for s in sections if s) + "\n"
+
+
+# The summary's results table: (stat in the summary CSV, column heading).
+SUMMARY_STATS = (
+    ("Requests/s", "Requests/s"),
+    ("Average Response Time", "Average"),
+    ("50%", "p50"),
+    ("90%", "p90"),
+    ("99%", "p99"),
+    ("99.9%", "p99.9"),
+    ("Max Response Time", "Max"),
+)
+
+
+def render_summary(case: str, jobs: list[tuple[str, dict | None, str | None]], rows: list[list[str]]) -> str:
+    """The README of a case's repeats. `jobs` is each repeat's folder name,
+    run.json and reason it was left out of the summary, if any; `rows` the
+    summary CSV's rows."""
+    infos = [(name, info) for name, info, _ in jobs if info]
+    sections = [
+        _summary_header(case, jobs),
+        _summary_results(case, jobs, rows),
+        *(_same_across(infos, section) for section in (_case, _hardware, _workers, _versions)),
+        _summary_files(case, jobs),
+    ]
+    return "\n\n".join(s for s in sections if s) + "\n"
+
+
+def _summary_header(case: str, jobs) -> str:
+    infos = [info for _, info, _ in jobs if info]
+    run_id = next((i["run_id"] for i in infos if i.get("run_id")), UNKNOWN)
+    used = sum(1 for _, _, reason in jobs if not reason)
+    lines = [f"# {case}, {len(jobs)} repeats, run {run_id}", ""]
+    lines.append(f"- **Summarized:** {used} of {len(jobs)} repeats, the ones that passed")
+
+    counted = [i["failures"] for i in infos if isinstance(i.get("failures"), dict) and "failed" in i["failures"]]
+    if counted:
+        requests = sum(f["requests"] for f in counted)
+        failed = sum(f["failed"] for f in counted)
+        total = {"requests": requests, "failed": failed, "ratio": failed / requests if requests else 0}
+        max_ratio = next((i.get("max_failure_ratio") for i in infos), None)
+        lines.append(f"- **Failed requests, all repeats:** {_failures(total, max_ratio)}")
+    lines.append("")
+
+    rows = []
+    for name, info, reason in jobs:
+        if not info:
+            rows.append([name, reason, UNKNOWN, UNKNOWN, UNKNOWN])
+            continue
+        steady = info.get("steady_window") if isinstance(info.get("steady_window"), dict) else {}
+        rows.append([
+            name,
+            _status(info.get("status")) + (f"; left out, {reason}" if reason and info.get("status") == 0 else ""),
+            _failures(info.get("failures"), None),
+            _window(info.get("started"), info.get("ended")),
+            _window(steady.get("start"), steady.get("end")) if steady else "none recorded",
+        ])
+    lines += _table(["Repeat", "Result", "Failed requests", "Window", "Steady-state window"], rows)
+    return "\n".join(lines)
+
+
+def _summary_results(case: str, jobs, rows: list[list[str]]) -> str:
+    lines = ["## Results", ""]
+    used = sum(1 for _, _, reason in jobs if not reason)
+    if not rows:
+        lines.append("No repeat passed with steady-state stats, so there is nothing to summarize.")
+        return "\n".join(lines)
+    lines.append(
+        "The median over the repeats that passed, with the lowest and highest in brackets, of each one's "
+        f"`locust_stats_steady.csv`; latencies in ms. `{case}-summary.csv` has every stat."
+    )
+    lines.append("")
+
+    stats: dict[str, dict[str, list[str]]] = {}
+    for _, name, stat, count, low, median, high in rows:
+        stats.setdefault(name, {})[stat] = [count, low, median, high]
+
+    def cell(value) -> str:
+        if not value:
+            return UNKNOWN
+        count, low, median, high = value
+        text = median if low == high else f"{median} ({low}-{high})"
+        return text if int(count) == used else f"{text}, in {count}"
+
+    table = [[name, *(cell(by_stat.get(stat)) for stat, _ in SUMMARY_STATS)] for name, by_stat in stats.items()]
+    lines += _table(["Request", *(heading for _, heading in SUMMARY_STATS)], table)
+    return "\n".join(lines)
+
+
+def _same_across(infos: list[tuple[str, dict]], section) -> str:
+    """`section` as each repeat's README has it: once if it reads the same in
+    all of them, otherwise once for each version, naming the repeats it is."""
+    versions: dict[str, list[str]] = {}
+    for name, info in infos:
+        versions.setdefault(section(info), []).append(name)
+    if len(versions) <= 1:
+        return next(iter(versions), "")
+    heading = next(text.partition("\n")[0] for text in versions if text)
+    lines = [heading, "", "Not the same in every repeat."]
+    for text, names in versions.items():
+        body = text.partition("\n\n")[2] if text else "Not recorded."
+        lines += ["", f"**{', '.join(names)}:**", "", body]
+    return "\n".join(lines)
+
+
+def _summary_files(case: str, jobs) -> str:
+    return "\n".join([
+        "## Files",
+        "",
+        f"- `{case}-summary.csv`: the min, median and max of every stat in the `locust_stats_steady.csv` "
+        "of the repeats that passed, with how many of them it was found in.",
+        *(f"- `{name}/`: the repeat's own files, and its README." for name, _, _ in jobs),
+    ])
+
+
+def _header(info: dict) -> str:
+    title = info.get("test_case") or UNKNOWN
+    if info.get("repeat"):
+        case = info.get("case") if isinstance(info.get("case"), dict) else {}
+        title += f", repeat {info['repeat']} of {case.get('repeats') or UNKNOWN}"
+    lines = [f"# {title}, run {info.get('run_id') or UNKNOWN}", ""]
+    lines.append(f"- **Result:** {_status(info.get('status'))}")
+    lines.append(f"- **Failed requests:** {_failures(info.get('failures'), info.get('max_failure_ratio'))}")
+    if isinstance(info.get("failures"), dict) and info["failures"].get("exceptions"):
+        lines.append(f"- **Load generator exceptions:** {info['failures']['exceptions']}")
+    lines.append(f"- **Window:** {_window(info.get('started'), info.get('ended'))}")
+    lines.append(f"- **Steady-state window:** {_steady_window(info.get('steady_window'), info.get('warm_up'))}")
+    errors = info.get("run_info_errors")
+    if isinstance(errors, dict) and errors:
+        lines.append(f"- **Metadata missing:** {', '.join(f'{k} ({v})' for k, v in errors.items())}")
+    return "\n".join(lines)
+
+
+def _case(info: dict) -> str:
+    case = info.get("case")
+    lines = [f"## Test case `{info.get('test_case') or UNKNOWN}`", ""]
+    if not isinstance(case, dict) or not case:
+        lines.append("The resolved case was not recorded.")
+        return "\n".join(lines)
+    master = case.get("master") if isinstance(case.get("master"), dict) else {}
+    worker = case.get("worker") if isinstance(case.get("worker"), dict) else {}
+    keys = [[k, v] for k, v in case.items() if k not in ("master", "worker", "infra")]
+    lines += _table(["Key", "Value"], keys)
+
+    users, rate = master.get("users"), master.get("spawn-rate")
+    if isinstance(users, (int, float)) and isinstance(rate, (int, float)) and rate > 0:
+        lines.append("")
+        if rate >= users:
+            lines.append(f"All {users} users start at once.")
+        else:
+            lines.append(f"The {users} users start over the first {users / rate:g} s, at {rate:g}/s.")
+    for side, flags in (("Master", master), ("Worker", worker)):
+        if flags:
+            lines.append("")
+            lines.append(f"{side} flags as run: " + " ".join(f"`--{k}={v}`" for k, v in flags.items()))
+    return "\n".join(lines)
+
+
+def _hardware(info: dict) -> str:
+    cluster = info.get("cluster") if isinstance(info.get("cluster"), dict) else {}
+    pools = cluster.get("node_pools") if isinstance(cluster.get("node_pools"), dict) else {}
+    nodes = info.get("nodes") if isinstance(info.get("nodes"), dict) else {}
+
+    lines = ["## Hardware", ""]
+    if not (cluster or nodes):
+        lines.append("Neither the cluster's configuration nor its nodes were recorded.")
+        return "\n".join(lines)
+    if cluster:
+        lines.append(
+            f"GKE cluster `{cluster.get('name') or UNKNOWN}` in {cluster.get('location') or UNKNOWN}: "
+            f"control plane {cluster.get('control_plane_version') or UNKNOWN}, "
+            f"release channel {cluster.get('release_channel') or UNKNOWN}."
+        )
+    else:
+        lines.append("The cluster's GKE configuration was not recorded; the columns below come from the nodes alone.")
+    lines.append("")
+
+    rows = []
+    for name in sorted(set(pools) | set(nodes)):
+        pool = pools.get(name) or {}
+        live = nodes.get(name) or {}
+        disk_type = pool.get("disk_type") or _joined(live.get("boot_disks"))
+        disk_size = pool.get("disk_size_gb")
+        rows.append([
+            name,
+            f"{live['ready']}/{live['count']}" if "count" in live else UNKNOWN,
+            pool.get("machine_type") or _joined(live.get("machine_types")),
+            _joined(live.get("cpu")),
+            _joined(live.get("memory_gib"), " GiB"),
+            f"{disk_type}, {disk_size} GB" if disk_size else disk_type,
+            _local_ssd(pool),
+            _joined(live.get("kubelet_versions")) if live.get("kubelet_versions") else pool.get("version") or UNKNOWN,
+            _on_off(pool.get("auto_upgrade")),
+            _autoscaling(pool.get("autoscaling")) if pool else UNKNOWN,
+            ", ".join(pool.get("locations") or live.get("zones") or []) or UNKNOWN,
+        ])
+    lines += _table(
+        ["Node pool", "Nodes ready", "Machine", "vCPU", "Memory", "Boot disk", "Local SSD",
+         "Node version", "Auto-upgrade", "Autoscaling", "Zones"],
+        rows,
+    )
+    return "\n".join(lines)
+
+
+def _workers(info: dict) -> str:
+    pool = info.get("worker_pool") if isinstance(info.get("worker_pool"), dict) else {}
+    templates = info.get("actor_templates") if isinstance(info.get("actor_templates"), dict) else {}
+    configs = info.get("sandbox_configs") if isinstance(info.get("sandbox_configs"), dict) else {}
+    if not (pool or templates):
+        return ""
+
+    lines = ["## Workers and actors", ""]
+    if pool:
+        spec, status = pool.get("spec") or {}, pool.get("status") or {}
+        lines.append(
+            f"WorkerPool: {status.get('readyReplicas', 0)}/{spec.get('replicas', UNKNOWN)} workers ready, "
+            f"sandbox class {spec.get('sandboxClass') or UNKNOWN}."
+        )
+    for name, tmpl in templates.items():
+        if not isinstance(tmpl, dict):
+            continue
+        sandbox = tmpl.get("sandboxConfig") or {}
+        config_name = sandbox.get("configName")
+        parts = [f"sandbox config `{config_name or UNKNOWN}`"]
+        runtime = _sandbox_asset(configs.get(config_name))
+        if runtime:
+            parts.append(f"runtime `{runtime}`")
+        memory = [
+            r.get("quantity") for r in (tmpl.get("resources") or {}).get("limits") or [] if r.get("name") == "memory"
+        ]
+        parts.append(f"memory limit {memory[0] if memory else 'unset'}")
+        # The scope of every snapshot of an actor, on pause and on suspend.
+        snapshots = tmpl.get("snapshotConfig") or {}
+        if snapshots.get("onCommit"):
+            parts.append(f"snapshot scope {snapshots['onCommit'].removeprefix('SNAPSHOT_CONTENT_SCOPE_')}")
+        golden = ((tmpl.get("status") or {}).get("goldenSnapshotStatus") or {}).get("takeGoldenSnapshotAt")
+        if golden:
+            parts.append(f"golden snapshot taken {golden}")
+        lines.append("")
+        lines.append(f"ActorTemplate `{name}`: " + ", ".join(parts) + ".")
+    return "\n".join(lines)
+
+
+def _versions(info: dict) -> str:
+    rows = []
+    commit = info.get("commit")
+    if commit:
+        rows.append(["Repository commit", f"`{commit}`" + (" (uncommitted changes)" if info.get("commit_dirty") else "")])
+    if info.get("substrate_commit"):
+        rows.append(["Substrate commit", f"`{info['substrate_commit']}`"])
+    if info.get("substrate_version"):
+        rows.append(["Substrate build version", f"`{info['substrate_version']}`"])
+    for name, image in (info.get("images") or {}).items():
+        rows.append([f"Image `{name}`", f"`{image}`"])
+
+    for name, tmpl in (info.get("actor_templates") or {}).items():
+        if isinstance(tmpl, dict):
+            for c in tmpl.get("containers") or []:
+                rows.append([f"ActorTemplate `{name}` / {c.get('name')}", f"`{c.get('image')}`"])
+    for name, dep in (info.get("deployments") or {}).items():
+        if isinstance(dep, dict):
+            for c in dep.get("containers") or []:
+                rows.append([f"Deployment `{name}` / {c.get('name')} x{dep.get('replicas', UNKNOWN)}", f"`{c.get('image')}`"])
+
+    if not rows:
+        return ""
+    return "\n".join(["## Versions and images", "", *_table(["Component", "Commit or image"], rows)])
+
+
+def _files() -> str:
+    lines = ["## Files", ""]
+    lines += [f"- `{name}`: {what}" for name, what in FILES]
+    return "\n".join(lines)
+
+
+def _status(status) -> str:
+    if not isinstance(status, int):
+        return UNKNOWN
+    if status == 0:
+        return "passed (exit 0)"
+    if status > 128:
+        try:
+            return f"stopped by {signal.Signals(status - 128).name} (exit {status})"
+        except ValueError:
+            pass
+    return f"failed (exit {status})"
+
+
+def _failures(failures, max_ratio) -> str:
+    if not isinstance(failures, dict):
+        return UNKNOWN
+    if failures.get("requests") == 0:
+        return "none; the run made no requests"
+    text = f"{failures['failed']:,} of {failures['requests']:,} ({failures['ratio']:.3%})"
+    if isinstance(max_ratio, (int, float)):
+        text += f", allowed {max_ratio * 100:g}%"
+    return text
+
+
+def _window(started, ended) -> str:
+    try:
+        start = datetime.datetime.fromisoformat(started)
+        end = datetime.datetime.fromisoformat(ended)
+    except (TypeError, ValueError):
+        return UNKNOWN
+    seconds = int((end - start).total_seconds())
+    return (
+        f"{start:%Y-%m-%d %H:%M:%S} to {end:%H:%M:%S} UTC "
+        f"({seconds // 60}m {seconds % 60}s)"
+    )
+
+
+def _steady_window(window, warm_up) -> str:
+    if not isinstance(window, dict):
+        return "none recorded"
+    return f"{_window(window.get('start'), window.get('end'))}, from {warm_up or UNKNOWN} after the last user started"
+
+
+def _sandbox_asset(config) -> str:
+    """The amd64 runtime the SandboxConfig installs, which is what the nodes run."""
+    if not isinstance(config, dict):
+        return ""
+    for asset in ((config.get("assets") or {}).get("amd64") or {}).values():
+        if isinstance(asset, dict) and asset.get("url"):
+            return asset["url"]
+    return ""
+
+
+def _local_ssd(pool: dict) -> str:
+    if not pool:
+        return UNKNOWN
+    ephemeral = pool.get("ephemeral_local_ssd_count") or 0
+    raw = pool.get("local_ssd_count") or 0
+    if ephemeral:
+        return f"{ephemeral} (ephemeral storage)"
+    return str(raw) if raw else "none"
+
+
+def _autoscaling(scaling) -> str:
+    if not isinstance(scaling, dict):
+        return "off"
+    if scaling.get("min") == scaling.get("max"):
+        return f"fixed at {scaling.get('min')} per zone"
+    return f"{scaling.get('min')}-{scaling.get('max')} per zone"
+
+
+def _on_off(value) -> str:
+    if value is None:
+        return UNKNOWN
+    return "on" if value else "off"
+
+
+def _joined(values, suffix: str = "") -> str:
+    if not values:
+        return UNKNOWN
+    return ", ".join(f"{v}{suffix}" for v in values)
+
+
+def _table(header: list, rows: list) -> list[str]:
+    def cell(v) -> str:
+        return str(v).replace("|", "\\|").replace("\n", " ")
+
+    out = ["| " + " | ".join(cell(h) for h in header) + " |", "|" + "---|" * len(header)]
+    out += ["| " + " | ".join(cell(v) for v in row) + " |" for row in rows]
+    return out

@@ -10,19 +10,49 @@
 # to just this deployment's ranges.
 
 locals {
-  network_name = var.network_name != "" ? var.network_name : var.default_resource_name
+  network_name   = var.network_name != "" ? var.network_name : var.default_resource_name
+  create_network = var.existing_network == null
+
+  network             = local.create_network ? google_compute_network.this[0].self_link : var.existing_network.network
+  subnetwork          = local.create_network ? google_compute_subnetwork.this[0].self_link : var.existing_network.subnetwork
+  pods_range_name     = local.create_network ? "pods" : var.existing_network.pods_range_name
+  services_range_name = local.create_network ? "services" : var.existing_network.services_range_name
+}
+
+moved {
+  from = google_compute_network.this
+  to   = google_compute_network.this[0]
+}
+
+moved {
+  from = google_compute_subnetwork.this
+  to   = google_compute_subnetwork.this[0]
+}
+
+moved {
+  from = google_compute_firewall.allow_internal
+  to   = google_compute_firewall.allow_internal[0]
+}
+
+moved {
+  from = google_compute_firewall.allow_iap_ssh
+  to   = google_compute_firewall.allow_iap_ssh[0]
 }
 
 resource "google_compute_network" "this" {
+  count = local.create_network ? 1 : 0
+
   project                 = var.project_id
   name                    = local.network_name
   auto_create_subnetworks = false
 }
 
 resource "google_compute_subnetwork" "this" {
+  count = local.create_network ? 1 : 0
+
   project       = var.project_id
   name          = local.network_name
-  network       = google_compute_network.this.id
+  network       = google_compute_network.this[0].id
   region        = var.region
   ip_cidr_range = var.subnet_cidr
 
@@ -50,9 +80,11 @@ resource "google_compute_subnetwork" "this" {
 # once nodes and pods live on a custom-mode network instead of "default"'s
 # permissive default-allow-internal rule.
 resource "google_compute_firewall" "allow_internal" {
+  count = local.create_network ? 1 : 0
+
   project = var.project_id
   name    = "${local.network_name}-allow-internal"
-  network = google_compute_network.this.id
+  network = google_compute_network.this[0].id
 
   direction = "INGRESS"
 
@@ -77,9 +109,11 @@ resource "google_compute_firewall" "allow_internal" {
 # without opening SSH to the internet, which is what "default"'s
 # default-allow-ssh rule does.
 resource "google_compute_firewall" "allow_iap_ssh" {
+  count = local.create_network ? 1 : 0
+
   project = var.project_id
   name    = "${local.network_name}-allow-iap-ssh"
-  network = google_compute_network.this.id
+  network = google_compute_network.this[0].id
 
   direction = "INGRESS"
 

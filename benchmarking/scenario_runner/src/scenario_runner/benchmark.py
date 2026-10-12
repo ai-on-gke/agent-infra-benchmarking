@@ -50,8 +50,9 @@ def missing_requirements(cases: dict[str, dict], cloud_build: bool = False) -> l
     return list(dict.fromkeys(missing))
 
 
-def run(name: str, case: dict, run_id: str, cluster: Cluster, **options: bool | str | None) -> None:
-    """options are those of its type's run, e.g. locust.run's build."""
+def run(name: str, case: dict, run_id: str, cluster: Cluster, **options: object) -> None:
+    """options are those of its type's run, e.g. locust.run's build, and
+    test_case and repeat for one of a case's repeats."""
     cluster.get_credentials()
     log(f"{name}: running as {run_id} on cluster {cluster.name}")
     # First, so it is watching before the run deploys anything to watch.

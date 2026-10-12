@@ -21,12 +21,11 @@ so the master's --class-picker enumerates the name. A Python worker container
 would set LOCUST_NO_RUNWORKLOAD_USER=1 to skip loading this file, leaving
 boomer as the sole owner of RunWorkloadUser load.
 
-This file is the only locust asset this repo owns — the rest of the image's
-Python comes from substrate. It exists because runworkload has no upstream
-counterpart, and its name is load-bearing twice over: the master loads
-/app/tests/${BENCHMARK_USER_CLASS}.py, and the boomer container is passed
---user-class=${BENCHMARK_USER_CLASS}, which selects the "runworkload" entry
-the Go package registers with userclass.Add.
+Its name is load-bearing twice over: the master loads
+/app/tests/<USER_CLASS>.py, and the boomer worker is passed
+--user-class=<USER_CLASS>, which selects the "runworkload" entry the Go
+package registers with userclass.Add; USER_CLASS is in
+scenario_runner/src/scenario_runner/locust.py.
 """
 
 import csv
