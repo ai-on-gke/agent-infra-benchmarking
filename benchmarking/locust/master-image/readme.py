@@ -294,9 +294,10 @@ def _workers(info: dict) -> str:
             r.get("quantity") for r in (tmpl.get("resources") or {}).get("limits") or [] if r.get("name") == "memory"
         ]
         parts.append(f"memory limit {memory[0] if memory else 'unset'}")
-        snapshots = tmpl.get("snapshotsConfig") or {}
-        if snapshots.get("onPause"):
-            parts.append(f"snapshot on pause {snapshots['onPause'].removeprefix('SNAPSHOT_CONTENT_SCOPE_')}")
+        # The scope of every snapshot of an actor, on pause and on suspend.
+        snapshots = tmpl.get("snapshotConfig") or {}
+        if snapshots.get("onCommit"):
+            parts.append(f"snapshot scope {snapshots['onCommit'].removeprefix('SNAPSHOT_CONTENT_SCOPE_')}")
         golden = ((tmpl.get("status") or {}).get("goldenSnapshotStatus") or {}).get("takeGoldenSnapshotAt")
         if golden:
             parts.append(f"golden snapshot taken {golden}")
