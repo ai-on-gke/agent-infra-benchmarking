@@ -86,6 +86,100 @@ cases:
       workload-template: glutton
       resume-mode: explicit
 
+  glutton-baseline:
+    type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 1
+          sandboxed_min_node_count = 1
+          sandboxed_max_node_count = 1
+    worker-count: 100
+    sandbox-class: gvisor
+    master:
+      run-time: 3m
+      users: 100
+      spawn-rate: 10
+    worker:
+      workload-name: glutton
+      workload-template: glutton
+      resume-mode: explicit
+      suspend-disabled: true
+
+  glutton-utilization-10:
+    type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 10
+          sandboxed_min_node_count = 10
+          sandboxed_max_node_count = 10
+    worker-count: 100
+    sandbox-class: gvisor
+    master:
+      run-time: 3m
+      users: 100
+      spawn-rate: 10
+    worker:
+      workload-name: glutton
+      workload-template: glutton
+      resume-mode: explicit
+      suspend-disabled: false
+      min-wait: 6000ms
+      max-wait: 6000ms
+
+  glutton-utilization-25:
+    type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 10
+          sandboxed_min_node_count = 10
+          sandboxed_max_node_count = 10
+    worker-count: 100
+    sandbox-class: gvisor
+    master:
+      run-time: 3m
+      users: 250
+      spawn-rate: 10
+    worker:
+      workload-name: glutton
+      workload-template: glutton
+      resume-mode: explicit
+      suspend-disabled: false
+      min-wait: 6000ms
+      max-wait: 6000ms
+
+  glutton-utilization-50:
+    type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 10
+          sandboxed_min_node_count = 10
+          sandboxed_max_node_count = 10
+    worker-count: 100
+    sandbox-class: gvisor
+    master:
+      run-time: 3m
+      users: 500
+      spawn-rate: 10
+    worker:
+      workload-name: glutton
+      workload-template: glutton
+      resume-mode: explicit
+      suspend-disabled: false
+      min-wait: 6000ms
+      max-wait: 6000ms
+
   openclaw:
     type: locust
     infra:
@@ -109,6 +203,109 @@ cases:
       workload-template: openclaw
       workload-timeout: 120s
       resume-mode: explicit
+      actor-egress-allow: "mock-llm.benchmark-workloads.svc.cluster.local"
+
+  openclaw-baseline:
+    type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: openclaw.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 10
+          sandboxed_min_node_count = 10
+          sandboxed_max_node_count = 10
+    worker-count: 100
+    sandbox-class: gvisor
+    master:
+      run-time: 5m
+      users: 100
+      spawn-rate: 10
+    worker:
+      workload-name: openclaw
+      workload-template: openclaw
+      workload-timeout: 120s
+      resume-mode: explicit
+      suspend-disabled: true
+      actor-egress-allow: "mock-llm.benchmark-workloads.svc.cluster.local"
+
+  openclaw-utilization-10:
+    type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: openclaw.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 10
+          sandboxed_min_node_count = 10
+          sandboxed_max_node_count = 10
+    worker-count: 100
+    sandbox-class: gvisor
+    master:
+      run-time: 5m
+      users: 100
+      spawn-rate: 10
+    worker:
+      workload-name: openclaw
+      workload-template: openclaw
+      workload-timeout: 120s
+      resume-mode: explicit
+      suspend-disabled: false
+      min-wait: 106000ms
+      max-wait: 106000ms
+      actor-egress-allow: "mock-llm.benchmark-workloads.svc.cluster.local"
+
+  openclaw-utilization-25:
+    type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: openclaw.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 10
+          sandboxed_min_node_count = 10
+          sandboxed_max_node_count = 10
+    worker-count: 100
+    sandbox-class: gvisor
+    master:
+      run-time: 10m
+      users: 250
+      spawn-rate: 3
+    worker:
+      workload-name: openclaw
+      workload-template: openclaw
+      workload-timeout: 120s
+      resume-mode: explicit
+      suspend-disabled: false
+      min-wait: 106000ms
+      max-wait: 106000ms
+      actor-egress-allow: "mock-llm.benchmark-workloads.svc.cluster.local"
+
+  openclaw-utilization-50:
+    type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: openclaw.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 10
+          sandboxed_min_node_count = 10
+          sandboxed_max_node_count = 10
+    worker-count: 100
+    sandbox-class: gvisor
+    master:
+      run-time: 10m
+      users: 500
+      spawn-rate: 3
+    worker:
+      workload-name: openclaw
+      workload-template: openclaw
+      workload-timeout: 120s
+      resume-mode: explicit
+      suspend-disabled: false
+      min-wait: 106000ms
+      max-wait: 106000ms
+      actor-egress-allow: "mock-llm.benchmark-workloads.svc.cluster.local"
 
   # The scenario-runner's Terraform path on infra/clusters/dummy, which creates
   # no GCP resources and so has nothing to benchmark on.
