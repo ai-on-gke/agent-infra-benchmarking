@@ -203,7 +203,6 @@ cases:
       workload-template: openclaw
       workload-timeout: 120s
       resume-mode: explicit
-<<<<<<< HEAD
       actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
   openclaw-baseline:
@@ -308,10 +307,6 @@ cases:
       max-wait: 106000ms
       # Without an egress policy the actors can't reach mock-llm.
       actor-egress-allow: "mock-llm.benchmark-workloads.svc.cluster.local"
-=======
-      # Without an egress policy the actors can't reach mock-llm.
-      actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
->>>>>>> main
 
   # The scenario-runner's Terraform path on infra/clusters/dummy, which creates
   # no GCP resources and so has nothing to benchmark on.
