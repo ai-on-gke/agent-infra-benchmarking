@@ -34,16 +34,41 @@ resource "google_storage_bucket_iam_member" "job_source" {
   }
 }
 
-# What scenario_runner/infra creates in the project.
+# What scenario_runner/infra creates in the project, and what the run does on
+# it: substrate's install on the cluster and the images' Cloud Build.
 resource "google_project_iam_member" "job" {
   for_each = toset([
     "roles/serviceusage.serviceUsageAdmin",
     "roles/artifactregistry.admin",
+    "roles/container.admin",
+    "roles/compute.networkAdmin",
+    "roles/compute.securityAdmin",
+    "roles/iam.serviceAccountAdmin",
+    "roles/iam.serviceAccountUser",
+    "roles/resourcemanager.projectIamAdmin",
+    "roles/storage.admin",
+    "roles/cloudbuild.builds.editor",
+    # For gcloud builds submit to stream the build's log.
+    "roles/logging.viewer",
   ])
 
   project = var.project_id
   role    = each.value
   member  = "serviceAccount:${google_service_account.job.email}"
+}
+
+locals {
+  # The scenario-runner's infra goes in this deployment's project and region,
+  # with its state in the deployment's state bucket. The image has no Docker,
+  # so the benchmark images build on Cloud Build.
+  module_args = concat([
+    "--project-id=${var.project_id}",
+    "--region=${var.region}",
+    "--state-backend=gcs",
+    "--state-bucket=${var.state_bucket}",
+    "--state-prefix=${var.state_bucket_prefix}",
+    "--cloud-build",
+  ], var.reports_bucket == null ? [] : ["--report-bucket=${var.reports_bucket}", "--report-prefix=${var.reports_prefix}"])
 }
 
 resource "google_cloud_run_v2_job" "job" {
@@ -67,15 +92,7 @@ resource "google_cloud_run_v2_job" "job" {
       containers {
         image   = data.google_artifact_registry_docker_image.runner.self_link
         command = var.command
-        # The scenario-runner's infra goes in this deployment's project and
-        # region, with its state in the deployment's state bucket.
-        args = concat([
-          "--project-id=${var.project_id}",
-          "--region=${var.region}",
-          "--state-backend=gcs",
-          "--state-bucket=${var.state_bucket}",
-          "--state-prefix=${var.state_bucket_prefix}",
-        ], var.args)
+        args    = concat(local.module_args, var.args)
 
         # The scenario-runner labels the infra with BENCHMARK_TRIGGER, which
         # the scheduler's run overrides with scheduled.
@@ -118,8 +135,9 @@ resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
   project  = var.project_id
   name     = google_cloud_run_v2_job.job.name
   location = google_cloud_run_v2_job.job.location
-  role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.scheduler[0].email}"
+  # Not run.invoker, which lacks run.jobs.runWithOverrides.
+  role   = "roles/run.jobsExecutorWithOverrides"
+  member = "serviceAccount:${google_service_account.scheduler[0].email}"
 }
 
 resource "google_cloud_scheduler_job" "trigger" {
@@ -139,9 +157,13 @@ resource "google_cloud_scheduler_job" "trigger" {
   http_target {
     http_method = "POST"
     uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.job.name}:run"
-    # Merged into the job's env, unlike args, which an override replaces.
+    # env is merged into the job's, while args replace its own, hence the
+    # module's again.
     body = base64encode(jsonencode({
-      overrides = { containerOverrides = [{ env = [{ name = "BENCHMARK_TRIGGER", value = "scheduled" }] }] }
+      overrides = { containerOverrides = [merge(
+        { env = [{ name = "BENCHMARK_TRIGGER", value = "scheduled" }] },
+        var.schedule_args == null ? {} : { args = concat(local.module_args, var.schedule_args) },
+      )] }
     }))
     headers = { "Content-Type" = "application/json" }
 

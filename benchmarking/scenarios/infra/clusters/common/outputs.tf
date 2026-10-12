@@ -32,6 +32,12 @@ output "substrate_version" {
   value       = var.substrate_version
 }
 
+output "substrate_docker_repo" {
+  description = "Image path prefix of the repository substrate's images are installed from; null for none."
+  value = (var.substrate_image_repository == null ? null :
+  "${local.substrate_repository[3]}-docker.pkg.dev/${local.substrate_repository[1]}/${local.substrate_repository[5]}")
+}
+
 output "sandbox_class" {
   description = "Sandbox class of the sandboxed node pool's workers."
   value       = var.sandbox_class

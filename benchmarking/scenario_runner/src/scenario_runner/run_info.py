@@ -158,7 +158,9 @@ def infra(case: dict) -> dict:
     return spec
 
 
-def collect(cluster: Cluster, case: dict, template_name: str | None, template: dict | None, image_refs: dict) -> dict:
+def collect(
+    cluster: Cluster, case: dict, template_name: str | None, template: dict | None, image_refs: dict, bucket: str
+) -> dict:
     errors: dict[str, str] = {}
     sandbox_configs = {}
     config_name = ((template or {}).get("sandboxConfig") or {}).get("configName")
@@ -186,7 +188,7 @@ def collect(cluster: Cluster, case: dict, template_name: str | None, template: d
         "commit_dirty": dirty,
         "substrate_commit": _read("substrate commit", lambda: output(["git", "rev-parse", "HEAD"], cwd=substrate.SUBSTRATE_DIR).strip(), errors),
         "substrate_version": _read("substrate version", substrate.build_version, errors),
-        "bucket": cluster.bucket,
+        "bucket": bucket,
     }
     if errors:
         info["run_info_errors"] = errors

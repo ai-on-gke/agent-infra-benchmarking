@@ -1,6 +1,6 @@
 output "artifact_registry_repository" {
   description = "Full resource name of the Artifact Registry repository."
-  value       = google_artifact_registry_repository.images.name
+  value       = google_artifact_registry_repository.images.id
 }
 
 output "docker_repo" {

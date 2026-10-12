@@ -125,6 +125,14 @@ variable "substrate_version" {
   type        = string
 }
 
+# The scenario-runner builds substrate's images once per execution, into its
+# own repository rather than each cluster's.
+variable "substrate_image_repository" {
+  description = "Full resource name of the Artifact Registry repository substrate's images are installed from, projects/P/locations/L/repositories/R, which the nodes and atelet are granted to pull from; null for none."
+  type        = string
+  default     = null
+}
+
 variable "sandboxed_node_count" {
   description = "Initial node count of the sandboxed node pool."
   type        = number

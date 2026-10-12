@@ -15,7 +15,8 @@
 """The master image's entrypoint: runs locust with this process's arguments,
 writes custom_history's and cluster_vitals' CSVs beside locust's, and run.json
 and README.md, then uploads every file in LOCUST_CSV's folder to
-gs://<REPORT_BUCKET>/reports/<BENCHMARK_RUN_ID>/<BENCHMARK_TEST_CASE>/.
+gs://<REPORT_BUCKET>/<REPORT_PREFIX>/<BENCHMARK_RUN_ID>/<BENCHMARK_TEST_CASE>/,
+REPORT_PREFIX being reports when unset or empty.
 
 An empty REPORT_BUCKET leaves the files on the pod. Exits with locust's
 status; TOO_MANY_FAILURES_EXIT for a run whose failed requests are more than
@@ -139,6 +140,7 @@ def main() -> int:
     csv_prefix = Path(os.environ["LOCUST_CSV"])
     report_dir = csv_prefix.parent
     bucket = os.environ.get("REPORT_BUCKET", "")
+    prefix = os.environ.get("REPORT_PREFIX") or upload.DEFAULT_PREFIX
     # Read before the run, so a missing one fails it before it starts.
     folder = f"{os.environ['BENCHMARK_RUN_ID']}/{os.environ['BENCHMARK_TEST_CASE']}" if bucket else ""
     max_ratio = float(os.environ.get("MAX_FAILURE_RATIO", "0"))
@@ -188,7 +190,7 @@ def main() -> int:
         print(f"locust wrote nothing to {report_dir} to upload.", flush=True)
         return status
     try:
-        results = upload.upload(paths, bucket, folder, report_dir)
+        results = upload.upload(paths, bucket, folder, report_dir, prefix)
     except upload.UploadError as exc:
         print(f"Upload failed: {exc}", flush=True)
         return status or UPLOAD_FAILED_EXIT

@@ -311,6 +311,26 @@ resource "google_artifact_registry_repository_iam_member" "atelet_reader" {
   member     = local.atelet_wi_principal
 }
 
+locals {
+  # projects/P/locations/L/repositories/R
+  substrate_repository = var.substrate_image_repository == null ? null : split("/", var.substrate_image_repository)
+}
+
+# Pulls of substrate's images, by the nodes for its pods and by atelet for an
+# ActorTemplate's.
+resource "google_artifact_registry_repository_iam_member" "substrate_reader" {
+  for_each = var.substrate_image_repository == null ? {} : {
+    node   = "serviceAccount:${google_service_account.node.email}"
+    atelet = local.atelet_wi_principal
+  }
+
+  project    = local.substrate_repository[1]
+  location   = local.substrate_repository[3]
+  repository = local.substrate_repository[5]
+  role       = "roles/artifactregistry.reader"
+  member     = each.value
+}
+
 resource "google_artifact_registry_repository_iam_member" "atelet_writer" {
   project    = var.project_id
   location   = google_artifact_registry_repository.this.location

@@ -24,7 +24,7 @@ from string import Template
 from . import RUNNER_DIR, substrate
 from .cluster import Cluster
 from .log import log
-from .process import stream
+from .process import output, stream
 
 MANIFEST = RUNNER_DIR.parent / "workloads" / "manifests" / "worker-pool.yaml.tmpl"
 # Have to match the WorkerPool in the manifest.
@@ -34,9 +34,8 @@ DEFAULT_TIMEOUT_SECS = 300
 
 
 def missing_requirements() -> list[str]:
-    missing = [tool for tool in ("kubectl", "go", "git") if not shutil.which(tool)]
-    # ko resolves the pool's ko:// workerImage, and only works inside the submodule.
-    return missing + substrate.missing_submodule()
+    # gcloud pins the pool's workerImage to the digest substrate.build_images pushed.
+    return [tool for tool in ("kubectl", "gcloud") if not shutil.which(tool)]
 
 
 def delete(cluster: Cluster, timeout: int = DEFAULT_TIMEOUT_SECS) -> None:
@@ -58,7 +57,8 @@ def deploy(cluster: Cluster, worker_count: int, sandbox_class: str, timeout: int
 
     log(f"worker pool: deploying {NAME} (replicas={worker_count}, sandbox_class={sandbox_class})")
     manifest = Template(MANIFEST.read_text()).substitute(WORKER_COUNT=worker_count, SANDBOX_CLASS=sandbox_class)
-    log(substrate.ko(cluster, "apply", "-f", "-", "--", *cluster.kubectl_flags(NAMESPACE), input=manifest).strip())
+    resolved = substrate.resolve(cluster, manifest)
+    log(output(cluster.kubectl("apply", "-f", "-", namespace=NAMESPACE), input=resolved).strip())
 
     log(f"worker pool: waiting for the workers to be ready (timeout: {timeout}s)")
     stream(cluster.kubectl("wait", "--for=create", f"deployment/{NAME}", f"--timeout={timeout}s", namespace=NAMESPACE))

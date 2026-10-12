@@ -82,37 +82,42 @@ without creating a cluster:
 ./benchmarking/tools/run-local-dummy
 ```
 
-## Running scenarios
+## Running scenarios from your machine
 
 ```bash
 ./benchmarking/tools/run --scenario glutton
 ```
 
-To run more than one case, repeat `--scenario`. Without it, every case in
-`scenarios.yaml` runs, in the order listed. Each repeat of a case gets a fresh
-cluster. Reports are copied to `reports/<run-id>/<case>/` at the repo root.
+To run more than one case, repeat `--scenario`; they run in the order given.
+Without it, every case in `scenarios.yaml` runs, in the order listed. A case
+with `repeats: N` runs N times, recorded as `<case>-1` to `<case>-N`, each on a
+fresh cluster. A failed repeat doesn't stop the ones after it.
+
+Creating and destroying a cluster takes most of a run's time. While you are
+changing a case or the code it runs, keep one cluster up instead:
+
+```bash
+./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton
+```
+
+See [Keeping a cluster between runs](#keeping-a-cluster-between-runs) for
+reusing it and destroying it afterwards.
 
 Useful flags (`--help` lists them all):
 
 | Flag | |
 |---|---|
 | `--scenario NAME` | case to run; repeatable |
-| `--name RUN_ID` | run id, default `run-<UTC timestamp>` |
+| `--name RUN_ID` | run id, default `run-<UTC timestamp>`. It starts the names of the GCP resources, so keep it lowercase |
+| `--project-id ID` | overrides `PROJECT_ID` |
+| `--region REGION` | default `us-central1` |
+| `--state-backend local\|gcs` | overrides `STATE_BACKEND`, see [Terraform state](#terraform-state) |
 | `--cloud-build` | build images on Cloud Build rather than local Docker |
+| `--no-docker-login` | push with Docker's own registry credentials rather than gcloud's access token |
+| `--scenarios-file PATH` | another scenarios file, e.g. a local copy with a smaller load |
 | `--terraform-output json` | log Terraform as JSON |
 
 `tools/run-local` is `tools/run --state-backend local`.
-
-A run fails when more than its case's `max-failure-ratio` of requests fail
-(0.01 by default), or when it makes no requests. A failed case does not stop
-the ones after it; the execution exits non-zero at the end, naming them. A run
-that outlives the hour the scenario-runner waits for it does stop the
-execution, as it is still going.
-
-Ctrl-C stops the run in progress the way its end would: the master stops the
-worker, which deletes its actors, and uploads what it recorded, and the
-reports are downloaded before the cluster is destroyed. Terraform is left to
-finish what it has in flight rather than killed. A second Ctrl-C forces it.
 
 Substrate blocks all outbound traffic from an actor that has no egress policy.
 The worker gives each actor one that allows only the hosts named by URLs in
@@ -120,13 +125,52 @@ its ActorTemplate's env, such as the OTLP collector and openclaw's mock LLM. To
 let actors reach another service, add its URL to the template, or set the
 case's `worker: actor-egress-allow` to a comma-separated list of hosts.
 
-### What a run leaves
+### What a run does
 
-Each run of a case uploads its files to `reports/<run-id>/<record>/` in its
-cluster's bucket, `<record>` being the case's name, or `<case>-<n>` for each of
-several repeats, and the scenario-runner copies them to the same path under
-`reports/` at the repo root. The bucket goes with the cluster, so the local copy
-is the one that lasts; on Cloud Run there is none. Each folder holds:
+1. Applies `scenario_runner/infra`: an Artifact Registry repository for the
+   run.
+2. For each repeat of each case:
+   1. Applies the case's cluster from `scenarios/infra/clusters/<name>/`: a
+      GKE cluster, its node pools, a GCS bucket for the reports and the IAM
+      the benchmark needs.
+   2. Builds substrate from the submodule with ko and installs it, unless the
+      case sets `skip-substrate-install`.
+   3. Builds and pushes the locust and workload images
+      (`locust/images.json`, `workloads/images.json`).
+   4. Deploys Prometheus, the worker pool and the case's workload, then the
+      locust master and boomer worker Jobs, and waits for both to end.
+   5. Deletes any actors the run left, recording them in `cleanup.json`,
+      uploads both Jobs' logs to the bucket beside the master's CSVs, and
+      copies everything to `reports/<run-id>/<record>/`.
+   6. Destroys the cluster, and its bucket with it.
+3. Destroys `scenario_runner/infra`.
+
+The `common` cluster's nodes are C2 by default; see
+[Cost and quota](#cost-and-quota) before raising `sandboxed_node_count`.
+
+### Where things end up
+
+| What | Where |
+|---|---|
+| Reports and Job logs | `reports/<run-id>/<record>/` at the repo root. The bucket is destroyed with the cluster, so this is the only copy left |
+| Terraform deployments | `scenario_runner/.local-data/runs/terraform/<run-id>/`: `scenario-runner/` and `scenarios/<record>/`, each with `config/`, `tf-data/` and, with the local backend, `tfstates/` |
+| The cluster's kubeconfig | `tf-data/kubeconfig` in the repeat's deployment |
+| GCP resources | labeled `benchmark-run-id=<run-id>` and `benchmark-test-case=<record>` |
+
+Both `.local-data/` and `reports/` are gitignored; a report worth committing,
+like the example below, needs an exception in `.gitignore`.
+
+To look at the cluster while a repeat runs:
+
+```bash
+export KUBECONFIG=benchmarking/scenario_runner/.local-data/runs/terraform/<run-id>/scenarios/<record>/tf-data/kubeconfig
+kubectl -n benchmarking get pods
+kubectl -n benchmarking port-forward deploy/prometheus 9090
+```
+
+### What a run's reports hold
+
+Each folder under `reports/<run-id>/` holds:
 
 - `locust_stats_steady.csv`: the run's latency percentiles over the
   steady-state window; see [Reading the results](#reading-the-results).
@@ -138,6 +182,9 @@ is the one that lasts; on Cloud Run there is none. Each folder holds:
 - `run.json`: how the run went, the resolved case, the cluster and its nodes,
   the WorkerPool, ActorTemplate and SandboxConfig, every image by digest, and
   the commits. `README.md` is the same for a reader.
+- `locust-master.log`, `boomer-worker.log`: the two Jobs' logs, taken from
+  their pods once the run ends. A run stopped with Ctrl-C has none, as
+  stopping it deletes the pods.
 - `cleanup.json`: the actors the scenario-runner found left after the run and
   deleted, and any still there a minute later, such as one stuck in
   `ACTOR_STATE_DELETING` (agent-substrate/substrate#2011).
@@ -161,7 +208,57 @@ benchmark-report reports/<run-id>
 
 With no argument it charts the latest run in `./reports`.
 
-### Dev infra
+### Images and versions
+
+The images are tagged with the repo's `HEAD` commit, but built from the
+working tree as it is, uncommitted changes included. Commit before a run whose
+results you want to tie to a commit. The images are built for `linux/amd64`,
+the nodes' platform, whatever the build host's; on an ARM machine that needs
+Docker's emulation, or `--cloud-build`.
+
+Substrate is built from `dependency-repos/substrate` as checked out, and its
+version is `git describe --tags --always --dirty` there, or `VERSION` if set.
+The cluster's nodes are labeled with it.
+
+### Terraform state
+
+With `local`, each deployment's state is a file under
+`.local-data/runs/terraform/<run-id>/`, so only this machine can destroy what
+a run left behind. With `gcs`, it is in `gs://<state bucket>/<state prefix>/<run-id>/`
+together with a copy of the rest of the deployment, so a destroy needs nothing
+but the bucket. Use `gcs` for long runs, or when several people share the
+project.
+
+### When a run fails or is stopped
+
+A run fails when more than its case's `max-failure-ratio` of requests fail
+(0.01 by default), or when it makes no requests. A failed case does not stop
+the ones after it; the execution exits non-zero at the end, naming them. A run
+that outlives the hour the scenario-runner waits for it does stop the
+execution, as it is still going.
+
+A failed apply, install or benchmark still destroys the repeat's cluster, and
+the run destroys `scenario_runner/infra` before it exits.
+
+Ctrl-C stops the run in progress the way its end would: the master stops the
+worker, which deletes its actors, and uploads what it recorded, and the
+reports are downloaded before the cluster is destroyed. Terraform is left to
+finish what it has in flight rather than killed, so press Ctrl-C once and let
+the destroy finish. A second Ctrl-C forces it, leaving behind whatever it had
+not destroyed yet.
+
+If a destroy itself fails, the resources stay. Run it again by hand from the
+deployment's `config/`:
+
+```bash
+cd benchmarking/scenario_runner/.local-data/runs/terraform/<run-id>/scenarios/<record>/config
+TF_DATA_DIR=../tf-data terraform destroy
+```
+
+Destroy the repeats' clusters before `scenario-runner/`. Anything still left
+can be found in the console by the `benchmark-run-id` label.
+
+### Keeping a cluster between runs
 
 To iterate without creating a cluster on every run, use `--dev-infra NAME`. It
 keeps the runner infra and cluster between executions, and repeats run one
@@ -172,8 +269,28 @@ because a dev infra keeps the cluster of the case it was first created for:
 ./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton
 # reuse the images and workloads already deployed
 ./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton --no-build --no-deploy-workloads
+# reapply the cluster config after changing it, reinstalling substrate if its version changed
+./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton --dev-infra-update
+```
 
+`--no-build` needs the images of the current `HEAD` already pushed to it.
+
+A dev infra's state is always local, in
+`scenario_runner/.local-data/dev-infra/terraform/<name>/`, and its kubeconfig
+in `cluster/tf-data/kubeconfig` there. `tools/dev-infra` manages them:
+
+```bash
+# every dev infra on this machine, its case, project and whether it is complete
 ./benchmarking/tools/dev-infra list
+# its Terraform outputs: cluster name, bucket, image repository
+./benchmarking/tools/dev-infra outputs glutton-dev
+```
+
+A dev infra keeps costing money until it is destroyed, so destroy it once you
+are done iterating. This destroys its cluster and runner infra and removes its
+local files:
+
+```bash
 ./benchmarking/tools/dev-infra destroy glutton-dev
 ```
 

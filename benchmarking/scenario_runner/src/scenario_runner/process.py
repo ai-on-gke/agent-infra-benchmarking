@@ -19,10 +19,16 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
-from typing import IO, Callable
+from typing import IO, Callable, TypeVar
 
 from .log import log
+
+T = TypeVar("T")
+
+ATTEMPTS = 3
+RETRY_DELAY = 30
 
 
 def environ(env: dict[str, str] | None) -> dict[str, str] | None:
@@ -96,3 +102,16 @@ def failure(exc: subprocess.CalledProcessError) -> str:
         # cmd[1] is -chdir=<the config's directory>.
         return f"terraform {exc.cmd[2]} failed in {exc.cmd[1].removeprefix('-chdir=')}"
     return f"{' '.join(exc.cmd)} failed"
+
+
+def retry(what: str, func: Callable[[], T], attempts: int = ATTEMPTS, delay: float = RETRY_DELAY) -> T:
+    """Calls func until a call doesn't raise CalledProcessError, at most
+    attempts times, and raises the last one's."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return func()
+        except subprocess.CalledProcessError as exc:
+            if attempt == attempts:
+                raise
+            log(f"{what}: {failure(exc)}, attempt {attempt} of {attempts}; retrying in {delay:g}s", "WARNING")
+            time.sleep(delay)

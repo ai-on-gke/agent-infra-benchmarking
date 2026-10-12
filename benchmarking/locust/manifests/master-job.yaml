@@ -56,6 +56,8 @@ spec:
         # Where run_master.py uploads locust's CSVs; empty keeps them here.
         - name: REPORT_BUCKET
           value: "${BENCHMARK_REPORT_BUCKET}"
+        - name: REPORT_PREFIX
+          value: "${BENCHMARK_REPORT_PREFIX}"
         - name: BENCHMARK_RUN_ID
           value: "${BENCHMARK_RUN_ID}"
         - name: BENCHMARK_TEST_CASE

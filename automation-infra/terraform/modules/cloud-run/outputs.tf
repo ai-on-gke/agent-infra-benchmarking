@@ -23,6 +23,11 @@ output "runner_image" {
   value       = data.google_artifact_registry_docker_image.runner.self_link
 }
 
+output "reports_dataset" {
+  description = "BigQuery dataset of the reports' views, as project.dataset, or null when var.reports_bucket is null."
+  value       = one([for d in google_bigquery_dataset.reports : "${d.project}.${d.dataset_id}"])
+}
+
 output "github_service_account_email" {
   description = "Service account GitHub Actions write under source/ as, or null when var.github_actions_bucket is null."
   value       = one(google_service_account.github[*].email)
