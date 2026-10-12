@@ -283,7 +283,8 @@ def record_cleanup(cluster: Cluster, bucket: str, report_prefix: str, run_id: st
                     for a in listed.get("actors") or []
                 ]
 
-            left = actors()
+            # Kept current, so a list that fails later leaves the last one seen.
+            left = record["left"] = actors()
             record["listed"] = True
             for actor in left:
                 subprocess.run(ate("delete", "actor", actor["name"], "-a", ACTOR_ATESPACE, "--any-state"),
@@ -292,8 +293,7 @@ def record_cleanup(cluster: Cluster, bucket: str, report_prefix: str, run_id: st
             deadline = time.monotonic() + ACTOR_DELETE_WAIT_SECS
             while left and time.monotonic() < deadline:
                 time.sleep(5)
-                left = actors()
-            record["left"] = left
+                left = record["left"] = actors()
     except (subprocess.CalledProcessError, OSError, ValueError, KeyError) as exc:
         log(f"locust: could not list the actors left in {ACTOR_ATESPACE}: {exc}", "WARNING")
     if record["left"]:
