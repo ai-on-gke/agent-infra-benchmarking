@@ -26,7 +26,7 @@ variable "command" {
 }
 
 variable "args" {
-  description = "Arguments passed to the entrypoint after --project-id, --region, --state-backend, --state-bucket and --state-prefix, which the module passes itself."
+  description = "Arguments passed to the entrypoint after --project-id, --region, --state-backend, --state-bucket, --state-prefix, --cloud-build and, with reports_bucket, --report-bucket and --report-prefix, which the module passes itself."
   type        = list(string)
   default     = []
 }
@@ -38,15 +38,16 @@ variable "env" {
 }
 
 variable "cpu" {
-  description = "CPU limit of the container."
+  description = "CPU limit of the container. Cloud Run needs at least 8 for more than 24Gi of memory."
   type        = string
-  default     = "2"
+  default     = "8"
 }
 
+# ko's Go module and build caches for substrate's images outgrow 4Gi.
 variable "memory" {
   description = "Memory limit of the container. The container's filesystem is in memory and counts against it."
   type        = string
-  default     = "4Gi"
+  default     = "32Gi"
 }
 
 variable "task_timeout" {
@@ -64,6 +65,12 @@ variable "max_retries" {
 variable "schedule" {
   description = "Cron schedule the job runs on. Null creates no Cloud Scheduler job, leaving the job to be run by hand."
   type        = string
+  default     = null
+}
+
+variable "schedule_args" {
+  description = "Arguments the scheduled runs pass in place of args, e.g. [\"--scenario=dummy\"]. Null passes args."
+  type        = list(string)
   default     = null
 }
 
@@ -85,6 +92,23 @@ variable "state_bucket_prefix" {
   validation {
     condition     = can(regex("^[^/]+(/[^/]+)*$", var.state_bucket_prefix))
     error_message = "state_bucket_prefix must not be empty, nor start or end with a slash."
+  }
+}
+
+variable "reports_bucket" {
+  description = "Bucket the cases' reports go to, under reports_prefix, and the BigQuery dataset reads them from. Null leaves them in each case's own bucket, destroyed with its cluster, and creates no dataset."
+  type        = string
+  default     = null
+}
+
+variable "reports_prefix" {
+  description = "Prefix in reports_bucket the reports go under, as <prefix>/<run-id>/<record>/. Each case's locust master may only write there."
+  type        = string
+  default     = "data"
+
+  validation {
+    condition     = can(regex("^[^/]+(/[^/]+)*$", var.reports_prefix))
+    error_message = "reports_prefix must not be empty, nor start or end with a slash."
   }
 }
 

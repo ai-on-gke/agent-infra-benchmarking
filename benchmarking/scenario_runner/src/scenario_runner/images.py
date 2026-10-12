@@ -130,17 +130,22 @@ def pin(image: str) -> str:
     return f"{head}/{last.split(':', 1)[0]}@{digest}"
 
 
-def docker_login(host: str) -> None:
-    """Rather than relying on gcloud auth configure-docker having been run for
-    the host, which docker looks credentials up by."""
+def access_token(host: str) -> str:
+    """gcloud's access token, to log in to host with as oauth2accesstoken."""
     token = subprocess.run(["gcloud", "auth", "print-access-token"], capture_output=True, text=True)
     if token.returncode or not token.stdout.strip():
         raise ImageError(f"cannot get an access token from gcloud for {host}; run gcloud auth login")
     account = subprocess.run(["gcloud", "config", "get-value", "account"], capture_output=True, text=True)
     log(f"images: authenticating to {host} as {account.stdout.strip() or 'an unknown account'}")
+    return token.stdout.strip()
+
+
+def docker_login(host: str) -> None:
+    """Rather than relying on gcloud auth configure-docker having been run for
+    the host, which docker looks credentials up by."""
     stream(
         ["docker", "login", "--username=oauth2accesstoken", "--password-stdin", f"https://{host}"],
-        input=token.stdout.strip(),
+        input=access_token(host),
     )
 
 
@@ -162,42 +167,46 @@ def without_vcs(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
     return None if Path(info.name).name in VCS_NAMES else info
 
 
-def cloud_build_and_push(images: list[Image], repo: str, image_tag: str, platform: str, project_id: str) -> None:
-    """Runs the same docker builds as one Cloud Build, which pushes them only
-    once all have succeeded. It uploads only the paths they read, at their
-    repo-relative paths, so their arguments are the local ones unchanged."""
-    refs = [ref(repo, image.name, image_tag) for image in images]
-    config = {
-        "steps": [
-            {
-                "id": image.name,
-                "name": CLOUD_BUILDER,
-                # --build-context needs BuildKit, which docker 24 doesn't default to.
-                "env": ["DOCKER_BUILDKIT=1"],
-                "args": image.docker_build_args(image_ref, platform),
-                "waitFor": ["-"],
-            }
-            for image, image_ref in zip(images, refs)
-        ],
-        "images": refs,
-        "timeout": "3600s",
-        "options": {"machineType": "E2_HIGHCPU_8"},
+def cloud_build_step(image: Image, image_ref: str, platform: str) -> dict:
+    """The Cloud Build step of image's docker build, run alongside the others."""
+    return {
+        "id": image.name,
+        "name": CLOUD_BUILDER,
+        # --build-context needs BuildKit, which docker 24 doesn't default to.
+        "env": ["DOCKER_BUILDKIT=1"],
+        "args": image.docker_build_args(image_ref, platform),
+        "waitFor": ["-"],
     }
+
+
+def cloud_build_submit(steps: list[dict], pushed: list[str], paths: list[str], project_id: str) -> None:
+    """Runs steps as one Cloud Build, which pushes the pushed images only once
+    all have succeeded. It uploads only paths, at their repo-relative paths, so
+    the steps' arguments are the local ones unchanged."""
+    # Cloud Logging, as streaming from the default logs bucket needs project Viewer.
+    options = {"machineType": "E2_HIGHCPU_8", "logging": "CLOUD_LOGGING_ONLY"}
+    config = {"steps": steps, "images": pushed, "timeout": "3600s", "options": options}
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "source.tgz"
         with tarfile.open(source, "w:gz") as tar:
-            for path in sorted({p for image in images for p in image.sources()}):
+            for path in sorted(set(paths)):
                 tar.add(ROOT / path, arcname=path, filter=without_vcs)
         config_file = Path(tmp) / "cloudbuild.json"
         config_file.write_text(json.dumps(config))
-
-        builds = [f"  {r} (platform: {image.platform or platform})" for image, r in zip(images, refs)]
-        log("images: building on Cloud Build:\n" + "\n".join(builds))
         # gcloud holds the build log back until the end when stdout isn't a terminal.
         stream(
             ["gcloud", "builds", "submit", str(source), f"--config={config_file}", f"--project={project_id}"],
             env={"PYTHONUNBUFFERED": "1"},
         )
+
+
+def cloud_build_and_push(images: list[Image], repo: str, image_tag: str, platform: str, project_id: str) -> None:
+    """Runs the same docker builds as one Cloud Build."""
+    refs = [ref(repo, image.name, image_tag) for image in images]
+    builds = [f"  {r} (platform: {image.platform or platform})" for image, r in zip(images, refs)]
+    log("images: building on Cloud Build:\n" + "\n".join(builds))
+    steps = [cloud_build_step(image, image_ref, platform) for image, image_ref in zip(images, refs)]
+    cloud_build_submit(steps, refs, [p for image in images for p in image.sources()], project_id)
 
 
 def build_and_push(

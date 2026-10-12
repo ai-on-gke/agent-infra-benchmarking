@@ -72,7 +72,14 @@ def create_deployment(record: dict, infra: str, json_output: bool = False) -> De
     if infra == "scenario-runner":
         return uncreated.create(RUNNER_INFRA_DIR, variables)
     version = None if record.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
-    return cluster_deployment(record["cluster"], uncreated, variables, version)
+    # Applied before the cluster is created.
+    repository = runner_outputs(record["name"])["artifact_registry_repository"]
+    return cluster_deployment(record["cluster"], uncreated, variables, version, repository)
+
+
+def runner_outputs(name: str) -> dict:
+    """The outputs of the dev infra's scenario_runner/infra, read off its state."""
+    return deployment(name, "scenario-runner").state_outputs()
 
 
 def substrate_version(name: str) -> str | None:
@@ -82,10 +89,14 @@ def substrate_version(name: str) -> str | None:
     return json.loads(variables.read_text()).get("substrate_version") if variables.exists() else None
 
 
-def apply(record: dict, json_output: bool = False, update: bool = False) -> dict:
+def apply(
+    record: dict, json_output: bool = False, update: bool = False, cloud_build: bool = False, login: bool = True
+) -> dict:
     """Applies every infra of the dev infra, which is complete only once all
-    of them are, and returns its record. An infra created by an earlier apply
-    keeps its config unless update, which copies it from the source again."""
+    of them are, building substrate's images once the runner infra's
+    repository is there unless the record skips substrate, and returns its
+    record. An infra created by an earlier apply keeps its config unless
+    update, which copies it from the source again."""
     record = {**record, "complete": False}
     installed_version = substrate_version(record["name"])
     write_record(record)
@@ -94,6 +105,8 @@ def apply(record: dict, json_output: bool = False, update: bool = False) -> dict
         if update or not infra_deployment.created:
             infra_deployment = create_deployment(record, infra, json_output)
         infra_deployment.apply()
+        if infra == "scenario-runner" and not record.get(SKIP_SUBSTRATE_INSTALL):
+            record = build_substrate_images(record, cloud_build, login)
     # The nodes now carry a version the installed dataplane is not, so no
     # worker would schedule until substrate is installed again.
     if substrate_version(record["name"]) != installed_version:
@@ -109,11 +122,26 @@ def cluster(name: str) -> Cluster:
     return Cluster(infra.state_outputs(), infra.data / "kubeconfig")
 
 
-def install_substrate(record: dict) -> dict:
-    """Installs substrate on the dev infra's cluster unless its record says it
-    is, and returns its record."""
+def build_substrate_images(record: dict, cloud_build: bool = False, login: bool = True) -> dict:
+    """Builds substrate's images into the dev infra's scenario_runner/infra
+    repository unless its record says they are of this version, and returns
+    its record."""
+    version = substrate.build_version()
+    if record.get("substrate_images") == version:
+        return record
+    substrate.build_images(runner_outputs(record["name"])["docker_repo"], record["project_id"], cloud_build, login)
+    record = {**record, "substrate_images": version}
+    write_record(record)
+    return record
+
+
+def install_substrate(record: dict, cloud_build: bool = False, login: bool = True) -> dict:
+    """Installs substrate on the dev infra's cluster from its images, built
+    first unless they are, unless its record says it is installed, and
+    returns its record."""
     if record.get("substrate_installed"):
         return record
+    record = build_substrate_images(record, cloud_build, login)
     substrate.install(cluster(record["name"]))
     record = {**record, "substrate_installed": True}
     write_record(record)

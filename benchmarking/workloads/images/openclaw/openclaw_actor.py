@@ -47,6 +47,9 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                                 "mock-provider": {
                                     "api": "openai-completions",
                                     "baseUrl": base_url,
+                                    # openclaw reads no env var for a custom provider's key,
+                                    # so without this every turn fails with missing-provider-auth.
+                                    "apiKey": "mock-key",
                                     "models": [{"id": "mock-model", "name": "mock-model"}]
                                 }
                             }
@@ -55,7 +58,6 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                     with open("/tmp/mock-config.json", "w") as f:
                         json.dump(config, f)
 
-                    env["OPENCLAW_MOCK_PROVIDER_API_KEY"] = "mock-key"
                     cmd = ["openclaw", "agent", "exec", "--config", "/tmp/mock-config.json", "--model", "mock-provider/mock-model", post_data]
                 else:
                     # Unused by the benchmark, whose template sets OPENCLAW_USE_MOCK_LLM: nothing

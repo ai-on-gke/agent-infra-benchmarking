@@ -53,6 +53,11 @@ class Cluster:
         return self.outputs["artifact_registry_docker_repo"]
 
     @property
+    def substrate_docker_repo(self) -> str | None:
+        # None for a cluster that runs no substrate, or one applied before the output existed.
+        return self.outputs.get("substrate_docker_repo")
+
+    @property
     def runner_ksa(self) -> str:
         # The variable's default for a state applied before the output existed.
         return self.outputs.get("benchmark_runner_ksa_name", "benchmark-runner")

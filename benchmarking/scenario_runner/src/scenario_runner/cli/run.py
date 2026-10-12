@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -33,7 +34,7 @@ from typing import Callable, NoReturn
 
 import yaml
 
-from .. import LOCAL_DATA_DIR, benchmark, dev_infra, names, substrate
+from .. import LOCAL_DATA_DIR, benchmark, dev_infra, locust, names, substrate
 from ..cases import SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases, record_names
 from ..cluster import Cluster
 from ..deployment import RUNNER_INFRA_DIR, Deployment, GcsDeployment, cluster_deployment
@@ -90,6 +91,16 @@ def parse_args() -> argparse.Namespace:
         help="prefix in the state bucket, each execution's Terraform deployments being under <prefix>/<name>; only,"
         f" and required, with gcs. With local, they are only under {LOCAL_TERRAFORM_DIR}/<name>."
         " Default: $STATE_PREFIX",
+    )
+    p.add_argument(
+        "--report-bucket",
+        help="GCS bucket the cases' reports go to, under --report-prefix. Default: each case's cluster's own"
+        " bucket, which is destroyed with it",
+    )
+    p.add_argument(
+        "--report-prefix",
+        default=locust.REPORT_PREFIX,
+        help="folder in the report bucket the reports go under, as <prefix>/<name>/<record>/. Default: %(default)s",
     )
     p.add_argument(
         "--name",
@@ -153,6 +164,8 @@ def parse_args() -> argparse.Namespace:
     # A cluster applied for the execution has neither yet.
     if not args.dev_infra and (args.no_build or args.no_deploy_workloads or args.dev_infra_update):
         p.error("--no-build, --no-deploy-workloads and --dev-infra-update are only for --dev-infra")
+    if not re.fullmatch(r"[^/]+(/[^/]+)*", args.report_prefix):
+        p.error("--report-prefix must not be empty, nor start or end with a slash")
     if args.state_backend == "gcs" and not (args.state_bucket and args.state_prefix):
         p.error("--state-backend=gcs requires --state-bucket and --state-prefix, or STATE_BUCKET and STATE_PREFIX")
     if args.state_backend == "local" and (args.state_bucket or args.state_prefix):
@@ -178,7 +191,7 @@ def check_requirements(cases: dict[str, dict], cloud_build: bool) -> None:
     if not shutil.which("terraform"):
         fail("terraform is required to apply the infra")
     if not all(case.get(SKIP_SUBSTRATE_INSTALL) for case in cases.values()):
-        missing = substrate.missing_requirements()
+        missing = substrate.missing_requirements(cloud_build)
         if missing:
             fail(f"installing substrate requires {', '.join(missing)}")
         # Its cluster's nodes are labeled with it.
@@ -241,12 +254,14 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
             )
         if spec != record["cluster"]:
             log(f"run: case {name}'s infra.cluster differs from dev infra {args.dev_infra}'s it runs on", "WARNING")
+    json_output = args.terraform_output == "json"
+    login = not args.no_docker_login
     if args.dev_infra_update:
         log(f"run: updating dev infra {args.dev_infra} from the source")
-        record = dev_infra.apply(record, args.terraform_output == "json", update=True)
+        record = dev_infra.apply(record, json_output, update=True, cloud_build=args.cloud_build, login=login)
     elif not record.get("complete"):
         log(f"run: applying dev infra {args.dev_infra}, which is not complete")
-        record = dev_infra.apply(record, args.terraform_output == "json")
+        record = dev_infra.apply(record, json_output, cloud_build=args.cloud_build, login=login)
     return record
 
 
@@ -263,6 +278,8 @@ def run_case(args: argparse.Namespace, name: str, case: dict, cluster: Cluster) 
         docker_login=not args.no_docker_login,
         build=not args.no_build,
         deploy_workloads=not args.no_deploy_workloads,
+        report_bucket=args.report_bucket,
+        report_prefix=args.report_prefix,
     )
 
 
@@ -291,7 +308,7 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     cluster = dev_infra.cluster(args.dev_infra)
     for name, case in cases.items():
         if not case.get(SKIP_SUBSTRATE_INSTALL):
-            record = dev_infra.install_substrate(record)
+            record = dev_infra.install_substrate(record, args.cloud_build, not args.no_docker_login)
         run_repeats(name, case, lambda run_name: run_case(args, run_name, case, cluster))
 
 
@@ -307,10 +324,11 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     variables = names.infra_vars(args.project_id, args.region, args.name)
     runner_infra = deployment(args, "scenario-runner").create(RUNNER_INFRA_DIR, variables)
 
-    def run_on_cluster(case: dict, record: str) -> None:
+    def run_on_cluster(case: dict, record: str, substrate_repository: str) -> None:
         version = None if case.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
         uncreated = deployment(args, "scenarios", record)
-        case_infra = cluster_deployment(case["infra"]["cluster"], uncreated, case_vars[record], version)
+        spec = case["infra"]["cluster"]
+        case_infra = cluster_deployment(spec, uncreated, case_vars[record], version, substrate_repository)
         with case_infra.applied():
             cluster = Cluster(case_infra.outputs(), case_infra.data / "kubeconfig")
             if not case.get(SKIP_SUBSTRATE_INSTALL):
@@ -318,8 +336,15 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> None:
             run_case(args, record, case, cluster)
 
     with runner_infra.applied():
+        outputs = runner_infra.outputs()
+        # Once, into the runner infra's repository, which every case's cluster
+        # installs substrate from.
+        if not all(case.get(SKIP_SUBSTRATE_INSTALL) for case in cases.values()):
+            login = not args.no_docker_login
+            substrate.build_images(outputs["docker_repo"], args.project_id, args.cloud_build, login)
+        repository = outputs["artifact_registry_repository"]
         for name, case in cases.items():
-            run_repeats(name, case, lambda record: run_on_cluster(case, record))
+            run_repeats(name, case, lambda record: run_on_cluster(case, record, repository))
 
 
 def main() -> None:

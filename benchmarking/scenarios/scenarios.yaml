@@ -51,7 +51,7 @@ cases:
           sandboxed_node_count     = 1
           sandboxed_min_node_count = 1
           sandboxed_max_node_count = 1
-    repeats: 3
+    repeats: 1
     worker-count: 10
     sandbox-class: gvisor
     master:
@@ -190,12 +190,12 @@ cases:
           sandboxed_node_count     = 1
           sandboxed_min_node_count = 1
           sandboxed_max_node_count = 1
-    repeats: 3
+    repeats: 1
     worker-count: 10
     sandbox-class: gvisor
     master:
-      run-time: 1m
-      users: 10
+      run-time: 2m
+      users: 3
       spawn-rate: 10
       warm-up: 10s
     worker:
@@ -203,7 +203,8 @@ cases:
       workload-template: openclaw
       workload-timeout: 120s
       resume-mode: explicit
-      actor-egress-allow: "mock-llm.benchmark-workloads.svc.cluster.local"
+<<<<<<< HEAD
+      actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
   openclaw-baseline:
     type: locust
@@ -305,7 +306,12 @@ cases:
       suspend-disabled: false
       min-wait: 106000ms
       max-wait: 106000ms
+      # Without an egress policy the actors can't reach mock-llm.
       actor-egress-allow: "mock-llm.benchmark-workloads.svc.cluster.local"
+=======
+      # Without an egress policy the actors can't reach mock-llm.
+      actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
+>>>>>>> main
 
   # The scenario-runner's Terraform path on infra/clusters/dummy, which creates
   # no GCP resources and so has nothing to benchmark on.

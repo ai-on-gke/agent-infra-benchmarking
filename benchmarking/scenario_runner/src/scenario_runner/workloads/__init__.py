@@ -61,7 +61,7 @@ class WorkloadError(RuntimeError):
 
 def missing_requirements() -> list[str]:
     missing = [tool for tool in ("kubectl", "go", "git", "gcloud") if not shutil.which(tool)]
-    # kubectl-ate and ko are substrate's, built and run in the submodule.
+    # kubectl-ate is substrate's, built in the submodule.
     return missing + substrate.missing_submodule()
 
 
@@ -229,9 +229,7 @@ def deploy(
             # runs. Deleting one also deletes its golden actor and snapshot.
             delete_template(ate, name)
             manifest = render_template(cluster, name, sandbox_class, actor_memory, otlp)
-            # ko builds the ko:// images and puts their pushed digests in.
-            resolved = substrate.ko(cluster, "resolve", "-f", "-", input=manifest)
-            stream(ate("create", "actor-template", "-f", "-"), input=resolved)
+            stream(ate("create", "actor-template", "-f", "-"), input=substrate.resolve(cluster, manifest))
         for i, name in enumerate(names, 1):
             log(f"workloads: [{i}/{len(names)}] waiting for the {ATESPACE}/{name} golden snapshot (timeout {timeout}s)")
             wait_golden_snapshot(ate, cluster, name, timeout)
