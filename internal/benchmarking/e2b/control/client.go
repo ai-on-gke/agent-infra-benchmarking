@@ -95,17 +95,26 @@ func (c *Client) Create(ctx context.Context, req *CreateRequest) (*Sandbox, erro
 }
 
 // Pause snapshots and suspends the sandbox. Maps to substrate's SuspendActor.
+//
+// The per-sandbox operations (pause/resume/kill) live under /sandboxes/{id} —
+// only create is versioned at /v2/sandboxes. A /v2 prefix here 404s with
+// "no matching operation was found".
 func (c *Client) Pause(ctx context.Context, sandboxID string) error {
-	return c.do(ctx, http.MethodPost, "/v2/sandboxes/"+sandboxID+"/pause", nil, nil)
+	return c.do(ctx, http.MethodPost, "/sandboxes/"+sandboxID+"/pause", nil, nil)
 }
 
 // Resume wakes a paused sandbox. Maps to substrate's ResumeActor. The resumed
 // sandbox may carry a fresh envd access token and domain, so the response is
 // decoded and returned; a resume that answers with no body yields a nil Sandbox
 // and the caller keeps the pre-pause connection details.
+//
+// This explicit resume endpoint is marked deprecated in E2B's spec (the modern
+// path is POST /v2/sandboxes/{id}/connect, which resumes on demand), but it is
+// still served and is the clearest analog of substrate's ResumeActor for a
+// latency measurement.
 func (c *Client) Resume(ctx context.Context, sandboxID string, timeout int) (*Sandbox, error) {
 	var sb Sandbox
-	decoded, err := c.doMaybe(ctx, http.MethodPost, "/v2/sandboxes/"+sandboxID+"/resume", resumeRequest{Timeout: timeout}, &sb)
+	decoded, err := c.doMaybe(ctx, http.MethodPost, "/sandboxes/"+sandboxID+"/resume", resumeRequest{Timeout: timeout}, &sb)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +126,7 @@ func (c *Client) Resume(ctx context.Context, sandboxID string, timeout int) (*Sa
 
 // Kill deletes the sandbox. Maps to substrate's DeleteActor.
 func (c *Client) Kill(ctx context.Context, sandboxID string) error {
-	return c.do(ctx, http.MethodDelete, "/v2/sandboxes/"+sandboxID, nil, nil)
+	return c.do(ctx, http.MethodDelete, "/sandboxes/"+sandboxID, nil, nil)
 }
 
 // do performs one request and, when out is non-nil, decodes a JSON response
