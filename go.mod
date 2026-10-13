@@ -5,6 +5,7 @@ go 1.27.0
 replace github.com/agent-substrate/substrate => ./dependency-repos/substrate
 
 require (
+	connectrpc.com/connect v1.21.0
 	github.com/agent-substrate/substrate v0.1.0
 	github.com/google/uuid v1.6.0
 	github.com/myzhan/boomer v1.6.1-0.20250711115830-8a2c7ce4c7b1
