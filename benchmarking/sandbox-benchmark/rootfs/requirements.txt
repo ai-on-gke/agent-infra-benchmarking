@@ -1,0 +1,9 @@
+# What the tests import, installed in the rootfs: numpy, scipy and psutil at
+# ai-sandbox-benchmark's requirements.txt versions, pandas for
+# test_startup_time, and their dependencies.
+numpy==2.2.1
+scipy==1.15.1
+psutil==6.1.1
+pandas==3.0.6
+python-dateutil==2.9.0.post0
+six==1.17.0

@@ -1,0 +1,25 @@
+# What test_suspend_resume's setup installs into a venv of its own, and its
+# dependencies: kept as wheels in /opt/wheels rather than installed, as the
+# test times installing them.
+pydantic==2.14.1
+pydantic_core==2.50.1
+fastapi==0.143.0
+requests==2.34.2
+Jinja2==3.1.6
+pytest==9.1.1
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.7.22
+charset-normalizer==3.5.2
+idna==3.20
+iniconfig==2.3.1
+MarkupSafe==3.0.4
+opentelemetry-api==1.45.1
+packaging==26.3
+pluggy==1.6.0
+Pygments==2.21.0
+starlette==1.8.0
+typing_extensions==4.16.0
+typing-inspection==0.4.4
+urllib3==2.8.0
