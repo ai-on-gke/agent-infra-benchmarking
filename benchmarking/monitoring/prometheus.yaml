@@ -120,6 +120,9 @@ data:
           - source_labels: [__meta_kubernetes_pod_label_benchmark_test_case]
             action: replace
             target_label: test_case
+          - source_labels: [__meta_kubernetes_pod_label_benchmark_provider]
+            action: replace
+            target_label: provider
 
       # Control plane: substrate (ate-system) or agent-sandbox (agent-sandbox-system)
       # pods annotate their metrics port with prometheus.io/scrape.

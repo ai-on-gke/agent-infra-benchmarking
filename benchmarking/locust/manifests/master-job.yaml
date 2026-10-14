@@ -34,6 +34,7 @@ spec:
         app: locust-master
         benchmark-run-id: "${BENCHMARK_RUN_ID}"
         benchmark-test-case: "${BENCHMARK_RECORD_NAME}"
+        benchmark-provider: "${BENCHMARK_PROVIDER}"
     spec:
       restartPolicy: Never
       # The account the bucket's objectCreator grant names, for the upload.
@@ -68,6 +69,8 @@ spec:
           value: "${BENCHMARK_CASE}"
         - name: BENCHMARK_REPEAT
           value: "${BENCHMARK_REPEAT}"
+        - name: BENCHMARK_PROVIDER
+          value: "${BENCHMARK_PROVIDER}"
         # The share of requests that may fail before run_master.py fails the
         # run; locust itself exits 0 whatever failed (--exit-code-on-error 0).
         - name: MAX_FAILURE_RATIO

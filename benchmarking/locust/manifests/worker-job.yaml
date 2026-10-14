@@ -39,6 +39,7 @@ spec:
         # scenario-runner checks the run id and the case name against.
         benchmark-run-id: "${BENCHMARK_RUN_ID}"
         benchmark-test-case: "${BENCHMARK_RECORD_NAME}"
+        benchmark-provider: "${BENCHMARK_PROVIDER}"
     spec:
       restartPolicy: Never
       # Time for boomer to delete its actors on a SIGTERM and wait for the last

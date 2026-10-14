@@ -526,6 +526,7 @@ roleRef:
         "BENCHMARK_RUN_ID": run_id,
         "BENCHMARK_RECORD_NAME": name,
         "BENCHMARK_CASE": test_case or name,
+        "BENCHMARK_PROVIDER": provider,
         "BENCHMARK_REPEAT": str(repeat),
         "BENCHMARK_ONLY_SUMMARY": "false",
         "MAX_FAILURE_RATIO": str(case["max-failure-ratio"]),
