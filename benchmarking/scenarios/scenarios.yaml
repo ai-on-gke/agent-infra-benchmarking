@@ -154,7 +154,7 @@ cases:
       cluster:
         name: common
         tfvars: default.tfvars
-        # Two nodes for 31 workers and their 1Gi environments, as one
+        # Two nodes for 31 workers and their 4Gi environments, as one
         # takes openclaw's 10.
         tfvars_inline: |
           sandboxed_node_count     = 2
@@ -165,6 +165,8 @@ cases:
     # own on a worker of its own: the 4 single-run tests once, the other 9
     # `runs` times.
     env-worker-count: 31
+    # The fft tests' 10000x10000 matrices and their transforms take ~2.4 GB.
+    actor-memory: 4Gi
     comparator:
       # Not test_llm_generated_primes, which calls OpenAI, nor
       # test_package_installation, which times installs from PyPI: the
