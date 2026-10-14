@@ -15,11 +15,13 @@
 """Builds the submodule's images once per execution, and installs substrate
 from them on a case's cluster with its hack/install-ate.sh --deploy-ate-system,
 and hack/install-microvm-deps.sh --install on a microvm one, configured from
-the cluster's Terraform outputs."""
+the cluster's Terraform outputs. The gVisor SandboxConfig's assets are then
+mirrored into the cluster's bucket."""
 
 from __future__ import annotations
 
 import functools
+import json
 import os
 import re
 import shlex
@@ -59,6 +61,11 @@ ENVOY_DATAPLANE_DIR = f"{SUBSTRATE_PATH}/cmd/dataplane/envoy"
 ENVOY_DATAPLANE = images.Image(
     name="envoy-dataplane", dockerfile=f"{ENVOY_DATAPLANE_DIR}/Dockerfile", context=ENVOY_DATAPLANE_DIR
 )
+# The SandboxConfig install-ate.sh lays down.
+GVISOR_CONFIG = "gvisor-default"
+# Where in the cluster's bucket its assets are mirrored to, clear of the
+# snapshot locations the object-store plugin refuses assets under.
+ASSET_MIRROR_PREFIX = "sandbox-assets"
 
 
 class SubstrateError(RuntimeError):
@@ -200,8 +207,32 @@ def install_once(cluster: Cluster) -> None:
     # provider, and the installer requires a choice either way.
     install_ate = [str(SUBSTRATE_DIR / "hack" / "install-ate.sh"), "--deploy-ate-system", '--credential-provider={"enabled":false}']
     stream(install_ate, env=env, cwd=SUBSTRATE_DIR)
+    mirror_gvisor_assets(cluster)
     # install-ate.sh lays down only the gVisor SandboxConfig. This one needs
     # substrate's CRDs, so it comes after.
     if cluster.sandbox_class == "microvm":
         log(f"substrate: installing the microvm SandboxConfig and its assets on cluster {cluster.name}")
         stream([str(SUBSTRATE_DIR / "hack" / "install-microvm-deps.sh"), "--install"], env=env, cwd=SUBSTRATE_DIR)
+
+
+def mirror_gvisor_assets(cluster: Cluster) -> None:
+    """Copies GVISOR_CONFIG's gs:// assets in other buckets into the cluster's
+    bucket, and points the config at the copies. atelet's Workload Identity
+    token can't read a public bucket without uniform bucket-level access, such
+    as gs://gvisor, and atelet doesn't fall back to reading it anonymously
+    (agent-substrate/substrate#2613)."""
+    config = json.loads(output(cluster.kubectl("get", "sandboxconfig", GVISOR_CONFIG, "-o=json")))
+    patch = []
+    for i, version in enumerate(config["spec"]["versions"]):
+        for arch, assets in (version.get("assets") or {}).items():
+            for name, asset in assets.items():
+                url = asset["url"]
+                bucket, _, path = url.removeprefix("gs://").partition("/")
+                if not url.startswith("gs://") or bucket == cluster.bucket:
+                    continue
+                mirror = f"gs://{cluster.bucket}/{ASSET_MIRROR_PREFIX}/{bucket}/{path}"
+                log(f"substrate: mirroring {url} to {mirror}")
+                stream(["gcloud", "storage", "cp", "--no-clobber", url, mirror])
+                patch.append({"op": "replace", "path": f"/spec/versions/{i}/assets/{arch}/{name}/url", "value": mirror})
+    if patch:
+        stream(cluster.kubectl("patch", "sandboxconfig", GVISOR_CONFIG, "--type=json", f"--patch={json.dumps(patch)}"))
