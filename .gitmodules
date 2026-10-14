@@ -5,3 +5,6 @@
 	path = dependency-repos/ai-sandbox-benchmark
 	url = https://github.com/ArthurKamalov/ai-sandbox-benchmark
 	branch = add-substrape
+[submodule "dependency-repos/env"]
+	path = dependency-repos/env
+	url = https://github.com/agent-substrate/env
