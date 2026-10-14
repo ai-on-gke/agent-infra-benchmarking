@@ -256,13 +256,13 @@ def deploy(
     log(f"workloads: all {len(names)} golden snapshots ready")
 
 
-def deployed_template(cluster: Cluster, name: str) -> dict:
+def deployed_template(cluster: Cluster, name: str, atespace: str = ATESPACE) -> dict:
     """The ActorTemplate as substrate holds it."""
     with kubectl_ate(cluster) as ate:
         try:
-            return json.loads(output(ate("get", "actor-template", name, "-a", ATESPACE, "-o", "json")))
+            return json.loads(output(ate("get", "actor-template", name, "-a", atespace, "-o", "json")))
         except subprocess.CalledProcessError:
-            raise WorkloadError(f"no actor template {ATESPACE}/{name}; deploy the workloads first") from None
+            raise WorkloadError(f"no actor template {atespace}/{name}; deploy the workloads first") from None
 
 
 def egress_hosts(template: dict) -> list[str]:

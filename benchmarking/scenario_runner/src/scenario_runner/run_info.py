@@ -130,10 +130,10 @@ def nodes(cluster: Cluster) -> dict:
     }
 
 
-def deployments(cluster: Cluster) -> dict:
+def deployments(cluster: Cluster, namespace: str) -> dict:
     """The WorkerPool's workers and what the workload calls, such as mock-llm,
     which run as Deployments in the pool's namespace."""
-    items = _kubectl_json(cluster, "deployments", namespace=worker_pool.NAMESPACE)["items"]
+    items = _kubectl_json(cluster, "deployments", namespace=namespace)["items"]
     return {
         d["metadata"]["name"]: {
             "replicas": d["spec"].get("replicas"),
@@ -159,8 +159,16 @@ def infra(case: dict) -> dict:
 
 
 def collect(
-    cluster: Cluster, case: dict, template_name: str | None, template: dict | None, image_refs: dict, bucket: str
+    cluster: Cluster,
+    case: dict,
+    template_name: str | None,
+    template: dict | None,
+    image_refs: dict,
+    bucket: str,
+    pool: tuple[str, str] = (worker_pool.NAMESPACE, worker_pool.NAME),
 ) -> dict:
+    """pool is the namespace and name of the WorkerPool the run's actors run on."""
+    pool_namespace, pool_name = pool
     errors: dict[str, str] = {}
     sandbox_configs = {}
     config_name = ((template or {}).get("sandboxConfig") or {}).get("configName")
@@ -168,9 +176,7 @@ def collect(
         config = _read("sandbox config", lambda: _kubectl_json(cluster, "sandboxconfig", config_name), errors)
         sandbox_configs = {config_name: (config or {}).get("spec")}
     pool = _read(
-        "worker pool",
-        lambda: _kubectl_json(cluster, "workerpool", worker_pool.NAME, namespace=worker_pool.NAMESPACE),
-        errors,
+        "worker pool", lambda: _kubectl_json(cluster, "workerpool", pool_name, namespace=pool_namespace), errors
     )
     dirty = _read("repo state", lambda: bool(output(["git", "status", "--porcelain"], cwd=images.ROOT).strip()), errors)
     info = {
@@ -181,15 +187,17 @@ def collect(
         "worker_pool": {"spec": pool.get("spec"), "status": pool.get("status")} if pool else None,
         "actor_templates": {template_name: template} if template_name and template else {},
         "sandbox_configs": sandbox_configs,
-        "deployments": _read("deployments", lambda: deployments(cluster), errors),
+        "deployments": _read("deployments", lambda: deployments(cluster, pool_namespace), errors),
         "images": image_refs,
-        "locust_image": image_refs.get("locust-master"),
         "commit": images.tag(),
         "commit_dirty": dirty,
         "substrate_commit": _read("substrate commit", lambda: output(["git", "rev-parse", "HEAD"], cwd=substrate.SUBSTRATE_DIR).strip(), errors),
         "substrate_version": _read("substrate version", substrate.build_version, errors),
         "bucket": bucket,
     }
+    # A locust run's run.json keeps the key it has always had.
+    if "locust-master" in image_refs:
+        info["locust_image"] = image_refs["locust-master"]
     if errors:
         info["run_info_errors"] = errors
     return info

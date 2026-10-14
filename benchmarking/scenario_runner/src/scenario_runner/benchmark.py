@@ -18,21 +18,23 @@ from __future__ import annotations
 
 import argparse
 
-from . import images, locust, monitoring, reports, workloads
+from . import ate_env, images, locust, monitoring, reports, sandbox_benchmark, workloads
 from .cluster import Cluster
 from .log import log
 
-RUNNERS = {"locust": locust}
+RUNNERS = {"locust": locust, "sandbox-benchmark": sandbox_benchmark}
 # What a failed run raises besides CalledProcessError.
 ERRORS = (
     locust.LocustError,
+    sandbox_benchmark.SandboxBenchmarkError,
+    ate_env.EnvError,
     reports.ReportError,
     workloads.WorkloadError,
     images.ImageError,
     monitoring.MonitoringError,
 )
 # A run that timed out is still going, so a series stops at it.
-TIMEOUTS = (locust.LocustTimeout,)
+TIMEOUTS = (locust.LocustTimeout, sandbox_benchmark.SandboxBenchmarkTimeout)
 # The types whose repeats summary.write can summarize.
 SUMMARIZED = {"locust"}
 
