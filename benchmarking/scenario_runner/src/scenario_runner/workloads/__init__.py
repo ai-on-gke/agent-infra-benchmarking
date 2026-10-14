@@ -127,7 +127,7 @@ def check_worker_pool(cluster: Cluster, sandbox_class: str, timeout: int) -> Non
     try:
         pool_class = output(
             cluster.kubectl(
-                "get", "workerpool", worker_pool.NAME, "-o=jsonpath={.spec.sandboxClass}", namespace=NAMESPACE
+                "get", "workerpool", worker_pool.NAME, "-o=jsonpath={.spec.sandboxClasses[*].name}", namespace=NAMESPACE
             )
         ).strip()
     except subprocess.CalledProcessError:
