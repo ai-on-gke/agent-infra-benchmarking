@@ -167,6 +167,7 @@ cases:
     env-worker-count: 3
     actor-memory: 4Gi
     comparator:
+      providers: [substrate, local]
       tests:
       - test_suspend_resume
       runs: 3
