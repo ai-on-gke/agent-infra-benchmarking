@@ -22,14 +22,12 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
-import threading
 import time
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from string import Template
-from typing import Callable, Iterator
+from typing import Callable
 
-from . import RUNNER_DIR, images, reports, run_info, worker_pool, workloads
+from . import RUNNER_DIR, images, jobs, reports, run_info, worker_pool, workloads
 from .cluster import Cluster
 from .log import ON_CLOUD_RUN, log
 from .process import stream
@@ -144,17 +142,6 @@ def render(manifest: str, values: dict[str, str]) -> str:
     return Template((MANIFESTS_DIR / manifest).read_text()).substitute(values)
 
 
-def job_status(cluster: Cluster, job: str) -> tuple[int, int]:
-    """The Job's succeeded and failed pod counts; none for one not found."""
-    proc = subprocess.run(
-        cluster.kubectl("get", "job", job, "-o=jsonpath={.status.succeeded}|{.status.failed}", namespace=NAMESPACE),
-        capture_output=True,
-        text=True,
-    )
-    succeeded, _, failed = proc.stdout.partition("|") if proc.returncode == 0 else ("", "", "")
-    return int(succeeded or 0), int(failed or 0)
-
-
 def wait_master_ready(cluster: Cluster) -> None:
     """Boomer tries the master once at startup and doesn't retry, so the worker
     goes in only once this returns."""
@@ -170,7 +157,7 @@ def wait_master_ready(cluster: Cluster) -> None:
     while time.monotonic() < deadline:
         if subprocess.run(ready, capture_output=True, text=True).stdout == "True":
             return
-        if any(job_status(cluster, MASTER_JOB)):
+        if any(jobs.job_status(cluster, MASTER_JOB, NAMESPACE)):
             raise LocustError(f"{MASTER_JOB} ended before it was ready: kubectl logs job/{MASTER_JOB} -n {NAMESPACE}")
         time.sleep(2)
     try:
@@ -180,36 +167,13 @@ def wait_master_ready(cluster: Cluster) -> None:
     raise LocustError(f"the {MASTER_JOB} pod was not ready within {POD_START_TIMEOUT_SECS}s")
 
 
-@contextmanager
-def master_logs(cluster: Cluster) -> Iterator[Callable[[int], None]]:
-    """Logs the master's output as it comes, and yields what stops it, after
-    giving it up to that many seconds to print its last lines and end."""
-    follow = cluster.kubectl("logs", "--follow", f"job/{MASTER_JOB}", namespace=NAMESPACE)
-    proc = subprocess.Popen(follow, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    reader = threading.Thread(target=lambda: [log(line.rstrip("\n")) for line in proc.stdout], daemon=True)
-    reader.start()
-
-    def stop(grace: int = 0) -> None:
-        try:
-            proc.wait(grace)
-        except subprocess.TimeoutExpired:
-            proc.terminate()
-            proc.wait()
-        reader.join()
-
-    try:
-        yield stop
-    finally:
-        stop()
-
-
 def wait_for_jobs(cluster: Cluster, stop_logs: Callable[[int], None]) -> None:
     """Waits for both Jobs to end rather than the first to fail, as each one's
     log is part of the run."""
     log("locust: waiting for the run to finish")
     deadline = time.monotonic() + WAIT_TIMEOUT_SECS
     while time.monotonic() < deadline:
-        statuses = {job: job_status(cluster, job) for job in (MASTER_JOB, WORKER_JOB)}
+        statuses = {job: jobs.job_status(cluster, job, NAMESPACE) for job in (MASTER_JOB, WORKER_JOB)}
         if all(any(status) for status in statuses.values()):
             stop_logs(10)
             failed = [job for job, (succeeded, _) in statuses.items() if not succeeded]
@@ -231,15 +195,7 @@ def stop_run(cluster: Cluster) -> bool:
     actors, then writes and uploads the reports before the pod goes. The worker
     Job ends once its master is gone."""
     log(f"locust: interrupted; stopping {MASTER_JOB} so it can upload what it recorded")
-    delete = ["delete", "job", MASTER_JOB, "--ignore-not-found", "--cascade=foreground", "--wait",
-              f"--timeout={STOP_TIMEOUT_SECS}s"]  # fmt: skip
-    stopped = True
-    for cmd in (delete, [*delete[:2], WORKER_JOB, *delete[3:]]):
-        proc = subprocess.run(cluster.kubectl(*cmd, namespace=NAMESPACE), capture_output=True, text=True)
-        if proc.returncode:
-            stopped = False
-            log(f"locust: {' '.join(cmd[:3])} failed: {proc.stderr.strip()}", "WARNING")
-    return stopped
+    return jobs.stop(cluster, (MASTER_JOB, WORKER_JOB), NAMESPACE, STOP_TIMEOUT_SECS)
 
 
 def run(
@@ -345,7 +301,7 @@ def run(
     still_running = False
     try:
         wait_master_ready(cluster)
-        with master_logs(cluster) as stop_logs:
+        with jobs.follow_logs(cluster, MASTER_JOB, NAMESPACE) as stop_logs:
             apply(cluster, render("worker-job.yaml", values))
             wait_for_jobs(cluster, stop_logs)
     except LocustTimeout:
