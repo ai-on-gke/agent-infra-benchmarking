@@ -49,10 +49,8 @@ ENV_ATESPACE = "ate-env"
 API = "ate-env-api"
 API_PORT = 7777
 API_ADDR = f"{API}.{NAMESPACE}.svc.cluster.local:{API_PORT}"
+# In ENV_ATESPACE, as env looks a template up in the environment's atespace.
 TEMPLATE = "py312"
-# Apart from the environments', whose leftover actors a run deletes, the
-# template's golden actor among them otherwise.
-TEMPLATE_ATESPACE = "sandbox-benchmark"
 # ate-env manifest's name for the template's pool.
 POOL = f"{TEMPLATE}-workerpool"
 # What the template's workerSelector picks, so its actors keep off other pools.
@@ -178,10 +176,10 @@ def render_template(
             "manifest",
             "template",
             f"--template={TEMPLATE}",
-            f"--atespace={TEMPLATE_ATESPACE}",
+            f"--atespace={ENV_ATESPACE}",
             f"--guest-image={guest_image}",
             f"--rootfs-image={rootfs_image}",
-            f"--snapshots-bucket=gs://{cluster.bucket}/{TEMPLATE_ATESPACE}/{TEMPLATE}/",
+            f"--snapshots-bucket=gs://{cluster.bucket}/{ENV_ATESPACE}/{TEMPLATE}/",
         )
     )
     template = yaml.safe_load(manifest)
@@ -218,26 +216,25 @@ def deploy(
     worker_pool.wait_ready(cluster, timeout, POOL, NAMESPACE)
 
     log(
-        f"env: registering {TEMPLATE_ATESPACE}/{TEMPLATE} (rootfs={rootfs_image}, actor_memory={actor_memory},"
-        f" bucket=gs://{cluster.bucket}/{TEMPLATE_ATESPACE}/{TEMPLATE}/)"
+        f"env: registering {ENV_ATESPACE}/{TEMPLATE} (rootfs={rootfs_image}, actor_memory={actor_memory},"
+        f" bucket=gs://{cluster.bucket}/{ENV_ATESPACE}/{TEMPLATE}/)"
     )
     with workloads.kubectl_ate(cluster) as ate:
         # The store wants a template's atespace to exist when it is created.
-        if subprocess.run(ate("create", "atespace", TEMPLATE_ATESPACE), capture_output=True).returncode:
-            output(ate("get", "atespace", TEMPLATE_ATESPACE))
+        if subprocess.run(ate("create", "atespace", ENV_ATESPACE), capture_output=True).returncode:
+            output(ate("get", "atespace", ENV_ATESPACE))
         # Templates are immutable. Deleting one also deletes its golden actor and snapshot.
-        workloads.delete_template(ate, TEMPLATE, TEMPLATE_ATESPACE)
+        workloads.delete_template(ate, TEMPLATE, ENV_ATESPACE)
         stream(ate("create", "actor-template", "-f", "-"), input=template)
-        workloads.wait_golden_snapshot(ate, cluster, TEMPLATE, timeout, TEMPLATE_ATESPACE, (NAMESPACE, POOL))
-    log(f"env: {TEMPLATE_ATESPACE}/{TEMPLATE} ready")
+        workloads.wait_golden_snapshot(ate, cluster, TEMPLATE, timeout, ENV_ATESPACE, (NAMESPACE, POOL))
+    log(f"env: {ENV_ATESPACE}/{TEMPLATE} ready")
 
 
 def delete(cluster: Cluster, timeout: int = DEFAULT_TIMEOUT_SECS) -> None:
-    """Deletes the template and its atespace, the pool, and env's namespace."""
+    """Deletes the template, the pool, and env's namespace. The atespace is
+    left to ate-env-api, which creates it."""
     log("env: deleting")
     with workloads.kubectl_ate(cluster) as ate:
-        workloads.delete_template(ate, TEMPLATE, TEMPLATE_ATESPACE)
-        if subprocess.run(ate("delete", "atespace", TEMPLATE_ATESPACE), capture_output=True).returncode:
-            log(f"env: atespace {TEMPLATE_ATESPACE} not deleted; it may not exist or not be empty")
+        workloads.delete_template(ate, TEMPLATE, ENV_ATESPACE)
     worker_pool.delete(cluster, timeout, POOL, NAMESPACE)
     stream(cluster.kubectl("delete", "namespace", NAMESPACE, "--ignore-not-found", "--wait=true"))

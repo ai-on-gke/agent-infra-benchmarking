@@ -227,13 +227,13 @@ def run(
 
     if deploy_workloads:
         ate_env.deploy(cluster, sandbox_class, case["env-worker-count"], case["actor-memory"])
-    template = workloads.deployed_template(cluster, ate_env.TEMPLATE, ate_env.TEMPLATE_ATESPACE)
+    template = workloads.deployed_template(cluster, ate_env.TEMPLATE, ate_env.ENV_ATESPACE)
     # Matters when the template was not deployed by this run (--no-deploy-workloads).
     want = workloads.SANDBOX_CONFIGS[sandbox_class][1]
     have = (template.get("sandboxConfig") or {}).get("sandboxClass")
     if have != want:
         raise SandboxBenchmarkError(
-            f"actor template {ate_env.TEMPLATE_ATESPACE}/{ate_env.TEMPLATE} is {have or 'of no sandbox class'},"
+            f"actor template {ate_env.ENV_ATESPACE}/{ate_env.TEMPLATE} is {have or 'of no sandbox class'},"
             f" not {want}; deploy it again"
         )
 
@@ -261,7 +261,7 @@ def run(
         "BENCHMARK_REPORT_PREFIX": report_prefix,
         "SUBSTRATE_ENV_API_ADDR": ate_env.API_ADDR,
         "SUBSTRATE_ATESPACE": ate_env.ENV_ATESPACE,
-        "SUBSTRATE_TEMPLATE": f"{ate_env.TEMPLATE_ATESPACE}/{ate_env.TEMPLATE}",
+        "SUBSTRATE_TEMPLATE": f"{ate_env.ENV_ATESPACE}/{ate_env.TEMPLATE}",
     }
 
     stream(
