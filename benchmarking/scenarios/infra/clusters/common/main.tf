@@ -39,7 +39,7 @@ locals {
   # rolls the pool's nodes to apply it; that is the same node-by-node move the
   # version is there to describe, so it belongs in the plan rather than out of
   # it. The monitoring pool goes without, so a bump leaves Prometheus running.
-  substrate_version_label = { "ate.dev/substrate-version" = var.substrate_version }
+  substrate_version_label = var.substrate_version != null && var.substrate_version != "" ? { "ate.dev/substrate-version" = var.substrate_version } : {}
 }
 
 module "cluster" {

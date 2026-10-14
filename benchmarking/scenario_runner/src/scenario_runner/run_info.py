@@ -24,7 +24,7 @@ import subprocess
 from collections import defaultdict
 from typing import Callable
 
-from . import SCENARIOS_DIR, images, substrate, worker_pool
+from . import SCENARIOS_DIR, agent_sandbox, images, substrate, worker_pool
 from .cluster import Cluster
 from .log import log
 from .process import output
@@ -35,7 +35,7 @@ def _read(what: str, read: Callable[[], object], errors: dict[str, str]) -> obje
     leaves a gap in run.json rather than failing the run."""
     try:
         return read()
-    except (subprocess.CalledProcessError, OSError, ValueError, KeyError, substrate.SubstrateError) as exc:
+    except (subprocess.CalledProcessError, OSError, ValueError, KeyError, substrate.SubstrateError, agent_sandbox.AgentSandboxError) as exc:
         errors[what] = str(exc)
         log(f"run info: no {what}: {exc}", "WARNING")
         return None
@@ -167,11 +167,18 @@ def collect(
     if config_name:
         config = _read("sandbox config", lambda: _kubectl_json(cluster, "sandboxconfig", config_name), errors)
         sandbox_configs = {config_name: (config or {}).get("spec")}
-    pool = _read(
-        "worker pool",
-        lambda: _kubectl_json(cluster, "workerpool", worker_pool.NAME, namespace=worker_pool.NAMESPACE),
-        errors,
-    )
+    if case.get("provider") == "agent-sandbox":
+        pool = _read(
+            "warm pool",
+            lambda: _kubectl_json(cluster, "sandboxwarmpool", f"{template_name}-warm-pool", namespace=worker_pool.NAMESPACE),
+            errors,
+        )
+    else:
+        pool = _read(
+            "worker pool",
+            lambda: _kubectl_json(cluster, "workerpool", worker_pool.NAME, namespace=worker_pool.NAMESPACE),
+            errors,
+        )
     dirty = _read("repo state", lambda: bool(output(["git", "status", "--porcelain"], cwd=images.ROOT).strip()), errors)
     info = {
         "case": case,
@@ -186,8 +193,11 @@ def collect(
         "locust_image": image_refs.get("locust-master"),
         "commit": images.tag(),
         "commit_dirty": dirty,
-        "substrate_commit": _read("substrate commit", lambda: output(["git", "rev-parse", "HEAD"], cwd=substrate.SUBSTRATE_DIR).strip(), errors),
-        "substrate_version": _read("substrate version", substrate.build_version, errors),
+        "provider": case.get("provider", "agent-substrate"),
+        "substrate_commit": _read("substrate commit", lambda: output(["git", "rev-parse", "HEAD"], cwd=substrate.SUBSTRATE_DIR).strip(), errors) if case.get("provider", "agent-substrate") == "agent-substrate" else None,
+        "substrate_version": _read("substrate version", substrate.build_version, errors) if case.get("provider", "agent-substrate") == "agent-substrate" else None,
+        "agent_sandbox_commit": _read("agent-sandbox commit", lambda: output(["git", "rev-parse", "HEAD"], cwd=agent_sandbox.AGENT_SANDBOX_DIR).strip(), errors) if case.get("provider") == "agent-sandbox" else None,
+        "agent_sandbox_version": _read("agent-sandbox version", agent_sandbox.build_version, errors) if case.get("provider") == "agent-sandbox" else None,
         "bucket": bucket,
     }
     if errors:

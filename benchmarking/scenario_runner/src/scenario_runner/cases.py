@@ -27,6 +27,11 @@ SCENARIOS_FILE = SCENARIOS_DIR / "scenarios.yaml"
 CLUSTERS_DIR = SCENARIOS_DIR / "infra" / "clusters"
 CLUSTER_KEYS = {"name", "tfvars", "tfvars_inline", "variables"}
 SKIP_SUBSTRATE_INSTALL = "skip-substrate-install"
+PROVIDER = "provider"
+PROVIDER_SUBSTRATE = "agent-substrate"
+PROVIDER_AGENT_SANDBOX = "agent-sandbox"
+PROVIDERS = [PROVIDER_SUBSTRATE, PROVIDER_AGENT_SANDBOX]
+DEFAULT_PROVIDER = PROVIDER_SUBSTRATE
 
 
 def load_cases(scenarios_file: Path) -> dict[str, dict]:
@@ -44,6 +49,12 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
             raise ValueError(f"{scenarios_file}: case {name}'s `type` must be one of {', '.join(known)}")
         if not isinstance(case.get(SKIP_SUBSTRATE_INSTALL, False), bool):
             raise ValueError(f"{scenarios_file}: case {name}'s `{SKIP_SUBSTRATE_INSTALL}` must be true or false")
+        provider = case.get(PROVIDER, DEFAULT_PROVIDER)
+        if provider not in PROVIDERS:
+            raise ValueError(f"{scenarios_file}: case {name}'s `{PROVIDER}` must be one of {', '.join(PROVIDERS)}")
+        case[PROVIDER] = provider
+        if provider == PROVIDER_AGENT_SANDBOX:
+            case[SKIP_SUBSTRATE_INSTALL] = True
         repeats = case.get("repeats", 1)
         if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats < 1:
             raise ValueError(f"{scenarios_file}: case {name}'s `repeats` must be a whole number from 1, got {repeats!r}")

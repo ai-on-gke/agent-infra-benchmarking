@@ -77,6 +77,7 @@ class Cluster:
 
     def get_credentials(self) -> None:
         """Writes the cluster's context into kubeconfig."""
+        self.kubeconfig.parent.mkdir(parents=True, exist_ok=True)
         stream(
             [
                 "gcloud",

@@ -431,23 +431,92 @@ def run(
     delete = ["delete", "job", MASTER_JOB, WORKER_JOB, "--ignore-not-found", "--cascade=foreground", "--wait"]
     stream(cluster.kubectl(*delete, namespace=NAMESPACE))
 
-    worker_pool.deploy(cluster, case["worker-count"], case["sandbox-class"])
+    provider = case.get("provider", "agent-substrate")
     template_name = case["worker"].get("workload-template") or case["worker"].get("workload-name")
     workload = case["worker"].get("workload-name") or template_name
-    # The golden snapshot is taken on the pool just deployed.
-    if deploy_workloads:
-        workloads.deploy(cluster, [template_name], case["sandbox-class"])
     template = None
-    if template_name:
-        template = workloads.deployed_template(cluster, template_name)
-        workloads.check_deployed(template, template_name, case["sandbox-class"], workload)
-        # A case may state its own allow-list; otherwise the actors may call
-        # what their template is configured to, and nothing else.
-        if "actor-egress-allow" not in case["worker"]:
-            hosts = workloads.egress_hosts(template)
-            if hosts:
-                case = {**case, "worker": {**case["worker"], "actor-egress-allow": ",".join(hosts)}}
-        log(f"locust: actors may connect to {case['worker'].get('actor-egress-allow') or 'nothing'}")
+    if provider == "agent-sandbox":
+        from . import agent_sandbox
+        if deploy_workloads:
+            agent_sandbox.deploy_workload_and_pool(cluster, workload, case["worker-count"], case["sandbox-class"])
+        else:
+            agent_sandbox.recreate_warm_pool(cluster, workload, case["worker-count"])
+        case = {
+            **case,
+            "worker": {
+                **case["worker"],
+                "provider": "agent-sandbox",
+                "router-url": "http://sandbox-router-svc.agent-sandbox-system.svc.cluster.local:8080",
+                "warm-pool-name": f"{workload}-warm-pool",
+                "atespace": "benchmark-workloads",
+            },
+        }
+        boomer_volume_mounts = ""
+        boomer_volumes = ""
+        boomer_rbac = f"""apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: benchmarking-job-permissions-sandbox
+subjects:
+- kind: ServiceAccount
+  name: {cluster.runner_ksa}
+  namespace: benchmarking
+roleRef:
+  kind: ClusterRole
+  name: agent-sandbox-controller-extensions
+  apiGroup: rbac.authorization.k8s.io"""
+    else:
+        worker_pool.deploy(cluster, case["worker-count"], case["sandbox-class"])
+        # The golden snapshot is taken on the pool just deployed.
+        if deploy_workloads:
+            workloads.deploy(cluster, [template_name], case["sandbox-class"])
+        if template_name:
+            template = workloads.deployed_template(cluster, template_name)
+            workloads.check_deployed(template, template_name, case["sandbox-class"], workload)
+            # A case may state its own allow-list; otherwise the actors may call
+            # what their template is configured to, and nothing else.
+            if "actor-egress-allow" not in case["worker"]:
+                hosts = workloads.egress_hosts(template)
+                if hosts:
+                    case = {**case, "worker": {**case["worker"], "actor-egress-allow": ",".join(hosts)}}
+            log(f"locust: actors may connect to {case['worker'].get('actor-egress-allow') or 'nothing'}")
+        boomer_volume_mounts = """        volumeMounts:
+        - name: servicedns-ca
+          mountPath: /run/servicedns-ca
+          readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true"""
+        boomer_volumes = """      volumes:
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: ca.crt
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem"""
+        boomer_rbac = f"""apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: benchmarking-job-permissions
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: {cluster.runner_ksa}
+  namespace: benchmarking
+roleRef:
+  kind: Role
+  name: atelet-endpointslices
+  apiGroup: rbac.authorization.k8s.io"""
 
     info = run_info.collect(cluster, case, template_name, template, image_refs, bucket)
     values = {
@@ -468,6 +537,9 @@ def run(
         # JSON is a YAML flow sequence.
         "LOCUST_MASTER_ARGS": json.dumps(master_args(case)),
         "BOOMER_WORKER_ARGS": json.dumps(worker_args(case)),
+        "BOOMER_VOLUME_MOUNTS": boomer_volume_mounts,
+        "BOOMER_VOLUMES": boomer_volumes,
+        "BOOMER_RBAC": boomer_rbac,
     }
     log(
         f"locust: running {name} (run {run_id}):\n"
@@ -494,8 +566,13 @@ def run(
         raise
     finally:
         if not still_running:
-            atespace = case["worker"].get("atespace") or ACTOR_ATESPACE
-            record_cleanup(cluster, atespace, bucket, report_prefix, run_id, name)
+            if provider == "agent-sandbox":
+                from . import agent_sandbox
+                rec = agent_sandbox.cleanup(cluster, "benchmark-workloads")
+                log(f"locust: agent-sandbox cleanup: {rec['claims_deleted']} claims, {rec['sandboxes_deleted']} sandboxes deleted")
+            else:
+                atespace = case["worker"].get("atespace") or ACTOR_ATESPACE
+                record_cleanup(cluster, atespace, bucket, report_prefix, run_id, name)
         upload_logs(cluster, bucket, report_prefix, run_id, name)
         # A failed run's reports are kept too. On Cloud Run they'd go with the
         # container, so they stay only in the bucket.

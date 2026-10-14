@@ -53,6 +53,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"k8s.io/client-go/dynamic"
 )
 
 // The atespace scenario_runner/src/scenario_runner/workloads/ creates its
@@ -143,6 +144,12 @@ const (
 // rather than parsed by it: every flag the worker accepts is declared in
 // benchmarking/locust/go/cmd/boomer-worker. The zero value asks for the defaults.
 type Options struct {
+	// Provider names the infrastructure provider: agent-substrate or agent-sandbox.
+	Provider string
+
+	// WarmPoolName is the agent-sandbox SandboxWarmPool name.
+	WarmPoolName string
+
 	// Workload names a registered workload (see workload.go). Empty selects
 	// DefaultWorkload.
 	Workload string
@@ -232,7 +239,16 @@ func initRunWorkload(cfg *userclass.Config) (taskFn func(), shutdown func(contex
 	if opts.Timeout == 0 {
 		opts.Timeout = DefaultTimeout
 	}
-	rt := &runWorkloadRuntime{cfg: cfg, opts: opts, workload: wl, egressHosts: hosts}
+	var dc dynamic.Interface
+	if opts.Provider == "agent-sandbox" {
+		var err error
+		dc, err = initKubeDynamicClient()
+		if err != nil {
+			slog.Error("fatal: cannot initialize k8s client for agent-sandbox", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+	}
+	rt := &runWorkloadRuntime{cfg: cfg, opts: opts, workload: wl, egressHosts: hosts, dynClient: dc}
 	rt.run, rt.endRun = context.WithCancelCause(context.Background())
 	return rt.iterate, rt.shutdown
 }
@@ -242,6 +258,7 @@ type runWorkloadRuntime struct {
 	opts     Options
 	workload workload
 	users    sync.Map // goroutineID -> *runWorkloadUser
+	dynClient dynamic.Interface
 
 	// Options.EgressAllow, checked; empty creates no egress policy.
 	egressHosts []string
@@ -353,7 +370,9 @@ func (r *runWorkloadRuntime) discard(ctx context.Context, gid int64, u *runWorkl
 		slog.String("call", call),
 		slog.String("err", cause.Error()))
 
-	if err := u.suspendAndDelete(ctx); err != nil {
+	if u.provider == "agent-sandbox" {
+		_ = u.deleteClaim(ctx)
+	} else if err := u.suspendAndDelete(ctx); err != nil {
 		slog.Warn("discarded actor was left behind",
 			slog.String("actor", u.actorName),
 			slog.String("template", u.templateName),
@@ -375,9 +394,15 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, opts Options) (*runW
 		actorName:    "sb-" + uuid.NewString(),
 		templateName: tmpl,
 		userClass:    runWorkloadUserClass,
+		provider:     opts.Provider,
+		warmPoolName: opts.WarmPoolName,
+		dynClient:    r.dynClient,
 		timeout:      opts.Timeout,
 	}
 	bmetrics.UpdateUsers(runWorkloadUserClass, 1)
+	if opts.Provider == "agent-sandbox" {
+		return u, nil
+	}
 	if err := r.ensureAtespace(ctx, u); err != nil {
 		bmetrics.UpdateUsers(runWorkloadUserClass, -1)
 		return nil, err
@@ -451,7 +476,12 @@ func (r *runWorkloadRuntime) shutdown(ctx context.Context) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			err := u.suspendAndDelete(ctx)
+			var err error
+			if u.provider == "agent-sandbox" {
+				err = u.deleteClaim(ctx)
+			} else {
+				err = u.suspendAndDelete(ctx)
+			}
 			bmetrics.UpdateUsers(runWorkloadUserClass, -1)
 			if err != nil {
 				left.Add(1)
@@ -479,6 +509,13 @@ type runWorkloadUser struct {
 	templateName string
 	userClass    string
 
+	// Provider settings
+	provider     string
+	warmPoolName string
+	dynClient    dynamic.Interface
+	claimName    string
+	podIP        string
+
 	// timeout bounds each call; zero leaves it unbounded.
 	timeout time.Duration
 
@@ -500,6 +537,8 @@ func (u *runWorkloadUser) actor() actorRef {
 		RouterURL:  u.cfg.RouterURL,
 		Atespace:   u.cfg.Atespace,
 		Name:       u.actorName,
+		PodIP:      u.podIP,
+		Provider:   u.provider,
 	}
 }
 
@@ -573,7 +612,11 @@ func (u *runWorkloadUser) cycle(ctx context.Context, mode string) (call string, 
 	if err := u.measureTTFI(ctx, mode); err != nil {
 		return ttfiMetric, err
 	}
-	if err := u.suspend(ctx); err != nil {
+	if u.provider == "agent-sandbox" {
+		if err := u.releaseClaim(ctx); err != nil {
+			return suspendMetric, err
+		}
+	} else if err := u.suspend(ctx); err != nil {
 		return suspendMetric, err
 	}
 	return "", nil
@@ -603,7 +646,12 @@ func (u *runWorkloadUser) measureTTFI(ctx context.Context, mode string) error {
 	)
 
 	start := time.Now()
-	if mode == ResumeModeExplicit {
+	if u.provider == "agent-sandbox" {
+		if err := u.claimWarmSandbox(ctx); err != nil {
+			u.recordWindow(ctx, span, ttfiMetric, time.Since(start), err)
+			return err
+		}
+	} else if mode == ResumeModeExplicit {
 		if err := u.resume(ctx); err != nil {
 			u.recordWindow(ctx, span, ttfiMetric, time.Since(start), err)
 			return err

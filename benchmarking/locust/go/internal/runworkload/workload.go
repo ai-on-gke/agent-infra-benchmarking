@@ -66,6 +66,8 @@ type actorRef struct {
 	RouterURL  string
 	Atespace   string
 	Name       string
+	PodIP      string
+	Provider   string
 }
 
 // target is the value atenet resolves the actor from.
@@ -145,10 +147,21 @@ func sendHTTPInstruction(ctx context.Context, actor actorRef, inst httpInstructi
 	if err != nil {
 		return false, err
 	}
-	// The router resolves the actor from this header alone — atenet's ingress
-	// handler parses it and 404s with "invalid actor reference" when it is
-	// absent, regardless of the request's Host.
-	httpReq.Header.Set(atenet.TargetActorHeader, actor.target())
+	if actor.Provider == "agent-sandbox" {
+		httpReq.Header.Set("X-Sandbox-ID", actor.Name)
+		httpReq.Header.Set("X-Sandbox-Port", "80")
+		if actor.Atespace != "" {
+			httpReq.Header.Set("X-Sandbox-Namespace", actor.Atespace)
+		}
+		if actor.PodIP != "" {
+			httpReq.Header.Set("X-Sandbox-Pod-IP", actor.PodIP)
+		}
+	} else {
+		// The router resolves the actor from this header alone — atenet's ingress
+		// handler parses it and 404s with "invalid actor reference" when it is
+		// absent, regardless of the request's Host.
+		httpReq.Header.Set(atenet.TargetActorHeader, actor.target())
+	}
 	if inst.ContentType != "" {
 		httpReq.Header.Set("Content-Type", inst.ContentType)
 	}

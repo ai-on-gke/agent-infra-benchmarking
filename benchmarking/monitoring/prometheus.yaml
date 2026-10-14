@@ -58,7 +58,7 @@ metadata:
   name: prometheus-benchmarking-nodes
 rules:
 - apiGroups: [""]
-  resources: ["nodes", "nodes/proxy", "nodes/metrics"]
+  resources: ["nodes", "nodes/proxy", "nodes/metrics", "pods"]
   verbs: ["get", "list", "watch"]
 - nonResourceURLs: ["/metrics"]
   verbs: ["get"]
@@ -71,33 +71,6 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: prometheus-benchmarking-nodes
-subjects:
-- kind: ServiceAccount
-  name: prometheus
-  namespace: benchmarking
----
-# Substrate's control plane runs in ate-system, which the pod discovery of the
-# substrate job below has to list. A Role there rather than a cluster-wide
-# grant, since that is the one namespace it reads.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: prometheus-benchmarking
-  namespace: ate-system
-rules:
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: prometheus-benchmarking
-  namespace: ate-system
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: prometheus-benchmarking
 subjects:
 - kind: ServiceAccount
   name: prometheus
@@ -148,16 +121,15 @@ data:
             action: replace
             target_label: test_case
 
-      # Substrate's control plane: ate-api-server, atelet and atenet-router
-      # annotate their metrics port with prometheus.io/scrape. The same job as
-      # dependency-repos/substrate/manifests/ate-install/kind/prometheus.yaml,
-      # so the series have the names upstream's own dashboards expect.
-      - job_name: 'substrate'
+      # Control plane: substrate (ate-system) or agent-sandbox (agent-sandbox-system)
+      # pods annotate their metrics port with prometheus.io/scrape.
+      - job_name: 'control-plane'
         kubernetes_sd_configs:
           - role: pod
             namespaces:
               names:
                 - ate-system
+                - agent-sandbox-system
         relabel_configs:
           - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
             action: keep

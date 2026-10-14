@@ -292,9 +292,10 @@ def cluster_deployment(
     tf_vars, later ones winning."""
     cluster_dir = CLUSTERS_DIR / spec["name"]
     variables = dict(spec.get("variables", {}))
+    if substrate_repository is not None:
+        variables["substrate_image_repository"] = substrate_repository
     if substrate_version is not None:
         variables["substrate_version"] = substrate_version
-        variables["substrate_image_repository"] = substrate_repository
     variables.update(tf_vars)
     return deployment.create(
         cluster_dir,

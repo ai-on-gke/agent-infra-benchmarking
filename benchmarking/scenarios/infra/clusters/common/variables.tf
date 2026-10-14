@@ -80,7 +80,7 @@ variable "services_cidr" {
 variable "kubernetes_version" {
   description = "Kubernetes version of the control plane (GKE's min_master_version) and of every node pool."
   type        = string
-  default     = "1.35.8-gke.1225000"
+  default     = "1.35.8-gke.1439001"
 }
 
 variable "zone" {
@@ -123,6 +123,7 @@ variable "sandbox_class" {
 variable "substrate_version" {
   description = "Build version of the substrate submodule, as the ate.dev/substrate-version label on every node pool."
   type        = string
+  default     = null
 }
 
 # The scenario-runner builds substrate's images once per execution, into its

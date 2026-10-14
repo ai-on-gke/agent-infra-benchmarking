@@ -34,6 +34,7 @@ import (
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	btrace "github.com/agent-substrate/substrate/internal/benchmarking/boomer/trace"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/myzhan/boomer"
 
 	// Imported for the user class each registers via init(). runworkload is
@@ -88,6 +89,8 @@ func main() {
 			fmt.Sprintf("runworkload only: deadline on each control-plane call and instruction; one that runs past it counts as a failure. Unset selects %s.", runworkload.DefaultTimeout))
 		actorEgressAllow = flag.String("actor-egress-allow", "",
 			"runworkload only: comma-separated hostnames every actor may reach over cleartext HTTP or gRPC, on any port, each as the actor dials it. Unset gives actors no egress policy, so they can reach nothing.")
+		provider     = flag.String("provider", "agent-substrate", "Provider: agent-substrate or agent-sandbox.")
+		warmPoolName = flag.String("warm-pool-name", "", "agent-sandbox only: name of the SandboxWarmPool to claim from.")
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
@@ -119,12 +122,16 @@ func main() {
 		_ = tp.Shutdown(shutdownCtx)
 	}()
 
-	conn, apiStub, err := boomerutil.DialControl(*apiEndpoint)
-	if err != nil {
-		slog.Error("failed to dial ateapi", slog.String("err", err.Error()))
-		os.Exit(1)
+	var apiStub ateapipb.ControlClient
+	if *provider == "agent-substrate" {
+		conn, stub, err := boomerutil.DialControl(*apiEndpoint)
+		if err != nil {
+			slog.Error("failed to dial ateapi", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+		defer conn.Close()
+		apiStub = stub
 	}
-	defer conn.Close()
 
 	// Upstream's tuning. Every VU calls the one router host, and the default two
 	// idle connections per host would put a TCP connect in most ExecutionTime rows.
@@ -159,13 +166,15 @@ func main() {
 	// only that entry's Init reads these, so a run of another user class
 	// carries them without ever looking at them.
 	runworkload.SetOptions(runworkload.Options{
-		Workload:    *workloadName,
-		Template:    *workloadTemplate,
-		Timeout:     *workloadTimeout,
-		MinWait:     *minWait,
-		MaxWait:     *maxWait,
-		ResumeMode:  *resumeMode,
-		EgressAllow: splitList(*actorEgressAllow),
+		Provider:     *provider,
+		WarmPoolName: *warmPoolName,
+		Workload:     *workloadName,
+		Template:     *workloadTemplate,
+		Timeout:      *workloadTimeout,
+		MinWait:      *minWait,
+		MaxWait:      *maxWait,
+		ResumeMode:   *resumeMode,
+		EgressAllow:  splitList(*actorEgressAllow),
 	})
 
 	entry, ok := userclass.Lookup(class)
