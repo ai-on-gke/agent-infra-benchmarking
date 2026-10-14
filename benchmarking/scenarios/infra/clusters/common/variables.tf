@@ -80,7 +80,7 @@ variable "services_cidr" {
 variable "kubernetes_version" {
   description = "Kubernetes version of the control plane (GKE's min_master_version) and of every node pool."
   type        = string
-  default     = "1.35.8-gke.1225000"
+  default     = "1.35.8-gke.1626001"
 }
 
 variable "zone" {
