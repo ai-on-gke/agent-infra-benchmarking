@@ -72,6 +72,13 @@ def parse_args() -> argparse.Namespace:
         help="a case to run; repeat it for more. Default: every case",
     )
     p.add_argument(
+        "--test",
+        action="append",
+        metavar="NAME",
+        help="an ai-sandbox-benchmark test to run, test_ prefix optional, instead of the case's `comparator.tests`;"
+        " repeat it for more. Only for sandbox-benchmark cases",
+    )
+    p.add_argument(
         "--project-id",
         default=os.environ.get("PROJECT_ID"),
         required="PROJECT_ID" not in os.environ,
@@ -188,7 +195,19 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
     unknown = [name for name in names if name not in cases]
     if unknown:
         fail(f"no case {', '.join(unknown)} in {args.scenarios_file}; it has {', '.join(cases)}")
-    return {name: cases[name] for name in names}
+    selected = {name: cases[name] for name in names}
+    if args.test:
+        others = [name for name, case in selected.items() if case["type"] != "sandbox-benchmark"]
+        if others:
+            fail(f"--test is only for sandbox-benchmark cases, not {', '.join(others)}")
+        tests = list(dict.fromkeys(t if t.startswith("test_") else f"test_{t}" for t in args.test))
+        for name, case in selected.items():
+            selected[name] = case = {**case, "comparator": {**case["comparator"], "tests": tests}}
+            try:
+                benchmark.check(name, case)
+            except ValueError as exc:
+                fail(str(exc))
+    return selected
 
 
 def check_requirements(cases: dict[str, dict], cloud_build: bool) -> None:
