@@ -23,6 +23,9 @@
 # For sandbox-benchmark: `comparator.tests` names ai-sandbox-benchmark's tests
 # by function name, run `comparator.runs` times each, and `env-worker-count`
 # and `actor-memory` size env's WorkerPool and its environments.
+# `comparator.providers` runs them on each of substrate and local in turn,
+# [substrate] by default, and combines their results into one comparison,
+# the first provider the others are compared with.
 # `sandbox-class` has to be the cluster's `sandbox_class`, gvisor by default.
 # `noop` is the scenario-runner's alone: it applies and destroys the case's
 # cluster, and runs nothing on it.

@@ -12,18 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The comparator image's entrypoint: runs ai-sandbox-benchmark's tests on its
-substrate provider, writes each run of each test to results.json and how the
+"""The comparator image's entrypoint: runs ai-sandbox-benchmark's tests on one
+of its providers, writes each run of each test to results.json and how the
 whole went to run.json, and uploads both to
-gs://<REPORT_BUCKET>/<REPORT_PREFIX>/<BENCHMARK_RUN_ID>/<BENCHMARK_RECORD_NAME>/.
+gs://<REPORT_BUCKET>/<REPORT_PREFIX>/<BENCHMARK_RUN_ID>/<BENCHMARK_RECORD_NAME>/<provider>/.
 
 It drives comparator.py's SandboxExecutor rather than its command line, which
 numbers the tests in directory order and whose history.json leaves out the
-errors a provider returns rather than raises: every error of the substrate
-provider's.
+errors a provider returns rather than raises: every error of the provider's.
 
-Read from the environment, besides the provider's SUBSTRATE_* settings:
+Read from the environment, besides the provider's own settings, such as
+substrate's SUBSTRATE_*:
 
+    BENCHMARK_PROVIDER     the provider, substrate by default
     BENCHMARK_TESTS        the tests' function names, comma-separated
     BENCHMARK_RUNS         how many times each test runs, once for a single-run one
     BENCHMARK_WARMUP_RUNS  the runs of each before those, not recorded; 0 by default
@@ -54,7 +55,7 @@ from google.cloud import storage
 
 APP_DIR = Path(__file__).resolve().parent
 REPORT_DIR = Path("/reports")
-PROVIDER = "substrate"
+PROVIDER = os.environ.get("BENCHMARK_PROVIDER") or "substrate"
 DEFAULT_PREFIX = "reports"
 # A test's output is kept to its last OUTPUT_TAIL characters.
 OUTPUT_TAIL = 2000
@@ -211,7 +212,7 @@ def main() -> int:
     bucket = os.environ.get("REPORT_BUCKET", "")
     prefix = os.environ.get("REPORT_PREFIX") or DEFAULT_PREFIX
     # Read before the run, so a missing one fails it before it starts.
-    folder = f"{os.environ['BENCHMARK_RUN_ID']}/{os.environ['BENCHMARK_RECORD_NAME']}" if bucket else ""
+    folder = f"{os.environ['BENCHMARK_RUN_ID']}/{os.environ['BENCHMARK_RECORD_NAME']}/{PROVIDER}" if bucket else ""
     max_ratio = float(os.environ.get("MAX_FAILURE_RATIO", "0"))
     names = [name.strip() for name in os.environ["BENCHMARK_TESTS"].split(",") if name.strip()]
     runs = int(os.environ["BENCHMARK_RUNS"])

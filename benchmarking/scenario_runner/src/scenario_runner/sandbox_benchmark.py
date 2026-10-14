@@ -12,12 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runs a case of type sandbox-benchmark: ai-sandbox-benchmark's tests on its
-substrate provider, through agent-substrate/env deployed for them by ate_env,
-as the comparator Job of sandbox-benchmark/manifests/comparator-job.yaml, and
-waits for it. The case's `comparator` names the tests by function name, how
-many times each runs and how many warmup runs go before; `env-worker-count`
-and `actor-memory` size env's pool and the environments."""
+"""Runs a case of type sandbox-benchmark: ai-sandbox-benchmark's tests on each
+of its providers in turn, each as a run of the comparator Job of
+sandbox-benchmark/manifests/comparator-job.yaml, and combines their results
+into those of one comparator run of them all. The case's `comparator` names
+the providers, the tests by function name, how many times each runs and how
+many warmup runs go before. The substrate provider runs them through
+agent-substrate/env deployed for them by ate_env, whose pool and environments
+`env-worker-count` and `actor-memory` size; local runs them in the
+comparator's own pod."""
 
 from __future__ import annotations
 
@@ -30,10 +33,13 @@ from datetime import datetime, timezone
 from string import Template
 from typing import Callable
 
+from google.cloud import storage
+
 from . import RUNNER_DIR, ate_env, images, jobs, reports, run_info, workloads
+from . import sandbox_benchmark_combine as combine
 from .cluster import Cluster
 from .log import ON_CLOUD_RUN, log
-from .process import stream
+from .process import failure, stream
 
 MANIFEST = RUNNER_DIR.parent / "sandbox-benchmark" / "manifests" / "comparator-job.yaml"
 AI_SANDBOX_BENCHMARK_DIR = ate_env.DEPENDENCY_REPOS / "ai-sandbox-benchmark"
@@ -54,7 +60,9 @@ CASE_KEYS = {
     "type", "infra", "repeats", "skip-substrate-install", "sandbox-class", "env-worker-count", "actor-memory",
     "max-failure-ratio", "comparator",
 }  # fmt: skip
-COMPARATOR_KEYS = {"tests", "runs", "warmup-runs"}
+COMPARATOR_KEYS = {"providers", "tests", "runs", "warmup-runs"}
+# The providers that need no API keys.
+PROVIDERS = ("substrate", "local")
 
 
 class SandboxBenchmarkError(RuntimeError):
@@ -128,13 +136,21 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
         raise ValueError(f"case {name}'s `comparator.runs` must be a whole number from 1")
     if not whole(comparator.get("warmup-runs", 0), 0):
         raise ValueError(f"case {name}'s `comparator.warmup-runs` must be a whole number")
+    providers = comparator.get("providers", ["substrate"])
+    if (
+        not isinstance(providers, list)
+        or not providers
+        or not set(providers) <= set(PROVIDERS)
+        or len(set(providers)) != len(providers)
+    ):
+        raise ValueError(f"case {name}'s `comparator.providers` must be a list of distinct {', '.join(PROVIDERS)}")
     return {
         "sandbox-class": "gvisor",
         "env-worker-count": DEFAULT_ENV_WORKER_COUNT,
         "actor-memory": ate_env.DEFAULT_ACTOR_MEMORY,
         "max-failure-ratio": DEFAULT_MAX_FAILURE_RATIO,
         **case,
-        "comparator": {"warmup-runs": 0, **comparator},
+        "comparator": {"providers": ["substrate"], "warmup-runs": 0, **comparator},
     }
 
 
@@ -177,76 +193,49 @@ def wait_for_job(cluster: Cluster, stop_logs: Callable[[int], None]) -> None:
     raise SandboxBenchmarkTimeout(f"timed out after {WAIT_TIMEOUT_SECS}s; the Job is left running")
 
 
-def run(
+def run_provider(
     cluster: Cluster,
     name: str,
     case: dict,
-    run_id: str | None = None,
-    build: bool = True,
-    deploy_workloads: bool = True,
-    cloud_build: bool = False,
-    docker_login: bool = True,
-    report_bucket: str | None = None,
-    report_prefix: str = reports.REPORT_PREFIX,
-    test_case: str | None = None,
-    repeat: int = 0,
+    provider: str,
+    run_id: str,
+    comparator_image: str,
+    deploy_workloads: bool,
+    bucket: str,
+    report_prefix: str,
+    test_case: str | None,
+    repeat: int,
 ) -> None:
-    """Runs the case, recorded under name, as part of run_id, by default a UTC
-    timestamp and the commit. test_case and repeat say which case it is a
-    repeat of; repeat is 0 for a case run once. Without build, uses the images
-    already pushed; without deploy_workloads, the env and template already
-    deployed. Without docker_login, a local build uses the registry
-    credentials Docker already has. The reports go under report_prefix in
-    report_bucket, by default the cluster's own. Expects the cluster's
-    credentials in its kubeconfig."""
-    case = check_case(name, case, deploy_workloads)
+    """Runs the case's tests on provider, as one comparator Job, whose reports
+    go under <run_id>/<name>/<provider>/."""
     sandbox_class = case["sandbox-class"]
-    # env's workers would never schedule past the sandboxed pool's taint.
-    if sandbox_class != cluster.sandbox_class:
-        raise SandboxBenchmarkError(
-            f"case {name} is {sandbox_class}, but cluster {cluster.name}'s sandboxed pool is"
-            f" {cluster.sandbox_class}; set the cluster's sandbox_class to match"
-        )
-    run_id = run_id or f"{datetime.now(timezone.utc):%Y%m%dt%H%M%Sz}-{images.tag()}"
-    if not reports.LABEL_RE.fullmatch(run_id):
-        raise ValueError(f"run id {run_id!r} is not a valid label value")
-    bucket = report_bucket or cluster.bucket
-    # Before the build, which is the slow part.
-    reports.refuse_reused(bucket, report_prefix, run_id, name)
-
-    if build:
-        images.build_and_push(cluster, [images.SANDBOX_BENCHMARK_IMAGES], cloud_build=cloud_build, login=docker_login)
-        # env's images are only read when it is deployed.
+    comparator = case["comparator"]
+    on_env = provider == "substrate"
+    template = None
+    if on_env:
         if deploy_workloads:
-            ate_env.build_images(cluster, cloud_build=cloud_build, login=docker_login)
-    # By digest, so the Job runs exactly the image built from this commit even
-    # if the tag is pushed again meanwhile; run.json records it.
-    comparator_image = images.pin(
-        images.image_ref(images.SANDBOX_BENCHMARK_IMAGES, cluster.docker_repo, COMPARATOR_IMAGE)
-    )
-
-    if deploy_workloads:
-        ate_env.deploy(cluster, sandbox_class, case["env-worker-count"], case["actor-memory"])
-    template = workloads.deployed_template(cluster, ate_env.TEMPLATE, ate_env.ENV_ATESPACE)
-    # Matters when the template was not deployed by this run (--no-deploy-workloads).
-    want = workloads.SANDBOX_CONFIGS[sandbox_class][1]
-    have = (template.get("sandboxConfig") or {}).get("sandboxClass")
-    if have != want:
-        raise SandboxBenchmarkError(
-            f"actor template {ate_env.ENV_ATESPACE}/{ate_env.TEMPLATE} is {have or 'of no sandbox class'},"
-            f" not {want}; deploy it again"
-        )
+            ate_env.deploy(cluster, sandbox_class, case["env-worker-count"], case["actor-memory"])
+        template = workloads.deployed_template(cluster, ate_env.TEMPLATE, ate_env.ENV_ATESPACE)
+        # Matters when the template was not deployed by this run (--no-deploy-workloads).
+        want = workloads.SANDBOX_CONFIGS[sandbox_class][1]
+        have = (template.get("sandboxConfig") or {}).get("sandboxClass")
+        if have != want:
+            raise SandboxBenchmarkError(
+                f"actor template {ate_env.ENV_ATESPACE}/{ate_env.TEMPLATE} is {have or 'of no sandbox class'},"
+                f" not {want}; deploy it again"
+            )
 
     info = run_info.collect(
-        cluster, case, ate_env.TEMPLATE, template, {COMPARATOR_IMAGE: comparator_image}, bucket,
+        cluster, case, ate_env.TEMPLATE if on_env else None, template, {COMPARATOR_IMAGE: comparator_image}, bucket,
         pool=(ate_env.NAMESPACE, ate_env.POOL),
     )  # fmt: skip
-    info["env_commit"] = commit(ate_env.ENV_DIR)
+    if on_env:
+        info["env_commit"] = commit(ate_env.ENV_DIR)
     info["ai_sandbox_benchmark_commit"] = commit(AI_SANDBOX_BENCHMARK_DIR)
-    comparator = case["comparator"]
     values = {
         "COMPARATOR_IMAGE": comparator_image,
         "BENCHMARK_RUNNER_KSA": cluster.runner_ksa,
+        "BENCHMARK_PROVIDER": provider,
         "BENCHMARK_TESTS": ",".join(comparator["tests"]),
         "BENCHMARK_RUNS": str(comparator["runs"]),
         "BENCHMARK_WARMUP_RUNS": str(comparator["warmup-runs"]),
@@ -275,11 +264,12 @@ def run(
             "delete", "job", JOB, "--ignore-not-found", "--cascade=foreground", "--wait", namespace=NAMESPACE
         )
     )
+    folder = f"{name}/{provider}"
     log(
-        f"sandbox-benchmark: running {name} (run {run_id}):\n"
+        f"sandbox-benchmark: running {name} on {provider} (run {run_id}):\n"
         f"  comparator: {comparator_image}\n"
         f"  tests: {values['BENCHMARK_TESTS']} ({comparator['runs']} runs, {comparator['warmup-runs']} warmup)\n"
-        f"  reports: gs://{bucket}/{report_prefix}/{run_id}/{name}/"
+        f"  reports: gs://{bucket}/{report_prefix}/{run_id}/{folder}/"
     )
     stream(cluster.kubectl("apply", "-f", "-"), input=Template(MANIFEST.read_text()).substitute(values))
     # The environments are the run's to delete while it is still going.
@@ -298,9 +288,121 @@ def run(
         still_running = not jobs.stop(cluster, (JOB,), NAMESPACE, STOP_TIMEOUT_SECS)
         raise
     finally:
-        if not still_running:
-            reports.record_cleanup(cluster, ate_env.ENV_ATESPACE, bucket, report_prefix, run_id, name)
-        reports.upload_logs(cluster, NAMESPACE, (JOB,), bucket, report_prefix, run_id, name)
+        if on_env and not still_running:
+            reports.record_cleanup(cluster, ate_env.ENV_ATESPACE, bucket, report_prefix, run_id, folder)
+        reports.upload_logs(cluster, NAMESPACE, (JOB,), bucket, report_prefix, run_id, folder)
+
+
+def combine_reports(bucket: str, report_prefix: str, run_id: str, name: str, providers: list[str]) -> None:
+    """Combines the providers' reports in the bucket into results.json and
+    comparison.md beside their folders, as one comparator run of them all
+    would have them. Best-effort: each provider's own reports are the record
+    either way."""
+    prefix = f"{report_prefix}/{run_id}/{name}"
+    sources = []
+    try:
+        bucket_ = storage.Client().bucket(bucket)
+        for provider in providers:
+            texts = {}
+            for file in (combine.RESULTS_JSON, combine.RUN_JSON):
+                blob = bucket_.blob(f"{prefix}/{provider}/{file}")
+                texts[file] = blob.download_as_text() if blob.exists() else None
+            if None in texts.values():
+                log(f"sandbox-benchmark: {provider} left out of the combined results: it recorded none", "WARNING")
+                continue
+            sources.append(
+                combine.source(
+                    provider,
+                    json.loads(texts[combine.RESULTS_JSON]),
+                    json.loads(texts[combine.RUN_JSON]),
+                    f"gs://{bucket}/{prefix}/{provider}",
+                )
+            )
+        if not sources:
+            log("sandbox-benchmark: no provider recorded results to combine", "WARNING")
+            return
+        combine.check(sources)
+        bucket_.blob(f"{prefix}/{combine.RESULTS_JSON}").upload_from_string(
+            json.dumps(combine.combined_results(sources), indent=2) + "\n", content_type="application/json"
+        )
+        bucket_.blob(f"{prefix}/{combine.COMPARISON_MD}").upload_from_string(
+            combine.render(sources), content_type="text/markdown"
+        )
+    except Exception as exc:
+        log(f"sandbox-benchmark: could not combine the providers' results: {type(exc).__name__}: {exc}", "WARNING")
+        return
+    names = ", ".join(s["name"] for s in sources)
+    log(f"sandbox-benchmark: {names} combined in gs://{bucket}/{prefix}/{combine.COMPARISON_MD}")
+
+
+def run(
+    cluster: Cluster,
+    name: str,
+    case: dict,
+    run_id: str | None = None,
+    build: bool = True,
+    deploy_workloads: bool = True,
+    cloud_build: bool = False,
+    docker_login: bool = True,
+    report_bucket: str | None = None,
+    report_prefix: str = reports.REPORT_PREFIX,
+    test_case: str | None = None,
+    repeat: int = 0,
+) -> None:
+    """Runs the case, recorded under name, as part of run_id, by default a UTC
+    timestamp and the commit: on each of its providers in turn, then combines
+    their results. A provider whose run fails does not stop the ones after it;
+    the run fails once they have run. test_case and repeat say which case it
+    is a repeat of; repeat is 0 for a case run once. Without build, uses the
+    images already pushed; without deploy_workloads, the env and template
+    already deployed. Without docker_login, a local build uses the registry
+    credentials Docker already has. The reports go under report_prefix in
+    report_bucket, by default the cluster's own. Expects the cluster's
+    credentials in its kubeconfig."""
+    case = check_case(name, case, deploy_workloads)
+    sandbox_class = case["sandbox-class"]
+    providers = case["comparator"]["providers"]
+    # env's workers would never schedule past the sandboxed pool's taint.
+    if "substrate" in providers and sandbox_class != cluster.sandbox_class:
+        raise SandboxBenchmarkError(
+            f"case {name} is {sandbox_class}, but cluster {cluster.name}'s sandboxed pool is"
+            f" {cluster.sandbox_class}; set the cluster's sandbox_class to match"
+        )
+    run_id = run_id or f"{datetime.now(timezone.utc):%Y%m%dt%H%M%Sz}-{images.tag()}"
+    if not reports.LABEL_RE.fullmatch(run_id):
+        raise ValueError(f"run id {run_id!r} is not a valid label value")
+    bucket = report_bucket or cluster.bucket
+    # Before the build, which is the slow part.
+    reports.refuse_reused(bucket, report_prefix, run_id, name)
+
+    if build:
+        images.build_and_push(cluster, [images.SANDBOX_BENCHMARK_IMAGES], cloud_build=cloud_build, login=docker_login)
+        # env's images are only read when it is deployed.
+        if "substrate" in providers and deploy_workloads:
+            ate_env.build_images(cluster, cloud_build=cloud_build, login=docker_login)
+    # By digest, so the Job runs exactly the image built from this commit even
+    # if the tag is pushed again meanwhile; run.json records it.
+    comparator_image = images.pin(
+        images.image_ref(images.SANDBOX_BENCHMARK_IMAGES, cluster.docker_repo, COMPARATOR_IMAGE)
+    )
+
+    failed = []
+    try:
+        for provider in providers:
+            try:
+                run_provider(
+                    cluster, name, case, provider, run_id, comparator_image, deploy_workloads, bucket, report_prefix,
+                    test_case, repeat,
+                )  # fmt: skip
+            except SandboxBenchmarkTimeout:
+                raise
+            except (SandboxBenchmarkError, ate_env.EnvError, workloads.WorkloadError,
+                    subprocess.CalledProcessError) as exc:  # fmt: skip
+                reason = failure(exc) if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+                log(f"sandbox-benchmark: {name} on {provider} failed: {reason}", "ERROR")
+                failed.append(provider)
+        combine_reports(bucket, report_prefix, run_id, name, providers)
+    finally:
         # A failed run's reports are kept too. On Cloud Run they'd go with the
         # container, so they stay only in the bucket.
         if ON_CLOUD_RUN:
@@ -309,3 +411,5 @@ def run(
             )
         else:
             reports.download_reports(bucket, report_prefix, run_id, name)
+    if failed:
+        raise SandboxBenchmarkError(f"{name} failed on {', '.join(failed)} of {', '.join(providers)}")

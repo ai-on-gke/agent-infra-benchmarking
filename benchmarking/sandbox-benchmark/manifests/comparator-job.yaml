@@ -48,6 +48,8 @@ spec:
         imagePullPolicy: Always
         env:
         # What run_comparator.py reads; its docstring says what each is.
+        - name: BENCHMARK_PROVIDER
+          value: "${BENCHMARK_PROVIDER}"
         - name: BENCHMARK_TESTS
           value: "${BENCHMARK_TESTS}"
         - name: BENCHMARK_RUNS
