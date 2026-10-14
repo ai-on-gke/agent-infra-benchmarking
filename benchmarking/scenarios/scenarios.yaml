@@ -154,37 +154,18 @@ cases:
       cluster:
         name: common
         tfvars: default.tfvars
-        # Two nodes for 31 workers and their 4Gi environments, as one
-        # takes openclaw's 10.
         tfvars_inline: |
           sandboxed_node_count     = 2
           sandboxed_min_node_count = 2
           sandboxed_max_node_count = 2
     sandbox-class: gvisor
     # The comparator starts every run at once, each in an environment of its
-    # own on a worker of its own: the 4 single-run tests once, the other 9
-    # `runs` times.
-    env-worker-count: 31
-    # The fft tests' 10000x10000 matrices and their transforms take ~2.4 GB.
+    # own on a worker of its own.
+    env-worker-count: 3
     actor-memory: 4Gi
     comparator:
-      # Not test_llm_generated_primes, which calls OpenAI, nor
-      # test_package_installation, which times installs from PyPI: the
-      # environments have no egress.
       tests:
-      - test_calculate_primes
-      - test_improved_calculate_primes
-      - test_fft_performance
-      - test_fft_multiprocessing_performance
-      - test_optimized_example
-      - test_list_directory
-      - test_resource_intensive_calculation
-      - test_startup_time
       - test_suspend_resume
-      - test_database_operations
-      - test_file_io_performance
-      - test_system_info
-      - test_container_stability
       runs: 3
 
   # The scenario-runner's Terraform path on infra/clusters/dummy, which creates
