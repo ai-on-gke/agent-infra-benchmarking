@@ -1,3 +1,7 @@
 [submodule "dependency-repos/substrate"]
 	path = dependency-repos/substrate
 	url = https://github.com/agent-substrate/substrate
+[submodule "dependency-repos/ai-sandbox-benchmark"]
+	path = dependency-repos/ai-sandbox-benchmark
+	url = https://github.com/ArthurKamalov/ai-sandbox-benchmark
+	branch = add-substrape
