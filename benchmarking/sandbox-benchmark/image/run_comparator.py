@@ -90,7 +90,7 @@ def select_tests(comparator, names: list[str]) -> dict:
 
 
 def records(tests: dict, results: dict) -> list[dict]:
-    """Each run of each test: its metrics in seconds, and its errors, of
+    """Each run of each test: its metrics in milliseconds, and its errors, of
     which a failed run has at least one."""
     out = []
     for test_id, func in tests.items():
@@ -129,7 +129,10 @@ def print_summary(runs: list[dict]) -> None:
         for run in passed:
             for name, values in run["metrics"].items():
                 medians.setdefault(name, []).extend(values)
-        stats = ", ".join(f"{name} {statistics.median(values):.3f}s" for name, values in medians.items())
+        # A metric a run added no measurement to has no values.
+        stats = ", ".join(
+            f"{name} {statistics.median(values):.3f}ms" for name, values in medians.items() if values
+        )
         print(
             f"{test}: {len(passed)} of {len(of_test)} runs passed" + (f"; medians: {stats}" if stats else ""),
             flush=True,
