@@ -34,7 +34,7 @@ from typing import Callable, NoReturn
 
 import yaml
 
-from .. import LOCAL_DATA_DIR, benchmark, dev_infra, locust, names, substrate, summary
+from .. import LOCAL_DATA_DIR, benchmark, dev_infra, names, reports, substrate, summary
 from ..cases import SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases, record_names
 from ..cluster import Cluster
 from ..deployment import RUNNER_INFRA_DIR, Deployment, GcsDeployment, cluster_deployment
@@ -103,7 +103,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--report-prefix",
-        default=locust.REPORT_PREFIX,
+        default=reports.REPORT_PREFIX,
         help="folder in the report bucket the reports go under, as <prefix>/<name>/<record>/. Default: %(default)s",
     )
     p.add_argument(
@@ -306,7 +306,7 @@ def run_repeats(name: str, case: dict, run: Callable[[str, int], None]) -> None:
         log(f"{name}: repeat {n} of {len(records)}, as {record}")
         try:
             run(record, n)
-        except locust.LocustTimeout:
+        except benchmark.TIMEOUTS:
             raise
         except RUN_ERRORS as exc:
             log(f"{record}: {describe(exc)}", "ERROR")
@@ -322,15 +322,15 @@ def run_cases(args: argparse.Namespace, cases: dict[str, dict], run: Callable[[s
     for name, case in cases.items():
         try:
             run(name, case)
-        except locust.LocustTimeout:
+        except benchmark.TIMEOUTS:
             raise
         except (CaseFailed, *RUN_ERRORS) as exc:
             log(f"{name}: {describe(exc)}", "ERROR")
             failed.append(name)
         # From what was downloaded, so not on Cloud Run.
         records = record_names(name, case)
-        if len(records) > 1 and case["type"] != "noop" and not ON_CLOUD_RUN:
-            summary.write(locust.REPORTS_DIR / args.name, name, records)
+        if len(records) > 1 and case["type"] in benchmark.SUMMARIZED and not ON_CLOUD_RUN:
+            summary.write(reports.REPORTS_DIR / args.name, name, records)
     return failed
 
 
