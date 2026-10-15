@@ -165,72 +165,62 @@ automation-infra/tools/trigger --deployment="$DEPLOYMENT" --scenario=glutton
 ## Keeping your own runs' reports in BigQuery
 
 A run from your machine keeps its reports only in `reports/` once its cluster
-is gone. To query them in BigQuery, as the scheduled runs' are, create a
-deployment of only the [`terraform/modules/reports`](terraform/modules/reports)
-module: a bucket and a dataset of views over it, with no Cloud Run job. Then
-point your runs at it by its name:
+is gone. To query them in BigQuery, as the scheduled runs' are, apply
+[`dev/reports`](dev/reports): a bucket and a dataset of views over it, with no
+Cloud Run job. Then point your runs at its folder:
 
 ```bash
-./benchmarking/tools/run --report-deployment="$DEPLOYMENT" --scenario glutton
+./benchmarking/tools/run --report-deployment=automation-infra/dev/reports --scenario glutton
 ```
 
 ### Creating the reports deployment
 
-1. Do steps 1-6 of [Preparing](#preparing). `SOURCE_BRANCH` is not used. The
-   deployment's name also names its bucket, `$DEPLOYMENT-reports`, which must
-   not be taken in any project.
+Its Terraform state stays in `dev/reports/terraform.tfstate`, gitignored, so
+each checkout has one. Keep the file: destroying the deployment needs it.
 
-2. Create the deployment's folder. If your runs' clusters are in another
-   project than `$PROJECT_ID`, add `writer_project_ids = ["<that project>"]` to
-   the `module` block, so their uploads are allowed:
+1. Log in to gcloud and for Application Default Credentials, as in steps 1-2 of
+   [Preparing](#preparing).
 
-   ```bash
-   mkdir -p "automation-infra/deployments/$DEPLOYMENT"
-
-   cat > "automation-infra/deployments/$DEPLOYMENT/main.tf" <<EOF
-   terraform {
-     required_version = ">= 1.5"
-
-     backend "gcs" {
-       bucket = "$STATE_BUCKET"
-       prefix = "automation/reports/$DEPLOYMENT"
-     }
-   }
-
-   module "reports" {
-     source = "../../terraform/modules/reports"
-
-     project_id = "$PROJECT_ID"
-     region     = "$REGION"
-     name       = "$DEPLOYMENT"
-   }
-
-   output "reports" {
-     value = module.reports
-   }
-   EOF
-
-   printf '.terraform/\n' > "automation-infra/deployments/$DEPLOYMENT/.gitignore"
-   ```
-
-3. Initialize and apply it:
+2. Set the project and the deployment's name, which the steps below use. The
+   name also names the bucket, `$DEPLOYMENT-reports`, which must not be taken
+   in any project: 6-30 lowercase letters, digits and hyphens, starting with a
+   letter.
 
    ```bash
-   terraform -chdir="automation-infra/deployments/$DEPLOYMENT" init
-   terraform -chdir="automation-infra/deployments/$DEPLOYMENT" apply
+   PROJECT_ID='<YOUR_PROJECT>' DEPLOYMENT='<DEPLOYMENT_NAME>'
    ```
 
-Commit the folder only if others are to use the deployment too.
+3. Write its `terraform.tfvars`. If your runs' clusters are in another project
+   than `$PROJECT_ID`, also add `writer_project_ids = ["<that project>"]`, so
+   their uploads are allowed:
+
+   ```bash
+   printf 'project_id = "%s"\nname       = "%s"\n' "$PROJECT_ID" "$DEPLOYMENT" > automation-infra/dev/reports/terraform.tfvars
+   ```
+
+4. Initialize it:
+
+   ```bash
+   terraform -chdir=automation-infra/dev/reports init
+   ```
+
+5. Apply it. It creates the bucket, the dataset, the bucket's grant to the
+   clusters and the dataset's tables and views:
+
+   ```bash
+   terraform -chdir=automation-infra/dev/reports apply
+   ```
 
 ### Running into it
 
-`--report-deployment` sends a run's reports to
-`gs://$DEPLOYMENT-reports/data/<run-id>/<record>/` rather than to the
+`--report-deployment` reads the bucket and the prefix from the folder's
+`reports` output, as `terraform output` shows them, and sends a run's reports
+to `gs://$DEPLOYMENT-reports/data/<run-id>/<record>/` rather than to the
 cluster's own bucket. It works with any other option, `--dev-infra` included,
 and a local copy still lands in `reports/<run-id>/`:
 
 ```bash
-./benchmarking/tools/run --report-deployment="$DEPLOYMENT" --scenario glutton
+./benchmarking/tools/run --report-deployment=automation-infra/dev/reports --scenario glutton
 ```
 
 The run uploads the Jobs' logs with your own credentials, so your account
@@ -264,5 +254,5 @@ else the deployment created:
 
 ```bash
 gcloud storage rm --recursive "gs://$DEPLOYMENT-reports/**"
-terraform -chdir="automation-infra/deployments/$DEPLOYMENT" destroy
+terraform -chdir=automation-infra/dev/reports destroy
 ```
