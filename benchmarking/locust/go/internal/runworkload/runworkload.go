@@ -150,6 +150,9 @@ type Options struct {
 	// WarmPoolName is the agent-sandbox SandboxWarmPool name.
 	WarmPoolName string
 
+	// LifecycleMode is the agent-sandbox lifecycle mode: "claim" or "snapshot".
+	LifecycleMode string
+
 	// Workload names a registered workload (see workload.go). Empty selects
 	// DefaultWorkload.
 	Workload string
@@ -371,7 +374,11 @@ func (r *runWorkloadRuntime) discard(ctx context.Context, gid int64, u *runWorkl
 		slog.String("err", cause.Error()))
 
 	if u.provider == "agent-sandbox" {
-		_ = u.deleteClaim(ctx)
+		if u.lifecycleMode == "snapshot" {
+			_ = u.cleanupSnapshotSandbox(ctx)
+		} else {
+			_ = u.deleteClaim(ctx)
+		}
 	} else if err := u.suspendAndDelete(ctx); err != nil {
 		slog.Warn("discarded actor was left behind",
 			slog.String("actor", u.actorName),
@@ -389,15 +396,16 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, opts Options) (*runW
 	}
 
 	u := &runWorkloadUser{
-		cfg:          r.cfg,
-		workload:     r.workload,
-		actorName:    "sb-" + uuid.NewString(),
-		templateName: tmpl,
-		userClass:    runWorkloadUserClass,
-		provider:     opts.Provider,
-		warmPoolName: opts.WarmPoolName,
-		dynClient:    r.dynClient,
-		timeout:      opts.Timeout,
+		cfg:           r.cfg,
+		workload:      r.workload,
+		actorName:     "sb-" + uuid.NewString(),
+		templateName:  tmpl,
+		userClass:     runWorkloadUserClass,
+		provider:      opts.Provider,
+		warmPoolName:  opts.WarmPoolName,
+		lifecycleMode: opts.LifecycleMode,
+		dynClient:     r.dynClient,
+		timeout:       opts.Timeout,
 	}
 	bmetrics.UpdateUsers(runWorkloadUserClass, 1)
 	if opts.Provider == "agent-sandbox" {
@@ -478,7 +486,11 @@ func (r *runWorkloadRuntime) shutdown(ctx context.Context) {
 
 			var err error
 			if u.provider == "agent-sandbox" {
-				err = u.deleteClaim(ctx)
+				if u.lifecycleMode == "snapshot" {
+					err = u.cleanupSnapshotSandbox(ctx)
+				} else {
+					err = u.deleteClaim(ctx)
+				}
 			} else {
 				err = u.suspendAndDelete(ctx)
 			}
@@ -510,11 +522,12 @@ type runWorkloadUser struct {
 	userClass    string
 
 	// Provider settings
-	provider     string
-	warmPoolName string
-	dynClient    dynamic.Interface
-	claimName    string
-	podIP        string
+	provider      string
+	warmPoolName  string
+	lifecycleMode string
+	dynClient     dynamic.Interface
+	claimName     string
+	podIP         string
 
 	// timeout bounds each call; zero leaves it unbounded.
 	timeout time.Duration
@@ -613,7 +626,11 @@ func (u *runWorkloadUser) cycle(ctx context.Context, mode string) (call string, 
 		return ttfiMetric, err
 	}
 	if u.provider == "agent-sandbox" {
-		if err := u.releaseClaim(ctx); err != nil {
+		if u.lifecycleMode == "snapshot" {
+			if err := u.snapshotAndSuspend(ctx); err != nil {
+				return suspendMetric, err
+			}
+		} else if err := u.releaseClaim(ctx); err != nil {
 			return suspendMetric, err
 		}
 	} else if err := u.suspend(ctx); err != nil {
@@ -647,7 +664,12 @@ func (u *runWorkloadUser) measureTTFI(ctx context.Context, mode string) error {
 
 	start := time.Now()
 	if u.provider == "agent-sandbox" {
-		if err := u.claimWarmSandbox(ctx); err != nil {
+		if u.lifecycleMode == "snapshot" {
+			if err := u.resumeSandbox(ctx); err != nil {
+				u.recordWindow(ctx, span, ttfiMetric, time.Since(start), err)
+				return err
+			}
+		} else if err := u.claimWarmSandbox(ctx); err != nil {
 			u.recordWindow(ctx, span, ttfiMetric, time.Since(start), err)
 			return err
 		}
@@ -863,8 +885,12 @@ func (u *runWorkloadUser) tracedCall(ctx context.Context, name string, do func(c
 
 // callContext bounds one call, retries included, by the user's timeout.
 func (u *runWorkloadUser) callContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	if u.timeout <= 0 {
+	timeout := u.timeout
+	if u.lifecycleMode == "snapshot" && (timeout <= 0 || timeout < 120*time.Second) {
+		timeout = 120 * time.Second
+	}
+	if timeout <= 0 {
 		return ctx, func() {}
 	}
-	return context.WithTimeout(ctx, u.timeout)
+	return context.WithTimeout(ctx, timeout)
 }

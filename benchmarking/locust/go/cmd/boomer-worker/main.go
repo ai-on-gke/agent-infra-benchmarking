@@ -89,8 +89,9 @@ func main() {
 			fmt.Sprintf("runworkload only: deadline on each control-plane call and instruction; one that runs past it counts as a failure. Unset selects %s.", runworkload.DefaultTimeout))
 		actorEgressAllow = flag.String("actor-egress-allow", "",
 			"runworkload only: comma-separated hostnames every actor may reach over cleartext HTTP or gRPC, on any port, each as the actor dials it. Unset gives actors no egress policy, so they can reach nothing.")
-		provider     = flag.String("provider", "agent-substrate", "Provider: agent-substrate or agent-sandbox.")
-		warmPoolName = flag.String("warm-pool-name", "", "agent-sandbox only: name of the SandboxWarmPool to claim from.")
+		provider      = flag.String("provider", "agent-substrate", "Provider: agent-substrate or agent-sandbox.")
+		warmPoolName  = flag.String("warm-pool-name", "", "agent-sandbox only: name of the SandboxWarmPool to claim from.")
+		lifecycleMode = flag.String("lifecycle-mode", "claim", "agent-sandbox only: 'claim' (warm pool claim) or 'snapshot' (GKE Pod Snapshot hibernate/resume).")
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
@@ -166,15 +167,16 @@ func main() {
 	// only that entry's Init reads these, so a run of another user class
 	// carries them without ever looking at them.
 	runworkload.SetOptions(runworkload.Options{
-		Provider:     *provider,
-		WarmPoolName: *warmPoolName,
-		Workload:     *workloadName,
-		Template:     *workloadTemplate,
-		Timeout:      *workloadTimeout,
-		MinWait:      *minWait,
-		MaxWait:      *maxWait,
-		ResumeMode:   *resumeMode,
-		EgressAllow:  splitList(*actorEgressAllow),
+		Provider:      *provider,
+		WarmPoolName:  *warmPoolName,
+		LifecycleMode: *lifecycleMode,
+		Workload:      *workloadName,
+		Template:      *workloadTemplate,
+		Timeout:       *workloadTimeout,
+		MinWait:       *minWait,
+		MaxWait:       *maxWait,
+		ResumeMode:    *resumeMode,
+		EgressAllow:   splitList(*actorEgressAllow),
 	})
 
 	entry, ok := userclass.Lookup(class)

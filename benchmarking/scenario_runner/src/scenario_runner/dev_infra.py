@@ -69,6 +69,9 @@ def create_deployment(record: dict, infra: str, json_output: bool = False) -> De
     the source as it is now."""
     uncreated = deployment(record["name"], infra, json_output)
     variables = names.dev_infra_vars(record["project_id"], record["region"], record["name"], infra == "cluster")
+    if record.get("lifecycle_mode") == "snapshot":
+        variables["enable_pod_snapshots"] = True
+        variables["sandbox_gvisor"] = True
     if infra == "scenario-runner":
         return uncreated.create(RUNNER_INFRA_DIR, variables)
     version = None if record.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()

@@ -114,6 +114,18 @@ variable "sandbox_class" {
   }
 }
 
+variable "enable_pod_snapshots" {
+  description = "Enables GKE Pod Snapshots addon on the cluster."
+  type        = bool
+  default     = false
+}
+
+variable "sandbox_gvisor" {
+  description = "Enables GKE Sandbox (gVisor) on the sandboxed node pool."
+  type        = bool
+  default     = false
+}
+
 # Every node pool's ate.dev/substrate-version label, which has to be the
 # version hack/install-ate.sh stamps on the atelet DaemonSet: a worker pod
 # schedules only onto a node whose label matches the dataplane's. The

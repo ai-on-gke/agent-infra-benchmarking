@@ -280,9 +280,9 @@ spec:
 
 
 def cleanup(cluster: Cluster, namespace: str, timeout: int = 60) -> dict:
-    """Deletes any leftover SandboxClaim and Sandbox resources in namespace."""
+    """Deletes any leftover SandboxClaim, Sandbox, and PodSnapshot resources in namespace."""
     record = {"namespace": namespace, "claims_deleted": 0, "sandboxes_deleted": 0, "left": []}
-    for kind in ("sandboxclaims", "sandboxes"):
+    for kind in ("podsnapshotmanualtriggers", "podsnapshots", "sandboxclaims", "sandboxes"):
         cmd = cluster.kubectl("get", kind, "-n", namespace, "-o", "jsonpath={.items[*].metadata.name}")
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode == 0 and proc.stdout.strip():
@@ -297,15 +297,58 @@ def cleanup(cluster: Cluster, namespace: str, timeout: int = 60) -> dict:
     return record
 
 
+def deploy_pod_snapshot_storage(cluster: Cluster) -> None:
+    ns = "benchmark-workloads"
+    manifest = f"""apiVersion: podsnapshot.gke.io/v1
+kind: PodSnapshotStorageConfig
+metadata:
+  name: benchmark-snapshot-storage
+  namespace: {ns}
+spec:
+  snapshotStorageConfig:
+    gcs:
+      bucket: {cluster.bucket}
+      path: pod-snapshots
+      tokenSource: podKSA
+---
+apiVersion: podsnapshot.gke.io/v1
+kind: PodSnapshotPolicy
+metadata:
+  name: benchmark-snapshot-policy
+  namespace: {ns}
+spec:
+  storageConfigName: benchmark-snapshot-storage
+  selector:
+    matchLabels:
+      agents.x-k8s.io/created-by: controller
+  snapshotScope: whole-pod
+  triggerConfig:
+    type: manual
+    postCheckpoint: resume
+  snapshotGroupingRules:
+    groupByLabelValue:
+      labels:
+      - agents.x-k8s.io/sandbox-name-hash
+      groupRetentionPolicy:
+        maxSnapshotCountPerGroup: 3
+"""
+    log(f"agent-sandbox: deploying GKE PodSnapshotStorageConfig and PodSnapshotPolicy (bucket={cluster.bucket})")
+    stream(cluster.kubectl("apply", "-f", "-"), input=manifest)
+
+
 def deploy_workload_and_pool(
     cluster: Cluster,
     workload_name: str,
     worker_count: int,
     sandbox_class: str = "gvisor",
+    lifecycle_mode: str = "claim",
     timeout: int = 300,
 ) -> None:
     ns = "benchmark-workloads"
     stream(cluster.kubectl("apply", "-f", "-"), input=f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {ns}\n")
+
+    if lifecycle_mode == "snapshot":
+        deploy_pod_snapshot_storage(cluster)
 
     if workload_name == "openclaw":
         from .workloads import openclaw
@@ -361,7 +404,9 @@ def deploy_workload_and_pool(
             memory: 256Mi"""
 
     runtime_class_field = ""
-    if sandbox_class == "microvm":
+    if lifecycle_mode == "snapshot":
+        runtime_class_field = "      runtimeClassName: gvisor\n"
+    elif sandbox_class == "microvm":
         runtime_class_field = "      runtimeClassName: kata\n"
     template_yaml = f"""apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxTemplate

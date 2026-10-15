@@ -58,6 +58,8 @@ module "cluster" {
   release_channel     = "REGULAR"
   block_upgrades      = true
 
+  enable_pod_snapshots = var.enable_pod_snapshots
+
   # Without these, substrate's podcertificate-controller never creates the
   # ClusterTrustBundles and hack/install-ate.sh waits for them forever.
   k8s_beta_apis = [
@@ -91,6 +93,7 @@ module "cluster" {
       labels         = merge(local.substrate_version_label, { "benchmarking-worker" = "true" })
       # The microvm guests boot on /dev/kvm.
       enable_nested_virtualization = var.sandbox_class == "microvm"
+      sandbox_gvisor               = var.sandbox_gvisor || var.enable_pod_snapshots
       # worker-pool.yaml.tmpl's WorkerPool already tolerates this taint; without
       # it actually applied to the nodes, nothing stops substrate's own
       # control-plane pods (and anything else) from also landing here
@@ -343,6 +346,27 @@ resource "google_storage_bucket_iam_member" "benchmark_runner_object_creator" {
   bucket = google_storage_bucket.this.name
   role   = "roles/storage.objectCreator"
   member = local.benchmark_runner_wi_principal
+}
+
+resource "google_storage_bucket_iam_member" "gke_robot_snapshot_user" {
+  count  = var.enable_pod_snapshots ? 1 : 0
+  bucket = google_storage_bucket.this.name
+  role   = "roles/storage.objectUser"
+  member = "serviceAccount:service-${data.google_project.this.number}@container-engine-robot.iam.gserviceaccount.com"
+}
+
+resource "google_storage_bucket_iam_member" "pod_ksa_snapshot_user" {
+  count  = var.enable_pod_snapshots ? 1 : 0
+  bucket = google_storage_bucket.this.name
+  role   = "roles/storage.objectUser"
+  member = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/benchmark-workloads/sa/default"
+}
+
+resource "google_storage_bucket_iam_member" "pod_ksa_snapshot_viewer" {
+  count  = var.enable_pod_snapshots ? 1 : 0
+  bucket = google_storage_bucket.this.name
+  role   = "roles/storage.bucketViewer"
+  member = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/benchmark-workloads/sa/default"
 }
 
 # The binding names a principal by namespace and ServiceAccount, so the

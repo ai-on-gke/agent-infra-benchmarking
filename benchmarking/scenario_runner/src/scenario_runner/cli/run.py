@@ -77,6 +77,12 @@ def parse_args() -> argparse.Namespace:
         help=f"infrastructure provider to test; one of {', '.join(PROVIDERS)}. Overrides case setting",
     )
     p.add_argument(
+        "--lifecycle-mode",
+        choices=["claim", "snapshot"],
+        default="claim",
+        help="agent-sandbox lifecycle mode: 'claim' (warm pool claim/release) or 'snapshot' (GKE Pod Snapshot hibernate/resume). Default: %(default)s",
+    )
+    p.add_argument(
         "--project-id",
         default=os.environ.get("PROJECT_ID"),
         required="PROJECT_ID" not in os.environ,
@@ -194,11 +200,13 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
     if unknown:
         fail(f"no case {', '.join(unknown)} in {args.scenarios_file}; it has {', '.join(cases)}")
     selected = {name: cases[name] for name in names}
-    if args.provider:
-        for name in selected:
+    for name in selected:
+        if args.provider:
             selected[name]["provider"] = args.provider
-            if args.provider == PROVIDER_AGENT_SANDBOX:
-                selected[name][SKIP_SUBSTRATE_INSTALL] = True
+        if args.lifecycle_mode:
+            selected[name]["lifecycle-mode"] = args.lifecycle_mode
+        if selected[name].get("provider") == PROVIDER_AGENT_SANDBOX:
+            selected[name][SKIP_SUBSTRATE_INSTALL] = True
     return selected
 
 
@@ -267,6 +275,7 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
             "project_id": args.project_id,
             "region": args.region,
             "cluster": cases[first]["infra"]["cluster"],
+            "lifecycle_mode": cases[first].get("lifecycle-mode", "claim"),
             SKIP_SUBSTRATE_INSTALL: cases[first].get(SKIP_SUBSTRATE_INSTALL, False),
         }
     for name, case in cases.items():
@@ -375,11 +384,14 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
     """Each of a case's repeats runs on a cluster of its own, applied for it and
     destroyed after it. Returns the cases that failed."""
     # Every repeat's, before anything is applied, so a name that can't be fails first.
-    case_vars = {
-        record: names.infra_vars(args.project_id, args.region, args.name, record)
-        for name, case in cases.items()
-        for record in record_names(name, case)
-    }
+    case_vars = {}
+    for name, case in cases.items():
+        for record in record_names(name, case):
+            vars_dict = names.infra_vars(args.project_id, args.region, args.name, record)
+            if case.get("lifecycle-mode") == "snapshot":
+                vars_dict["enable_pod_snapshots"] = True
+                vars_dict["sandbox_gvisor"] = True
+            case_vars[record] = vars_dict
     variables = names.infra_vars(args.project_id, args.region, args.name)
     runner_infra = deployment(args, "scenario-runner").create(RUNNER_INFRA_DIR, variables)
 

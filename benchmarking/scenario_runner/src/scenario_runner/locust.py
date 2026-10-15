@@ -437,8 +437,9 @@ def run(
     template = None
     if provider == "agent-sandbox":
         from . import agent_sandbox
+        lifecycle_mode = case.get("lifecycle-mode", "claim")
         if deploy_workloads:
-            agent_sandbox.deploy_workload_and_pool(cluster, workload, case["worker-count"], case["sandbox-class"])
+            agent_sandbox.deploy_workload_and_pool(cluster, workload, case["worker-count"], case["sandbox-class"], lifecycle_mode)
         else:
             agent_sandbox.recreate_warm_pool(cluster, workload, case["worker-count"])
         case = {
@@ -446,6 +447,7 @@ def run(
             "worker": {
                 **case["worker"],
                 "provider": "agent-sandbox",
+                "lifecycle-mode": lifecycle_mode,
                 "router-url": "http://sandbox-router-svc.agent-sandbox-system.svc.cluster.local:8080",
                 "warm-pool-name": f"{workload}-warm-pool",
                 "atespace": "benchmark-workloads",
@@ -454,6 +456,21 @@ def run(
         boomer_volume_mounts = ""
         boomer_volumes = ""
         boomer_rbac = f"""apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: benchmarking-job-permissions-sandbox
+rules:
+- apiGroups: ["agents.x-k8s.io", "extensions.agents.x-k8s.io"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: ["podsnapshot.gke.io"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: [""]
+  resources: ["pods", "pods/status", "services"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: benchmarking-job-permissions-sandbox
@@ -463,7 +480,7 @@ subjects:
   namespace: benchmarking
 roleRef:
   kind: ClusterRole
-  name: agent-sandbox-controller-extensions
+  name: benchmarking-job-permissions-sandbox
   apiGroup: rbac.authorization.k8s.io"""
     else:
         worker_pool.deploy(cluster, case["worker-count"], case["sandbox-class"])
