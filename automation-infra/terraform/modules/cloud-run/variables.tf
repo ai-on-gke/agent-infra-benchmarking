@@ -112,6 +112,12 @@ variable "reports_prefix" {
   }
 }
 
+variable "reports_writer_project_ids" {
+  description = "Other projects whose clusters' benchmark-runner KSA may write the reports too, as the cluster of a local or dev run in another project."
+  type        = list(string)
+  default     = []
+}
+
 variable "github_actions_bucket" {
   description = "Bucket under whose source/ GitHub Actions may write, as the github_service_account_email account, and the job reads its source from. Null creates no account and leaves the job without source, so it fails."
   type        = string

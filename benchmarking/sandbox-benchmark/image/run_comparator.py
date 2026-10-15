@@ -62,7 +62,7 @@ DEFAULT_PREFIX = "reports"
 OUTPUT_TAIL = 2000
 UPLOAD_FAILED_EXIT = 3
 # Newline-delimited JSON, as BigQuery's external tables in
-# automation-infra/terraform/modules/cloud-run/reports.tf read it.
+# automation-infra/terraform/modules/reports/main.tf read it.
 RUNS_JSONL = "sandbox_benchmark_runs.jsonl"
 RUN_JSONL = "sandbox_benchmark_run.jsonl"
 # What of run.json goes into RUN_JSONL.

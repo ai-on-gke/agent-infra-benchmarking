@@ -25,7 +25,7 @@ output "runner_image" {
 
 output "reports_dataset" {
   description = "BigQuery dataset of the reports' views, as project.dataset, or null when var.reports_bucket is null."
-  value       = one([for d in google_bigquery_dataset.reports : "${d.project}.${d.dataset_id}"])
+  value       = one(module.reports[*].dataset)
 }
 
 output "github_service_account_email" {
