@@ -64,20 +64,21 @@ data "google_project" "runner" {
 }
 
 locals {
+  bucket = var.bucket == null ? google_storage_bucket.reports[0].name : var.bucket
   # The benchmark-runner KSA of a project's Workload Identity pool, and so on
   # every cluster in it.
   runner_principal = {
     for id, project in data.google_project.runner :
     id => "principal://iam.googleapis.com/projects/${project.number}/locations/global/workloadIdentityPools/${id}.svc.id.goog/subject/ns/benchmarking/sa/benchmark-runner"
   }
-  prefix_only = "resource.name.startsWith(\"projects/_/buckets/${var.bucket}/objects/${var.prefix}/\")"
+  prefix_only = "resource.name.startsWith(\"projects/_/buckets/${local.bucket}/objects/${var.prefix}/\")"
 }
 
 # Each case's locust master and sandbox-benchmark comparator upload their
 # reports as the benchmark-runner KSA, by Workload Identity. Whoever runs the
 # scenario-runner uploads the Jobs' logs with their own credentials.
 resource "google_storage_bucket_iam_member" "reports_runner" {
-  bucket = var.bucket
+  bucket = local.bucket
   role   = "roles/storage.objectCreator"
   member = local.runner_principal[var.project_id]
 
@@ -90,7 +91,7 @@ resource "google_storage_bucket_iam_member" "reports_runner" {
 resource "google_storage_bucket_iam_member" "writer_projects_runner" {
   for_each = toset([for id in var.writer_project_ids : id if id != var.project_id])
 
-  bucket = var.bucket
+  bucket = local.bucket
   role   = "roles/storage.objectCreator"
   member = local.runner_principal[each.value]
 
@@ -100,16 +101,31 @@ resource "google_storage_bucket_iam_member" "writer_projects_runner" {
   }
 }
 
-data "google_storage_bucket" "reports" {
+# Named as the scenario-runner's --report-deployment expects, in
+# scenario_runner/reports.py.
+resource "google_storage_bucket" "reports" {
+  count = var.bucket == null ? 1 : 0
+
+  project  = var.project_id
+  name     = "${var.name}-reports"
+  location = var.region
+
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+}
+
+data "google_storage_bucket" "existing" {
+  count = var.bucket == null ? 0 : 1
+
   name = var.bucket
 }
 
 resource "google_bigquery_dataset" "reports" {
   project     = var.project_id
-  dataset_id  = var.dataset_id
-  description = "The reports in gs://${var.bucket}/${var.prefix}/, a view of each file across every run."
+  dataset_id  = replace(var.name, "-", "_")
+  description = "The reports in gs://${local.bucket}/${var.prefix}/, a view of each file across every run."
   # An external table reads only from a bucket in its dataset's location.
-  location = lower(data.google_storage_bucket.reports.location)
+  location = lower(one(concat(google_storage_bucket.reports[*].location, data.google_storage_bucket.existing[*].location)))
   # Its tables only point at the bucket, so deleting them loses nothing.
   delete_contents_on_destroy = true
 
@@ -130,7 +146,7 @@ resource "google_bigquery_table" "report_files" {
   external_data_configuration {
     autodetect    = false
     source_format = each.value.format
-    source_uris   = ["gs://${var.bucket}/${var.prefix}/*/${each.value.file}"]
+    source_uris   = ["gs://${local.bucket}/${var.prefix}/*/${each.value.file}"]
     schema        = jsonencode([for c in each.value.columns : { name = c.name, type = "STRING" }])
     # locust_steady_window.json's warm_up_secs.
     ignore_unknown_values = true
@@ -375,7 +391,7 @@ resource "google_bigquery_table" "sandbox_benchmark_files" {
   external_data_configuration {
     autodetect            = false
     source_format         = "NEWLINE_DELIMITED_JSON"
-    source_uris           = ["gs://${var.bucket}/${var.prefix}/*/${each.key}.jsonl"]
+    source_uris           = ["gs://${local.bucket}/${var.prefix}/*/${each.key}.jsonl"]
     schema                = each.value
     ignore_unknown_values = true
   }

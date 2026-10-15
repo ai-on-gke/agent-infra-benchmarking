@@ -110,8 +110,15 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--report-prefix",
-        default=reports.REPORT_PREFIX,
-        help="folder in the report bucket the reports go under, as <prefix>/<name>/<record>/. Default: %(default)s",
+        help="folder in the report bucket the reports go under, as <prefix>/<name>/<record>/. Default:"
+        f" {reports.REPORT_PREFIX}",
+    )
+    p.add_argument(
+        "--report-deployment",
+        metavar="NAME",
+        help="an automation-infra/terraform/modules/reports deployment that created its own bucket, which the"
+        f" reports go to: --report-bucket={reports.report_deployment_bucket('NAME')}"
+        f" --report-prefix={reports.REPORT_DEPLOYMENT_PREFIX}, queried in its BigQuery dataset",
     )
     p.add_argument(
         "--name",
@@ -175,6 +182,15 @@ def parse_args() -> argparse.Namespace:
     # A cluster applied for the execution has neither yet.
     if not args.dev_infra and (args.no_build or args.no_deploy_workloads or args.dev_infra_update):
         p.error("--no-build, --no-deploy-workloads and --dev-infra-update are only for --dev-infra")
+    if args.report_deployment:
+        if args.report_bucket or args.report_prefix:
+            p.error("--report-deployment is instead of --report-bucket and --report-prefix")
+        if not reports.REPORT_DEPLOYMENT_RE.fullmatch(args.report_deployment):
+            p.error(f"--report-deployment {args.report_deployment!r} is no reports deployment's name: 6-30 lowercase"
+                    " letters, digits and hyphens, starting with a letter and not ending with a hyphen")  # fmt: skip
+        args.report_bucket = reports.report_deployment_bucket(args.report_deployment)
+        args.report_prefix = reports.REPORT_DEPLOYMENT_PREFIX
+    args.report_prefix = args.report_prefix or reports.REPORT_PREFIX
     if not re.fullmatch(r"[^/]+(/[^/]+)*", args.report_prefix):
         p.error("--report-prefix must not be empty, nor start or end with a slash")
     if args.state_backend == "gcs" and not (args.state_bucket and args.state_prefix):

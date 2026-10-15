@@ -3,7 +3,12 @@ output "dataset" {
   value       = "${google_bigquery_dataset.reports.project}.${google_bigquery_dataset.reports.dataset_id}"
 }
 
-output "run_args" {
-  description = "The scenario-runner's arguments that send a run's reports here."
-  value       = ["--report-bucket=${var.bucket}", "--report-prefix=${var.prefix}"]
+output "bucket" {
+  description = "Bucket the reports go to."
+  value       = local.bucket
+}
+
+output "prefix" {
+  description = "Prefix in bucket the reports go under."
+  value       = var.prefix
 }

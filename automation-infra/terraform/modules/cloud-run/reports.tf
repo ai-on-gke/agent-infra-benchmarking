@@ -3,7 +3,7 @@ module "reports" {
   count  = var.reports_bucket == null ? 0 : 1
 
   project_id         = var.project_id
-  dataset_id         = replace(var.default_resource_name, "-", "_")
+  name               = var.default_resource_name
   bucket             = var.reports_bucket
   prefix             = var.reports_prefix
   writer_project_ids = var.reports_writer_project_ids
