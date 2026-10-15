@@ -14,7 +14,8 @@
 
 """The comparator image's entrypoint: runs ai-sandbox-benchmark's tests on one
 of its providers, writes each run of each test to results.json and how the
-whole went to run.json, and uploads both to
+whole went to run.json, the same as BigQuery reads them in RUNS_JSONL and
+RUN_JSONL, and uploads them to
 gs://<REPORT_BUCKET>/<REPORT_PREFIX>/<BENCHMARK_RUN_ID>/<BENCHMARK_RECORD_NAME>/<provider>/.
 
 It drives comparator.py's SandboxExecutor rather than its command line, which
@@ -60,6 +61,15 @@ DEFAULT_PREFIX = "reports"
 # A test's output is kept to its last OUTPUT_TAIL characters.
 OUTPUT_TAIL = 2000
 UPLOAD_FAILED_EXIT = 3
+# Newline-delimited JSON, as BigQuery's external tables in
+# automation-infra/terraform/modules/cloud-run/reports.tf read it.
+RUNS_JSONL = "sandbox_benchmark_runs.jsonl"
+RUN_JSONL = "sandbox_benchmark_run.jsonl"
+# What of run.json goes into RUN_JSONL.
+RUN_JSONL_KEYS = (
+    "status", "started", "ended", "tests", "runs", "warmup_runs", "max_failure_ratio", "commit", "substrate_commit",
+    "env_commit", "ai_sandbox_benchmark_commit",
+)  # fmt: skip
 FAILED_EXIT = 4
 
 
@@ -185,6 +195,34 @@ def write_run_json(started: float, ended: float, status: int, failures: dict | N
         **passed,
     }
     (REPORT_DIR / "run.json").write_text(json.dumps(info, indent=2) + "\n")
+    case = info.get("case") or {}
+    row = {
+        "provider": PROVIDER,
+        **{key: info.get(key) for key in RUN_JSONL_KEYS},
+        "total_runs": (failures or {}).get("runs"),
+        "failed_runs": (failures or {}).get("failed"),
+        "sandbox_class": case.get("sandbox-class") if PROVIDER == "substrate" else None,
+        "actor_memory": case.get("actor-memory") if PROVIDER == "substrate" else None,
+        "comparator_image": next(iter((info.get("images") or {}).values()), None),
+    }
+    (REPORT_DIR / RUN_JSONL).write_text(json.dumps(row) + "\n")
+
+
+def write_runs_jsonl(runs: list[dict]) -> None:
+    """Each run of each test as a line; its metrics as a list, as their names
+    are no column names."""
+    lines = [
+        {
+            "provider": PROVIDER,
+            "test": run["test"],
+            "run": run["run"],
+            "failed": bool(run["errors"]),
+            "errors": run["errors"],
+            "metrics": [{"name": name, "value_ms": v} for name, values in run["metrics"].items() for v in values],
+        }
+        for run in runs
+    ]
+    (REPORT_DIR / RUNS_JSONL).write_text("".join(json.dumps(line) + "\n" for line in lines))
 
 
 def upload(bucket_name: str, prefix: str, folder: str) -> bool:
@@ -246,6 +284,7 @@ def main() -> int:
     if not status:
         recorded = records(tests, results)
         (REPORT_DIR / "results.json").write_text(json.dumps({"provider": PROVIDER, "runs": recorded}, indent=2) + "\n")
+        write_runs_jsonl(recorded)
         print_summary(recorded)
         failures = count_failures(recorded)
         if not within_limits(failures, max_ratio):
