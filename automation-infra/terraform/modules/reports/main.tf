@@ -101,8 +101,6 @@ resource "google_storage_bucket_iam_member" "writer_projects_runner" {
   }
 }
 
-# Named as the scenario-runner's --report-deployment expects, in
-# scenario_runner/reports.py.
 resource "google_storage_bucket" "reports" {
   count = var.bucket == null ? 1 : 0
 

@@ -109,7 +109,7 @@ creating one is in
 [Keeping your own runs' reports in BigQuery](../automation-infra/README.md#keeping-your-own-runs-reports-in-bigquery):
 
 ```bash
-./benchmarking/tools/run --report-deployment my-reports --scenario glutton
+./benchmarking/tools/run --report-deployment automation-infra/dev/reports --scenario glutton
 ```
 
 Useful flags (`--help` lists them all):
@@ -121,7 +121,7 @@ Useful flags (`--help` lists them all):
 | `--project-id ID` | overrides `PROJECT_ID` |
 | `--region REGION` | default `us-central1` |
 | `--state-backend local\|gcs` | overrides `STATE_BACKEND`, see [Terraform state](#terraform-state) |
-| `--report-deployment NAME` | send the reports to that reports deployment's bucket, to be queried in its BigQuery dataset |
+| `--report-deployment DIR` | send the reports to the bucket of that applied reports deployment, such as `automation-infra/dev/reports`, to be queried in its BigQuery dataset |
 | `--cloud-build` | build images on Cloud Build rather than local Docker |
 | `--no-docker-login` | push with Docker's own registry credentials rather than gcloud's access token |
 | `--scenarios-file PATH` | another scenarios file, e.g. a local copy with a smaller load |

@@ -20,13 +20,13 @@ variable "name" {
 }
 
 variable "bucket" {
-  description = "Existing bucket the reports go to, in place of the one the module creates. The scenario-runner's --report-deployment does not find it."
+  description = "Existing bucket the reports go to, in place of the one the module creates."
   type        = string
   default     = null
 }
 
 variable "prefix" {
-  description = "Prefix in the bucket the reports go under, as <prefix>/<run-id>/<record>/. Each case's benchmark-runner KSA may only write there. The scenario-runner's --report-deployment expects the default."
+  description = "Prefix in the bucket the reports go under, as <prefix>/<run-id>/<record>/. Each case's benchmark-runner KSA may only write there."
   type        = string
   default     = "data"
 
