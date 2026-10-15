@@ -237,3 +237,140 @@ resource "google_bigquery_table" "reports" {
     })
   }
 }
+
+locals {
+  # The sandbox-benchmark comparator's newline-delimited JSON, as
+  # benchmarking/sandbox-benchmark/image/run_comparator.py writes it under
+  # <prefix>/<run-id>/<record>/<provider>/. Typed, as the runs' metrics are a
+  # nested list. Each schema as JSON, as their shapes differ.
+  sandbox_benchmark_files = {
+    sandbox_benchmark_runs = jsonencode([
+      { name = "provider", type = "STRING" },
+      { name = "test", type = "STRING" },
+      { name = "run", type = "INT64" },
+      { name = "failed", type = "BOOL" },
+      { name = "errors", type = "STRING", mode = "REPEATED" },
+      {
+        name   = "metrics", type = "RECORD", mode = "REPEATED",
+        fields = [{ name = "name", type = "STRING" }, { name = "value_ms", type = "FLOAT64" }]
+      },
+    ])
+    sandbox_benchmark_run = jsonencode(concat(
+      [
+        { name = "provider", type = "STRING" },
+        { name = "status", type = "INT64" },
+        { name = "started", type = "TIMESTAMP" },
+        { name = "ended", type = "TIMESTAMP" },
+        { name = "tests", type = "STRING", mode = "REPEATED" },
+        { name = "runs", type = "INT64" },
+        { name = "warmup_runs", type = "INT64" },
+        { name = "total_runs", type = "INT64" },
+        { name = "failed_runs", type = "INT64" },
+        { name = "max_failure_ratio", type = "FLOAT64" },
+      ],
+      [for name in ["sandbox_class", "actor_memory", "comparator_image", "commit", "substrate_commit", "env_commit", "ai_sandbox_benchmark_commit"] :
+      { name = name, type = "STRING" }],
+    ))
+  }
+  # Each file's rows, with the run, record and case from its path,
+  # <run-id>/<record>/<provider>/<file>. The views read the files tables
+  # rather than one another, so they can be created at once.
+  sandbox_benchmark_rows = {
+    for name in ["sandbox_benchmark_run", "sandbox_benchmark_runs"] : name => <<-SQL
+      SELECT
+        REGEXP_EXTRACT(_FILE_NAME, r'/([^/]+)/[^/]+/[^/]+/[^/]+$') AS run_id,
+        REGEXP_EXTRACT(_FILE_NAME, r'/([^/]+)/[^/]+/[^/]+$') AS test_case,
+        REGEXP_REPLACE(REGEXP_EXTRACT(_FILE_NAME, r'/([^/]+)/[^/]+/[^/]+$'), r'-[0-9]+$', '') AS scenario,
+        *
+      FROM `${local.dataset_ref}.${name}_files`
+    SQL
+  }
+  sandbox_benchmark_metrics = <<-SQL
+    SELECT r.* EXCEPT (metrics), m.name AS metric, m.value_ms
+    FROM (${local.sandbox_benchmark_rows.sandbox_benchmark_runs}) AS r, UNNEST(r.metrics) AS m
+  SQL
+  # The comparator's own total time adds these up.
+  sandbox_benchmark_total = ["Workspace Creation", "Suspend", "Resume", "Dependency Installation", "Environment Setup", "Code Execution", "Cleanup"]
+  sandbox_benchmark_views = var.reports_bucket == null ? {} : {
+    sandbox_benchmark_run = {
+      description = "Each provider's run of each sandbox-benchmark record: how it went, and the commits."
+      query       = local.sandbox_benchmark_rows.sandbox_benchmark_run
+    }
+    sandbox_benchmark_runs = {
+      description = "Each run of each sandbox-benchmark test on each provider, with its errors and metrics."
+      query       = local.sandbox_benchmark_rows.sandbox_benchmark_runs
+    }
+    sandbox_benchmark_metrics = {
+      description = "Each metric value of each run of each sandbox-benchmark test on each provider, in ms."
+      query       = local.sandbox_benchmark_metrics
+    }
+    # As the comparator's table: each run's mean of a metric, failed runs too,
+    # averaged across the runs, with their population deviation; Total Time
+    # the sum of a run's means of sandbox_benchmark_total.
+    sandbox_benchmark_comparison = {
+      description = "The sandbox-benchmark comparator's table: each metric of each test on each provider, per record."
+      query       = <<-SQL
+        WITH per_run AS (
+          SELECT run_id, test_case, scenario, provider, test, run, metric, AVG(value_ms) AS run_mean
+          FROM (${local.sandbox_benchmark_metrics})
+          GROUP BY run_id, test_case, scenario, provider, test, run, metric
+        ),
+        with_total AS (
+          SELECT * FROM per_run
+          UNION ALL
+          SELECT run_id, test_case, scenario, provider, test, run, 'Total Time', SUM(run_mean)
+          FROM per_run
+          WHERE metric IN (${join(", ", [for m in local.sandbox_benchmark_total : "'${m}'"])})
+          GROUP BY run_id, test_case, scenario, provider, test, run
+        ),
+        tests AS (
+          SELECT run_id, test_case, provider, test, COUNT(*) AS test_runs, COUNTIF(failed) AS failed_runs
+          FROM (${local.sandbox_benchmark_rows.sandbox_benchmark_runs})
+          GROUP BY run_id, test_case, provider, test
+        )
+        SELECT
+          run_id, test_case, scenario, test, provider, metric,
+          AVG(run_mean) AS mean_ms, STDDEV_POP(run_mean) AS stddev_ms, COUNT(*) AS runs,
+          ANY_VALUE(test_runs) AS test_runs, ANY_VALUE(failed_runs) AS failed_runs
+        FROM with_total
+        JOIN tests USING (run_id, test_case, provider, test)
+        GROUP BY run_id, test_case, scenario, test, provider, metric
+      SQL
+    }
+  }
+}
+
+resource "google_bigquery_table" "sandbox_benchmark_files" {
+  for_each = var.reports_bucket == null ? {} : local.sandbox_benchmark_files
+
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.reports[0].dataset_id
+  table_id            = "${each.key}_files"
+  description         = "Every sandbox-benchmark run's ${each.key}.jsonl, as written. Query the ${each.key} view instead."
+  deletion_protection = false
+
+  external_data_configuration {
+    autodetect            = false
+    source_format         = "NEWLINE_DELIMITED_JSON"
+    source_uris           = ["gs://${var.reports_bucket}/${var.reports_prefix}/*/${each.key}.jsonl"]
+    schema                = each.value
+    ignore_unknown_values = true
+  }
+}
+
+resource "google_bigquery_table" "sandbox_benchmark" {
+  for_each = local.sandbox_benchmark_views
+
+  project             = var.project_id
+  dataset_id          = google_bigquery_dataset.reports[0].dataset_id
+  table_id            = each.key
+  description         = each.value.description
+  deletion_protection = false
+
+  view {
+    use_legacy_sql = false
+    query          = each.value.query
+  }
+
+  depends_on = [google_bigquery_table.sandbox_benchmark_files]
+}
