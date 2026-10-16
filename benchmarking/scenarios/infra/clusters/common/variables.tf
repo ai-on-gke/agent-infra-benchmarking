@@ -100,6 +100,18 @@ variable "sandboxed_machine_type" {
   type        = string
 }
 
+# An alternative to nested virtualization for the microvm sandbox class: a GCE
+# bare metal ("-metal") host exposes /dev/kvm natively, with no Google
+# hypervisor layer in between. When true, sandboxed_machine_type must be a
+# "-metal" type (e.g. c3-standard-192-metal) and the pool's boot disk moves to
+# hyperdisk-balanced, which is the only disk a "-metal" machine type boots off.
+# Bare metal is capacity-constrained and frequently stocks out per zone.
+variable "sandboxed_bare_metal" {
+  description = "Run the sandboxed node pool on a GCE bare metal (\"-metal\") machine type instead of a VM with nested virtualization. Requires sandboxed_machine_type to be a \"-metal\" type."
+  type        = bool
+  default     = false
+}
+
 # microvm guests boot on /dev/kvm, which only nested virtualization exposes,
 # and GCE offers it on no E2 machine type, so sandboxed_machine_type has to be
 # n2/c2/c3 or similar.

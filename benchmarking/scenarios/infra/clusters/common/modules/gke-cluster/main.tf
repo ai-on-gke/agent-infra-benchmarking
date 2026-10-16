@@ -227,9 +227,12 @@ resource "google_container_node_pool" "this" {
     # Nested virtualization is what exposes /dev/kvm on the node; without it
     # the microvm (kata + cloud-hypervisor) sandbox class has no hypervisor to
     # boot a guest on. GCE only offers it on non-E2 machine types, so a pool
-    # that sets this must also pick an n2/c2/c3 (etc.) machine_type above.
+    # that sets this must also pick an n2/c2/c3 (etc.) machine_type above. A
+    # bare_metal pool skips this block entirely: there's no Google hypervisor
+    # layer on a "-metal" machine type to begin with, so /dev/kvm is already
+    # there and GCE rejects the feature flag on that machine type.
     dynamic "advanced_machine_features" {
-      for_each = each.value.enable_nested_virtualization ? [1] : []
+      for_each = each.value.enable_nested_virtualization && !each.value.bare_metal ? [1] : []
       content {
         enable_nested_virtualization = true
         # 0 leaves SMT at the machine type's default; the block just needs it
