@@ -87,6 +87,15 @@ spec:
               name: sandbox-benchmark-providers
               key: E2B_API_KEY
               optional: true
+        - name: DAYTONA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: sandbox-benchmark-providers
+              key: DAYTONA_API_KEY
+              optional: true
+        # The comparator requires it although the daytona provider defaults to it.
+        - name: DAYTONA_SERVER_URL
+          value: "https://app.daytona.io/api"
         resources:
           requests:
             cpu: "1"

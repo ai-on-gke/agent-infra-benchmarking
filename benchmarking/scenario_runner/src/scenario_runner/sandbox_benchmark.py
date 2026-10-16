@@ -20,8 +20,8 @@ the providers, the tests by function name, how many times each runs and how
 many warmup runs go before. The substrate provider runs them through
 agent-substrate/env deployed for them by ate_env, whose pool and environments
 `env-worker-count` and `actor-memory` size; local runs them in the
-comparator's own pod; e2b in e2b's cloud, with the E2B_API_KEY of the
-scenario-runner's environment."""
+comparator's own pod; e2b and daytona in their clouds, with the E2B_API_KEY
+and DAYTONA_API_KEY of the scenario-runner's environment."""
 
 from __future__ import annotations
 
@@ -63,11 +63,11 @@ CASE_KEYS = {
     "max-failure-ratio", "comparator",
 }  # fmt: skip
 COMPARATOR_KEYS = {"providers", "tests", "runs", "warmup-runs"}
-PROVIDERS = ("substrate", "local", "e2b")
+PROVIDERS = ("substrate", "local", "e2b", "daytona")
 # The API key a provider needs, read from the scenario-runner's environment
 # and handed to the comparator in the Secret PROVIDER_SECRET, which the
 # manifest's env reads; have to match it.
-PROVIDER_KEYS = {"e2b": "E2B_API_KEY"}
+PROVIDER_KEYS = {"e2b": "E2B_API_KEY", "daytona": "DAYTONA_API_KEY"}
 PROVIDER_SECRET = "sandbox-benchmark-providers"
 
 

@@ -167,8 +167,9 @@ cases:
     env-worker-count: 3
     actor-memory: 4Gi
     comparator:
-      # e2b needs E2B_API_KEY in the scenario-runner's environment.
-      providers: [substrate, local, e2b]
+      # e2b and daytona need E2B_API_KEY and DAYTONA_API_KEY in the
+      # scenario-runner's environment.
+      providers: [substrate, local, e2b, daytona]
       tests:
       - test_suspend_resume
       runs: 3

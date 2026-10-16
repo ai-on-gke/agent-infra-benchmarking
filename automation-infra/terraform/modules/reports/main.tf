@@ -361,7 +361,7 @@ locals {
   # The comparator table's rows, in its order, and its columns: the
   # scenario-runner's sandbox_benchmark.PROVIDERS, against substrate.
   sandbox_benchmark_table_rows      = ["Workspace Creation", "Suspend", "Resume", "Code Execution", "Cleanup", "Total Time", "vs substrate %"]
-  sandbox_benchmark_table_providers = ["substrate", "local", "e2b"]
+  sandbox_benchmark_table_providers = ["substrate", "local", "e2b", "daytona"]
   sandbox_benchmark_views = {
     sandbox_benchmark_run = {
       description = "Each provider's run of each sandbox-benchmark record: how it went, and the commits."
