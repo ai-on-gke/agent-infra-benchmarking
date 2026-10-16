@@ -1,7 +1,8 @@
 # substrate-bench-auto
 
-Runs every case in
-[`scenarios.yaml`](../../../benchmarking/scenarios/scenarios.yaml) once a day,
+Runs the cases of
+[`scenarios.yaml`](../../../benchmarking/scenarios/scenarios.yaml) that `args`
+in [`main.tf`](main.tf) names, the gVisor and microvm pairs, once a day,
 at 3am UTC, in the GCP project `akvelon-gke-aieco` (`us-central1`). Each
 execution runs the latest commit pushed to the `main` branch, and each
 repeat of a case gets a cluster of its own, destroyed after it.
@@ -32,11 +33,15 @@ names to differ:
 | What | Name |
 |---|---|
 | Cloud Run job | `substrate-bench-auto` |
-| Cloud Scheduler job that starts it | `substrate-bench-auto` |
+| Cloud Scheduler job that starts it, daily at 03:00 UTC | `substrate-bench-auto` |
+| Cloud Run job, and its scheduler, that destroys what a killed execution left (`tools/destroy-leftovers`), daily at 15:00 UTC | `substrate-bench-auto-cleanup` |
+| Alert policy on a failed execution of either job | `substrate-bench-auto: failed execution` |
 | Artifact Registry repository of the job's image | `substrate-bench-auto` |
 | Service account the job, and so the scenario-runner, runs as | `substrate-bench-auto` |
-| Service accounts of the scheduler, the image's build and GitHub Actions | `substrate-bench-auto-sched`, `-build`, `-gh` |
+| Service accounts of the scheduler, the image's build, the benchmark images' builds, the runs' cluster nodes and GitHub Actions | `substrate-bench-auto-sched`, `-build`, `-images`, `-nodes`, `-gh` |
+| Workload Identity pool and provider GitHub Actions authenticate through | `substrate-bench-auto-gh`, `github` |
 | Bucket Cloud Build stages the image's source in | `substrate-bench-auto-build-source` |
+| Network, subnetwork and Cloud NAT the runs' clusters go into, with an internal control-plane endpoint only, and the job joins | `substrate-bench-auto` |
 | BigQuery dataset of the reports' views | [`substrate_bench_auto`](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco&p=akvelon-gke-aieco&d=substrate_bench_auto&page=dataset) |
 
 The bucket `substrate-bench-auto-tfstate` was created by hand, before the
@@ -52,8 +57,9 @@ deployment. It holds:
 ## Running it by hand
 
 [`tools/trigger`](../../tools/trigger) starts an execution and prints its log
-until it ends. Without arguments it runs every case, like the schedule. Any
-argument goes to the scenario-runner, so `--scenario` picks the cases:
+until it ends. Without arguments it runs the cases `args` in [`main.tf`](main.tf)
+names, like the schedule. Any argument goes to the scenario-runner instead, so
+`--scenario` picks the cases:
 
 ```bash
 automation-infra/tools/trigger --deployment=substrate-bench-auto --scenario=glutton
@@ -256,8 +262,10 @@ The job runs whatever is on `main`, so a change to the scenarios or
 the scenario-runner only needs a push. Wait for the Upload source workflow to
 finish before the next execution starts.
 
-A change to the deployment itself, such as the schedule or the branch, goes in
-[`main.tf`](main.tf), then is applied from the repo root:
+A change to the deployment itself, such as the schedule, the branch, the cases
+the nightly runs (`args`) or who is told of a failed execution
+(`alert_emails`), goes in [`main.tf`](main.tf), then is applied from the repo
+root:
 
 ```bash
 terraform -chdir=automation-infra/deployments/substrate-bench-auto apply
@@ -276,21 +284,30 @@ gcloud scheduler jobs pause substrate-bench-auto --project=akvelon-gke-aieco --l
 ## Cleaning up after a failed execution
 
 An execution destroys its clusters and runner infra even when a case fails. If
-a destroy itself fails, the resources stay, with their state and config in
-`gs://substrate-bench-auto-tfstate/terraform/<run-id>/`. Find them in the
-console by the `benchmark-run-id=<run-id>` label, and see
-[When a run fails or is stopped](../../../benchmarking/README.md#when-a-run-fails-or-is-stopped)
-for destroying them.
+a destroy itself fails, or the execution is killed, the resources stay, with
+their state and config in `gs://substrate-bench-auto-tfstate/terraform/<run-id>/`.
+The cleanup job destroys them at 15:00 UTC once their execution has ended. To
+do it sooner, run the same tool by hand:
+
+```bash
+automation-infra/tools/destroy-leftovers --deployment=substrate-bench-auto
+```
 
 ## Removing it
 
 Destroying the deployment deletes everything in [What it creates](#what-it-creates),
-but not the state bucket, the APIs it enabled, or the repo secret
-`GCP_CREDENTIALS_SUBSTRATE_BENCH_AUTO`:
+but not the state bucket, the APIs it enabled, or the repo variables
+`GCP_WORKLOAD_IDENTITY_PROVIDER_SUBSTRATE_BENCH_AUTO` and
+`GCP_SERVICE_ACCOUNT_SUBSTRATE_BENCH_AUTO`. The Workload Identity pool stays
+deleted for 30 days, during which its name cannot be used again:
 
 ```bash
 terraform -chdir=automation-infra/deployments/substrate-bench-auto destroy
 ```
+
+The destroy stops at the subnetwork, as "already being used by ...
+serverless-ipv4-cloudrun-...": Cloud Run keeps the job's addresses in it for up
+to a couple of hours after the job is deleted. Run it again once they are gone.
 
 Then take `substrate-bench-auto` out of the `deployment` matrix of both jobs in
 [`upload-source.yml`](../../../.github/workflows/upload-source.yml), or every

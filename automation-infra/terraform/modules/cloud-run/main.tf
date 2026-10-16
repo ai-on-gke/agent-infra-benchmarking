@@ -19,9 +19,11 @@ data "external" "git" {
 
 resource "google_project_service" "services" {
   for_each = toset(concat(
-    ["run.googleapis.com", "storage.googleapis.com", "artifactregistry.googleapis.com", "cloudbuild.googleapis.com"],
+    ["run.googleapis.com", "storage.googleapis.com", "artifactregistry.googleapis.com", "cloudbuild.googleapis.com",
+    "monitoring.googleapis.com", "compute.googleapis.com"],
     var.schedule == null ? [] : ["cloudscheduler.googleapis.com"],
     var.reports_bucket == null ? [] : ["bigquery.googleapis.com"],
+    var.github_actions_bucket == null ? [] : ["iam.googleapis.com", "iamcredentials.googleapis.com", "sts.googleapis.com"],
   ))
 
   project = var.project_id

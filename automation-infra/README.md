@@ -7,7 +7,9 @@ uploads to a bucket on every push.
 
 A deployment is a folder under [`deployments/`](deployments) that calls the
 [`terraform/modules/cloud-run`](terraform/modules/cloud-run) module. The module
-deploys the job and builds its image. See
+deploys the job and builds its image. It also creates the network the runs'
+clusters go into, which the job joins: their control planes have an internal
+endpoint only, and their nodes reach out through its Cloud NAT. See
 [`deployments/substrate-bench-auto`](deployments/substrate-bench-auto) for an
 example.
 
@@ -15,7 +17,7 @@ example.
 
 - Terraform 1.5+
 - gcloud, git, jq
-- gh, logged in with permission to set this repo's Actions secrets
+- gh, logged in with permission to set this repo's Actions variables and secrets
 - A GCP project with billing, and an account with `Owner` on it. `Editor` is
   not enough, because it cannot set IAM.
 
@@ -121,14 +123,21 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
    ```
 
 3. Apply. This also builds the job's image on Cloud Build, which takes a few
-   minutes. The image is rebuilt whenever the commit or the image's files change:
+   minutes. The image is rebuilt whenever the commit or the image's files change.
+   The build is started from this machine, with `gcloud builds submit`, as the
+   module's build account; building it from a Cloud Build trigger instead would
+   need the repo connected to Cloud Build, which an organization admin has to
+   set up:
 
    ```bash
    terraform -chdir="automation-infra/deployments/$DEPLOYMENT" apply
    ```
 
-4. Store the key that GitHub Actions uploads the source with as the repo secret
-   `GCP_CREDENTIALS_<DEPLOYMENT>`. Running this again rotates the key:
+4. Let GitHub Actions upload the source without a key: this sets the repo
+   variables `GCP_WORKLOAD_IDENTITY_PROVIDER_<DEPLOYMENT>` and
+   `GCP_SERVICE_ACCOUNT_<DEPLOYMENT>`, which the workflow authenticates with
+   through Workload Identity Federation, and deletes any key of that account
+   and the old `GCP_CREDENTIALS_<DEPLOYMENT>` secret:
 
    ```bash
    automation-infra/tools/get-gh-actions-gcs-config --deployment="$DEPLOYMENT" --set
@@ -156,7 +165,8 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
 
 [`tools/trigger`](tools/trigger) starts one execution and prints its log as it
 comes in. Any other argument is passed to the scenario-runner, for that
-execution only:
+execution only; a `--scenario` or `--all` replaces the cases the job's `args`
+name:
 
 ```bash
 automation-infra/tools/trigger --deployment="$DEPLOYMENT" --scenario=glutton

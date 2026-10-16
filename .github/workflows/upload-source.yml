@@ -3,9 +3,12 @@ name: Upload source
 # Uploads each pushed commit, as a git repo, to
 # gs://<bucket>/source/<branch>/<commit>.tar.gz, and writes the branch's tip
 # commit to latest.txt beside it, for each deployment in the matrix. The
-# bucket is the state_bucket local of the deployment's main.tf, and its key
-# the secret GCP_CREDENTIALS_<DEPLOYMENT>, which
-# automation-infra/tools/get-gh-actions-gcs-config sets.
+# bucket is the state_bucket local of the deployment's main.tf. The workflow
+# authenticates through Workload Identity Federation, with the repository
+# variables GCP_WORKLOAD_IDENTITY_PROVIDER_<DEPLOYMENT> and
+# GCP_SERVICE_ACCOUNT_<DEPLOYMENT> that
+# automation-infra/tools/get-gh-actions-gcs-config sets; a deployment without
+# them yet falls back to the key in the secret GCP_CREDENTIALS_<DEPLOYMENT>.
 
 on:
   push:
@@ -17,6 +20,10 @@ permissions:
 jobs:
   upload-tarball:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The OIDC token Workload Identity Federation exchanges.
+      id-token: write
     strategy:
       matrix:
         deployment: [substrate-bench-auto]
@@ -38,10 +45,19 @@ jobs:
           bucket="$(sed -n 's/^ *state_bucket *= *"\(.*\)"/\1/p' "automation-infra/deployments/$DEPLOYMENT/main.tf")"
           [[ -n "$bucket" ]] || { echo "No state_bucket in $DEPLOYMENT's main.tf." >&2; exit 1; }
           echo "bucket=$bucket" >> "$GITHUB_OUTPUT"
-          echo "credentials_secret=GCP_CREDENTIALS_$(tr 'a-z-' 'A-Z_' <<<"$DEPLOYMENT")" >> "$GITHUB_OUTPUT"
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+          suffix="$(tr 'a-z-' 'A-Z_' <<<"$DEPLOYMENT")"
+          echo "credentials_secret=GCP_CREDENTIALS_$suffix" >> "$GITHUB_OUTPUT"
+          echo "provider_variable=GCP_WORKLOAD_IDENTITY_PROVIDER_$suffix" >> "$GITHUB_OUTPUT"
+          echo "account_variable=GCP_SERVICE_ACCOUNT_$suffix" >> "$GITHUB_OUTPUT"
+      # Named per deployment, so looked up in the whole vars and secrets contexts.
+      - if: vars[steps.deployment.outputs.provider_variable] != ''
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          # Named per deployment, so looked up in the whole secrets context.
+          workload_identity_provider: ${{ vars[steps.deployment.outputs.provider_variable] }}
+          service_account: ${{ vars[steps.deployment.outputs.account_variable] }}
+      - if: vars[steps.deployment.outputs.provider_variable] == ''
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
           credentials_json: ${{ secrets[steps.deployment.outputs.credentials_secret] }} # zizmor: ignore[overprovisioned-secrets]
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
       - name: Upload
@@ -62,6 +78,9 @@ jobs:
   upload-latest:
     needs: upload-tarball
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       matrix:
         # The same as upload-tarball's.
@@ -81,8 +100,18 @@ jobs:
           bucket="$(sed -n 's/^ *state_bucket *= *"\(.*\)"/\1/p' "automation-infra/deployments/$DEPLOYMENT/main.tf")"
           [[ -n "$bucket" ]] || { echo "No state_bucket in $DEPLOYMENT's main.tf." >&2; exit 1; }
           echo "bucket=$bucket" >> "$GITHUB_OUTPUT"
-          echo "credentials_secret=GCP_CREDENTIALS_$(tr 'a-z-' 'A-Z_' <<<"$DEPLOYMENT")" >> "$GITHUB_OUTPUT"
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+          suffix="$(tr 'a-z-' 'A-Z_' <<<"$DEPLOYMENT")"
+          echo "credentials_secret=GCP_CREDENTIALS_$suffix" >> "$GITHUB_OUTPUT"
+          echo "provider_variable=GCP_WORKLOAD_IDENTITY_PROVIDER_$suffix" >> "$GITHUB_OUTPUT"
+          echo "account_variable=GCP_SERVICE_ACCOUNT_$suffix" >> "$GITHUB_OUTPUT"
+      # Named per deployment, so looked up in the whole vars and secrets contexts.
+      - if: vars[steps.deployment.outputs.provider_variable] != ''
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars[steps.deployment.outputs.provider_variable] }}
+          service_account: ${{ vars[steps.deployment.outputs.account_variable] }}
+      - if: vars[steps.deployment.outputs.provider_variable] == ''
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           credentials_json: ${{ secrets[steps.deployment.outputs.credentials_secret] }} # zizmor: ignore[overprovisioned-secrets]
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
