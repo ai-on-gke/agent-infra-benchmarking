@@ -1,0 +1,30 @@
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:23:15.816575528Z","level":"WARN","msg":"partial telemetry resource","err":"error detecting resource: conflicting Schema URL: https://opentelemetry.io/schemas/1.40.0 and https://opentelemetry.io/schemas/1.43.0"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:23:15.817264269Z","level":"INFO","msg":"actors may connect to","hosts":["opentelemetry-collector.gke-managed-otel.svc.cluster.local"],"tls_hosts":null}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:23:15.817291623Z","level":"INFO","msg":"registered boomer task","user_class":"RunWorkloadUser","user_class_flag":"runworkload"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:23:15.817318411Z","level":"INFO","msg":"new slave runner"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:23:15.817322737Z","level":"INFO","msg":"Boomer is built with gomq support."}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:23:15.836828423Z","level":"INFO","msg":"Boomer is connected to master(tcp://locust-master.benchmarking.svc.cluster.local:5557) press Ctrl+c to quit."}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:23:16.634036089Z","level":"INFO","msg":"The total number of clients required is  10"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:23:16.634081312Z","level":"INFO","msg":"The current number of clients is 0, 10 clients will be added"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.634005915Z","level":"INFO","msg":"boomer:stop event received; suspending+deleting actors"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.634096395Z","level":"WARN","msg":"suspend failed; the actor may be left mid transition","actor":"sb-95e92c02-c4d6-4753-887d-5674e7a454b7","err":"rpc error: code = Canceled desc = context canceled"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.634098207Z","level":"WARN","msg":"suspend failed; the actor may be left mid transition","actor":"sb-e5808795-4959-48ab-8a8f-f2712f1b949c","err":"rpc error: code = Canceled desc = context canceled"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.6341255Z","level":"WARN","msg":"suspend failed; the actor may be left mid transition","actor":"sb-d03fc8d2-e3ab-4c5c-ae4b-18779097b2fe","err":"rpc error: code = Canceled desc = context canceled"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.634120989Z","level":"WARN","msg":"suspend failed; the actor may be left mid transition","actor":"sb-383d4088-5349-44a3-94a9-0369be1322dd","err":"rpc error: code = Canceled desc = context canceled"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.634152192Z","level":"WARN","msg":"suspend failed; the actor may be left mid transition","actor":"sb-2c941832-9a68-46f9-b4d8-9d581c3cffc2","err":"rpc error: code = Canceled desc = context canceled"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.634155259Z","level":"WARN","msg":"suspend failed; the actor may be left mid transition","actor":"sb-e1361648-9913-4ca7-8d59-2d15c6c13f68","err":"rpc error: code = Canceled desc = context canceled"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.634184957Z","level":"WARN","msg":"suspend failed; the actor may be left mid transition","actor":"sb-5f4c98e4-eac0-4e06-8909-09ffde5e9655","err":"rpc error: code = Canceled desc = context canceled"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.843966296Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-a96420c6-0320-4684-b7a5-6a9642170cec"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.860185417Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-d03fc8d2-e3ab-4c5c-ae4b-18779097b2fe"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.861574617Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-e1361648-9913-4ca7-8d59-2d15c6c13f68"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.887826059Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-2c941832-9a68-46f9-b4d8-9d581c3cffc2"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.888185446Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-383d4088-5349-44a3-94a9-0369be1322dd"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.891385542Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-95e92c02-c4d6-4753-887d-5674e7a454b7"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.900121583Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-5f4c98e4-eac0-4e06-8909-09ffde5e9655"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.913433087Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-5c76e265-3925-431b-9ced-e521c4e33d2d"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.922047562Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-859c7ec0-b83d-488d-9f26-74f32458023b"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.926991477Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-e5808795-4959-48ab-8a8f-f2712f1b949c"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:16.927007613Z","level":"INFO","msg":"teardown finished","removed":10,"left":0}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:20.927983987Z","level":"INFO","msg":"Recv stop message from master, all the goroutines are stopped"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:21.638620492Z","level":"INFO","msg":"shutdown"}
+[pod/boomer-worker-27ntw/boomer] {"time":"2026-10-15T16:28:21.638642412Z","level":"INFO","msg":"boomer exited; waiting for the final scrape","wait":15000000000}

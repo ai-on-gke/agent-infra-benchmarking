@@ -1,0 +1,163 @@
+Type,Name,Stat,Repeats,Min,Median,Max
+grpc,CreateActor,Request Count,1,2,2,2
+grpc,CreateActor,Failure Count,1,0,0,0
+grpc,CreateActor,Average Response Time,1,1.5,1.5,1.5
+grpc,CreateActor,Min Response Time,1,1,1,1
+grpc,CreateActor,Max Response Time,1,2,2,2
+grpc,CreateActor,Requests/s,1,0.01,0.01,0.01
+grpc,CreateActor,Failures/s,1,0,0,0
+grpc,CreateActor,50%,1,2,2,2
+grpc,CreateActor,66%,1,2,2,2
+grpc,CreateActor,75%,1,2,2,2
+grpc,CreateActor,80%,1,2,2,2
+grpc,CreateActor,90%,1,2,2,2
+grpc,CreateActor,95%,1,2,2,2
+grpc,CreateActor,98%,1,2,2,2
+grpc,CreateActor,99%,1,2,2,2
+grpc,CreateActor,99.9%,1,2,2,2
+grpc,CreateActor,99.99%,1,2,2,2
+grpc,CreateActor,100%,1,2,2,2
+grpc,CreateActorEgressPolicy,Request Count,1,2,2,2
+grpc,CreateActorEgressPolicy,Failure Count,1,0,0,0
+grpc,CreateActorEgressPolicy,Average Response Time,1,1,1,1
+grpc,CreateActorEgressPolicy,Min Response Time,1,1,1,1
+grpc,CreateActorEgressPolicy,Max Response Time,1,1,1,1
+grpc,CreateActorEgressPolicy,Requests/s,1,0.01,0.01,0.01
+grpc,CreateActorEgressPolicy,Failures/s,1,0,0,0
+grpc,CreateActorEgressPolicy,50%,1,1,1,1
+grpc,CreateActorEgressPolicy,66%,1,1,1,1
+grpc,CreateActorEgressPolicy,75%,1,1,1,1
+grpc,CreateActorEgressPolicy,80%,1,1,1,1
+grpc,CreateActorEgressPolicy,90%,1,1,1,1
+grpc,CreateActorEgressPolicy,95%,1,1,1,1
+grpc,CreateActorEgressPolicy,98%,1,1,1,1
+grpc,CreateActorEgressPolicy,99%,1,1,1,1
+grpc,CreateActorEgressPolicy,99.9%,1,1,1,1
+grpc,CreateActorEgressPolicy,99.99%,1,1,1,1
+grpc,CreateActorEgressPolicy,100%,1,1,1,1
+runworkload,CycleTime,Request Count,3,22876,27470,28568
+runworkload,CycleTime,Failure Count,3,0,0,2
+runworkload,CycleTime,Average Response Time,3,724.9,765.48,970.22
+runworkload,CycleTime,Min Response Time,3,520,528,543
+runworkload,CycleTime,Max Response Time,3,14855,14887,30309
+runworkload,CycleTime,Requests/s,3,81.99,98.46,102.39
+runworkload,CycleTime,Failures/s,3,0,0,0.01
+runworkload,CycleTime,50%,3,680,690,750
+runworkload,CycleTime,66%,3,710,720,810
+runworkload,CycleTime,75%,3,730,730,860
+runworkload,CycleTime,80%,3,750,750,910
+runworkload,CycleTime,90%,3,790,800,1200
+runworkload,CycleTime,95%,3,840,960,2700
+runworkload,CycleTime,98%,3,1300,2300,3800
+runworkload,CycleTime,99%,3,1800,3400,4300
+runworkload,CycleTime,99.9%,3,3200,4600,9100
+runworkload,CycleTime,99.99%,3,5600,10000,28000
+runworkload,CycleTime,100%,3,15000,15000,30000
+grpc,DeleteActor,Request Count,1,2,2,2
+grpc,DeleteActor,Failure Count,1,0,0,0
+grpc,DeleteActor,Average Response Time,1,92.5,92.5,92.5
+grpc,DeleteActor,Min Response Time,1,82,82,82
+grpc,DeleteActor,Max Response Time,1,103,103,103
+grpc,DeleteActor,Requests/s,1,0.01,0.01,0.01
+grpc,DeleteActor,Failures/s,1,0,0,0
+grpc,DeleteActor,50%,1,100,100,100
+grpc,DeleteActor,66%,1,100,100,100
+grpc,DeleteActor,75%,1,100,100,100
+grpc,DeleteActor,80%,1,100,100,100
+grpc,DeleteActor,90%,1,100,100,100
+grpc,DeleteActor,95%,1,100,100,100
+grpc,DeleteActor,98%,1,100,100,100
+grpc,DeleteActor,99%,1,100,100,100
+grpc,DeleteActor,99.9%,1,100,100,100
+grpc,DeleteActor,99.99%,1,100,100,100
+grpc,DeleteActor,100%,1,100,100,100
+http,ExecutionTime,Request Count,3,22873,27477,28580
+http,ExecutionTime,Failure Count,3,0,0,0
+http,ExecutionTime,Average Response Time,3,3.87,3.99,4.22
+http,ExecutionTime,Min Response Time,3,3,3,3
+http,ExecutionTime,Max Response Time,3,16,22,41
+http,ExecutionTime,Requests/s,3,81.98,98.48,102.44
+http,ExecutionTime,Failures/s,3,0,0,0
+http,ExecutionTime,50%,3,4,4,4
+http,ExecutionTime,66%,3,4,4,4
+http,ExecutionTime,75%,3,4,4,4
+http,ExecutionTime,80%,3,4,4,5
+http,ExecutionTime,90%,3,5,5,5
+http,ExecutionTime,95%,3,5,5,5
+http,ExecutionTime,98%,3,6,6,6
+http,ExecutionTime,99%,3,6,6,6
+http,ExecutionTime,99.9%,3,8,8,9
+http,ExecutionTime,99.99%,3,10,13,13
+http,ExecutionTime,100%,3,16,22,41
+grpc,Resume,Request Count,3,22873,27477,28581
+grpc,Resume,Failure Count,3,0,0,0
+grpc,Resume,Average Response Time,3,251.37,261.41,331.27
+grpc,Resume,Min Response Time,3,175,179,181
+grpc,Resume,Max Response Time,3,3284,6475,27180
+grpc,Resume,Requests/s,3,81.98,98.48,102.44
+grpc,Resume,Failures/s,3,0,0,0
+grpc,Resume,50%,3,230,240,250
+grpc,Resume,66%,3,250,250,280
+grpc,Resume,75%,3,260,260,300
+grpc,Resume,80%,3,270,270,310
+grpc,Resume,90%,3,290,290,430
+grpc,Resume,95%,3,320,330,800
+grpc,Resume,98%,3,390,650,1300
+grpc,Resume,99%,3,580,1000,1500
+grpc,Resume,99.9%,3,1100,1800,4700
+grpc,Resume,99.99%,3,2100,2200,15000
+grpc,Resume,100%,3,3300,6500,27000
+grpc,Suspend,Request Count,3,22876,27470,28568
+grpc,Suspend,Failure Count,3,0,0,2
+grpc,Suspend,Average Response Time,3,468.31,499.33,634.1
+grpc,Suspend,Min Response Time,3,307,316,328
+grpc,Suspend,Max Response Time,3,14555,14611,30001
+grpc,Suspend,Requests/s,3,81.99,98.46,102.39
+grpc,Suspend,Failures/s,3,0,0,0.01
+grpc,Suspend,50%,3,440,440,470
+grpc,Suspend,66%,3,460,460,510
+grpc,Suspend,75%,3,470,470,550
+grpc,Suspend,80%,3,480,490,590
+grpc,Suspend,90%,3,510,530,780
+grpc,Suspend,95%,3,550,620,1700
+grpc,Suspend,98%,3,790,1600,2800
+grpc,Suspend,99%,3,1300,2400,3200
+grpc,Suspend,99.9%,3,2700,3400,6000
+grpc,Suspend,99.99%,3,5300,9900,24000
+grpc,Suspend,100%,3,15000,15000,30000
+runworkload,TTFI,Request Count,3,22873,27477,28580
+runworkload,TTFI,Failure Count,3,0,0,0
+runworkload,TTFI,Average Response Time,3,256.11,265.74,335.73
+runworkload,TTFI,Min Response Time,3,179,184,184
+runworkload,TTFI,Max Response Time,3,3289,6480,27185
+runworkload,TTFI,Requests/s,3,81.98,98.48,102.44
+runworkload,TTFI,Failures/s,3,0,0,0
+runworkload,TTFI,50%,3,240,240,260
+runworkload,TTFI,66%,3,250,260,280
+runworkload,TTFI,75%,3,260,270,300
+runworkload,TTFI,80%,3,270,270,320
+runworkload,TTFI,90%,3,290,290,430
+runworkload,TTFI,95%,3,320,340,800
+runworkload,TTFI,98%,3,400,650,1300
+runworkload,TTFI,99%,3,590,1000,1500
+runworkload,TTFI,99.9%,3,1100,1800,4700
+runworkload,TTFI,99.99%,3,2100,2200,15000
+runworkload,TTFI,100%,3,3300,6500,27000
+,Aggregated,Request Count,3,114377,137371,142877
+,Aggregated,Failure Count,3,0,0,4
+,Aggregated,Average Response Time,3,340.94,359.14,455.06
+,Aggregated,Min Response Time,3,1,3,3
+,Aggregated,Max Response Time,3,14855,14887,30309
+,Aggregated,Requests/s,3,409.95,492.37,512.1
+,Aggregated,Failures/s,3,0,0,0.01
+,Aggregated,50%,3,260,260,300
+,Aggregated,66%,3,420,430,470
+,Aggregated,75%,3,480,490,620
+,Aggregated,80%,3,610,620,680
+,Aggregated,90%,3,700,700,820
+,Aggregated,95%,3,740,760,1100
+,Aggregated,98%,3,810,1000,2300
+,Aggregated,99%,3,950,1700,3200
+,Aggregated,99.9%,3,2200,3800,5500
+,Aggregated,99.99%,3,4900,6500,22000
+,Aggregated,100%,3,15000,15000,30000

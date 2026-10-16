@@ -1,0 +1,24 @@
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T16:59:40.147463811Z","level":"WARN","msg":"partial telemetry resource","err":"error detecting resource: conflicting Schema URL: https://opentelemetry.io/schemas/1.40.0 and https://opentelemetry.io/schemas/1.43.0"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T16:59:40.148182115Z","level":"INFO","msg":"actors may connect to","hosts":["opentelemetry-collector.gke-managed-otel.svc.cluster.local"],"tls_hosts":null}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T16:59:40.148206988Z","level":"INFO","msg":"registered boomer task","user_class":"RunWorkloadUser","user_class_flag":"runworkload"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T16:59:40.1482242Z","level":"INFO","msg":"new slave runner"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T16:59:40.148228845Z","level":"INFO","msg":"Boomer is built with gomq support."}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T16:59:40.172636458Z","level":"INFO","msg":"Boomer is connected to master(tcp://locust-master.benchmarking.svc.cluster.local:5557) press Ctrl+c to quit."}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T16:59:40.549119212Z","level":"INFO","msg":"The total number of clients required is  10"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T16:59:40.549154563Z","level":"INFO","msg":"The current number of clients is 0, 10 clients will be added"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:40.548375712Z","level":"INFO","msg":"boomer:stop event received; suspending+deleting actors"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:40.548492742Z","level":"WARN","msg":"suspend failed; the actor may be left mid transition","actor":"sb-c37461a9-aad0-45fe-96d5-2548dc8b1d09","err":"rpc error: code = Canceled desc = context canceled"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:41.030873667Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-1412d50b-9eb9-402e-983e-95bbf29f539f"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:41.044730336Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-691233d6-ed04-4b69-9f37-1386b802403d"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:41.045800525Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-a9bec16e-d9c4-4ed2-a2c8-870be5736c4f"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:41.050228365Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-3b76750a-b018-40f3-8e9e-29158cb3b12e"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:41.058006261Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-725b01dd-fd29-44b3-bb66-a280312350de"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:41.062289163Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-b04d0ce5-f9d6-45b0-a7f2-8a1926e504b3"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:41.06681098Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-f944d45c-6c15-4d66-af4b-11ad41ff1c9e"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:41.079611115Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-363c544a-bb35-4cd0-a435-51948b4ce629"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:41.082432741Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-c6a7e2f1-aa68-46f0-86f3-d8caf4d5082a"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:51.055128296Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-c37461a9-aad0-45fe-96d5-2548dc8b1d09"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:51.055147362Z","level":"INFO","msg":"teardown finished","removed":10,"left":0}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:55.055572512Z","level":"INFO","msg":"Recv stop message from master, all the goroutines are stopped"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:55.561783712Z","level":"INFO","msg":"shutdown"}
+[pod/boomer-worker-jrppw/boomer] {"time":"2026-10-15T17:04:55.561801891Z","level":"INFO","msg":"boomer exited; waiting for the final scrape","wait":15000000000}

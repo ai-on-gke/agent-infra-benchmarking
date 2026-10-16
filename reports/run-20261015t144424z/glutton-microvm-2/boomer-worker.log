@@ -1,0 +1,28 @@
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:34:32.574665504Z","level":"WARN","msg":"partial telemetry resource","err":"error detecting resource: conflicting Schema URL: https://opentelemetry.io/schemas/1.40.0 and https://opentelemetry.io/schemas/1.43.0"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:34:32.57558765Z","level":"INFO","msg":"actors may connect to","hosts":["opentelemetry-collector.gke-managed-otel.svc.cluster.local"],"tls_hosts":null}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:34:32.575615066Z","level":"INFO","msg":"registered boomer task","user_class":"RunWorkloadUser","user_class_flag":"runworkload"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:34:32.575640019Z","level":"INFO","msg":"new slave runner"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:34:32.575646083Z","level":"INFO","msg":"Boomer is built with gomq support."}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:34:32.598632338Z","level":"INFO","msg":"Boomer is connected to master(tcp://locust-master.benchmarking.svc.cluster.local:5557) press Ctrl+c to quit."}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:34:33.178392579Z","level":"INFO","msg":"The total number of clients required is  10"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:34:33.178432115Z","level":"INFO","msg":"The current number of clients is 0, 10 clients will be added"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:33.178494567Z","level":"INFO","msg":"boomer:stop event received; suspending+deleting actors"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:33.178584758Z","level":"WARN","msg":"suspend failed; the actor may be left mid transition","actor":"sb-eb2400ba-ef12-426d-8c47-ddfb361d8688","err":"rpc error: code = Canceled desc = context canceled"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:33.178586773Z","level":"WARN","msg":"suspend failed; the actor may be left mid transition","actor":"sb-81ac80b3-e7e0-41d3-8dc5-68200f83de73","err":"rpc error: code = Canceled desc = context canceled"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:33.178586652Z","level":"WARN","msg":"suspend failed; the actor may be left mid transition","actor":"sb-cd7bca31-5a95-477a-8e54-cd7a8a71d5e6","err":"rpc error: code = Canceled desc = context canceled"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:33.17860853Z","level":"WARN","msg":"suspend failed; the actor may be left mid transition","actor":"sb-478ccf50-0e16-400d-802d-673bbc3107b7","err":"rpc error: code = Canceled desc = context canceled"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:33.178607594Z","level":"WARN","msg":"suspend failed; the actor may be left mid transition","actor":"sb-83661e3c-196e-49e3-843d-0a540bf3d5ed","err":"rpc error: code = Canceled desc = context canceled"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:33.477670149Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-3b1a035d-182c-42cd-9ebf-7cd9465ca615"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:33.481254171Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-6e093a91-e0b2-40e7-872b-b63a2a67d77d"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:33.482279493Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-2e14c2f8-5bb4-4544-a491-254d08259bd7"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:33.482312638Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-d36557ae-8169-4eb0-8289-3d51d7ef06c1"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:33.487157744Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-811bf798-bcb6-48c5-9146-85f609c8430d"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:34.492680455Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-cd7bca31-5a95-477a-8e54-cd7a8a71d5e6"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:34.546622515Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-81ac80b3-e7e0-41d3-8dc5-68200f83de73"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:37.891332013Z","level":"WARN","msg":"teardown left an actor behind","actor":"sb-eb2400ba-ef12-426d-8c47-ddfb361d8688","template":"glutton","err":"delete: rpc error: code = Aborted desc = another operation is in progress for this actor (after suspend: rpc error: code = Aborted desc = another operation is in progress for this actor)"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:43.791927341Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-478ccf50-0e16-400d-802d-673bbc3107b7"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:43.794057327Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-83661e3c-196e-49e3-843d-0a540bf3d5ed"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:43.794076045Z","level":"INFO","msg":"teardown finished","removed":9,"left":1}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:47.794472786Z","level":"INFO","msg":"Recv stop message from master, all the goroutines are stopped"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:48.191893167Z","level":"INFO","msg":"shutdown"}
+[pod/boomer-worker-czjpz/boomer] {"time":"2026-10-15T17:39:48.191914141Z","level":"INFO","msg":"boomer exited; waiting for the final scrape","wait":15000000000}
