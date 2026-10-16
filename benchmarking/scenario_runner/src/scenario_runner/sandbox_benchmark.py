@@ -20,8 +20,8 @@ the providers, the tests by function name, how many times each runs and how
 many warmup runs go before. The substrate provider runs them through
 agent-substrate/env deployed for them by ate_env, whose pool and environments
 `env-worker-count` and `actor-memory` size; local runs them in the
-comparator's own pod; e2b and daytona in their clouds, with the E2B_API_KEY
-and DAYTONA_API_KEY of the scenario-runner's environment."""
+comparator's own pod; e2b, daytona and modal in their clouds, with the
+PROVIDER_KEYS of the scenario-runner's environment."""
 
 from __future__ import annotations
 
@@ -63,11 +63,15 @@ CASE_KEYS = {
     "max-failure-ratio", "comparator",
 }  # fmt: skip
 COMPARATOR_KEYS = {"providers", "tests", "runs", "warmup-runs"}
-PROVIDERS = ("substrate", "local", "e2b", "daytona")
-# The API key a provider needs, read from the scenario-runner's environment
+PROVIDERS = ("substrate", "local", "e2b", "daytona", "modal")
+# The API keys a provider needs, read from the scenario-runner's environment
 # and handed to the comparator in the Secret PROVIDER_SECRET, which the
 # manifest's env reads; have to match it.
-PROVIDER_KEYS = {"e2b": "E2B_API_KEY", "daytona": "DAYTONA_API_KEY"}
+PROVIDER_KEYS = {
+    "e2b": ("E2B_API_KEY",),
+    "daytona": ("DAYTONA_API_KEY",),
+    "modal": ("MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"),
+}
 PROVIDER_SECRET = "sandbox-benchmark-providers"
 
 
@@ -214,9 +218,10 @@ def run_provider(
 ) -> None:
     """Runs the case's tests on provider, as one comparator Job, whose reports
     go under <run_id>/<name>/<provider>/."""
-    key = PROVIDER_KEYS.get(provider)
-    if key and not os.environ.get(key):
-        raise SandboxBenchmarkError(f"{provider} needs {key} in the environment")
+    keys = PROVIDER_KEYS.get(provider, ())
+    missing = [key for key in keys if not os.environ.get(key)]
+    if missing:
+        raise SandboxBenchmarkError(f"{provider} needs {', '.join(missing)} in the environment")
     sandbox_class = case["sandbox-class"]
     comparator = case["comparator"]
     on_env = provider == "substrate"
@@ -265,13 +270,13 @@ def run_provider(
     stream(
         cluster.kubectl("apply", "-f", "-"), input=f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {NAMESPACE}\n"
     )
-    if key:
-        # Server-side, so no last-applied-configuration annotation copies the key.
+    if keys:
+        # Server-side, so no last-applied-configuration annotation copies the keys.
         secret = {
             "apiVersion": "v1",
             "kind": "Secret",
             "metadata": {"name": PROVIDER_SECRET, "namespace": NAMESPACE},
-            "data": {key: base64.b64encode(os.environ[key].encode()).decode()},
+            "data": {key: base64.b64encode(os.environ[key].encode()).decode() for key in keys},
         }
         stream(cluster.kubectl("apply", "--server-side", "-f", "-"), input=json.dumps(secret))
     # A Job's pod template is immutable. Foreground, so its pod is gone too and
@@ -306,7 +311,7 @@ def run_provider(
         still_running = not jobs.stop(cluster, (JOB,), NAMESPACE, STOP_TIMEOUT_SECS)
         raise
     finally:
-        if key:
+        if keys:
             # Best-effort: the pod read it as it started, and a dev infra's
             # cluster outlives the run.
             subprocess.run(

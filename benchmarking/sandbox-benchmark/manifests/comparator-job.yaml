@@ -79,7 +79,7 @@ spec:
           value: "${SUBSTRATE_ATESPACE}"
         - name: SUBSTRATE_TEMPLATE
           value: "${SUBSTRATE_TEMPLATE}"
-        # The key of a provider that needs one, in the Secret the scenario-runner
+        # The keys of a provider that needs them, in the Secret the scenario-runner
         # creates for its run; sandbox_benchmark.PROVIDER_KEYS.
         - name: E2B_API_KEY
           valueFrom:
@@ -96,6 +96,18 @@ spec:
         # The comparator requires it although the daytona provider defaults to it.
         - name: DAYTONA_SERVER_URL
           value: "https://app.daytona.io/api"
+        - name: MODAL_TOKEN_ID
+          valueFrom:
+            secretKeyRef:
+              name: sandbox-benchmark-providers
+              key: MODAL_TOKEN_ID
+              optional: true
+        - name: MODAL_TOKEN_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: sandbox-benchmark-providers
+              key: MODAL_TOKEN_SECRET
+              optional: true
         resources:
           requests:
             cpu: "1"
