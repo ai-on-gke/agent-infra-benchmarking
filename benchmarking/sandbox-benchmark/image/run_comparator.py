@@ -23,7 +23,7 @@ numbers the tests in directory order and whose history.json leaves out the
 errors a provider returns rather than raises: every error of the provider's.
 
 Read from the environment, besides the provider's own settings, such as
-substrate's SUBSTRATE_*:
+substrate's SUBSTRATE_* and e2b's E2B_API_KEY:
 
     BENCHMARK_PROVIDER     the provider, substrate by default
     BENCHMARK_TESTS        the tests' function names, comma-separated

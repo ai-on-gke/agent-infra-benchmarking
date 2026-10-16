@@ -20,12 +20,14 @@ the providers, the tests by function name, how many times each runs and how
 many warmup runs go before. The substrate provider runs them through
 agent-substrate/env deployed for them by ate_env, whose pool and environments
 `env-worker-count` and `actor-memory` size; local runs them in the
-comparator's own pod."""
+comparator's own pod; e2b in e2b's cloud, with the E2B_API_KEY of the
+scenario-runner's environment."""
 
 from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import subprocess
 import time
@@ -61,8 +63,12 @@ CASE_KEYS = {
     "max-failure-ratio", "comparator",
 }  # fmt: skip
 COMPARATOR_KEYS = {"providers", "tests", "runs", "warmup-runs"}
-# The providers that need no API keys.
-PROVIDERS = ("substrate", "local")
+PROVIDERS = ("substrate", "local", "e2b")
+# The API key a provider needs, read from the scenario-runner's environment
+# and handed to the comparator in the Secret PROVIDER_SECRET, which the
+# manifest's env reads; have to match it.
+PROVIDER_KEYS = {"e2b": "E2B_API_KEY"}
+PROVIDER_SECRET = "sandbox-benchmark-providers"
 
 
 class SandboxBenchmarkError(RuntimeError):
@@ -208,6 +214,9 @@ def run_provider(
 ) -> None:
     """Runs the case's tests on provider, as one comparator Job, whose reports
     go under <run_id>/<name>/<provider>/."""
+    key = PROVIDER_KEYS.get(provider)
+    if key and not os.environ.get(key):
+        raise SandboxBenchmarkError(f"{provider} needs {key} in the environment")
     sandbox_class = case["sandbox-class"]
     comparator = case["comparator"]
     on_env = provider == "substrate"
@@ -256,6 +265,15 @@ def run_provider(
     stream(
         cluster.kubectl("apply", "-f", "-"), input=f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {NAMESPACE}\n"
     )
+    if key:
+        # Server-side, so no last-applied-configuration annotation copies the key.
+        secret = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": PROVIDER_SECRET, "namespace": NAMESPACE},
+            "data": {key: base64.b64encode(os.environ[key].encode()).decode()},
+        }
+        stream(cluster.kubectl("apply", "--server-side", "-f", "-"), input=json.dumps(secret))
     # A Job's pod template is immutable. Foreground, so its pod is gone too and
     # the job-name lookup only sees this run's.
     log(f"sandbox-benchmark: deleting any previous {JOB}")
@@ -288,6 +306,13 @@ def run_provider(
         still_running = not jobs.stop(cluster, (JOB,), NAMESPACE, STOP_TIMEOUT_SECS)
         raise
     finally:
+        if key:
+            # Best-effort: the pod read it as it started, and a dev infra's
+            # cluster outlives the run.
+            subprocess.run(
+                cluster.kubectl("delete", "secret", PROVIDER_SECRET, "--ignore-not-found", namespace=NAMESPACE),
+                capture_output=True,
+            )
         if on_env and not still_running:
             reports.record_cleanup(cluster, ate_env.ENV_ATESPACE, bucket, report_prefix, run_id, folder)
         reports.upload_logs(cluster, NAMESPACE, (JOB,), bucket, report_prefix, run_id, folder)
