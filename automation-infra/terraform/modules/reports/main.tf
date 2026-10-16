@@ -328,6 +328,40 @@ locals {
   SQL
   # The comparator's own total time adds these up.
   sandbox_benchmark_total = ["Workspace Creation", "Suspend", "Resume", "Dependency Installation", "Environment Setup", "Code Execution", "Cleanup"]
+  # As the comparator's table: each run's mean of a metric, failed runs too,
+  # averaged across the runs, with their population deviation; Total Time
+  # the sum of a run's means of sandbox_benchmark_total.
+  sandbox_benchmark_comparison = <<-SQL
+    WITH per_run AS (
+      SELECT run_id, test_case, scenario, provider, test, run, metric, AVG(value_ms) AS run_mean
+      FROM (${local.sandbox_benchmark_metrics})
+      GROUP BY run_id, test_case, scenario, provider, test, run, metric
+    ),
+    with_total AS (
+      SELECT * FROM per_run
+      UNION ALL
+      SELECT run_id, test_case, scenario, provider, test, run, 'Total Time', SUM(run_mean)
+      FROM per_run
+      WHERE metric IN (${join(", ", [for m in local.sandbox_benchmark_total : "'${m}'"])})
+      GROUP BY run_id, test_case, scenario, provider, test, run
+    ),
+    tests AS (
+      SELECT run_id, test_case, provider, test, COUNT(*) AS test_runs, COUNTIF(failed) AS failed_runs
+      FROM (${local.sandbox_benchmark_rows.sandbox_benchmark_runs})
+      GROUP BY run_id, test_case, provider, test
+    )
+    SELECT
+      run_id, test_case, scenario, test, provider, metric,
+      AVG(run_mean) AS mean_ms, STDDEV_POP(run_mean) AS stddev_ms, COUNT(*) AS runs,
+      ANY_VALUE(test_runs) AS test_runs, ANY_VALUE(failed_runs) AS failed_runs
+    FROM with_total
+    JOIN tests USING (run_id, test_case, provider, test)
+    GROUP BY run_id, test_case, scenario, test, provider, metric
+  SQL
+  # The comparator table's rows, in its order, and its columns: the
+  # scenario-runner's sandbox_benchmark.PROVIDERS, against substrate.
+  sandbox_benchmark_table_rows      = ["Workspace Creation", "Suspend", "Resume", "Code Execution", "Cleanup", "Total Time", "vs substrate %"]
+  sandbox_benchmark_table_providers = ["substrate", "local"]
   sandbox_benchmark_views = {
     sandbox_benchmark_run = {
       description = "Each provider's run of each sandbox-benchmark record: how it went, and the commits."
@@ -341,37 +375,34 @@ locals {
       description = "Each metric value of each run of each sandbox-benchmark test on each provider, in ms."
       query       = local.sandbox_benchmark_metrics
     }
-    # As the comparator's table: each run's mean of a metric, failed runs too,
-    # averaged across the runs, with their population deviation; Total Time
-    # the sum of a run's means of sandbox_benchmark_total.
     sandbox_benchmark_comparison = {
       description = "The sandbox-benchmark comparator's table: each metric of each test on each provider, per record."
+      query       = local.sandbox_benchmark_comparison
+    }
+    # As comparison.md formats it; Total Time has no deviation.
+    sandbox_benchmark_table = {
+      description = "The sandbox-benchmark comparator's table as it prints it, a column per provider; ORDER BY run_id, test_case, test, position."
       query       = <<-SQL
-        WITH per_run AS (
-          SELECT run_id, test_case, scenario, provider, test, run, metric, AVG(value_ms) AS run_mean
-          FROM (${local.sandbox_benchmark_metrics})
-          GROUP BY run_id, test_case, scenario, provider, test, run, metric
-        ),
-        with_total AS (
-          SELECT * FROM per_run
+        WITH c AS (${local.sandbox_benchmark_comparison}),
+        cells AS (
+          SELECT run_id, test_case, scenario, test, provider, metric,
+            IF(metric = 'Total Time', FORMAT('%.2fms', mean_ms), FORMAT('%.2fms (±%.2f)', mean_ms, stddev_ms)) AS cell
+          FROM c
+          WHERE metric IN (${join(", ", [for m in local.sandbox_benchmark_table_rows : "'${m}'"])})
           UNION ALL
-          SELECT run_id, test_case, scenario, provider, test, run, 'Total Time', SUM(run_mean)
-          FROM per_run
-          WHERE metric IN (${join(", ", [for m in local.sandbox_benchmark_total : "'${m}'"])})
-          GROUP BY run_id, test_case, scenario, provider, test, run
-        ),
-        tests AS (
-          SELECT run_id, test_case, provider, test, COUNT(*) AS test_runs, COUNTIF(failed) AS failed_runs
-          FROM (${local.sandbox_benchmark_rows.sandbox_benchmark_runs})
-          GROUP BY run_id, test_case, provider, test
+          SELECT t.run_id, t.test_case, t.scenario, t.test, t.provider, 'vs substrate %',
+            IF(t.provider = 'substrate' OR b.mean_ms = 0, '0%', FORMAT('%+.1f%%', SAFE_DIVIDE(t.mean_ms - b.mean_ms, b.mean_ms) * 100))
+          FROM c AS t
+          JOIN c AS b USING (run_id, test_case, test)
+          WHERE t.metric = 'Total Time' AND b.metric = 'Total Time' AND b.provider = 'substrate'
         )
         SELECT
-          run_id, test_case, scenario, test, provider, metric,
-          AVG(run_mean) AS mean_ms, STDDEV_POP(run_mean) AS stddev_ms, COUNT(*) AS runs,
-          ANY_VALUE(test_runs) AS test_runs, ANY_VALUE(failed_runs) AS failed_runs
-        FROM with_total
-        JOIN tests USING (run_id, test_case, provider, test)
-        GROUP BY run_id, test_case, scenario, test, provider, metric
+          run_id, test_case, scenario, test,
+          CASE metric ${join(" ", [for i, m in local.sandbox_benchmark_table_rows : "WHEN '${m}' THEN ${i + 1}"])} END AS position,
+          metric,
+          ${join(", ", [for p in local.sandbox_benchmark_table_providers : "IFNULL(${p}, 'N/A') AS ${p}"])}
+        FROM cells
+        PIVOT (ANY_VALUE(cell) FOR provider IN (${join(", ", [for p in local.sandbox_benchmark_table_providers : "'${p}'"])}))
       SQL
     }
   }
