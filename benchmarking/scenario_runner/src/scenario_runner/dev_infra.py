@@ -153,5 +153,7 @@ def destroy(name: str, json_output: bool = False) -> None:
         infra_deployment = deployment(name, infra, json_output)
         # One never applied has nothing to destroy.
         if infra_deployment.state_file.exists():
+            if infra == "cluster" and infra_deployment.state_outputs().get("cluster_name"):
+                cluster(name).delete_volumes()
             infra_deployment.destroy()
     shutil.rmtree(DEV_INFRA_DIR / name)

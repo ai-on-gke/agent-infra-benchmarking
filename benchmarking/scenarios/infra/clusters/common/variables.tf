@@ -70,7 +70,9 @@ variable "services_cidr" {
   default     = "10.8.0.0/20"
 }
 
-# Bump it deliberately, to one the REGULAR channel offers in var.region:
+# A minor version, as REGULAR stops offering each exact build within weeks;
+# run.json records the build a run got. It has to be one REGULAR offers in
+# var.region:
 #   gcloud container get-server-config --location=<region> \
 #     --flatten=channels --filter=channels.channel=REGULAR \
 #     --format="value(channels.validVersions)"
@@ -78,9 +80,9 @@ variable "services_cidr" {
 # pools where they are until end of support; GKE still patches the control
 # plane.
 variable "kubernetes_version" {
-  description = "Kubernetes version of the control plane (GKE's min_master_version) and of every node pool."
+  description = "GKE version of the control plane (GKE's min_master_version), which the node pools are created at: a minor such as 1.35, for which GKE picks a build the REGULAR channel offers, or an exact build."
   type        = string
-  default     = "1.35.8-gke.1225000"
+  default     = "1.35"
 }
 
 variable "zone" {
