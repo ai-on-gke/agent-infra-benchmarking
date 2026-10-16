@@ -29,7 +29,7 @@ from pathlib import Path
 
 from . import data
 
-# Where run_locust_job.sh downloads runs to, relative to the current directory.
+# Where the scenario-runner downloads runs to, relative to the current directory.
 REPORTS_DIR = Path("reports")
 
 # Chart name -> the request name in locust_stats_history.csv whose latency the

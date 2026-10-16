@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Named benchmark runs, each picked by the scenario-runner's --scenario:
+# Named benchmark runs, each picked by the scenario-runner's --scenario, or
+# all of them with --all:
 #
 #   python3 -m scenario_runner.cli.run --scenario glutton ...
 #
@@ -20,13 +21,19 @@
 # the rest.
 # For locust: `worker-count` and `sandbox-class` shape the WorkerPool, and
 # every key in `master` and `worker` becomes `--key=value` on that process.
-# `sandbox-class` has to be the cluster's `sandbox_class`, gvisor by default.
+# `sandbox-class`, gvisor by default, is also the class the case's cluster is
+# applied for (its `sandbox_class`), so it is stated here only.
+# `actor-memory` is the actors' memory limit, which on microvm is the guest's
+# RAM: 256Mi by default, 2Gi for openclaw. `locust-workers` is how many boomer
+# worker pods share the users, 1 by default.
 # `noop` is the scenario-runner's alone: it applies and destroys the case's
 # cluster, and runs nothing on it.
 #
-# `max-failure-ratio` is the share of requests, 0 to 1, that may fail before a
-# run of the case counts as failed, 0.01 by default; a run that makes no
-# requests, or whose load generator raises any exception, fails too.
+# `max-failure-ratio` is the share of cycles, 0 to 1, that may fail before a
+# run of the case counts as failed, 0.01 by default. A cycle fails on any of
+# its calls, and an actor that could not be created counts as a failed cycle.
+# A run that completes no cycle, or whose load generator raises any exception,
+# fails too.
 #
 # `repeats` is how many times the case runs, 1 by default, each on its own
 # cluster applied for it, or one after another on a --dev-infra's. Above 1,
@@ -55,11 +62,11 @@ cases:
           sandboxed_node_count     = 1
           sandboxed_min_node_count = 1
           sandboxed_max_node_count = 1
-    repeats: 1
+    repeats: 3
     worker-count: 10
     sandbox-class: gvisor
     master:
-      run-time: 1m
+      run-time: 5m
       users: 10
       spawn-rate: 10
       warm-up: 10s
@@ -68,6 +75,7 @@ cases:
       workload-template: glutton
       resume-mode: explicit
 
+  # glutton on microvm: the same as glutton but the class, so the two compare.
   glutton-microvm:
     type: locust
     infra:
@@ -75,16 +83,17 @@ cases:
         name: common
         tfvars: default.tfvars
         tfvars_inline: |
-          sandbox_class            = "microvm"
           sandboxed_node_count     = 1
           sandboxed_min_node_count = 1
           sandboxed_max_node_count = 1
-    worker-count: 5
+    repeats: 3
+    worker-count: 10
     sandbox-class: microvm
     master:
-      run-time: 3m
-      users: 3
-      spawn-rate: 2
+      run-time: 5m
+      users: 10
+      spawn-rate: 10
+      warm-up: 10s
     worker:
       workload-name: glutton
       workload-template: glutton
@@ -125,7 +134,6 @@ cases:
         name: common
         tfvars: openclaw.tfvars
         tfvars_inline: |
-          sandbox_class            = "microvm"
           sandboxed_node_count     = 1
           sandboxed_min_node_count = 1
           sandboxed_max_node_count = 1
@@ -143,6 +151,133 @@ cases:
       workload-timeout: 120s
       resume-mode: explicit
       actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
+
+  # glutton woken by its instruction, through the router, rather than by a
+  # ResumeActor first: TTFI is then the router's wake.
+  glutton-implicit:
+    type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 1
+          sandboxed_min_node_count = 1
+          sandboxed_max_node_count = 1
+    worker-count: 10
+    sandbox-class: gvisor
+    master:
+      run-time: 5m
+      users: 10
+      spawn-rate: 10
+      warm-up: 10s
+    worker:
+      workload-name: glutton
+      workload-template: glutton
+      resume-mode: implicit
+
+  # glutton with memory and disk to snapshot: each cycle rewrites 64Mi of the
+  # actor's memory and a 16Mi file before its suspend (WriteRAM and WriteDisk
+  # rows).
+  glutton-load:
+    type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 1
+          sandboxed_min_node_count = 1
+          sandboxed_max_node_count = 1
+    worker-count: 10
+    sandbox-class: gvisor
+    actor-memory: 512Mi
+    master:
+      run-time: 5m
+      users: 10
+      spawn-rate: 10
+      warm-up: 10s
+    worker:
+      workload-name: glutton
+      workload-template: glutton
+      resume-mode: explicit
+      glutton-write-ram: 64Mi
+      glutton-write-disk: 16777216
+
+  # A session of five instructions per wake, rather than one.
+  glutton-session:
+    type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 1
+          sandboxed_min_node_count = 1
+          sandboxed_max_node_count = 1
+    worker-count: 10
+    sandbox-class: gvisor
+    master:
+      run-time: 5m
+      users: 10
+      spawn-rate: 10
+      warm-up: 10s
+    worker:
+      workload-name: glutton
+      workload-template: glutton
+      resume-mode: explicit
+      instructions-per-cycle: 5
+
+  # Four instructions at once to each actor at every step.
+  glutton-concurrent:
+    type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 1
+          sandboxed_min_node_count = 1
+          sandboxed_max_node_count = 1
+    worker-count: 10
+    sandbox-class: gvisor
+    master:
+      run-time: 5m
+      users: 10
+      spawn-rate: 10
+      warm-up: 10s
+    worker:
+      workload-name: glutton
+      workload-template: glutton
+      resume-mode: explicit
+      concurrent-instructions: 4
+
+  # glutton at scale: 100 users on 100 workers over 25 sandboxed nodes, the
+  # load spread over four boomer pods. Its 26 c2-standard-16 nodes take 416 of
+  # a region's default 500 C2 vCPUs, so it runs by hand rather than nightly.
+  glutton-large:
+    type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 25
+          sandboxed_min_node_count = 25
+          sandboxed_max_node_count = 25
+    repeats: 3
+    worker-count: 100
+    locust-workers: 4
+    sandbox-class: gvisor
+    master:
+      run-time: 5m
+      users: 100
+      spawn-rate: 10
+      warm-up: 10s
+    worker:
+      workload-name: glutton
+      workload-template: glutton
+      resume-mode: explicit
 
   # The scenario-runner's Terraform path on infra/clusters/dummy, which creates
   # no GCP resources and so has nothing to benchmark on.
