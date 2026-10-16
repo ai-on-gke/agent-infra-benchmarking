@@ -61,6 +61,17 @@ type workload interface {
 // actorRef is the handle a workload needs to reach one actor. It carries what
 // substrate requires to route a request and nothing about the measurement, so
 // an implementation cannot accidentally depend on benchmark state.
+// loader is a workload whose actors can be made to change their memory and
+// disk on request, which a cycle can do before its suspend so the snapshot
+// holds that much changed state.
+type loader interface {
+	// WriteRAM rewrites size (a quantity such as "64Mi") of the actor's
+	// memory, first on an actor not yet written to, and WriteDisk size bytes
+	// of a file on its disk.
+	WriteRAM(ctx context.Context, actor actorRef, size string, first bool) error
+	WriteDisk(ctx context.Context, actor actorRef, size int) error
+}
+
 type actorRef struct {
 	HTTPClient *http.Client
 	RouterURL  string

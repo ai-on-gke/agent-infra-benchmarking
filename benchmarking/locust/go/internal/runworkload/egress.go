@@ -47,27 +47,43 @@ func egressHosts(hosts []string) ([]string, error) {
 	return slices.Compact(names), nil
 }
 
+// egressRules allows hosts over cleartext HTTP, gRPC included, and tlsHosts
+// over TLS, each on any port. TLS is passed through rather than intercepted,
+// so the actor needs no trust in the gateway's CA.
+func egressRules(hosts, tlsHosts []string) []*ateapipb.EgressRule {
+	var rules []*ateapipb.EgressRule
+	if len(hosts) > 0 {
+		rules = append(rules, &ateapipb.EgressRule{Http: &ateapipb.HTTPRule{
+			Hostnames: hosts,
+			Ports:     &ateapipb.Ports{All: &ateapipb.AllPorts{}},
+		}})
+	}
+	if len(tlsHosts) > 0 {
+		rules = append(rules, &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TLSPassthroughRule{
+			Hostnames: tlsHosts,
+			Ports:     &ateapipb.Ports{All: &ateapipb.AllPorts{}},
+		}})
+	}
+	return rules
+}
+
 // allowEgress gives the actor an egress policy that lets it reach hosts over
-// cleartext HTTP, gRPC included, on any port, and nothing else. Without one,
+// cleartext HTTP and tlsHosts over TLS, and nothing else. Without one,
 // substrate's egress gateway refuses every connection the actor opens,
 // including the telemetry its SDK exports and a workload's calls to its own
-// backends.
+// backends; and a cleartext rule refuses TLS to the same name, which shows in
+// the actor as a call that times out rather than as a refusal.
 //
 // It runs between CreateActor and the first resume, because the gateway
 // caches an actor's lack of a policy for a while and the actor may connect as
 // soon as it runs. The policy is deleted with the actor.
-func (u *runWorkloadUser) allowEgress(ctx context.Context, hosts []string) error {
+func (u *runWorkloadUser) allowEgress(ctx context.Context, hosts, tlsHosts []string) error {
 	return u.tracedCall(ctx, "CreateActorEgressPolicy", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.CreateActorEgressPolicy(callCtx, &ateapipb.CreateActorEgressPolicyRequest{
+		_, err := u.client().CreateActorEgressPolicy(callCtx, &ateapipb.CreateActorEgressPolicyRequest{
 			Actor: u.ref(),
 			EgressPolicy: &ateapipb.EgressPolicy{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: egressPolicyName},
-				Rules: []*ateapipb.EgressRule{{
-					Http: &ateapipb.HTTPRule{
-						Hostnames: hosts,
-						Ports:     &ateapipb.Ports{All: &ateapipb.AllPorts{}},
-					},
-				}},
+				Rules:    egressRules(hosts, tlsHosts),
 			},
 		}, grpc.Trailer(tr))
 		// A retry after an Aborted attempt that did land.

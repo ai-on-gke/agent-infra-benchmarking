@@ -35,8 +35,15 @@ const (
 	// for glutton.
 	gluttonTemplate = "glutton"
 
+	// glutton's HTTP routes (internal/benchmarking/glutton in the submodule).
 	pingPath         = "/ping"
+	writeRAMPath     = "/writeram"
+	writeDiskPath    = "/writedisk"
 	protoContentType = "application/x-protobuf"
+
+	// The memory array and file a cycle's load rewrites, the same each time so
+	// the actor's footprint stays at one of each.
+	loadKey = "load"
 )
 
 func init() {
@@ -79,4 +86,58 @@ func (gluttonWorkload) SendInstruction(ctx context.Context, actor actorRef) (boo
 			return nil
 		},
 	})
+}
+
+// WriteRAM rewrites size of the actor's memory. The first call on an actor
+// allocates and fills the array, which rotating writes need to exist; later
+// ones move on through it rather than dirtying the same pages again.
+func (gluttonWorkload) WriteRAM(ctx context.Context, actor actorRef, size string, first bool) error {
+	mode := gluttonpb.WriteMode_WRITE_MODE_OVERWRITE_ROTATE
+	if first {
+		mode = gluttonpb.WriteMode_WRITE_MODE_TRUNCATE
+	}
+	body, err := proto.Marshal(&gluttonpb.WriteRAMRequest{
+		Key:       loadKey,
+		Size:      size,
+		WriteMode: mode,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = sendHTTPInstruction(ctx, actor, httpInstruction{
+		Method:      http.MethodPost,
+		Path:        writeRAMPath,
+		ContentType: protoContentType,
+		Body:        body,
+	})
+	return err
+}
+
+// WriteDisk writes size new random bytes over the actor's file.
+func (gluttonWorkload) WriteDisk(ctx context.Context, actor actorRef, size int) error {
+	body, err := proto.Marshal(&gluttonpb.WriteDiskRequest{
+		Key:       loadKey,
+		Size:      int32(size),
+		WriteMode: gluttonpb.WriteMode_WRITE_MODE_TRUNCATE,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = sendHTTPInstruction(ctx, actor, httpInstruction{
+		Method:      http.MethodPost,
+		Path:        writeDiskPath,
+		ContentType: protoContentType,
+		Body:        body,
+		Verify: func(respBody []byte) error {
+			written := &gluttonpb.WriteDiskResponse{}
+			if err := proto.Unmarshal(respBody, written); err != nil {
+				return err
+			}
+			if written.GetSize() != int64(size) {
+				return fmt.Errorf("wrote %d bytes, file is %d", size, written.GetSize())
+			}
+			return nil
+		},
+	})
+	return err
 }

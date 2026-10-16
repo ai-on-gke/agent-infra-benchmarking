@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -49,10 +50,83 @@ type pingServer struct {
 	// PingDelay is how long a request that is not rejected takes to answer,
 	// standing in for an application whose instruction is not free.
 	PingDelay time.Duration
+	// LoadStatus fails every WriteRAM and WriteDisk with this status.
+	LoadStatus int
 
 	mu          sync.Mutex
 	pingCount   int
 	targetActor string
+	// pingsInFlight and pingPeak track overlapping pings.
+	pingsInFlight int
+	pingPeak      int
+	// writes is each WriteRAM or WriteDisk path served, in order, and
+	// ramModes each WriteRAM's mode.
+	writes   []string
+	ramModes []gluttonpb.WriteMode
+}
+
+// RecordedRAMModes is each WriteRAM's mode, in order.
+func (s *pingServer) RecordedRAMModes() []gluttonpb.WriteMode {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]gluttonpb.WriteMode(nil), s.ramModes...)
+}
+
+// PeakPings is the most pings that were being served at once.
+func (s *pingServer) PeakPings() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pingPeak
+}
+
+// RecordedWrites is the WriteRAM and WriteDisk paths served, in order.
+func (s *pingServer) RecordedWrites() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.writes...)
+}
+
+// serveWrite answers glutton's WriteRAM and WriteDisk as glutton does.
+func (s *pingServer) serveWrite(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	s.writes = append(s.writes, r.URL.Path)
+	s.mu.Unlock()
+	if s.LoadStatus != 0 {
+		http.Error(w, http.StatusText(s.LoadStatus), s.LoadStatus)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var resp proto.Message = &gluttonpb.WriteRAMResponse{}
+	if r.URL.Path == writeRAMPath {
+		var req gluttonpb.WriteRAMRequest
+		if err := proto.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.mu.Lock()
+		// As glutton: rotating needs the array a first write made.
+		filled := slices.Contains(s.ramModes, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE)
+		s.ramModes = append(s.ramModes, req.GetWriteMode())
+		s.mu.Unlock()
+		if req.GetWriteMode() == gluttonpb.WriteMode_WRITE_MODE_OVERWRITE_ROTATE && !filled {
+			http.Error(w, `rotate needs an existing array "load"; fill with TRUNCATE first`, http.StatusNotFound)
+			return
+		}
+	}
+	if r.URL.Path == writeDiskPath {
+		var req gluttonpb.WriteDiskRequest
+		if err := proto.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		resp = &gluttonpb.WriteDiskResponse{Size: int64(req.GetSize())}
+	}
+	out, _ := proto.Marshal(resp)
+	_, _ = w.Write(out)
 }
 
 // RecordedTargetActor returns the ate-target-actor header from the most recent
@@ -86,6 +160,10 @@ func (s *pingServer) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(s.Status), s.Status)
 		return
 	}
+	if r.URL.Path == writeRAMPath || r.URL.Path == writeDiskPath {
+		s.serveWrite(w, r)
+		return
+	}
 	if r.URL.Path != pingPath {
 		http.NotFound(w, r)
 		return
@@ -107,6 +185,15 @@ func (s *pingServer) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.mu.Lock()
+	s.pingsInFlight++
+	s.pingPeak = max(s.pingPeak, s.pingsInFlight)
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.pingsInFlight--
+		s.mu.Unlock()
+	}()
 	if s.PingDelay > 0 {
 		time.Sleep(s.PingDelay)
 	}
