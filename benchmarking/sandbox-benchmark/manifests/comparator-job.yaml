@@ -114,6 +114,12 @@ spec:
               name: sandbox-benchmark-providers
               key: ANTHROPIC_API_KEY
               optional: true
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: sandbox-benchmark-providers
+              key: OPENAI_API_KEY
+              optional: true
         resources:
           requests:
             cpu: "1"

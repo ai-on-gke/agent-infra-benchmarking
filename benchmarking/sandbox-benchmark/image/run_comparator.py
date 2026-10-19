@@ -24,7 +24,7 @@ errors a provider returns rather than raises: every error of the provider's.
 
 Read from the environment, besides the provider's own settings, such as
 substrate's SUBSTRATE_*, e2b's E2B_API_KEY, daytona's DAYTONA_*, modal's
-MODAL_TOKEN_* and anthropic's ANTHROPIC_API_KEY:
+MODAL_TOKEN_*, anthropic's ANTHROPIC_API_KEY and openai's OPENAI_API_KEY:
 
     BENCHMARK_PROVIDER     the provider, substrate by default
     BENCHMARK_TESTS        the tests' function names, comma-separated

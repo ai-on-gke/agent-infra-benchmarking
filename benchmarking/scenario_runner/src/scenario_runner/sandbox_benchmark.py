@@ -20,8 +20,8 @@ the providers, the tests by function name, how many times each runs and how
 many warmup runs go before. The substrate provider runs them through
 agent-substrate/env deployed for them by ate_env, whose pool and environments
 `env-worker-count` and `actor-memory` size; local runs them in the
-comparator's own pod; e2b, daytona, modal and anthropic in their clouds,
-with the PROVIDER_KEYS of the scenario-runner's environment."""
+comparator's own pod; e2b, daytona, modal, anthropic and openai in their
+clouds, with the PROVIDER_KEYS of the scenario-runner's environment."""
 
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ CASE_KEYS = {
     "max-failure-ratio", "comparator",
 }  # fmt: skip
 COMPARATOR_KEYS = {"providers", "tests", "runs", "warmup-runs"}
-PROVIDERS = ("substrate", "local", "e2b", "daytona", "modal", "anthropic")
+PROVIDERS = ("substrate", "local", "e2b", "daytona", "modal", "anthropic", "openai")
 # The API keys a provider needs, read from the scenario-runner's environment
 # and handed to the comparator in the Secret PROVIDER_SECRET, which the
 # manifest's env reads; have to match it.
@@ -72,6 +72,7 @@ PROVIDER_KEYS = {
     "daytona": ("DAYTONA_API_KEY",),
     "modal": ("MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"),
     "anthropic": ("ANTHROPIC_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
 }
 PROVIDER_SECRET = "sandbox-benchmark-providers"
 
