@@ -312,6 +312,17 @@ file describe each key. To change the load or the worker pool, add a new case
 rather than editing an existing one, so results stay tied to the case name
 they were recorded under.
 
+### Comparing sandbox providers' costs
+
+The `sandbox-benchmark-cost` case measures E2B's, Modal's and Daytona's
+suspend and resume overheads and writes a monthly cost sheet next to Anthropic
+Managed Agents and OpenAI. It needs the providers' API keys; see
+[sandbox-benchmark-cost.md](sandbox-benchmark/sandbox-benchmark-cost.md):
+
+```bash
+./benchmarking/tools/run --dev-infra cost-dev --scenario sandbox-benchmark-cost
+```
+
 ## Reading the results
 
 The committed example is run
