@@ -15,11 +15,13 @@
 """Builds the submodule's images once per execution, and installs substrate
 from them on a case's cluster with its hack/install-ate.sh --deploy-ate-system,
 and hack/install-microvm-deps.sh --install on a microvm one, configured from
-the cluster's Terraform outputs."""
+the cluster's Terraform outputs. The gVisor SandboxConfig's assets are then
+mirrored into the cluster's bucket."""
 
 from __future__ import annotations
 
 import functools
+import json
 import os
 import re
 import shlex
@@ -33,17 +35,37 @@ from .process import output, retry, stream
 
 SUBSTRATE_DIR = RUNNER_DIR.parent.parent / "dependency-repos" / "substrate"
 SUBSTRATE_PATH = SUBSTRATE_DIR.relative_to(images.ROOT).as_posix()
-# Of the go.mod's Go version, with make and git.
+# Of the go.mod's Go version, with git.
 GO_BUILDER = "golang:1.27.2"
 LABEL_VALUE = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?")
+# What a pre-built install takes: images.Components in
+# cmd/ate-setup/internal/images, less the demos.
+SUBSTRATE_PACKAGES = [
+    "./cmd/ateapi",
+    "./cmd/atecontroller",
+    "./cmd/atelet",
+    "./cmd/atenet",
+    "./cmd/credential-provider/kubernetes-secrets",
+    "./cmd/podcertcontroller",
+    "./cmd/snapshot-plugin",
+    "./cmd/ateom-gvisor",
+    "./cmd/ateom-microvm",
+]
 # What workloads/manifests name by ko:// reference that a pre-built install
 # doesn't take.
 WORKLOAD_PACKAGES = ["./cmd/benchmarking/glutton"]
+# Where ko stamps the build version, as ate-setup's ko runner does.
+VERSION_PKG = "github.com/agent-substrate/substrate/internal/version"
 KO_REF = re.compile(r"ko://github\.com/agent-substrate/substrate/([^\s\"',\]}]+)")
 ENVOY_DATAPLANE_DIR = f"{SUBSTRATE_PATH}/cmd/dataplane/envoy"
 ENVOY_DATAPLANE = images.Image(
     name="envoy-dataplane", dockerfile=f"{ENVOY_DATAPLANE_DIR}/Dockerfile", context=ENVOY_DATAPLANE_DIR
 )
+# The SandboxConfig install-ate.sh lays down.
+GVISOR_CONFIG = "gvisor-default"
+# Where in the cluster's bucket its assets are mirrored to, clear of the
+# snapshot locations the object-store plugin refuses assets under.
+ASSET_MIRROR_PREFIX = "sandbox-assets"
 
 
 class SubstrateError(RuntimeError):
@@ -80,18 +102,19 @@ def build_version() -> str:
 
 def build_images(repo: str, project_id: str, cloud_build: bool = False, login: bool = True) -> None:
     """Builds and pushes to repo, tagged build_version(), what install and
-    resolve take: every image of a pre-built install, which is the Makefile's
-    build-images and envoy-dataplane, and the ones workloads/manifests name.
-    With cloud_build all of them on Cloud Build, else with ko and Docker here,
-    which without login use the registry credentials Docker's configuration
-    already has."""
+    resolve take: every image of a pre-built install, SUBSTRATE_PACKAGES and
+    envoy-dataplane, and the ones workloads/manifests name. With cloud_build
+    all of them on Cloud Build, else with ko and Docker here, which without
+    login use the registry credentials Docker's configuration already has."""
     version = build_version()
     log(f"substrate: building the {version} images into {repo}")
-    make = ["make", "build-images", f"KO_DOCKER_REPO={repo}", f"VERSION={version}", f"KO_TAGS=--tags={version}"]
-    makes = [make, [*make, f"IMAGES={' '.join(WORKLOAD_PACKAGES)}"]]
-    env = {"KO_DEFAULTPLATFORMS": images.DEFAULT_PLATFORM}
+    # Each image named after the last element of its package, as ate-setup's
+    # ko runner (cmd/ate-setup/internal/ko) names them.
+    ko_build = ["hack/run-tool.sh", "ko", "build", "--base-import-paths", f"--tags={version}",
+                f"--ldflags=-X={VERSION_PKG}.Version={version}", *SUBSTRATE_PACKAGES, *WORKLOAD_PACKAGES]  # fmt: skip
+    env = {"KO_DEFAULTPLATFORMS": images.DEFAULT_PLATFORM, "KO_DOCKER_REPO": repo}
     if cloud_build:
-        cloud_build_images(makes, env, repo, version, project_id)
+        cloud_build_images(ko_build, env, repo, version, project_id)
         return
     if login:
         # ko login, as ko doesn't push with docker.
@@ -99,13 +122,12 @@ def build_images(repo: str, project_id: str, cloud_build: bool = False, login: b
         ko = [str(SUBSTRATE_DIR / "hack" / "run-tool.sh"), "ko", "login", host]
         token = images.access_token(host)
         stream([*ko, "--username=oauth2accesstoken", "--password-stdin"], cwd=SUBSTRATE_DIR, input=token)
-    for args in makes:
-        stream(args, env=env, cwd=SUBSTRATE_DIR)
+    stream(ko_build, env=env, cwd=SUBSTRATE_DIR)
     images.docker_build_and_push([ENVOY_DATAPLANE], repo, version, images.DEFAULT_PLATFORM, login)
 
 
-def cloud_build_images(makes: list[list[str]], env: dict, repo: str, version: str, project_id: str) -> None:
-    """Runs the makes alongside envoy-dataplane's docker build as one Cloud
+def cloud_build_images(ko_build: list[str], env: dict, repo: str, version: str, project_id: str) -> None:
+    """Runs the ko build alongside envoy-dataplane's docker build as one Cloud
     Build, uploading the submodule's files git doesn't ignore. ko pushes as the
     build's service account, through its Google keychain."""
     envoy = images.ref(repo, ENVOY_DATAPLANE.name, version)
@@ -117,7 +139,7 @@ def cloud_build_images(makes: list[list[str]], env: dict, repo: str, version: st
         "name": GO_BUILDER,
         "dir": SUBSTRATE_PATH,
         "entrypoint": "bash",
-        "args": ["-c", " && ".join([*git, *map(shlex.join, makes)])],
+        "args": ["-c", " && ".join([*git, shlex.join(ko_build)])],
         # VCS stamping fails in a repository without commits.
         "env": [f"{key}={value}" for key, value in env.items()] + ["GOFLAGS=-buildvcs=false"],
         "waitFor": ["-"],
@@ -144,7 +166,7 @@ def resolve(cluster: Cluster, manifest: str) -> str:
     """The manifest with each ko:// reference to substrate replaced by the
     image build_images pushed of it, pinned to its digest."""
     repo = image_repo(cluster)
-    # ko names an image after the last element of its package, as the Makefile has it.
+    # build_images names an image after the last element of its package.
     return KO_REF.sub(lambda ref: images.pin(f"{repo}/{ref[1].rsplit('/', 1)[-1]}:{build_version()}"), manifest)
 
 
@@ -153,8 +175,7 @@ def missing_submodule() -> list[str]:
 
 
 def missing_requirements(cloud_build: bool = False) -> list[str]:
-    tools = ["go", "gcloud"] + ([] if cloud_build else ["make"])
-    missing = [tool for tool in tools if not shutil.which(tool)]
+    missing = [tool for tool in ("go", "gcloud") if not shutil.which(tool)]
     return list(dict.fromkeys(missing + images.missing_requirements(cloud_build) + missing_submodule()))
 
 
@@ -186,8 +207,32 @@ def install_once(cluster: Cluster) -> None:
     # provider, and the installer requires a choice either way.
     install_ate = [str(SUBSTRATE_DIR / "hack" / "install-ate.sh"), "--deploy-ate-system", '--credential-provider={"enabled":false}']
     stream(install_ate, env=env, cwd=SUBSTRATE_DIR)
+    mirror_gvisor_assets(cluster)
     # install-ate.sh lays down only the gVisor SandboxConfig. This one needs
     # substrate's CRDs, so it comes after.
     if cluster.sandbox_class == "microvm":
         log(f"substrate: installing the microvm SandboxConfig and its assets on cluster {cluster.name}")
         stream([str(SUBSTRATE_DIR / "hack" / "install-microvm-deps.sh"), "--install"], env=env, cwd=SUBSTRATE_DIR)
+
+
+def mirror_gvisor_assets(cluster: Cluster) -> None:
+    """Copies GVISOR_CONFIG's gs:// assets in other buckets into the cluster's
+    bucket, and points the config at the copies. atelet's Workload Identity
+    token can't read a public bucket without uniform bucket-level access, such
+    as gs://gvisor, and atelet doesn't fall back to reading it anonymously
+    (agent-substrate/substrate#2613)."""
+    config = json.loads(output(cluster.kubectl("get", "sandboxconfig", GVISOR_CONFIG, "-o=json")))
+    patch = []
+    for i, version in enumerate(config["spec"]["versions"]):
+        for arch, assets in (version.get("assets") or {}).items():
+            for name, asset in assets.items():
+                url = asset["url"]
+                bucket, _, path = url.removeprefix("gs://").partition("/")
+                if not url.startswith("gs://") or bucket == cluster.bucket:
+                    continue
+                mirror = f"gs://{cluster.bucket}/{ASSET_MIRROR_PREFIX}/{bucket}/{path}"
+                log(f"substrate: mirroring {url} to {mirror}")
+                stream(["gcloud", "storage", "cp", "--no-clobber", url, mirror])
+                patch.append({"op": "replace", "path": f"/spec/versions/{i}/assets/{arch}/{name}/url", "value": mirror})
+    if patch:
+        stream(cluster.kubectl("patch", "sandboxconfig", GVISOR_CONFIG, "--type=json", f"--patch={json.dumps(patch)}"))

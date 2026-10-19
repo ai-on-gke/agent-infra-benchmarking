@@ -38,15 +38,15 @@ def missing_requirements() -> list[str]:
     return [tool for tool in ("kubectl", "gcloud") if not shutil.which(tool)]
 
 
-def delete(cluster: Cluster, timeout: int = DEFAULT_TIMEOUT_SECS) -> None:
+def delete(cluster: Cluster, timeout: int = DEFAULT_TIMEOUT_SECS, name: str = NAME, namespace: str = NAMESPACE) -> None:
     # By name rather than through the manifest, which also carries the namespace.
-    log(f"worker pool: deleting any previous {NAME}")
-    stream(cluster.kubectl("delete", "workerpool", NAME, "--ignore-not-found", "--wait=true", namespace=NAMESPACE))
+    log(f"worker pool: deleting any previous {name}")
+    stream(cluster.kubectl("delete", "workerpool", name, "--ignore-not-found", "--wait=true", namespace=namespace))
     # The Deployment is garbage-collected after the pool; a new one of the same
     # name would race it.
-    wait = ["wait", "--for=delete", f"deployment/{NAME}", f"--timeout={timeout}s"]
+    wait = ["wait", "--for=delete", f"deployment/{name}", f"--timeout={timeout}s"]
     try:
-        stream(cluster.kubectl(*wait, namespace=NAMESPACE))
+        stream(cluster.kubectl(*wait, namespace=namespace))
     except subprocess.CalledProcessError:
         pass
 
@@ -60,18 +60,23 @@ def deploy(cluster: Cluster, worker_count: int, sandbox_class: str, timeout: int
     resolved = substrate.resolve(cluster, manifest)
     log(output(cluster.kubectl("apply", "-f", "-", namespace=NAMESPACE), input=resolved).strip())
 
-    log(f"worker pool: waiting for the workers to be ready (timeout: {timeout}s)")
-    stream(cluster.kubectl("wait", "--for=create", f"deployment/{NAME}", f"--timeout={timeout}s", namespace=NAMESPACE))
+    wait_ready(cluster, timeout)
+
+
+def wait_ready(cluster: Cluster, timeout: int = DEFAULT_TIMEOUT_SECS, name: str = NAME, namespace: str = NAMESPACE) -> None:
+    """Waits for the Deployment the controller makes of the pool to roll out."""
+    log(f"worker pool: waiting for the {name} workers to be ready (timeout: {timeout}s)")
+    stream(cluster.kubectl("wait", "--for=create", f"deployment/{name}", f"--timeout={timeout}s", namespace=namespace))
     try:
-        stream(cluster.kubectl("rollout", "status", f"deployment/{NAME}", f"--timeout={timeout}s", namespace=NAMESPACE))
+        stream(cluster.kubectl("rollout", "status", f"deployment/{name}", f"--timeout={timeout}s", namespace=namespace))
     except subprocess.CalledProcessError:
-        log(f"worker pool: {NAME} was not ready within {timeout}s. Pending pods and scheduling events:", "ERROR")
+        log(f"worker pool: {name} was not ready within {timeout}s. Pending pods and scheduling events:", "ERROR")
         for args in (
             ["get", "pods", "--field-selector=status.phase=Pending"],
             ["get", "events", "--field-selector=reason=FailedScheduling", "--sort-by=.lastTimestamp"],
         ):
             try:
-                stream(cluster.kubectl(*args, namespace=NAMESPACE))
+                stream(cluster.kubectl(*args, namespace=namespace))
             except subprocess.CalledProcessError:
                 pass
         raise

@@ -127,7 +127,7 @@ def check_worker_pool(cluster: Cluster, sandbox_class: str, timeout: int) -> Non
     try:
         pool_class = output(
             cluster.kubectl(
-                "get", "workerpool", worker_pool.NAME, "-o=jsonpath={.spec.sandboxClass}", namespace=NAMESPACE
+                "get", "workerpool", worker_pool.NAME, "-o=jsonpath={.spec.sandboxClasses[*].name}", namespace=NAMESPACE
             )
         ).strip()
     except subprocess.CalledProcessError:
@@ -154,18 +154,26 @@ def render_template(cluster: Cluster, name: str, sandbox_class: str, actor_memor
     return Template((MANIFESTS_DIR / f"{name}-template.yaml.tmpl").read_text()).substitute(values)
 
 
-def delete_template(ate: KubectlAte, name: str) -> None:
-    subprocess.run(ate("delete", "actor-template", name, "-a", ATESPACE), capture_output=True)
+def delete_template(ate: KubectlAte, name: str, atespace: str = ATESPACE) -> None:
+    subprocess.run(ate("delete", "actor-template", name, "-a", atespace), capture_output=True)
 
 
-def wait_golden_snapshot(ate: KubectlAte, cluster: Cluster, name: str, timeout: int) -> None:
+def wait_golden_snapshot(
+    ate: KubectlAte,
+    cluster: Cluster,
+    name: str,
+    timeout: int,
+    atespace: str = ATESPACE,
+    pool: tuple[str, str] = (NAMESPACE, worker_pool.NAME),
+) -> None:
     """Ready once the controller publishes the golden tag, which is when an
-    actor can be restored from it; the snapshot existing is not enough."""
+    actor can be restored from it; the snapshot existing is not enough. pool is
+    the namespace and name of the WorkerPool the golden actor runs on."""
     started = time.monotonic()
     next_report = started + PROGRESS_EVERY_SECS
     status, error = None, ""
     while (elapsed := int(time.monotonic() - started)) < timeout:
-        get = ate("get", "actor-template", name, "-a", ATESPACE, "-o", "json")
+        get = ate("get", "actor-template", name, "-a", atespace, "-o", "json")
         proc = subprocess.run(get, capture_output=True, text=True)
         try:
             template = json.loads(proc.stdout) if proc.returncode == 0 else None
@@ -180,7 +188,7 @@ def wait_golden_snapshot(ate: KubectlAte, cluster: Cluster, name: str, timeout: 
                 log(f"  {name}: golden snapshot ready after {elapsed}s, tag {tag.get('atespace', '')}/{tag['name']}")
                 return
             if golden.get("errorMessage"):
-                raise WorkloadError(f"actor template {ATESPACE}/{name} failed: {golden['errorMessage']}")
+                raise WorkloadError(f"actor template {atespace}/{name} failed: {golden['errorMessage']}")
         else:
             # Kept, or a get failing every time looks like a slow snapshot.
             error = proc.stderr.strip()
@@ -198,10 +206,11 @@ def wait_golden_snapshot(ate: KubectlAte, cluster: Cluster, name: str, timeout: 
     elif status is not None:
         log(f"  neither a snapshot nor an error; last status: {json.dumps(status)}", "ERROR")
     # The golden actor's snapshot is published as a tag under the bucket.
+    namespace, pool_name = pool
     raise WorkloadError(
-        f"no golden snapshot of {ATESPACE}/{name} within {timeout}s; check that gs://{cluster.bucket}/ exists"
-        f" and the workers can write to it, then the workers: kubectl get pods -n {NAMESPACE};"
-        f" kubectl logs -n {NAMESPACE} deployment/{worker_pool.NAME} --tail=50"
+        f"no golden snapshot of {atespace}/{name} within {timeout}s; check that gs://{cluster.bucket}/ exists"
+        f" and the workers can write to it, then the workers: kubectl get pods -n {namespace};"
+        f" kubectl logs -n {namespace} deployment/{pool_name} --tail=50"
     )
 
 
@@ -247,13 +256,13 @@ def deploy(
     log(f"workloads: all {len(names)} golden snapshots ready")
 
 
-def deployed_template(cluster: Cluster, name: str) -> dict:
+def deployed_template(cluster: Cluster, name: str, atespace: str = ATESPACE) -> dict:
     """The ActorTemplate as substrate holds it."""
     with kubectl_ate(cluster) as ate:
         try:
-            return json.loads(output(ate("get", "actor-template", name, "-a", ATESPACE, "-o", "json")))
+            return json.loads(output(ate("get", "actor-template", name, "-a", atespace, "-o", "json")))
         except subprocess.CalledProcessError:
-            raise WorkloadError(f"no actor template {ATESPACE}/{name}; deploy the workloads first") from None
+            raise WorkloadError(f"no actor template {atespace}/{name}; deploy the workloads first") from None
 
 
 def egress_hosts(template: dict) -> list[str]:

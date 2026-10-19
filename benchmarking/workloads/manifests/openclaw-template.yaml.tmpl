@@ -26,7 +26,7 @@ resources:
   - name: memory
     quantity: 2Gi
 snapshotConfig:
-  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/openclaw/
 sandboxConfig:
   sandboxClass: ${SANDBOX_CLASS_ENUM}

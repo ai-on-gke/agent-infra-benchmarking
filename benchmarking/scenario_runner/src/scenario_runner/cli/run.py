@@ -34,7 +34,7 @@ from typing import Callable, NoReturn
 
 import yaml
 
-from .. import LOCAL_DATA_DIR, benchmark, dev_infra, locust, names, substrate, summary
+from .. import LOCAL_DATA_DIR, benchmark, dev_infra, names, reports, substrate, summary, terraform
 from ..cases import SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases, record_names
 from ..cluster import Cluster
 from ..deployment import RUNNER_INFRA_DIR, Deployment, GcsDeployment, cluster_deployment
@@ -72,6 +72,13 @@ def parse_args() -> argparse.Namespace:
         help="a case to run; repeat it for more. Default: every case",
     )
     p.add_argument(
+        "--test",
+        action="append",
+        metavar="NAME",
+        help="an ai-sandbox-benchmark test to run, test_ prefix optional, instead of the case's `comparator.tests`;"
+        " repeat it for more. Only for sandbox-benchmark cases",
+    )
+    p.add_argument(
         "--project-id",
         default=os.environ.get("PROJECT_ID"),
         required="PROJECT_ID" not in os.environ,
@@ -103,8 +110,15 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--report-prefix",
-        default=locust.REPORT_PREFIX,
-        help="folder in the report bucket the reports go under, as <prefix>/<name>/<record>/. Default: %(default)s",
+        help="folder in the report bucket the reports go under, as <prefix>/<name>/<record>/. Default:"
+        f" {reports.REPORT_PREFIX}",
+    )
+    p.add_argument(
+        "--report-deployment",
+        type=Path,
+        metavar="DIR",
+        help="an applied Terraform deployment, such as automation-infra/dev/reports, whose reports output's bucket"
+        " and prefix the reports go to, in place of --report-bucket and --report-prefix",
     )
     p.add_argument(
         "--name",
@@ -168,6 +182,23 @@ def parse_args() -> argparse.Namespace:
     # A cluster applied for the execution has neither yet.
     if not args.dev_infra and (args.no_build or args.no_deploy_workloads or args.dev_infra_update):
         p.error("--no-build, --no-deploy-workloads and --dev-infra-update are only for --dev-infra")
+    if args.report_deployment:
+        if args.report_bucket or args.report_prefix:
+            p.error("--report-deployment is instead of --report-bucket and --report-prefix")
+        if not args.report_deployment.is_dir():
+            p.error(f"--report-deployment: no directory {args.report_deployment}")
+        try:
+            out = terraform.output(args.report_deployment).get("reports")
+        except (OSError, subprocess.CalledProcessError):
+            p.error(f"--report-deployment: cannot read the outputs of {args.report_deployment}")
+        # An unapplied deployment has no outputs.
+        if not (isinstance(out, dict) and out.get("bucket") and out.get("prefix")):
+            p.error(f"--report-deployment: {args.report_deployment} has no reports output with a bucket and a prefix;"
+                    " is it applied?")  # fmt: skip
+        args.report_bucket, args.report_prefix = out["bucket"], out["prefix"]
+        dataset = f", queried in BigQuery as {out['dataset']}" if out.get("dataset") else ""
+        log(f"run: reports go to gs://{args.report_bucket}/{args.report_prefix}/{dataset}")
+    args.report_prefix = args.report_prefix or reports.REPORT_PREFIX
     if not re.fullmatch(r"[^/]+(/[^/]+)*", args.report_prefix):
         p.error("--report-prefix must not be empty, nor start or end with a slash")
     if args.state_backend == "gcs" and not (args.state_bucket and args.state_prefix):
@@ -188,7 +219,19 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
     unknown = [name for name in names if name not in cases]
     if unknown:
         fail(f"no case {', '.join(unknown)} in {args.scenarios_file}; it has {', '.join(cases)}")
-    return {name: cases[name] for name in names}
+    selected = {name: cases[name] for name in names}
+    if args.test:
+        others = [name for name, case in selected.items() if case["type"] != "sandbox-benchmark"]
+        if others:
+            fail(f"--test is only for sandbox-benchmark cases, not {', '.join(others)}")
+        tests = list(dict.fromkeys(t if t.startswith("test_") else f"test_{t}" for t in args.test))
+        for name, case in selected.items():
+            selected[name] = case = {**case, "comparator": {**case["comparator"], "tests": tests}}
+            try:
+                benchmark.check(name, case)
+            except ValueError as exc:
+                fail(str(exc))
+    return selected
 
 
 def check_requirements(cases: dict[str, dict], cloud_build: bool) -> None:
@@ -306,7 +349,7 @@ def run_repeats(name: str, case: dict, run: Callable[[str, int], None]) -> None:
         log(f"{name}: repeat {n} of {len(records)}, as {record}")
         try:
             run(record, n)
-        except locust.LocustTimeout:
+        except benchmark.TIMEOUTS:
             raise
         except RUN_ERRORS as exc:
             log(f"{record}: {describe(exc)}", "ERROR")
@@ -322,15 +365,15 @@ def run_cases(args: argparse.Namespace, cases: dict[str, dict], run: Callable[[s
     for name, case in cases.items():
         try:
             run(name, case)
-        except locust.LocustTimeout:
+        except benchmark.TIMEOUTS:
             raise
         except (CaseFailed, *RUN_ERRORS) as exc:
             log(f"{name}: {describe(exc)}", "ERROR")
             failed.append(name)
         # From what was downloaded, so not on Cloud Run.
         records = record_names(name, case)
-        if len(records) > 1 and case["type"] != "noop" and not ON_CLOUD_RUN:
-            summary.write(locust.REPORTS_DIR / args.name, name, records)
+        if len(records) > 1 and case["type"] in benchmark.SUMMARIZED and not ON_CLOUD_RUN:
+            summary.write(reports.REPORTS_DIR / args.name, name, records)
     return failed
 
 
