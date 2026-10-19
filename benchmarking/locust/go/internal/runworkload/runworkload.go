@@ -254,10 +254,10 @@ func initRunWorkload(cfg *userclass.Config) (taskFn func(), shutdown func(contex
 }
 
 type runWorkloadRuntime struct {
-	cfg      *userclass.Config
-	opts     Options
-	workload workload
-	users    sync.Map // goroutineID -> *runWorkloadUser
+	cfg       *userclass.Config
+	opts      Options
+	workload  workload
+	users     sync.Map // goroutineID -> *runWorkloadUser
 	dynClient dynamic.Interface
 
 	// Options.EgressAllow, checked; empty creates no egress policy.
