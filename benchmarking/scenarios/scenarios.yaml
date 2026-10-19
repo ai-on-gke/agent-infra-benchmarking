@@ -175,6 +175,27 @@ cases:
       - test_suspend_resume
       runs: 3
 
+  # The suspend and resume overheads behind the cost sheet that
+  # sandbox-benchmark/cost_sheet.py fills from this case's results.json.
+  # Cloud providers only, so neither substrate nor env is installed.
+  sandbox-benchmark-cost:
+    type: sandbox-benchmark
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 1
+          sandboxed_min_node_count = 1
+          sandboxed_max_node_count = 1
+    skip-substrate-install: true
+    comparator:
+      providers: [e2b, modal, daytona, anthropic, openai]
+      tests:
+      - test_suspend_resume
+      runs: 10
+      warmup-runs: 1
+
   # The scenario-runner's Terraform path on infra/clusters/dummy, which creates
   # no GCP resources and so has nothing to benchmark on.
   dummy:
