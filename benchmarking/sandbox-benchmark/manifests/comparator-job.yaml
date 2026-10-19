@@ -108,6 +108,12 @@ spec:
               name: sandbox-benchmark-providers
               key: MODAL_TOKEN_SECRET
               optional: true
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: sandbox-benchmark-providers
+              key: ANTHROPIC_API_KEY
+              optional: true
         resources:
           requests:
             cpu: "1"

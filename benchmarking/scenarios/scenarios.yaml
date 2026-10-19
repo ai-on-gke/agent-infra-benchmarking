@@ -167,9 +167,10 @@ cases:
     env-worker-count: 3
     actor-memory: 4Gi
     comparator:
-      # e2b, daytona and modal need E2B_API_KEY, DAYTONA_API_KEY and
-      # MODAL_TOKEN_ID/MODAL_TOKEN_SECRET in the scenario-runner's environment.
-      providers: [substrate, local, e2b, daytona, modal]
+      # e2b, daytona, modal and anthropic need E2B_API_KEY, DAYTONA_API_KEY,
+      # MODAL_TOKEN_ID/MODAL_TOKEN_SECRET and ANTHROPIC_API_KEY in the
+      # scenario-runner's environment.
+      providers: [substrate, local, e2b, daytona, modal, anthropic]
       tests:
       - test_suspend_resume
       runs: 3
