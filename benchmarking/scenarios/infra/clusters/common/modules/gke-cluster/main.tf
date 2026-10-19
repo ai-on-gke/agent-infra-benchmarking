@@ -187,7 +187,7 @@ resource "google_container_node_pool" "this" {
   location = var.region
   project  = var.project_id
   cluster  = local.cluster_name
-  version  = try(coalesce(each.value.version, var.kubernetes_version), null)
+  version  = each.value.version
 
   node_locations = length(each.value.node_locations) > 0 ? each.value.node_locations : null
 
