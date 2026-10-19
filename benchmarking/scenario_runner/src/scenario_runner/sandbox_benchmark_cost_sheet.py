@@ -12,23 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The sandbox cost sheet as CSV, its suspend and restore overheads from a
-sandbox-benchmark run's combined results.json (the sandbox-benchmark-cost
-case's), the rest from the prices and usage below:
-
-    python3 cost_sheet.py reports/RUN_ID/sandbox-benchmark-cost [-o bench.csv]
-
-An overhead is the provider's mean Suspend or Resume of test_suspend_resume,
-as comparison.md has it, taken once an hour."""
+"""The sandbox cost sheet, as CSV: its suspend and restore overheads from a
+sandbox-benchmark run's combined results, the rest from the prices and usage
+below. sandbox_benchmark.run writes it beside comparison.md for a case with
+`cost-sheet: true`. An overhead is the provider's mean Suspend or Resume of
+test_suspend_resume, as comparison.md has it, taken once an hour."""
 
 from __future__ import annotations
 
-import argparse
 import csv
-import json
+import io
 import statistics
-import sys
-from pathlib import Path
+
+from .log import log
+
+COST_SHEET_CSV = "cost_sheet.csv"
 
 TEST = "test_suspend_resume"
 ACTIVE_SECS_PER_HOUR = 360
@@ -65,13 +63,14 @@ def sample_count(runs: list[dict]) -> int:
 
 
 def sheet(results: dict) -> list[list[str]]:
+    """The sheet's rows, of results as results.json has them."""
     runs = results["runs"]
     for p in [*RESOURCE_PRICED, "anthropic", "openai"]:
         if p not in results["providers"]:
-            print(f"cost_sheet: no {p} runs in results.json; its column is left empty", file=sys.stderr)
+            log(f"sandbox-benchmark: no {p} runs in the results; its cost sheet column is left empty", "WARNING")
         failed = sum(1 for r in runs if r["provider"] == p and r["test"] == TEST and r["errors"])
         if failed:
-            print(f"cost_sheet: {failed} of {p}'s runs failed; their times still count", file=sys.stderr)
+            log(f"sandbox-benchmark: {failed} of {p}'s runs failed; the cost sheet still counts them", "WARNING")
 
     cols = {p: {} for p in RESOURCE_PRICED}
     for p, (_, vcpu_price, ram_price) in RESOURCE_PRICED.items():
@@ -123,7 +122,10 @@ def sheet(results: dict) -> list[list[str]]:
     blank = [""] * 7
     return [
         blank,
-        ["", "Sandbox-as-a-Service - Resource-based Pricing Models", "", "", "", "Agents-as-a-Service - Session-based Pricing", ""],
+        [
+            "", "Sandbox-as-a-Service - Resource-based Pricing Models", "", "", "",
+            "Agents-as-a-Service - Session-based Pricing", "",
+        ],  # fmt: skip
         ["", *(name for name, _, _ in RESOURCE_PRICED.values()), "", "Anthropic Managed Agents", "OpenAI Frontier"],
         ["Active Time (seconds per hour)", *[str(ACTIVE_SECS_PER_HOUR)] * 3, "", *[str(ACTIVE_SECS_PER_HOUR)] * 2],
         row("Suspend Overhead (seconds per hour)", "suspend"),
@@ -155,19 +157,7 @@ def sheet(results: dict) -> list[list[str]]:
     ]
 
 
-def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("results", type=Path, help="a combined results.json, or the folder it is in")
-    p.add_argument("-o", "--output", type=Path, help="the CSV to write; stdout by default")
-    args = p.parse_args()
-    path = args.results / "results.json" if args.results.is_dir() else args.results
-    rows = sheet(json.loads(path.read_text()))
-    if args.output:
-        with args.output.open("w", newline="") as f:
-            csv.writer(f).writerows(rows)
-    else:
-        csv.writer(sys.stdout).writerows(rows)
-
-
-if __name__ == "__main__":
-    main()
+def csv_text(results: dict) -> str:
+    out = io.StringIO()
+    csv.writer(out).writerows(sheet(results))
+    return out.getvalue()

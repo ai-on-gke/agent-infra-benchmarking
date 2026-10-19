@@ -39,6 +39,7 @@ from google.cloud import storage
 
 from . import RUNNER_DIR, ate_env, images, jobs, reports, run_info, workloads
 from . import sandbox_benchmark_combine as combine
+from . import sandbox_benchmark_cost_sheet as costs
 from .cluster import Cluster
 from .log import ON_CLOUD_RUN, log
 from .process import failure, stream
@@ -60,7 +61,7 @@ DEFAULT_MAX_FAILURE_RATIO = 0.01
 DEFAULT_ENV_WORKER_COUNT = 5
 CASE_KEYS = {
     "type", "infra", "repeats", "skip-substrate-install", "sandbox-class", "env-worker-count", "actor-memory",
-    "max-failure-ratio", "comparator",
+    "max-failure-ratio", "comparator", "cost-sheet",
 }  # fmt: skip
 COMPARATOR_KEYS = {"providers", "tests", "runs", "warmup-runs"}
 PROVIDERS = ("substrate", "local", "e2b", "daytona", "modal", "anthropic", "openai")
@@ -128,6 +129,8 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     ratio = case.get("max-failure-ratio", DEFAULT_MAX_FAILURE_RATIO)
     if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 <= ratio <= 1:
         raise ValueError(f"case {name}'s `max-failure-ratio` must be a number from 0 to 1, got {ratio!r}")
+    if not isinstance(case.get("cost-sheet", False), bool):
+        raise ValueError(f"case {name}'s `cost-sheet` must be true or false")
 
     comparator = case.get("comparator")
     if not isinstance(comparator, dict):
@@ -161,6 +164,7 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
         "env-worker-count": DEFAULT_ENV_WORKER_COUNT,
         "actor-memory": ate_env.DEFAULT_ACTOR_MEMORY,
         "max-failure-ratio": DEFAULT_MAX_FAILURE_RATIO,
+        "cost-sheet": False,
         **case,
         "comparator": {"providers": ["substrate"], "warmup-runs": 0, **comparator},
     }
@@ -325,11 +329,13 @@ def run_provider(
         reports.upload_logs(cluster, NAMESPACE, (JOB,), bucket, report_prefix, run_id, folder)
 
 
-def combine_reports(bucket: str, report_prefix: str, run_id: str, name: str, providers: list[str]) -> None:
+def combine_reports(
+    bucket: str, report_prefix: str, run_id: str, name: str, providers: list[str], cost_sheet: bool = False
+) -> None:
     """Combines the providers' reports in the bucket into results.json and
     comparison.md beside their folders, as one comparator run of them all
-    would have them. Best-effort: each provider's own reports are the record
-    either way."""
+    would have them, and with cost_sheet cost_sheet.csv. Best-effort: each
+    provider's own reports are the record either way."""
     prefix = f"{report_prefix}/{run_id}/{name}"
     sources = []
     try:
@@ -354,12 +360,17 @@ def combine_reports(bucket: str, report_prefix: str, run_id: str, name: str, pro
             log("sandbox-benchmark: no provider recorded results to combine", "WARNING")
             return
         combine.check(sources)
+        combined = combine.combined_results(sources)
         bucket_.blob(f"{prefix}/{combine.RESULTS_JSON}").upload_from_string(
-            json.dumps(combine.combined_results(sources), indent=2) + "\n", content_type="application/json"
+            json.dumps(combined, indent=2) + "\n", content_type="application/json"
         )
         bucket_.blob(f"{prefix}/{combine.COMPARISON_MD}").upload_from_string(
             combine.render(sources), content_type="text/markdown"
         )
+        if cost_sheet:
+            bucket_.blob(f"{prefix}/{costs.COST_SHEET_CSV}").upload_from_string(
+                costs.csv_text(combined), content_type="text/csv"
+            )
     except Exception as exc:
         log(f"sandbox-benchmark: could not combine the providers' results: {type(exc).__name__}: {exc}", "WARNING")
         return
@@ -433,7 +444,7 @@ def run(
                 reason = failure(exc) if isinstance(exc, subprocess.CalledProcessError) else str(exc)
                 log(f"sandbox-benchmark: {name} on {provider} failed: {reason}", "ERROR")
                 failed.append(provider)
-        combine_reports(bucket, report_prefix, run_id, name, providers)
+        combine_reports(bucket, report_prefix, run_id, name, providers, case["cost-sheet"])
     finally:
         # A failed run's reports are kept too. On Cloud Run they'd go with the
         # container, so they stay only in the bucket.

@@ -25,7 +25,8 @@
 # and `actor-memory` size env's WorkerPool and its environments.
 # `comparator.providers` runs them on each of substrate and local in turn,
 # [substrate] by default, and combines their results into one comparison,
-# the first provider the others are compared with.
+# the first provider the others are compared with. `cost-sheet: true` adds
+# cost_sheet.csv, the sandbox cost sheet, to that comparison.
 # `sandbox-class` has to be the cluster's `sandbox_class`, gvisor by default.
 # `noop` is the scenario-runner's alone: it applies and destroys the case's
 # cluster, and runs nothing on it.
@@ -175,8 +176,7 @@ cases:
       - test_suspend_resume
       runs: 3
 
-  # The suspend and resume overheads behind the cost sheet that
-  # sandbox-benchmark/cost_sheet.py fills from this case's results.json.
+  # The sandbox cost sheet, from the providers' suspend and resume overheads.
   # Cloud providers only, so neither substrate nor env is installed.
   sandbox-benchmark-cost:
     type: sandbox-benchmark
@@ -189,6 +189,7 @@ cases:
           sandboxed_min_node_count = 1
           sandboxed_max_node_count = 1
     skip-substrate-install: true
+    cost-sheet: true
     comparator:
       providers: [e2b, modal, daytona, anthropic, openai]
       tests:
