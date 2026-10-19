@@ -390,11 +390,16 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
         case_infra = cluster_deployment(spec, uncreated, case_vars[record], version, substrate_repository)
         with case_infra.applied():
             cluster = Cluster(case_infra.outputs(), case_infra.data / "kubeconfig")
-            if case.get("provider") == PROVIDER_AGENT_SANDBOX:
-                agent_sandbox.install(cluster)
-            elif not case.get(SKIP_SUBSTRATE_INSTALL):
-                substrate.install(cluster)
-            run_case(args, record, case, cluster, name, repeat)
+            try:
+                if case.get("provider") == PROVIDER_AGENT_SANDBOX:
+                    agent_sandbox.install(cluster)
+                elif not case.get(SKIP_SUBSTRATE_INSTALL):
+                    substrate.install(cluster)
+                run_case(args, record, case, cluster, name, repeat)
+            finally:
+                # A cluster nothing was deployed to, such as dummy's, has no volumes.
+                if version is not None or case["type"] != "noop":
+                    cluster.delete_volumes()
 
     with runner_infra.applied():
         outputs = runner_infra.outputs()

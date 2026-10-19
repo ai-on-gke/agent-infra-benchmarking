@@ -16,10 +16,16 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .process import stream
+from .log import log
+from .process import output, stream
+
+# How long a cluster's persistent volumes get to go before it is destroyed.
+VOLUMES_TIMEOUT_SECS = 300
 
 
 @dataclass(frozen=True)
@@ -90,3 +96,21 @@ class Cluster:
             ],
             env={"KUBECONFIG": str(self.kubeconfig)},
         )
+
+    def delete_volumes(self) -> None:
+        """Deletes the cluster's persistent volume claims, and the workloads
+        that mount or would recreate them, and waits for their volumes to go,
+        as GKE leaves a claim's disk behind when the cluster is deleted under
+        it. Best effort: a failure is logged, and the disks then stay."""
+        try:
+            self.get_credentials()
+            claims = json.loads(output(self.kubectl("get", "pvc", "--all-namespaces", "--output=json")))["items"]
+            for namespace in sorted({claim["metadata"]["namespace"] for claim in claims}):
+                log(f"cluster: deleting the persistent volumes in {namespace}, so their disks go before the cluster")
+                workloads = "statefulsets,deployments,jobs,pods"
+                stream(self.kubectl("delete", workloads, "--all", "--wait=false", namespace=namespace))
+                stream(self.kubectl("delete", "pvc", "--all", "--wait=false", namespace=namespace))
+            if json.loads(output(self.kubectl("get", "pv", "--output=json")))["items"]:
+                stream(self.kubectl("wait", "--for=delete", "pv", "--all", f"--timeout={VOLUMES_TIMEOUT_SECS}s"))
+        except (subprocess.CalledProcessError, OSError, ValueError, KeyError) as exc:
+            log(f"cluster: the disks of {self.name}'s persistent volumes may outlive it: {exc}", "WARNING")
