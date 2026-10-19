@@ -82,7 +82,7 @@ variable "services_cidr" {
 variable "kubernetes_version" {
   description = "GKE version of the control plane (GKE's min_master_version), which the node pools are created at: a minor such as 1.35, for which GKE picks a build the REGULAR channel offers, or an exact build."
   type        = string
-  default     = "1.35.8-gke.1626001"
+  default     = "1.35"
 }
 
 variable "zone" {
