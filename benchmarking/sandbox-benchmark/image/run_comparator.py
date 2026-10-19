@@ -276,7 +276,8 @@ def main() -> int:
         executor = comparator.SandboxExecutor(
             warmup_runs=warmup_runs, measurement_runs=runs, num_concurrent_providers=1
         )
-        results = asyncio.run(executor.run_comparison(tests, [PROVIDER], runs, ""))
+        # The target region, which only daytona reads.
+        results = asyncio.run(executor.run_comparison(tests, [PROVIDER], runs, "us"))
     except Stopped as exc:
         print(f"Stopped by signal {exc.signum}; nothing is recorded.", flush=True)
         status = 128 + exc.signum
