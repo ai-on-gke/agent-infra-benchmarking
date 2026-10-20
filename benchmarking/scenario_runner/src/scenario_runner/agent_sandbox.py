@@ -105,7 +105,9 @@ def install(cluster: Cluster) -> None:
 
 
 def install_once(cluster: Cluster) -> None:
-    repo = cluster.substrate_docker_repo or cluster.docker_repo
+    repo = cluster.image_docker_repo
+    if not repo:
+        raise AgentSandboxError(f"cluster {cluster.name} names no repository of agent-sandbox images")
     version = build_version()
     controller_ref = f"{repo}/{CONTROLLER_IMAGE.name}:{version}"
     router_ref = f"{repo}/{ROUTER_IMAGE.name}:{version}"
@@ -301,6 +303,7 @@ def deploy_workload_and_pool(
     cluster: Cluster,
     workload_name: str,
     worker_count: int,
+    image_repo: str,
     sandbox_class: str = "gvisor",
     timeout: int = 300,
 ) -> None:
@@ -309,10 +312,10 @@ def deploy_workload_and_pool(
 
     if workload_name == "openclaw":
         from .workloads import openclaw
-        openclaw.deploy_mock_llm(cluster, timeout)
+        openclaw.deploy_mock_llm(cluster, image_repo, timeout)
 
     if workload_name == "openclaw":
-        image = images.pin(images.image_ref(images.WORKLOADS_IMAGES, cluster.docker_repo, "openclaw-workload"))
+        image = images.pin(images.image_ref(images.WORKLOADS_IMAGES, image_repo, "openclaw-workload"))
         containers_yaml = f"""      containers:
       - name: openclaw
         image: {image}
@@ -337,7 +340,7 @@ def deploy_workload_and_pool(
           limits:
             memory: 2Gi"""
     else:
-        image = images.pin(images.image_ref(images.WORKLOADS_IMAGES, cluster.docker_repo, "glutton"))
+        image = images.pin(images.image_ref(images.WORKLOADS_IMAGES, image_repo, "glutton"))
         containers_yaml = f"""      containers:
       - name: glutton
         image: {image}

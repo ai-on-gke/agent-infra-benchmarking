@@ -1,0 +1,109 @@
+Type,Name,Stat,Repeats,Min,Median,Max
+runworkload,CycleTime,Request Count,3,1019,1072,1097
+runworkload,CycleTime,Failure Count,3,0,0,0
+runworkload,CycleTime,Average Response Time,3,2375.81,2440.51,2583.4
+runworkload,CycleTime,Min Response Time,3,1575,1608,1685
+runworkload,CycleTime,Max Response Time,3,5835,7135,14761
+runworkload,CycleTime,Requests/s,3,3.54,3.72,3.81
+runworkload,CycleTime,Failures/s,3,0,0,0
+runworkload,CycleTime,50%,3,2300,2300,2400
+runworkload,CycleTime,66%,3,2400,2500,2500
+runworkload,CycleTime,75%,3,2600,2600,2600
+runworkload,CycleTime,80%,3,2700,2700,2700
+runworkload,CycleTime,90%,3,2900,2900,3300
+runworkload,CycleTime,95%,3,3200,3200,3900
+runworkload,CycleTime,98%,3,3500,3800,5300
+runworkload,CycleTime,99%,3,3600,4700,8600
+runworkload,CycleTime,99.9%,3,5400,6000,14000
+runworkload,CycleTime,99.99%,3,5800,7100,15000
+runworkload,CycleTime,100%,3,5800,7100,15000
+http,ExecutionTime,Request Count,3,1017,1068,1095
+http,ExecutionTime,Failure Count,3,0,0,0
+http,ExecutionTime,Average Response Time,3,7.35,8.08,8.28
+http,ExecutionTime,Min Response Time,3,3,4,4
+http,ExecutionTime,Max Response Time,3,48,60,84
+http,ExecutionTime,Requests/s,3,3.53,3.71,3.8
+http,ExecutionTime,Failures/s,3,0,0,0
+http,ExecutionTime,50%,3,5,6,6
+http,ExecutionTime,66%,3,6,7,7
+http,ExecutionTime,75%,3,7,8,8
+http,ExecutionTime,80%,3,8,9,10
+http,ExecutionTime,90%,3,13,15,16
+http,ExecutionTime,95%,3,19,21,23
+http,ExecutionTime,98%,3,27,29,29
+http,ExecutionTime,99%,3,32,34,39
+http,ExecutionTime,99.9%,3,46,47,54
+http,ExecutionTime,99.99%,3,48,60,84
+http,ExecutionTime,100%,3,48,60,84
+grpc,Resume,Request Count,3,1017,1068,1095
+grpc,Resume,Failure Count,3,0,0,0
+grpc,Resume,Average Response Time,3,936.41,968.26,989.29
+grpc,Resume,Min Response Time,3,646,655,678
+grpc,Resume,Max Response Time,3,1852,2485,7327
+grpc,Resume,Requests/s,3,3.53,3.71,3.8
+grpc,Resume,Failures/s,3,0,0,0
+grpc,Resume,50%,3,920,950,960
+grpc,Resume,66%,3,970,1000,1000
+grpc,Resume,75%,3,1000,1100,1100
+grpc,Resume,80%,3,1000,1100,1100
+grpc,Resume,90%,3,1100,1100,1200
+grpc,Resume,95%,3,1200,1200,1300
+grpc,Resume,98%,3,1200,1300,1500
+grpc,Resume,99%,3,1300,1400,1700
+grpc,Resume,99.9%,3,1600,1600,2600
+grpc,Resume,99.99%,3,1900,2500,7300
+grpc,Resume,100%,3,1900,2500,7300
+grpc,Suspend,Request Count,3,1019,1072,1097
+grpc,Suspend,Failure Count,3,0,0,0
+grpc,Suspend,Average Response Time,3,1429.98,1461.92,1586.35
+grpc,Suspend,Min Response Time,3,816,856,863
+grpc,Suspend,Max Response Time,3,4999,6379,13512
+grpc,Suspend,Requests/s,3,3.54,3.72,3.81
+grpc,Suspend,Failures/s,3,0,0,0
+grpc,Suspend,50%,3,1300,1400,1400
+grpc,Suspend,66%,3,1500,1500,1500
+grpc,Suspend,75%,3,1600,1600,1600
+grpc,Suspend,80%,3,1700,1700,1700
+grpc,Suspend,90%,3,1900,1900,2200
+grpc,Suspend,95%,3,2100,2200,2800
+grpc,Suspend,98%,3,2400,2700,3700
+grpc,Suspend,99%,3,2600,3800,7600
+grpc,Suspend,99.9%,3,4400,4900,13000
+grpc,Suspend,99.99%,3,5000,6400,14000
+grpc,Suspend,100%,3,5000,6400,14000
+runworkload,TTFI,Request Count,3,1017,1068,1095
+runworkload,TTFI,Failure Count,3,0,0,0
+runworkload,TTFI,Average Response Time,3,945.15,977.13,997.09
+runworkload,TTFI,Min Response Time,3,652,661,684
+runworkload,TTFI,Max Response Time,3,1858,2491,7332
+runworkload,TTFI,Requests/s,3,3.53,3.71,3.8
+runworkload,TTFI,Failures/s,3,0,0,0
+runworkload,TTFI,50%,3,930,960,970
+runworkload,TTFI,66%,3,980,1000,1000
+runworkload,TTFI,75%,3,1000,1100,1100
+runworkload,TTFI,80%,3,1000,1100,1100
+runworkload,TTFI,90%,3,1100,1100,1200
+runworkload,TTFI,95%,3,1200,1200,1300
+runworkload,TTFI,98%,3,1300,1300,1500
+runworkload,TTFI,99%,3,1300,1400,1700
+runworkload,TTFI,99.9%,3,1600,1600,2600
+runworkload,TTFI,99.99%,3,1900,2500,7300
+runworkload,TTFI,100%,3,1900,2500,7300
+,Aggregated,Request Count,3,5089,5348,5479
+,Aggregated,Failure Count,3,0,0,0
+,Aggregated,Average Response Time,3,1139.64,1172.39,1233.36
+,Aggregated,Min Response Time,3,0,3,4
+,Aggregated,Max Response Time,3,5835,7135,14761
+,Aggregated,Requests/s,3,17.67,18.57,19.02
+,Aggregated,Failures/s,3,0,0,0
+,Aggregated,50%,3,1000,1000,1000
+,Aggregated,66%,3,1200,1200,1300
+,Aggregated,75%,3,1600,1600,1600
+,Aggregated,80%,3,1900,2000,2000
+,Aggregated,90%,3,2300,2400,2400
+,Aggregated,95%,3,2600,2600,2700
+,Aggregated,98%,3,2900,3000,3500
+,Aggregated,99%,3,3200,3500,4700
+,Aggregated,99.9%,3,4400,5700,13000
+,Aggregated,99.99%,3,5800,7100,15000
+,Aggregated,100%,3,5800,7100,15000

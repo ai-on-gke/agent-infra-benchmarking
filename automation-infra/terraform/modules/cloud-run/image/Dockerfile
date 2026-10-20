@@ -1,7 +1,7 @@
 # The job's image: fetches the latest source of a branch, then installs and
 # runs the scenario-runner in it. benchmarking/scenario_runner/requirements.txt
 # is compiled for this Python.
-FROM hashicorp/terraform:1.13.3@sha256:dfb1889a8ee74ada3ddacc48f89b8a0d69f3e114de3d8a2ce15f6a8d3dbfdbe2 AS terraform
+FROM hashicorp/terraform:1.15.6@sha256:adae45661e45d3c88beef071ee1277b4621cea73517aae7f0844657c8e85f641 AS terraform
 
 # The same Go as benchmarking/locust/go/Dockerfile builds with.
 FROM golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS go
@@ -12,7 +12,7 @@ COPY --from=go /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:$PATH
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git gnupg make zstd \
+  && apt-get install -y --no-install-recommends ca-certificates curl git gnupg jq make zstd \
   && curl -sSfL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
     | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
   && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \

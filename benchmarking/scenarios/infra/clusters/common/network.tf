@@ -19,6 +19,28 @@ locals {
   services_range_name = local.create_network ? "services" : var.existing_network.services_range_name
 }
 
+# GKE takes an internal endpoint only with authorized networks on; the
+# subnetwork's primary range, which holds the nodes and a runner inside the
+# network, is one of them.
+data "google_compute_subnetwork" "existing" {
+  count = var.enable_private_endpoint && !local.create_network ? 1 : 0
+
+  project = local.subnetwork_project
+  region  = var.region
+  name    = reverse(split("/", local.subnetwork))[0]
+}
+
+locals {
+  subnetwork_path    = split("/", local.create_network ? "" : var.existing_network.subnetwork)
+  subnetwork_project = contains(local.subnetwork_path, "projects") ? local.subnetwork_path[index(local.subnetwork_path, "projects") + 1] : var.project_id
+  subnetwork_cidr    = local.create_network ? var.subnet_cidr : one(data.google_compute_subnetwork.existing[*].ip_cidr_range)
+
+  master_authorized_networks = !var.enable_private_endpoint ? var.master_authorized_networks : concat(
+    var.master_authorized_networks == null ? [] : var.master_authorized_networks,
+    [{ cidr_block = local.subnetwork_cidr, display_name = "cluster subnetwork" }],
+  )
+}
+
 moved {
   from = google_compute_network.this
   to   = google_compute_network.this[0]
@@ -45,6 +67,8 @@ resource "google_compute_network" "this" {
   project                 = var.project_id
   name                    = local.network_name
   auto_create_subnetworks = false
+
+  depends_on = [google_project_service.this]
 }
 
 resource "google_compute_subnetwork" "this" {
@@ -125,4 +149,32 @@ resource "google_compute_firewall" "allow_iap_ssh" {
   # IAP's fixed TCP forwarding range - the only source SSH should ever be
   # allowed from now that the network has no default-allow-ssh rule.
   source_ranges = ["35.235.240.0/20"]
+}
+
+# Private nodes have no external IP, so this is how they reach anything outside
+# Google's APIs, such as public image registries. Google's APIs themselves go
+# through the subnetwork's Private Google Access.
+resource "google_compute_router" "nat" {
+  count = local.create_network && var.enable_private_nodes ? 1 : 0
+
+  project = var.project_id
+  name    = "${local.network_name}-nat"
+  region  = var.region
+  network = google_compute_network.this[0].id
+}
+
+resource "google_compute_router_nat" "this" {
+  count = local.create_network && var.enable_private_nodes ? 1 : 0
+
+  project                            = var.project_id
+  name                               = "${local.network_name}-nat"
+  router                             = google_compute_router.nat[0].name
+  region                             = var.region
+  nat_ip_allocate_option             = "AUTO_ONLY"
+  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+
+  log_config {
+    enable = true
+    filter = "ERRORS_ONLY"
+  }
 }

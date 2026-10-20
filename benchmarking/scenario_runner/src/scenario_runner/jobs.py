@@ -26,15 +26,28 @@ from .cluster import Cluster
 from .log import log
 
 
-def job_status(cluster: Cluster, job: str, namespace: str) -> tuple[int, int]:
-    """The Job's succeeded and failed pod counts; none for one not found."""
+class StatusUnread(RuntimeError):
+    """kubectl could not read a Job."""
+
+
+def job_status(cluster: Cluster, job: str, namespace: str) -> str | None:
+    """"Complete" or "Failed" once the Job has ended, as its conditions say,
+    else None. A Job of several pods ends once all of them have succeeded, or
+    one has failed. Raises StatusUnread if the Job cannot be read."""
     proc = subprocess.run(
-        cluster.kubectl("get", "job", job, "-o=jsonpath={.status.succeeded}|{.status.failed}", namespace=namespace),
+        cluster.kubectl("get", "job", job, '-o=jsonpath={.status.conditions[?(@.status=="True")].type}',
+                        namespace=namespace),
         capture_output=True,
         text=True,
-    )
-    succeeded, _, failed = proc.stdout.partition("|") if proc.returncode == 0 else ("", "", "")
-    return int(succeeded or 0), int(failed or 0)
+    )  # fmt: skip
+    if proc.returncode:
+        raise StatusUnread(f"kubectl get job {job}: {proc.stderr.strip()}")
+    ended = set(proc.stdout.split()) & {"Complete", "Failed"}
+    return ended.pop() if ended else None
+
+
+def logs_hint(cluster: Cluster, job: str, namespace: str) -> str:
+    return f"kubectl logs --selector=job-name={job} --prefix --tail=-1 -n {namespace} --kubeconfig={cluster.kubeconfig}"
 
 
 @contextmanager

@@ -31,6 +31,8 @@ A GcsDeployment keeps the same layout in a GCS bucket, its state included.
 from __future__ import annotations
 
 import json
+import os
+import re
 import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -43,7 +45,7 @@ from google.cloud import storage
 from . import RUNNER_DIR, terraform
 from .cases import CLUSTERS_DIR
 from .log import log
-from .process import retry
+from .process import retry, shielded
 
 RUNNER_INFRA_DIR = RUNNER_DIR / "infra"
 # The config's own deployments' files, e.g. one applied by hand, which would
@@ -74,6 +76,18 @@ DESTROYED_FILE = "DESTROYED"
 # keeps there itself, and the providers, links into the plugin cache that init
 # makes again.
 UNSYNCED = (f"{STATES_DIR}/", "tf-data/providers/")
+
+
+class DestroyFailed(RuntimeError):
+    """A deployment applied for a run could not be destroyed, so what it left
+    is still up, and billed. The series stops here rather than apply more."""
+
+    def __init__(self, root: Path, cause: BaseException | None) -> None:
+        after = f", after {type(cause).__name__}: {cause}" if cause is not None else ""
+        super().__init__(
+            f"destroying {root} failed{after}. What it left is still up: destroy it with"
+            f" TF_DATA_DIR=../tf-data terraform destroy in {root / 'config'}, or with tools/runs destroy"
+        )
 
 
 def tf_vars(project_id: str, region: str, name: str) -> dict:
@@ -192,13 +206,28 @@ class Deployment:
     @contextmanager
     def applied(self) -> Iterator[None]:
         """Applies the config for the with block, and destroys it after, also
-        after a failed apply, which may have created part of it."""
+        after a failed apply, which may have created part of it. The destroy
+        is shielded from a single Ctrl-C. One that fails raises DestroyFailed,
+        having logged what failed before it, if anything did."""
         self.init()
         try:
             self.deploy()
             yield
-        finally:
-            self.deploy("-destroy")
+        except BaseException as exc:
+            self.destroy_after(exc)
+            raise
+        self.destroy_after(None)
+
+    def destroy_after(self, cause: BaseException | None) -> None:
+        try:
+            with shielded(f"{self.root}: the destroy that cleans up"):
+                self.deploy("-destroy")
+        except KeyboardInterrupt:
+            raise
+        except BaseException as exc:
+            if cause is not None:
+                log(f"{self.root}: before the destroy failed: {type(cause).__name__}: {cause}", "ERROR")
+            raise DestroyFailed(self.root, cause) from exc
 
 
 @cache
@@ -283,19 +312,53 @@ class GcsDeployment(Deployment):
         super().destroy()
 
 
+# Set by automation-infra's Cloud Run job: the account its clusters' nodes run
+# as, which its deployment created with the project roles nodes need, so the
+# job neither creates one per run nor grants it those.
+NODE_SERVICE_ACCOUNT = os.environ.get("NODE_SERVICE_ACCOUNT")
+# Set by automation-infra's Cloud Run job, which runs inside this network: its
+# clusters go into the subnetwork, with an internal endpoint only.
+CLUSTER_NETWORK = os.environ.get("CLUSTER_NETWORK")
+CLUSTER_SUBNETWORK = os.environ.get("CLUSTER_SUBNETWORK")
+
+
+def declared_variables(config: Path) -> set[str]:
+    """The variables a config declares, in the .tf files terraform reads,
+    which skips hidden ones (such as the ._ files macOS tar adds)."""
+    names = set()
+    for tf in config.glob("*.tf"):
+        if not tf.name.startswith("."):
+            names.update(re.findall(r'^variable\s+"([^"]+)"', tf.read_text(), re.MULTILINE))
+    return names
+
+
 def cluster_deployment(
-    spec: dict, deployment: Deployment, tf_vars: dict, substrate_version: str | None, substrate_repository: str | None
+    spec: dict,
+    deployment: Deployment,
+    tf_vars: dict,
+    substrate_version: str | None,
+    image_repository: str | None,
+    sandbox_class: str | None = None,
 ) -> Deployment:
     """Creates deployment of the config a case's infra.cluster names, with its
-    tfvars, tfvars_inline and variables, then substrate_version and the
-    substrate_repository its images are installed from unless None, and
-    tf_vars, later ones winning."""
+    tfvars, tfvars_inline and variables, then substrate_version unless None,
+    the image_repository its images are pulled from unless None, the case's
+    sandbox_class unless None, and tf_vars, later ones winning. The class
+    comes from the case, so its cluster cannot be set to another."""
     cluster_dir = CLUSTERS_DIR / spec["name"]
     variables = dict(spec.get("variables", {}))
-    if substrate_repository is not None:
-        variables["substrate_image_repository"] = substrate_repository
     if substrate_version is not None:
         variables["substrate_version"] = substrate_version
+    if image_repository is not None:
+        variables["image_repository"] = image_repository
+    if sandbox_class is not None:
+        variables["sandbox_class"] = sandbox_class
+    declared = declared_variables(cluster_dir)
+    if NODE_SERVICE_ACCOUNT and "node_service_account" in declared:
+        variables["node_service_account"] = NODE_SERVICE_ACCOUNT
+    if CLUSTER_SUBNETWORK and {"existing_network", "enable_private_endpoint"} <= declared:
+        variables["existing_network"] = {"network": CLUSTER_NETWORK, "subnetwork": CLUSTER_SUBNETWORK}
+        variables["enable_private_endpoint"] = True
     variables.update(tf_vars)
     return deployment.create(
         cluster_dir,

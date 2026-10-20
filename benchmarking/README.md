@@ -12,7 +12,8 @@ against it and destroys it afterwards.
 - Python 3.11
 - Terraform
 - gcloud
-- Go, kubectl and git
+- Go and git
+- kubectl 1.31 or later
 - gcloud's `gke-gcloud-auth-plugin` (`gcloud components install
   gke-gcloud-auth-plugin`), which kubectl reaches the clusters through
 - Docker with Buildx, unless you pass `--cloud-build`: the image builds use
@@ -89,9 +90,23 @@ without creating a cluster:
 ```
 
 To run more than one case, repeat `--scenario`; they run in the order given.
-Without it, every case in `scenarios.yaml` runs, in the order listed. A case
-with `repeats: N` runs N times, recorded as `<case>-1` to `<case>-N`, each on a
+`--all` runs every case in `scenarios.yaml`, in the order listed; one or the
+other is required, as every case means a cluster or more. A case with
+`repeats: N` runs N times, recorded as `<case>-1` to `<case>-N`, each on a
 fresh cluster. A failed repeat doesn't stop the ones after it.
+
+Before it applies anything, the run checks what the cases need, and names
+every problem it finds: the tools and their versions, Application Default
+Credentials and gcloud's login, Docker and buildx unless `--cloud-build`, the
+substrate submodule checked out at the commit the repo pins, and for each case
+its cluster's config as Terraform evaluates it, such as a machine type that
+can run `microvm`, a mock-llm node pool for `openclaw` and a GKE version the
+REGULAR channel still offers.
+
+Without `--report-bucket`, each case's reports go to its cluster's own bucket,
+which is destroyed with the cluster; the only copy that lasts is the one
+downloaded to `reports/<run-id>/`, and a repeat whose download fails fails.
+To keep them in GCS, pass a bucket of your own with `--report-bucket`.
 
 Creating and destroying a cluster takes most of a run's time. While you are
 changing a case or the code it runs, keep one cluster up instead:
@@ -117,6 +132,7 @@ Useful flags (`--help` lists them all):
 | Flag | |
 |---|---|
 | `--scenario NAME` | case to run; repeatable |
+| `--all` | run every case instead |
 | `--name RUN_ID` | run id, default `run-<UTC timestamp>`. It starts the names of the GCP resources, so keep it lowercase |
 | `--project-id ID` | overrides `PROJECT_ID` |
 | `--region REGION` | default `us-central1` |
@@ -125,35 +141,46 @@ Useful flags (`--help` lists them all):
 | `--cloud-build` | build images on Cloud Build rather than local Docker |
 | `--no-docker-login` | push with Docker's own registry credentials rather than gcloud's access token |
 | `--scenarios-file PATH` | another scenarios file, e.g. a local copy with a smaller load |
+| `--report-bucket BUCKET` | keep the reports in this bucket, under `--report-prefix` (`reports` by default), rather than in each cluster's own |
 | `--terraform-output json` | log Terraform as JSON |
 
 `tools/run-local` is `tools/run --state-backend local`.
 
 Substrate blocks all outbound traffic from an actor that has no egress policy.
 The worker gives each actor one that allows only the hosts named by URLs in
-its ActorTemplate's env, such as the OTLP collector and openclaw's mock LLM. To
-let actors reach another service, add its URL to the template, or set the
-case's `worker: actor-egress-allow` to a comma-separated list of hosts.
+its ActorTemplate's env, such as the OTLP collector and openclaw's mock LLM:
+over cleartext HTTP for `http://` URLs, and over TLS, passed through
+undecrypted, for `https://` ones, which a cleartext rule would not let
+through. To let actors reach another service, add its URL to the template, or
+set the case's `worker: actor-egress-allow` (cleartext) or
+`worker: actor-egress-allow-tls` (TLS) to a comma-separated list of hosts.
 
 ### What a run does
 
-1. Applies `scenario_runner/infra`: an Artifact Registry repository for the
+1. Checks what the cases need, as above.
+2. Applies `scenario_runner/infra`: an Artifact Registry repository for the
    run.
-2. For each repeat of each case:
+3. Builds substrate's images from the submodule, and the locust and workload
+   images (`locust/images.json`, `workloads/images.json`), once, into that
+   repository, which every repeat's cluster pulls from.
+4. For each repeat of each case:
    1. Applies the case's cluster from `scenarios/infra/clusters/<name>/`: a
-      GKE cluster, its node pools, a GCS bucket for the reports and the IAM
-      the benchmark needs.
-   2. Builds substrate from the submodule with ko and installs it, unless the
-      case sets `skip-substrate-install`.
-   3. Builds and pushes the locust and workload images
-      (`locust/images.json`, `workloads/images.json`).
-   4. Deploys Prometheus, the worker pool and the case's workload, then the
+      zonal GKE cluster whose nodes have no public IP and reach out through
+      Cloud NAT, its node pools, a GCS bucket for the reports and the IAM the
+      benchmark needs. From a laptop, the cluster gets a network of its own
+      and a public control-plane endpoint, which IAM guards; from
+      automation-infra's Cloud Run job, it goes into the job's network with an
+      internal endpoint only.
+   2. Installs substrate, unless the case sets `skip-substrate-install`; on a
+      `microvm` cluster also its kata and cloud-hypervisor assets, checked
+      against the sha256s the SandboxConfig pins before they are uploaded.
+   3. Deploys Prometheus, the worker pool and the case's workload, then the
       locust master and boomer worker Jobs, and waits for both to end.
-   5. Deletes any actors the run left, recording them in `cleanup.json`,
-      uploads both Jobs' logs to the bucket beside the master's CSVs, and
+   4. Deletes any actors the run left, recording them in `cleanup.json`,
+      uploads the Jobs' logs to the bucket beside the master's CSVs, and
       copies everything to `reports/<run-id>/<record>/`.
-   6. Destroys the cluster, and its bucket with it.
-3. Destroys `scenario_runner/infra`.
+   5. Destroys the cluster, and its bucket with it.
+5. Destroys `scenario_runner/infra`.
 
 The `common` cluster's nodes are C2 by default; see
 [Cost and quota](#cost-and-quota) before raising `sandboxed_node_count`.
@@ -162,7 +189,7 @@ The `common` cluster's nodes are C2 by default; see
 
 | What | Where |
 |---|---|
-| Reports and Job logs | `reports/<run-id>/<record>/` at the repo root. The bucket is destroyed with the cluster, so this is the only copy left, unless `--report-deployment` sent them to a bucket of their own |
+| Reports and Job logs | `reports/<run-id>/<record>/` at the repo root, and with `--report-bucket` or `--report-deployment` in that bucket. The cluster's own bucket is destroyed with it |
 | Terraform deployments | `scenario_runner/.local-data/runs/terraform/<run-id>/`: `scenario-runner/` and `scenarios/<record>/`, each with `config/`, `tf-data/` and, with the local backend, `tfstates/` |
 | The cluster's kubeconfig | `tf-data/kubeconfig` in the repeat's deployment |
 | GCP resources | labeled `benchmark-run-id=<run-id>` and `benchmark-test-case=<record>` |
@@ -189,12 +216,16 @@ Each folder under `reports/<run-id>/` holds:
 - `custom_stats_history.csv`, `cluster_vitals_history.csv`: actor counts and
   node CPU and memory over the run, read back out of Prometheus.
 - `locust_steady_window.json`: the steady-state window's bounds.
-- `run.json`: how the run went, the resolved case, the cluster and its nodes,
-  the WorkerPool, ActorTemplate and SandboxConfig, every image by digest, and
-  the commits. `README.md` is the same for a reader.
-- `locust-master.log`, `boomer-worker.log`: the two Jobs' logs, taken from
-  their pods once the run ends. A run stopped with Ctrl-C has none, as
-  stopping it deletes the pods.
+- `run.json`: how the run went (its failed cycles, over the whole run and the
+  steady state), the resolved case, the cluster and its nodes, the
+  WorkerPool, ActorTemplate and SandboxConfig, every image by the digest its
+  pods ran, substrate's control plane in `ate-system` included, the commits
+  and whether the tree had uncommitted changes, and the versions of the tools
+  and builders the images were made with. `README.md` is the same for a
+  reader, with a results table.
+- `locust-master.log`, `boomer-worker.log`: the Jobs' logs, every pod's,
+  taken from the pods once the run ends. A run stopped with Ctrl-C has none,
+  as stopping it deletes the pods.
 - `cleanup.json`: the actors the scenario-runner found left after the run and
   deleted, and any still there a minute later, such as one stuck in
   `ACTOR_STATE_DELETING` (agent-substrate/substrate#2011).
@@ -220,15 +251,29 @@ With no argument it charts the latest run in `./reports`.
 
 ### Images and versions
 
-The images are tagged with the repo's `HEAD` commit, but built from the
-working tree as it is, uncommitted changes included. Commit before a run whose
-results you want to tie to a commit. The images are built for `linux/amd64`,
-the nodes' platform, whatever the build host's; on an ARM machine that needs
-Docker's emulation, or `--cloud-build`.
+The images are built from the working tree as it is, and tagged with the
+repo's `HEAD` commit; a tree with uncommitted changes, here or in the
+submodule, gets `<commit>-dirty-<digest of the changes>` instead, so an image
+is only ever reused for exactly the code it was built from, and `run.json`
+records which. Commit before a run whose results you want to tie to a commit.
+The images are built for `linux/amd64`, the nodes' platform, whatever the build
+host's; on an ARM machine that needs Docker's emulation (with Rosetta on Apple
+silicon), or `--cloud-build`, whose builder images are pinned by digest.
 
-Substrate is built from `dependency-repos/substrate` as checked out, and its
-version is `git describe --tags --always --dirty` there, or `VERSION` if set.
-The cluster's nodes are labeled with it.
+Substrate is built from `dependency-repos/substrate`, which has to be checked
+out at the commit the repo pins: after a pull, run `git submodule update`. To
+benchmark another substrate commit, check it out there and `git add` the
+submodule. Its version is `git describe --tags --always --dirty` there, or
+`VERSION` if set, and the cluster's nodes are labeled with it.
+
+The GKE minor version is pinned (`kubernetes_version` in the cluster config,
+1.35), and GKE picks a build of it that the REGULAR channel offers; each run's
+`run.json` and `README.md` record the build it got. The cluster's maintenance
+exclusion keeps it on that minor, and its node pools on their build, for the
+life of the cluster. An exact build can be pinned too, but REGULAR drops each
+build within weeks. When REGULAR does not offer the pin where the cluster goes
+(its zone, or its region for a regional control plane, which can differ), a
+run refuses to start and names the versions REGULAR offers there.
 
 ### Terraform state
 
@@ -241,21 +286,30 @@ project.
 
 ### When a run fails or is stopped
 
-A run fails when more than its case's `max-failure-ratio` of requests fail
-(0.01 by default), when it makes no requests, or when the load generator
-raises any exception (`locust_exceptions.csv`). A failed case does not stop
-the ones after it; the execution exits non-zero at the end, naming them. A run
-that outlives the hour the scenario-runner waits for it does stop the
-execution, as it is still going.
+A run fails when more than its case's `max-failure-ratio` of its cycles fail
+(0.01 by default), over the whole run. A cycle fails on any of its calls, and
+counts once however many rows that failure shows in; an actor that could not
+be created counts as a failed cycle too. A run also fails when it completes no
+cycle, or when the load generator raises any exception
+(`locust_exceptions.csv`). A failed case does not stop the ones after it; the
+execution exits non-zero at the end, naming them.
+
+A run that may still be going, because it outlived the hour the
+scenario-runner waits for it or its Jobs' status could not be read for ten
+minutes, fails its repeat. Its cluster is destroyed with it, and the series goes
+on, except on a dev infra, where the next run would deploy under it, so the
+series stops.
 
 A failed apply, install or benchmark still destroys the repeat's cluster, and
-the run destroys `scenario_runner/infra` before it exits.
+the run destroys `scenario_runner/infra` before it exits. If that destroy
+fails, the run says what failed before it too, and stops the series rather
+than apply more.
 
 Ctrl-C stops the run in progress the way its end would: the master stops the
 worker, which deletes its actors, and uploads what it recorded, and the
-reports are downloaded before the cluster is destroyed. Terraform is left to
-finish what it has in flight rather than killed, so press Ctrl-C once and let
-the destroy finish. A second Ctrl-C forces it, leaving behind whatever it had
+reports are downloaded before the cluster is destroyed. The destroy then runs
+out of the terminal's reach: another Ctrl-C only warns, and a second within
+five seconds of it interrupts Terraform, which leaves behind whatever it had
 not destroyed yet.
 
 If a destroy itself fails, the resources stay. Run it again by hand from the
@@ -284,7 +338,11 @@ because a dev infra keeps the cluster of the case it was first created for:
 ./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton --dev-infra-update
 ```
 
-`--no-build` needs the images of the current `HEAD` already pushed to it.
+`--no-build` needs the images of the current tree already pushed to it: of
+`HEAD`, or for uncommitted changes, of exactly those; it refuses to start
+otherwise. A dev infra's sandboxed
+node pool is applied for one sandbox class, so a case of the other needs a dev
+infra of its own.
 
 A dev infra's state is always local, in
 `scenario_runner/.local-data/dev-infra/terraform/<name>/`, and its kubeconfig
@@ -310,7 +368,26 @@ local files:
 Add an entry under `cases:` in `scenarios.yaml`. The comments at the top of that
 file describe each key. To change the load or the worker pool, add a new case
 rather than editing an existing one, so results stay tied to the case name
-they were recorded under.
+they were recorded under. To compare gVisor and microvm, add both, the same
+but for `sandbox-class`.
+
+Besides the load, a case can shape each cycle with the worker's options:
+
+| `worker` key | What each cycle does |
+|---|---|
+| `resume-mode: implicit` | no `ResumeActor`: the instruction wakes the actor through the router (`glutton-implicit`) |
+| `instructions-per-cycle: N` | N instructions between the resume and the suspend, the first closing TTFI (`glutton-session`) |
+| `concurrent-instructions: N` | N instructions at once at each of those steps (`glutton-concurrent`) |
+| `glutton-write-ram: SIZE`, `glutton-write-disk: BYTES` | rewrites that much of the actor's memory and a file on its disk before the suspend, as `WriteRAM` and `WriteDisk` rows, so the snapshot holds changed state (`glutton-load`, with `actor-memory: 512Mi`) |
+
+At the case's top level, `actor-memory` sets the actors' memory limit, which
+on `microvm` is the guest's RAM, and `locust-workers` runs that many boomer
+worker pods, each with its own connections to substrate, for loads one pod
+cannot drive (`glutton-large`).
+
+The scheduled runs (`automation-infra/deployments/substrate-bench-auto`) run
+the cases its `main.tf` lists in `args`, so a new case runs there once it is
+added to that list.
 
 ### Comparing sandbox providers' costs
 
@@ -326,13 +403,36 @@ Managed Agents and OpenAI. It needs the providers' API keys; see
 ## Reading the results
 
 The committed example is run
-[`reports/20261001t184243z/`](../reports/20261001t184243z/): the `glutton` case
-at 100 users on 100 workers and 30 `c2-standard-16` nodes, three repeats,
-recorded before the scenario-runner. Its
-[`glutton-summary.md`](../reports/20261001t184243z/glutton-summary.md) has the
-numbers, the hardware and the versions; each repeat's folder has its own
-`README.md`. Steady-state TTFI there is p50 230 ms (230-240 across the
-repeats) and p99 1100 ms (920-1300), at about 93 requests/s.
+[`reports/run-20261015t144424z/`](../reports/run-20261015t144424z/): the
+shipped cases `glutton` and `glutton-microvm`, three repeats each, and
+`openclaw` and `openclaw-microvm` once, each repeat on a cluster of its own as
+`tools/run` applies them. It was recorded from the change that added it,
+before that was committed, so its `run.json` files name commit 1aa312c with
+uncommitted changes. Each case's `<case>-summary.md` has its numbers over the
+repeats, the hardware and the versions; each repeat's folder has its own
+`README.md`.
+
+`glutton` and `glutton-microvm` differ only in their sandbox class: 10 users on
+10 workers on one `c2-standard-16` sandboxed node, for 5 minutes after a 10 s
+warm-up. In steady state, the median over the three repeats, in ms:
+
+| Case | TTFI p50 | TTFI p99 | Suspend p50 | Suspend p99 | Cycles/s |
+| --- | --- | --- | --- | --- | --- |
+| `glutton` (gVisor) | 310 | 1300 | 520 | 1600 | 8.5 |
+| `glutton-microvm` | 960 | 1400 | 1400 | 3800 | 3.7 |
+
+A microvm actor takes about three times as long to resume and to suspend, so
+each user completes fewer cycles. The sandboxed node's CPU stayed at or below
+55% in both (`cluster_vitals_history.csv`), so the difference is the sandbox's
+own rather than contention.
+
+`glutton-large`, run
+[`reports/run-20261015t192645z/`](../reports/run-20261015t192645z/), is
+`glutton` at ten times the load: 100 users on 100 workers over 25 sandboxed
+nodes, with the users spread over four boomer pods. Over its three repeats,
+TTFI p50 is 240 ms (240-260) and p99 1000 ms (590-1500), Suspend p50 440 ms and
+p99 2400 ms (1300-3200), at 98 cycles/s, with 2 of 83,741 cycles failed. The
+sandboxed nodes stayed below a quarter of their CPU.
 
 ### What each row measures
 
@@ -342,8 +442,9 @@ times the pieces. The request names in the CSVs are:
 | Name | What it times |
 | --- | --- |
 | `TTFI` | Time to first instruction: from the start of the `ResumeActor` (explicit mode) or of the instruction that wakes the actor (implicit mode) until that instruction has been served and its answer checked. It includes the instruction's own service time. |
-| `ExecutionTime` | The instruction's round trip to the actor on its own. |
-| `CycleTime` | The whole cycle: `TTFI` and then the suspend. |
+| `ExecutionTime` | Each instruction's round trip to the actor on its own. |
+| `CycleTime` | The whole cycle: `TTFI`, any further instructions and load, and then the suspend. |
+| `WriteRAM` / `WriteDisk` | A `glutton-write-ram` / `glutton-write-disk` cycle's load, before its suspend. |
 | `Resume` / `Suspend` | The `ResumeActor` / `SuspendActor` calls on their own. |
 | `CreateActor` / `CreateActorEgressPolicy` / `CreateAtespace` / `DeleteActor` | The lifecycle calls. `CreateAtespace` is once per run; `DeleteActor` is mostly the teardown. |
 | `ActiveActors` / `IdleActors` | Gauges in `custom_stats_history.csv`: actors resumed and actors suspended. |
@@ -356,6 +457,9 @@ counts as failed.
 `locust_stats_steady.csv` is the number to quote for a repeat. It comes from
 locust, which counts failed requests too and keeps response times at 1 ms
 resolution below 100 ms, 10 ms below 1 s, 100 ms below 10 s and 1 s above.
+The worker reports each latency to locust rounded to the nearest whole
+millisecond, which is all locust takes, so a call under a millisecond shows as
+0 or 1 ms.
 
 `custom_stats_history.csv` is read back out of Prometheus. The worker's
 histograms there use power-of-two buckets (1, 2, 4, ... 32768 ms) and count
@@ -367,14 +471,34 @@ locust disagree, locust wins.
 - **The ramp is excluded.** `locust_stats.csv` covers the whole run, the
   ramp included. `locust_stats_steady.csv` starts the case's `warm-up` after
   the last user has started; a case without `warm-up` writes none.
-- **The p99 is a few stalls, not a slow cluster.** In every repeat of the
-  example, the steady-state window holds one or two stalls of 6-9 s in which
-  TTFI throughput about halves and p50 briefly rises to 660-800 ms
-  (`glutton-1` at 18:45:03 and 18:46:28 UTC, `glutton-2` at 18:49:59,
-  `glutton-3` at 18:55:23). The rest of the time p50 sits at 230-250 ms. The
-  ~1 s p99 is those stalls. Their cause is not established yet, and the
-  cluster vitals cannot show it: they hold CPU and memory only. Quote p50, and
-  name the tail, rather than quote a bare p99.
+- **The p99 is rare stalls.** A repeat's steady-state window holds about
+  2,400 cycles of `glutton` and 1,050 of `glutton-microvm`. Their p50 barely
+  moves between repeats (`glutton`'s TTFI 300-310 ms), but a few cycles stall
+  for seconds, and how many land in a window decides the p99: `glutton`'s TTFI
+  p99 is 820-1700 ms over the example's repeats, and once a Resume ran into the
+  30 s deadline and failed its cycle. Quote p50, and give the p99 with its
+  range over the repeats, which the summary has, rather than one repeat's.
+
+### Comparing sandboxes with openclaw
+
+An openclaw instruction is a whole agent turn: openclaw runs its tool-calling
+loop against mock-llm, and `ExecutionTime` times it, about 25 s on gVisor and
+41 s on microvm in the example. That turn makes up nearly all of `TTFI` and
+`CycleTime`, and only a handful of cycles fit in a run, so compare gVisor and
+microvm on `Resume` and `Suspend`, as the run's `README.md` says for openclaw
+cases. In the example, `openclaw` resumed in 620 ms and suspended in 1300 ms
+(p50 of 12 cycles), and `openclaw-microvm` in 6900 ms and 6400 ms (p50 of 6).
+A turn counts only if its output carries the nonce the worker put in its
+prompt, which mock-llm repeats in its last answer.
+
+### The load generator
+
+A case's users run in one boomer worker pod unless it sets `locust-workers`,
+each pod with its own connections to substrate (one by default, more with the
+worker option `api-connections`). The shipped cases run 10 users in one pod,
+and `glutton-large` 100 over four; for more users, split them over more pods
+and check that their CPU stays well below their nodes' in
+`cluster_vitals_history.csv`.
 
 ### Repeats
 

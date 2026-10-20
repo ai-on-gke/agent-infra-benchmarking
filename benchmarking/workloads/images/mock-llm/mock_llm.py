@@ -1,5 +1,26 @@
 import json
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# The nonce the benchmark worker puts in its prompt, "(request <uuid>)", which
+# the final answer repeats so the worker can tell this turn's answer from any
+# other (locust/go/internal/runworkload/openclaw.go).
+REQUEST_NONCE = re.compile(r"\(request ([0-9a-f-]{36})\)")
+
+
+def request_nonce(messages):
+    """The nonce in the last user message that has one, or None."""
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            content = " ".join(part.get("text", "") for part in content if isinstance(part, dict))
+        match = REQUEST_NONCE.search(content or "")
+        if match:
+            return match[1]
+    return None
+
 
 class MockLLMHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -34,8 +55,10 @@ class MockLLMHandler(BaseHTTPRequestHandler):
                 req_data = json.loads(body.decode('utf-8'))
                 messages = req_data.get("messages", [])
                 assistant_message_count = sum(1 for m in messages if m.get("role") == "assistant")
+                nonce = request_nonce(messages)
             except Exception:
                 assistant_message_count = 0
+                nonce = None
 
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
@@ -94,7 +117,10 @@ class MockLLMHandler(BaseHTTPRequestHandler):
                 }
                 self._send_tool_call_sse(tool_call, "turn5")
             else:
-                self._send_text_sse("I have successfully executed the bash commands!", "turn6")
+                answer = "I have successfully executed the bash commands!"
+                if nonce:
+                    answer += f" (request {nonce})"
+                self._send_text_sse(answer, "turn6")
 
             self.wfile.write(b"data: [DONE]\n\n")
         else:

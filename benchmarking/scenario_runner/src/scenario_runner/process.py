@@ -21,9 +21,11 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import IO, Callable, TypeVar
+from typing import IO, Callable, Iterator, TypeVar
 
 from .log import log
 
@@ -31,11 +33,18 @@ T = TypeVar("T")
 
 ATTEMPTS = 3
 RETRY_DELAY = 30
+# How soon a second Ctrl-C has to follow the first to interrupt what is shielded.
+SHIELD_SECS = 5
+
+_shielding = False
 
 
-def environ(env: dict[str, str] | None) -> dict[str, str] | None:
-    """The process's environment with env added, for subprocess."""
-    return {**os.environ, **env} if env else None
+def environ(env: dict[str, str | None] | None) -> dict[str, str] | None:
+    """The process's environment with env added, for subprocess. A None value
+    removes that variable."""
+    if not env:
+        return None
+    return {key: value for key, value in {**os.environ, **env}.items() if value is not None}
 
 
 def reached_by_ctrl_c(proc: subprocess.Popen) -> bool:
@@ -52,14 +61,15 @@ def reached_by_ctrl_c(proc: subprocess.Popen) -> bool:
 def stream(
     cmd: list[str],
     log_line: Callable[[str], None] = log,
-    env: dict[str, str] | None = None,
+    env: dict[str, str | None] | None = None,
     cwd: Path | None = None,
     input: str | None = None,
     stdout: IO[str] | None = None,
 ) -> None:
     """Runs a command, with input on its stdin, and passes each line of its
     output to log_line as it comes. With stdout, its stdout goes there and only
-    its stderr is logged."""
+    its stderr is logged. Within shielded, the command runs out of the
+    terminal's reach."""
     with subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE if input is not None else None,
@@ -68,6 +78,7 @@ def stream(
         text=True,
         env=environ(env),
         cwd=cwd,
+        start_new_session=_shielding,
     ) as proc:
         lines = proc.stderr if stdout else proc.stdout
         try:
@@ -99,10 +110,43 @@ def stream(
         raise subprocess.CalledProcessError(proc.returncode, cmd)
 
 
+@contextmanager
+def shielded(what: str) -> Iterator[None]:
+    """Shields the with block, such as the destroy that cleans up after a run,
+    from a single Ctrl-C, its pauses and every command it runs alike: a Ctrl-C
+    only warns, and a second within SHIELD_SECS of it raises
+    KeyboardInterrupt, which stops the command running then."""
+    global _shielding
+    # Python takes signals only in the main thread, and only it can set a handler.
+    if _shielding or threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    warned_at = None
+
+    def interrupt(signum, frame) -> None:
+        nonlocal warned_at
+        if warned_at is not None and time.monotonic() - warned_at < SHIELD_SECS:
+            raise KeyboardInterrupt
+        warned_at = time.monotonic()
+        log(
+            f"{what} goes on; press Ctrl-C again within {SHIELD_SECS}s to interrupt it, which leaves what it has"
+            " not removed yet",
+            "WARNING",
+        )
+
+    previous = signal.signal(signal.SIGINT, interrupt)
+    _shielding = True
+    try:
+        yield
+    finally:
+        _shielding = False
+        signal.signal(signal.SIGINT, previous)
+
+
 def output(
     cmd: list[str],
     log_line: Callable[[str], None] = log,
-    env: dict[str, str] | None = None,
+    env: dict[str, str | None] | None = None,
     cwd: Path | None = None,
     input: str | None = None,
 ) -> str:

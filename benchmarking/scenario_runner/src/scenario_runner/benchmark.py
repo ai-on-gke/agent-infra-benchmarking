@@ -33,8 +33,8 @@ ERRORS = (
     images.ImageError,
     monitoring.MonitoringError,
 )
-# A run that timed out is still going, so a series stops at it.
-TIMEOUTS = (locust.LocustTimeout, sandbox_benchmark.SandboxBenchmarkTimeout)
+# A run that may still be going, which a series on a shared cluster stops at.
+STILL_RUNNING = (locust.LocustStillRunning, sandbox_benchmark.SandboxBenchmarkTimeout)
 # The types whose repeats summary.write can summarize.
 SUMMARIZED = {"locust"}
 
@@ -63,7 +63,7 @@ def missing_requirements(cases: dict[str, dict], cloud_build: bool = False) -> l
 
 
 def run(name: str, case: dict, run_id: str, cluster: Cluster, **options: object) -> None:
-    """options are those of its type's run, e.g. locust.run's build, and
+    """options are those of its type's run, e.g. locust.run's image_repo, and
     test_case and repeat for one of a case's repeats."""
     cluster.get_credentials()
     log(f"{name}: running as {run_id} on cluster {cluster.name}")

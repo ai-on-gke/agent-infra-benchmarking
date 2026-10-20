@@ -129,3 +129,27 @@ variable "source_branch" {
   type        = string
   default     = "main"
 }
+
+variable "cleanup_schedule" {
+  description = "Cron schedule automation-infra/tools/destroy-leftovers runs on, in the job's image, to destroy what killed executions left. Null creates no cleanup job; only with a schedule."
+  type        = string
+  default     = "0 15 * * *"
+}
+
+variable "network_cidr" {
+  description = "Primary range of the runs' subnetwork: their nodes, their control planes' internal endpoints and the job's own addresses. GKE adds each cluster's Pod and Service ranges beside it."
+  type        = string
+  default     = "10.100.0.0/20"
+}
+
+variable "alert_emails" {
+  description = "Addresses told of a failed execution of the job or its cleanup. Empty still records the incidents in Cloud Monitoring."
+  type        = list(string)
+  default     = []
+}
+
+variable "github_repository" {
+  description = "GitHub repository, owner/name, whose Actions may upload source as the github_service_account_email account, through Workload Identity Federation rather than a key."
+  type        = string
+  default     = "ai-on-gke/agent-infra-benchmarking"
+}

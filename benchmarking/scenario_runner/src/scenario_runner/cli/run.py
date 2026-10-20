@@ -12,19 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Applies scenario_runner/infra/, runs the cases in scenarios.yaml one after
-another (every case in the order listed, or the ones --scenario names in the
-order given), each of a case's repeats on its own infra/clusters/ cluster
-applied for it and destroyed after it, and destroys the infra again. With
---dev-infra, uses the scenario_runner/infra and the cluster of that dev infra
-instead, which outlive the execution."""
+"""Applies scenario_runner/infra/, builds the benchmark's images into it once,
+runs the cases in scenarios.yaml one after another (the ones --scenario names
+in the order given, or with --all every case in the order listed), each of a
+case's repeats on its own infra/clusters/ cluster applied for it and destroyed
+after it, and destroys the infra again. With --dev-infra, uses the
+scenario_runner/infra and the cluster of that dev infra instead, which outlive
+the execution. Before any of it, checks what the cases need."""
 
 from __future__ import annotations
 
 import argparse
 import os
 import re
-import shutil
 import signal
 import subprocess
 import sys
@@ -34,10 +34,23 @@ from typing import Callable, NoReturn
 
 import yaml
 
-from .. import LOCAL_DATA_DIR, agent_sandbox, benchmark, dev_infra, locust, names, reports, substrate, summary, terraform
-from ..cases import PROVIDER_AGENT_SANDBOX, PROVIDER_SUBSTRATE, PROVIDERS, SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases, record_names
+from .. import (
+    LOCAL_DATA_DIR,
+    agent_sandbox,
+    ate_env,
+    benchmark,
+    dev_infra,
+    images,
+    names,
+    preflight,
+    reports,
+    substrate,
+    summary,
+    terraform,
+)
+from ..cases import PROVIDER_AGENT_SANDBOX, PROVIDERS, SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases, record_names
 from ..cluster import Cluster
-from ..deployment import RUNNER_INFRA_DIR, Deployment, GcsDeployment, cluster_deployment
+from ..deployment import RUNNER_INFRA_DIR, Deployment, DestroyFailed, GcsDeployment, cluster_deployment
 from ..log import ON_CLOUD_RUN, log
 from ..process import failure
 
@@ -48,6 +61,12 @@ from ..process import failure
 LOCAL_TERRAFORM_DIR = LOCAL_DATA_DIR / "runs" / "terraform"
 
 STATE_BACKENDS = ["local", "gcs"]
+
+# The images.json files of the images each type of case runs.
+IMAGE_FILES = {
+    "locust": [images.LOCUST_IMAGES, images.WORKLOADS_IMAGES],
+    "sandbox-benchmark": [images.SANDBOX_BENCHMARK_IMAGES],
+}
 
 # What a failed repeat raises, its infra's apply included.
 RUN_ERRORS = (subprocess.CalledProcessError, *benchmark.ERRORS, substrate.SubstrateError, agent_sandbox.AgentSandboxError)
@@ -65,11 +84,12 @@ def fail(message: str) -> NoReturn:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="python3 -m scenario_runner.cli.run", description=__doc__)
     p.add_argument("--scenarios-file", type=Path, default=SCENARIOS_FILE, help=f"default: {SCENARIOS_FILE}")
-    p.add_argument(
-        "--scenario",
-        action="append",
-        metavar="NAME",
-        help="a case to run; repeat it for more. Default: every case",
+    which = p.add_mutually_exclusive_group(required=True)
+    which.add_argument("--scenario", action="append", metavar="NAME", help="a case to run; repeat it for more")
+    which.add_argument(
+        "--all",
+        action="store_true",
+        help="run every case in the scenarios file, in the order listed, each on clusters of its own",
     )
     p.add_argument(
         "--provider",
@@ -173,7 +193,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--no-build",
         action="store_true",
-        help="use the benchmark images already pushed for this commit rather than building them; only with --dev-infra",
+        help="use the benchmark images already pushed for this tree, uncommitted changes included, rather than"
+        " building them; only with --dev-infra",
     )
     p.add_argument(
         "--no-deploy-workloads",
@@ -226,7 +247,7 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
     except (OSError, ValueError, yaml.YAMLError) as exc:
         fail(str(exc))
     # dict.fromkeys drops repeated names, keeping the first.
-    names = list(dict.fromkeys(args.scenario or cases))
+    names = list(dict.fromkeys(cases if args.all else args.scenario))
     unknown = [name for name in names if name not in cases]
     if unknown:
         fail(f"no case {', '.join(unknown)} in {args.scenarios_file}; it has {', '.join(cases)}")
@@ -255,31 +276,58 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
     return selected
 
 
-def check_requirements(cases: dict[str, dict], cloud_build: bool) -> None:
-    if not shutil.which("terraform"):
-        fail("terraform is required to apply the infra")
-    substrate_cases = [c for c in cases.values() if c.get("provider", PROVIDER_SUBSTRATE) == PROVIDER_SUBSTRATE and not c.get(SKIP_SUBSTRATE_INSTALL)]
-    if substrate_cases:
-        missing = substrate.missing_requirements(cloud_build)
-        if missing:
-            fail(f"installing substrate requires {', '.join(missing)}")
-        try:
-            substrate.build_version()
-        except substrate.SubstrateError as exc:
-            fail(str(exc))
-    agent_sandbox_cases = [c for c in cases.values() if c.get("provider") == PROVIDER_AGENT_SANDBOX]
-    if agent_sandbox_cases:
-        missing = agent_sandbox.missing_requirements(cloud_build)
-        if missing:
-            fail(f"installing agent-sandbox requires {', '.join(missing)}")
-        try:
-            agent_sandbox.build_version()
-        except agent_sandbox.AgentSandboxError as exc:
-            fail(str(exc))
-    benchmarks = {name: case for name, case in cases.items() if case["type"] != "noop"}
-    missing = benchmark.missing_requirements(benchmarks, cloud_build)
-    if missing:
-        fail(f"running the benchmark requires {', '.join(missing)}")
+def applied_clusters(args: argparse.Namespace, cases: dict[str, dict]) -> list[str]:
+    """The cases whose cluster the run applies: each one's, on clusters of
+    their own; on a dev infra, the first one's if it creates, completes or
+    updates the dev infra, and none if the dev infra is complete."""
+    if not args.dev_infra:
+        return list(cases)
+    record = dev_infra.read_record(args.dev_infra)
+    if record is None or args.dev_infra_update or not record.get("complete"):
+        return [next(iter(cases))]
+    return []
+
+
+def check_requirements(args: argparse.Namespace, cases: dict[str, dict]) -> None:
+    """Fails, naming every problem, before anything is applied."""
+    log(f"run: checking what {', '.join(cases)} need before applying anything")
+    problems = preflight.check(cases, args.project_id, args.region, args.cloud_build, applied_clusters(args, cases))
+    if problems:
+        fail("cannot run, as:\n" + "\n".join(f"  - {problem}" for problem in problems))
+    if args.report_bucket or all(case["type"] == "noop" for case in cases.values()):
+        return
+    if args.dev_infra:
+        log(
+            f"run: no --report-bucket, so the reports go to dev infra {args.dev_infra}'s cluster bucket, which goes"
+            f" when the dev infra is destroyed, and are downloaded to {reports.REPORTS_DIR / args.name}"
+        )
+        return
+    log(
+        "run: no --report-bucket, so each case's reports go to its cluster's own bucket, which is destroyed with"
+        f" it; the only copy that lasts is the one downloaded to {reports.REPORTS_DIR / args.name}",
+        "WARNING",
+    )
+
+
+def build_images(args: argparse.Namespace, cases: dict[str, dict], repo: str) -> None:
+    """Builds the benchmark's images the cases run into the runner infra's
+    repository once, for every case and repeat to pull from."""
+    benchmarks = [case for case in cases.values() if case["type"] != "noop"]
+    files = list(dict.fromkeys(file for case in benchmarks for file in IMAGE_FILES[case["type"]]))
+    if not files:
+        return
+    # env's images are only read when it is deployed.
+    env = not args.no_deploy_workloads and any(
+        "substrate" in case["comparator"]["providers"] for case in benchmarks if case["type"] == "sandbox-benchmark"
+    )
+    if args.no_build:
+        images.check_pushed(repo, files)
+        log(f"run: using the images already in {repo} for {images.tag()}")
+        return
+    login = not args.no_docker_login
+    images.build_and_push(repo, args.project_id, files, cloud_build=args.cloud_build, login=login)
+    if env:
+        ate_env.build_images(repo, args.project_id, cloud_build=args.cloud_build, login=login)
 
 
 def deployment(args: argparse.Namespace, *key: str) -> Deployment:
@@ -320,6 +368,7 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
             "project_id": args.project_id,
             "region": args.region,
             "cluster": cases[first]["infra"]["cluster"],
+            "sandbox_class": sandbox_class(cases[first]),
             SKIP_SUBSTRATE_INSTALL: cases[first].get(SKIP_SUBSTRATE_INSTALL, False),
         }
     for name, case in cases.items():
@@ -328,6 +377,12 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
             fail(
                 f"case {name} runs on infra/clusters/{spec['name']}, but dev infra {args.dev_infra}"
                 f" is infra/clusters/{record['cluster']['name']}"
+            )
+        # The sandboxed pool is tainted for one class, which no other's workers tolerate.
+        if case["type"] != "noop" and record.get("sandbox_class") and sandbox_class(case) != record["sandbox_class"]:
+            fail(
+                f"case {name} is {sandbox_class(case)}, but dev infra {args.dev_infra}'s sandboxed pool is"
+                f" {record['sandbox_class']}; use a dev infra of its own"
             )
         if spec != record["cluster"]:
             log(f"run: case {name}'s infra.cluster differs from dev infra {args.dev_infra}'s it runs on", "WARNING")
@@ -342,7 +397,15 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
     return record
 
 
-def run_case(args: argparse.Namespace, record: str, case: dict, cluster: Cluster, name: str, repeat: int) -> None:
+def sandbox_class(case: dict) -> str | None:
+    """The class of the case's workers, which its cluster's sandboxed pool is
+    applied for; None for a noop."""
+    return None if case["type"] == "noop" else case.get("sandbox-class", "gvisor")
+
+
+def run_case(
+    args: argparse.Namespace, record: str, case: dict, cluster: Cluster, name: str, repeat: int, image_repo: str
+) -> None:
     if case["type"] == "noop":
         log(f"{record}: noop, nothing to run")
         return
@@ -351,14 +414,14 @@ def run_case(args: argparse.Namespace, record: str, case: dict, cluster: Cluster
         case,
         args.name,
         cluster,
+        image_repo=image_repo,
         cloud_build=args.cloud_build,
-        docker_login=not args.no_docker_login,
-        build=not args.no_build,
         deploy_workloads=not args.no_deploy_workloads,
         test_case=name,
         repeat=repeat,
         report_bucket=args.report_bucket,
         report_prefix=args.report_prefix,
+        keeps_bucket=bool(args.dev_infra),
     )
 
 
@@ -366,10 +429,11 @@ def describe(exc: BaseException) -> str:
     return failure(exc) if isinstance(exc, subprocess.CalledProcessError) else str(exc)
 
 
-def run_repeats(name: str, case: dict, run: Callable[[str, int], None]) -> None:
+def run_repeats(name: str, case: dict, run: Callable[[str, int], None], shared_cluster: bool) -> None:
     """Calls run with each of the case's record names and repeat numbers, 0 for
     a case run once. A failed repeat does not stop the ones after it; the case
-    fails once they have run. A run that timed out does: it is still going."""
+    fails once they have run. A cluster that could not be destroyed does, and
+    on a shared_cluster a run that may still be going, as run_cases says."""
     records = record_names(name, case)
     if len(records) == 1:
         run(name, 0)
@@ -379,8 +443,11 @@ def run_repeats(name: str, case: dict, run: Callable[[str, int], None]) -> None:
         log(f"{name}: repeat {n} of {len(records)}, as {record}")
         try:
             run(record, n)
-        except benchmark.TIMEOUTS:
-            raise
+        except benchmark.STILL_RUNNING as exc:
+            if shared_cluster:
+                raise
+            log(f"{record}: {exc}", "ERROR")
+            failed.append(record)
         except RUN_ERRORS as exc:
             log(f"{record}: {describe(exc)}", "ERROR")
             failed.append(record)
@@ -388,15 +455,23 @@ def run_repeats(name: str, case: dict, run: Callable[[str, int], None]) -> None:
         raise CaseFailed(f"{len(failed)} of {len(records)} repeats of {name} failed: {', '.join(failed)}")
 
 
-def run_cases(args: argparse.Namespace, cases: dict[str, dict], run: Callable[[str, dict], None]) -> list[str]:
+def run_cases(
+    args: argparse.Namespace, cases: dict[str, dict], run: Callable[[str, dict], None], shared_cluster: bool
+) -> list[str]:
     """Calls run with each case, and returns the ones that failed. A failed case
-    does not stop the ones after it; a timed-out run or an interrupt does."""
+    does not stop the ones after it; an interrupt, or a cluster that could not
+    be destroyed, does. So does a run that may still be going on a
+    shared_cluster, which the next case would deploy under it; on a cluster of
+    its own, which is destroyed after it, the next case runs."""
     failed = []
     for name, case in cases.items():
         try:
             run(name, case)
-        except benchmark.TIMEOUTS:
-            raise
+        except benchmark.STILL_RUNNING as exc:
+            if shared_cluster:
+                raise
+            log(f"{name}: {exc}", "ERROR")
+            failed.append(name)
         except (CaseFailed, *RUN_ERRORS) as exc:
             log(f"{name}: {describe(exc)}", "ERROR")
             failed.append(name)
@@ -412,6 +487,8 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
     Returns the cases that failed."""
     record = prepare_dev_infra(args, cases)
     cluster = dev_infra.cluster(args.dev_infra)
+    image_repo = dev_infra.runner_outputs(args.dev_infra)["docker_repo"]
+    build_images(args, cases, image_repo)
 
     def run(name: str, case: dict) -> None:
         nonlocal record
@@ -419,9 +496,14 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
             record = dev_infra.install_agent_sandbox(record, args.cloud_build, not args.no_docker_login)
         elif not case.get(SKIP_SUBSTRATE_INSTALL):
             record = dev_infra.install_substrate(record, args.cloud_build, not args.no_docker_login)
-        run_repeats(name, case, lambda record_name, repeat: run_case(args, record_name, case, cluster, name, repeat))
+        run_repeats(
+            name,
+            case,
+            lambda run_name, repeat: run_case(args, run_name, case, cluster, name, repeat, image_repo),
+            shared_cluster=True,
+        )
 
-    return run_cases(args, cases, run)
+    return run_cases(args, cases, run, shared_cluster=True)
 
 
 def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[str]:
@@ -433,14 +515,17 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
         for name, case in cases.items()
         for record in record_names(name, case)
     }
-    variables = names.infra_vars(args.project_id, args.region, args.name)
+    variables = {**names.infra_vars(args.project_id, args.region, args.name), "image_writers": images.writers()}
     runner_infra = deployment(args, "scenario-runner").create(RUNNER_INFRA_DIR, variables)
 
-    def run_on_cluster(name: str, case: dict, record: str, repeat: int, substrate_repository: str) -> None:
+    def run_on_cluster(name: str, case: dict, record: str, repeat: int, outputs: dict) -> None:
         version = None if case.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
         uncreated = deployment(args, "scenarios", record)
         spec = case["infra"]["cluster"]
-        case_infra = cluster_deployment(spec, uncreated, case_vars[record], version, substrate_repository)
+        # A cluster that pulls none of the runner infra's images is not granted it.
+        pulls = version is not None or case["type"] != "noop"
+        repository = outputs["artifact_registry_repository"] if pulls else None
+        case_infra = cluster_deployment(spec, uncreated, case_vars[record], version, repository, sandbox_class(case))
         with case_infra.applied():
             cluster = Cluster(case_infra.outputs(), case_infra.data / "kubeconfig")
             try:
@@ -448,35 +533,38 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
                     agent_sandbox.install(cluster)
                 elif not case.get(SKIP_SUBSTRATE_INSTALL):
                     substrate.install(cluster)
-                run_case(args, record, case, cluster, name, repeat)
+                run_case(args, record, case, cluster, name, repeat, outputs["docker_repo"])
             finally:
-                # A cluster nothing was deployed to, such as dummy's, has no volumes.
-                if version is not None or case["type"] != "noop":
+                if pulls:
                     cluster.delete_volumes()
 
     with runner_infra.applied():
         outputs = runner_infra.outputs()
         # Once, into the runner infra's repository, which every case's cluster
-        # installs substrate from.
+        # installs substrate or agent-sandbox from and pulls the benchmark's images from.
         login = not args.no_docker_login
-        if any(c.get("provider", PROVIDER_SUBSTRATE) == PROVIDER_SUBSTRATE and not c.get(SKIP_SUBSTRATE_INSTALL) for c in cases.values()):
+        if not all(case.get(SKIP_SUBSTRATE_INSTALL) for case in cases.values()):
             substrate.build_images(outputs["docker_repo"], args.project_id, args.cloud_build, login)
-        if any(c.get("provider") == PROVIDER_AGENT_SANDBOX for c in cases.values()):
+        if any(case.get("provider") == PROVIDER_AGENT_SANDBOX for case in cases.values()):
             agent_sandbox.build_images(outputs["docker_repo"], args.project_id, args.cloud_build, login)
-        repository = outputs["artifact_registry_repository"]
+        build_images(args, cases, outputs["docker_repo"])
         return run_cases(
             args,
             cases,
             lambda name, case: run_repeats(
-                name, case, lambda record, repeat: run_on_cluster(name, case, record, repeat, repository)
+                name,
+                case,
+                lambda record, repeat: run_on_cluster(name, case, record, repeat, outputs),
+                shared_cluster=False,
             ),
+            shared_cluster=False,
         )
 
 
 def main() -> None:
     args = parse_args()
     cases = selected_cases(args)
-    check_requirements(cases, args.cloud_build)
+    check_requirements(args, cases)
 
     # Cloud Run stops a task that outlives its timeout with SIGTERM; exiting
     # on it, rather than dying, still destroys the infra.
@@ -497,7 +585,7 @@ def main() -> None:
         sys.exit(130)
     except subprocess.CalledProcessError as exc:
         fail(failure(exc))
-    except (*RUN_ERRORS, names.NamingError) as exc:
+    except (*RUN_ERRORS, names.NamingError, DestroyFailed) as exc:
         fail(str(exc))
     if failed:
         fail(f"{len(failed)} of {len(cases)} cases failed: {', '.join(failed)}")

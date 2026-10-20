@@ -197,13 +197,16 @@ def wait_for_job(cluster: Cluster, stop_logs: Callable[[int], None]) -> None:
     log("sandbox-benchmark: waiting for the run to finish")
     deadline = time.monotonic() + WAIT_TIMEOUT_SECS
     while time.monotonic() < deadline:
-        succeeded, failed = jobs.job_status(cluster, JOB, NAMESPACE)
-        if succeeded or failed:
+        try:
+            ended = jobs.job_status(cluster, JOB, NAMESPACE)
+        except jobs.StatusUnread:
+            ended = None
+        if ended:
             stop_logs(10)
-            if failed:
+            if ended == "Failed":
                 # run_comparator.py's exit status says why, and run.json what it counted.
-                raise SandboxBenchmarkError(f"{JOB} failed: kubectl logs job/{JOB} -n {NAMESPACE}")
-            log(f"sandbox-benchmark: {JOB} completed: kubectl logs job/{JOB} -n {NAMESPACE}")
+                raise SandboxBenchmarkError(f"{JOB} failed: {jobs.logs_hint(cluster, JOB, NAMESPACE)}")
+            log(f"sandbox-benchmark: {JOB} completed: {jobs.logs_hint(cluster, JOB, NAMESPACE)}")
             return
         time.sleep(5)
     raise SandboxBenchmarkTimeout(f"timed out after {WAIT_TIMEOUT_SECS}s; the Job is left running")
@@ -216,11 +219,13 @@ def run_provider(
     provider: str,
     run_id: str,
     comparator_image: str,
+    image_repo: str,
     deploy_workloads: bool,
     bucket: str,
     report_prefix: str,
     test_case: str | None,
     repeat: int,
+    cloud_build: bool,
 ) -> None:
     """Runs the case's tests on provider, as one comparator Job, whose reports
     go under <run_id>/<name>/<provider>/."""
@@ -234,7 +239,7 @@ def run_provider(
     template = None
     if on_env:
         if deploy_workloads:
-            ate_env.deploy(cluster, sandbox_class, case["env-worker-count"], case["actor-memory"])
+            ate_env.deploy(cluster, image_repo, sandbox_class, case["env-worker-count"], case["actor-memory"])
         template = workloads.deployed_template(cluster, ate_env.TEMPLATE, ate_env.ENV_ATESPACE)
         # Matters when the template was not deployed by this run (--no-deploy-workloads).
         want = workloads.SANDBOX_CONFIGS[sandbox_class][1]
@@ -247,7 +252,7 @@ def run_provider(
 
     info = run_info.collect(
         cluster, case, ate_env.TEMPLATE if on_env else None, template, {COMPARATOR_IMAGE: comparator_image}, bucket,
-        pool=(ate_env.NAMESPACE, ate_env.POOL),
+        pool=(ate_env.NAMESPACE, ate_env.POOL), cloud_build=cloud_build,
     )  # fmt: skip
     if on_env:
         info["env_commit"] = commit(ate_env.ENV_DIR)
@@ -383,25 +388,27 @@ def run(
     name: str,
     case: dict,
     run_id: str | None = None,
-    build: bool = True,
+    *,
+    image_repo: str,
     deploy_workloads: bool = True,
-    cloud_build: bool = False,
-    docker_login: bool = True,
     report_bucket: str | None = None,
     report_prefix: str = reports.REPORT_PREFIX,
     test_case: str | None = None,
     repeat: int = 0,
+    cloud_build: bool = False,
+    keeps_bucket: bool = False,
 ) -> None:
     """Runs the case, recorded under name, as part of run_id, by default a UTC
     timestamp and the commit: on each of its providers in turn, then combines
-    their results. A provider whose run fails does not stop the ones after it;
-    the run fails once they have run. test_case and repeat say which case it
-    is a repeat of; repeat is 0 for a case run once. Without build, uses the
-    images already pushed; without deploy_workloads, the env and template
-    already deployed. Without docker_login, a local build uses the registry
-    credentials Docker already has. The reports go under report_prefix in
-    report_bucket, by default the cluster's own. Expects the cluster's
-    credentials in its kubeconfig."""
+    their results, with the images build_images and ate_env.build_images
+    pushed to image_repo. A provider whose run fails does not stop the ones
+    after it; the run fails once they have run. test_case and repeat say which
+    case it is a repeat of; repeat is 0 for a case run once. Without
+    deploy_workloads, uses the env and template already deployed. The reports
+    go under report_prefix in report_bucket, by default the cluster's own,
+    which keeps_bucket says outlives the run, as a dev infra's does.
+    cloud_build says, for run.json, where the images were built. Expects the
+    cluster's credentials in its kubeconfig."""
     case = check_case(name, case, deploy_workloads)
     sandbox_class = case["sandbox-class"]
     providers = case["comparator"]["providers"]
@@ -411,31 +418,23 @@ def run(
             f"case {name} is {sandbox_class}, but cluster {cluster.name}'s sandboxed pool is"
             f" {cluster.sandbox_class}; set the cluster's sandbox_class to match"
         )
-    run_id = run_id or f"{datetime.now(timezone.utc):%Y%m%dt%H%M%Sz}-{images.tag()}"
+    run_id = run_id or f"{datetime.now(timezone.utc):%Y%m%dt%H%M%Sz}-{images.commit()[:12]}"
     if not reports.LABEL_RE.fullmatch(run_id):
         raise ValueError(f"run id {run_id!r} is not a valid label value")
     bucket = report_bucket or cluster.bucket
-    # Before the build, which is the slow part.
     reports.refuse_reused(bucket, report_prefix, run_id, name)
-
-    if build:
-        images.build_and_push(cluster, [images.SANDBOX_BENCHMARK_IMAGES], cloud_build=cloud_build, login=docker_login)
-        # env's images are only read when it is deployed.
-        if "substrate" in providers and deploy_workloads:
-            ate_env.build_images(cluster, cloud_build=cloud_build, login=docker_login)
-    # By digest, so the Job runs exactly the image built from this commit even
+    # By digest, so the Job runs exactly the image built from this tree even
     # if the tag is pushed again meanwhile; run.json records it.
-    comparator_image = images.pin(
-        images.image_ref(images.SANDBOX_BENCHMARK_IMAGES, cluster.docker_repo, COMPARATOR_IMAGE)
-    )
+    comparator_image = images.pin(images.image_ref(images.SANDBOX_BENCHMARK_IMAGES, image_repo, COMPARATOR_IMAGE))
 
     failed = []
+    downloaded = None
     try:
         for provider in providers:
             try:
                 run_provider(
-                    cluster, name, case, provider, run_id, comparator_image, deploy_workloads, bucket, report_prefix,
-                    test_case, repeat,
+                    cluster, name, case, provider, run_id, comparator_image, image_repo, deploy_workloads, bucket,
+                    report_prefix, test_case, repeat, cloud_build,
                 )  # fmt: skip
             except SandboxBenchmarkTimeout:
                 raise
@@ -453,6 +452,15 @@ def run(
                 f"sandbox-benchmark: on Cloud Run, so the reports stay only in gs://{bucket}/{report_prefix}/{run_id}/{name}/"
             )
         else:
-            reports.download_reports(bucket, report_prefix, run_id, name)
+            downloaded = reports.download_reports(bucket, report_prefix, run_id, name)
+    if downloaded is False and report_bucket is None and keeps_bucket:
+        log(f"sandbox-benchmark: the reports stay in gs://{bucket}/{report_prefix}/{run_id}/{name}/", "WARNING")
+    # The case's own bucket goes with its cluster, so the local copy is the
+    # only one; without it the run recorded nothing that lasts.
+    elif downloaded is False and report_bucket is None:
+        raise SandboxBenchmarkError(
+            f"the reports of {name} could not be downloaded from gs://{bucket}/{report_prefix}/{run_id}/{name}/, which"
+            " is destroyed with the cluster; pass --report-bucket to keep them in a bucket of your own"
+        )
     if failed:
         raise SandboxBenchmarkError(f"{name} failed on {', '.join(failed)} of {', '.join(providers)}")

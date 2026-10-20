@@ -35,7 +35,9 @@ resource "google_storage_bucket_iam_member" "job_source" {
 }
 
 # What scenario_runner/infra creates in the project, and what the run does on
-# it: substrate's install on the cluster and the images' Cloud Build.
+# it: substrate's install on the cluster and the images' Cloud Build. The job
+# creates no service account and grants no project role: its clusters' nodes
+# run as the nodes account below, and its builds as the images one.
 resource "google_project_iam_member" "job" {
   for_each = toset([
     "roles/serviceusage.serviceUsageAdmin",
@@ -43,18 +45,120 @@ resource "google_project_iam_member" "job" {
     "roles/container.admin",
     "roles/compute.networkAdmin",
     "roles/compute.securityAdmin",
-    "roles/iam.serviceAccountAdmin",
-    "roles/iam.serviceAccountUser",
-    "roles/resourcemanager.projectIamAdmin",
-    "roles/storage.admin",
     "roles/cloudbuild.builds.editor",
     # For gcloud builds submit to stream the build's log.
     "roles/logging.viewer",
+    # For destroy-leftovers to tell a running execution from an ended one.
+    "roles/run.viewer",
   ])
 
   project = var.project_id
   role    = each.value
   member  = "serviceAccount:${google_service_account.job.email}"
+}
+
+locals {
+  # The scenario-runner names an execution's buckets after its run id,
+  # run-<UTC timestamp> on this job.
+  run_bucket_prefix = "projects/_/buckets/${var.project_id}-run-"
+}
+
+# The account every run's cluster nodes run as (NODE_SERVICE_ACCOUNT, which the
+# scenario-runner passes to the cluster config), with the project roles GKE
+# nodes need, granted here once rather than by each run.
+resource "google_service_account" "nodes" {
+  project      = var.project_id
+  account_id   = "${substr(var.default_resource_name, 0, 24)}-nodes"
+  display_name = "GKE nodes of ${var.default_resource_name}'s runs"
+}
+
+resource "google_project_iam_member" "nodes" {
+  for_each = toset([
+    "roles/logging.logWriter",
+    "roles/monitoring.metricWriter",
+    "roles/monitoring.viewer",
+    "roles/stackdriver.resourceMetadata.writer",
+  ])
+
+  project = var.project_id
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.nodes.email}"
+}
+
+resource "google_service_account_iam_member" "job_act_as_nodes" {
+  service_account_id = google_service_account.nodes.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.job.email}"
+}
+
+# The runs' buckets, and creating them, which is checked on the project.
+resource "google_project_iam_member" "job_run_buckets" {
+  project = var.project_id
+  role    = "roles/storage.admin"
+  member  = "serviceAccount:${google_service_account.job.email}"
+
+  condition {
+    title = "run-buckets-only"
+    expression = join(" || ", [
+      "resource.type == \"cloudresourcemanager.googleapis.com/Project\"",
+      "resource.name.startsWith(\"${local.run_bucket_prefix}\")",
+    ])
+  }
+}
+
+# The reports under var.reports_prefix: the runner checks a run id is new,
+# uploads the Jobs' logs and cleanup.json beside the master's reports, and
+# reads them back.
+resource "google_storage_bucket_iam_member" "job_reports" {
+  count = var.reports_bucket == null ? 0 : 1
+
+  bucket = var.reports_bucket
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.job.email}"
+
+  condition {
+    title = "reports-prefix-only"
+    expression = join(" || ", [
+      "resource.name.startsWith(\"projects/_/buckets/${var.reports_bucket}/objects/${var.reports_prefix}/\")",
+      "api.getAttribute(\"storage.googleapis.com/objectListPrefix\", \"\").startsWith(\"${var.reports_prefix}/\")",
+    ])
+  }
+}
+
+# The account the job's Cloud Builds run as (images.py and substrate.py in the
+# scenario-runner), rather than the project's default, which the job would
+# otherwise have to act as. Each run's repository grants it push itself
+# (scenario_runner/infra's image_writers), so it holds no repository role here.
+resource "google_service_account" "images" {
+  project      = var.project_id
+  account_id   = "${substr(var.default_resource_name, 0, 23)}-images"
+  display_name = "Cloud Build of ${var.default_resource_name}'s benchmark images"
+}
+
+resource "google_project_iam_member" "images_logs" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.images.email}"
+}
+
+resource "google_service_account_iam_member" "job_act_as_images" {
+  service_account_id = google_service_account.images.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.job.email}"
+}
+
+# Where the job stages the source of those builds, for the images account to
+# read.
+resource "google_storage_bucket_iam_member" "job_build_source" {
+  bucket = google_storage_bucket.build_source.name
+  role   = "roles/storage.admin"
+  member = "serviceAccount:${google_service_account.job.email}"
+}
+
+resource "google_storage_bucket_iam_member" "images_build_source" {
+  bucket = google_storage_bucket.build_source.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.images.email}"
 }
 
 locals {
@@ -97,7 +201,14 @@ resource "google_cloud_run_v2_job" "job" {
         # The scenario-runner labels the infra with BENCHMARK_TRIGGER, which
         # the scheduler's run overrides with scheduled.
         dynamic "env" {
-          for_each = merge({ BENCHMARK_TRIGGER = "manual" }, var.github_actions_bucket == null ? {} : {
+          for_each = merge({
+            BENCHMARK_TRIGGER           = "manual"
+            CLOUD_BUILD_SERVICE_ACCOUNT = google_service_account.images.email
+            NODE_SERVICE_ACCOUNT        = google_service_account.nodes.email
+            CLOUD_BUILD_STAGING_DIR     = "gs://${google_storage_bucket.build_source.name}/benchmark"
+            CLUSTER_NETWORK             = google_compute_network.runs.id
+            CLUSTER_SUBNETWORK          = google_compute_subnetwork.runs.id
+            }, var.github_actions_bucket == null ? {} : {
             SOURCE_BUCKET = var.github_actions_bucket
             SOURCE_BRANCH = var.source_branch
           }, var.env)
@@ -113,6 +224,16 @@ resource "google_cloud_run_v2_job" "job" {
             memory = var.memory
           }
         }
+      }
+
+      # Into the runs' network for their clusters' internal endpoints; the
+      # rest, such as GitHub and Google's APIs, goes out directly.
+      vpc_access {
+        network_interfaces {
+          network    = google_compute_network.runs.id
+          subnetwork = google_compute_subnetwork.runs.id
+        }
+        egress = "PRIVATE_RANGES_ONLY"
       }
     }
   }

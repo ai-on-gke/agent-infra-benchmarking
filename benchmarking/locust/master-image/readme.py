@@ -53,9 +53,12 @@ FILES = (
 )
 
 
-def render(info: dict) -> str:
+def render(info: dict, stats: list[dict] | None = None, stats_file: str | None = None) -> str:
+    """stats are the rows of the run's stats CSV, stats_file's, for its
+    results table."""
     sections = [
         _header(info),
+        _results(info, stats or [], stats_file),
         _case(info),
         _hardware(info),
         _workers(info),
@@ -82,10 +85,18 @@ def render_summary(case: str, jobs: list[tuple[str, dict | None, str | None]], r
     run.json and reason it was left out of the summary, if any; `rows` the
     summary CSV's rows."""
     infos = [(name, info) for name, info, _ in jobs if info]
+    names = [(info.get("cluster") or {}).get("name") if isinstance(info.get("cluster"), dict) else None
+             for _, info in infos]  # fmt: skip
+    clusters = None
+    if all(names) and len(set(names)) > 1:
+        clusters = "clusters " + ", ".join(f"`{name}`" for name in dict.fromkeys(names)) + ", one per repeat,"
     sections = [
         _summary_header(case, jobs),
         _summary_results(case, jobs, rows),
-        *(_same_across(infos, section) for section in (_case, _hardware, _workers, _versions)),
+        _same_across(infos, _case),
+        _same_across(infos, _hardware, lambda info: _hardware(info, clusters)),
+        _same_across(infos, _workers, lambda info: _workers(info, golden=False)),
+        _same_across(infos, _versions),
         _summary_files(case, jobs),
     ]
     return "\n\n".join(s for s in sections if s) + "\n"
@@ -98,13 +109,13 @@ def _summary_header(case: str, jobs) -> str:
     lines = [f"# {case}, {len(jobs)} repeats, run {run_id}", ""]
     lines.append(f"- **Summarized:** {used} of {len(jobs)} repeats, the ones that passed")
 
-    counted = [i["failures"] for i in infos if isinstance(i.get("failures"), dict) and "failed" in i["failures"]]
+    counted = [i["failures"] for i in infos if isinstance(i.get("failures"), dict) and "cycles" in i["failures"]]
     if counted:
-        requests = sum(f["requests"] for f in counted)
-        failed = sum(f["failed"] for f in counted)
-        total = {"requests": requests, "failed": failed, "ratio": failed / requests if requests else 0}
+        total = {key: sum(f[key] for f in counted) for key in ("cycles", "failed_cycles", "failed_starts")}
+        attempted = total["cycles"] + total["failed_starts"]
+        total["ratio"] = (total["failed_cycles"] + total["failed_starts"]) / attempted if attempted else None
         max_ratio = next((i.get("max_failure_ratio") for i in infos), None)
-        lines.append(f"- **Failed requests, all repeats:** {_failures(total, max_ratio)}")
+        lines.append(f"- **Failed cycles, all repeats:** {_failures(total, max_ratio)}")
     lines.append("")
 
     rows = []
@@ -120,7 +131,7 @@ def _summary_header(case: str, jobs) -> str:
             _window(info.get("started"), info.get("ended")),
             _window(steady.get("start"), steady.get("end")) if steady else "none recorded",
         ])
-    lines += _table(["Repeat", "Result", "Failed requests", "Window", "Steady-state window"], rows)
+    lines += _table(["Repeat", "Result", "Failed cycles", "Window", "Steady-state window"], rows)
     return "\n".join(lines)
 
 
@@ -152,9 +163,15 @@ def _summary_results(case: str, jobs, rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
-def _same_across(infos: list[tuple[str, dict]], section) -> str:
+def _same_across(infos: list[tuple[str, dict]], section, shared=None) -> str:
     """`section` as each repeat's README has it: once if it reads the same in
-    all of them, otherwise once for each version, naming the repeats it is."""
+    all of them, otherwise once for each version, naming the repeats it is.
+    `shared` is the section without what is each repeat's own, such as its
+    cluster's name, shown once instead if that reads the same in all."""
+    if shared:
+        texts = {shared(info) for _, info in infos}
+        if len(texts) == 1:
+            return texts.pop()
     versions: dict[str, list[str]] = {}
     for name, info in infos:
         versions.setdefault(section(info), []).append(name)
@@ -185,15 +202,56 @@ def _header(info: dict) -> str:
         title += f", repeat {info['repeat']} of {case.get('repeats') or UNKNOWN}"
     lines = [f"# {title}, run {info.get('run_id') or UNKNOWN}", ""]
     lines.append(f"- **Result:** {_status(info.get('status'))}")
-    lines.append(f"- **Failed requests:** {_failures(info.get('failures'), info.get('max_failure_ratio'))}")
-    if isinstance(info.get("failures"), dict) and info["failures"].get("exceptions"):
-        lines.append(f"- **Load generator exceptions:** {info['failures']['exceptions']}")
+    failures = info.get("failures") if isinstance(info.get("failures"), dict) else {}
+    lines.append(f"- **Failed cycles:** {_failures(failures or None, info.get('max_failure_ratio'))}")
+    if isinstance(failures.get("steady"), dict):
+        lines.append(f"- **Failed cycles, steady state:** {_failures(failures['steady'], None)}")
+    if failures.get("exceptions"):
+        lines.append(f"- **Load generator exceptions:** {failures['exceptions']}")
     lines.append(f"- **Window:** {_window(info.get('started'), info.get('ended'))}")
     lines.append(f"- **Steady-state window:** {_steady_window(info.get('steady_window'), info.get('warm_up'))}")
     errors = info.get("run_info_errors")
     if isinstance(errors, dict) and errors:
         lines.append(f"- **Metadata missing:** {', '.join(f'{k} ({v})' for k, v in errors.items())}")
     return "\n".join(lines)
+
+
+# The per-run results table: the request names in a cycle's order.
+RESULT_ROWS = ("Resume", "ExecutionTime", "TTFI", "Suspend", "CycleTime")
+# Workloads whose instruction takes long enough to dominate TTFI and CycleTime,
+# so that only Resume and Suspend say much about the sandbox itself.
+SLOW_INSTRUCTION_WORKLOADS = ("openclaw",)
+
+
+def _results(info: dict, stats: list[dict], stats_file: str | None) -> str:
+    rows = {row.get("Name"): row for row in stats}
+    if not any(name in rows for name in RESULT_ROWS):
+        return ""
+    lines = ["## Results", "", f"From `{stats_file or UNKNOWN}`; latencies in ms.", ""]
+    table = []
+    for name in RESULT_ROWS:
+        row = rows.get(name)
+        if row:
+            table.append([f"`{name}`", row.get("Request Count", UNKNOWN), row.get("Failure Count", UNKNOWN),
+                          *(_ms(row.get(stat)) for stat in ("50%", "90%", "99%", "Max Response Time"))])  # fmt: skip
+    lines += _table(["Request", "Count", "Failed", "p50", "p90", "p99", "Max"], table)
+    case = info.get("case") if isinstance(info.get("case"), dict) else {}
+    worker = case.get("worker") if isinstance(case.get("worker"), dict) else {}
+    workload = worker.get("workload-name") or worker.get("workload-template")
+    if workload in SLOW_INSTRUCTION_WORKLOADS:
+        lines += [
+            "",
+            f"`{workload}`'s instruction is a whole agent turn, which `ExecutionTime` times on its own and which"
+            " makes up most of `TTFI` and `CycleTime`. Compare sandboxes on `Resume` and `Suspend`.",
+        ]
+    return "\n".join(lines)
+
+
+def _ms(value) -> str:
+    try:
+        return f"{float(value):g}"
+    except (TypeError, ValueError):
+        return UNKNOWN
 
 
 def _case(info: dict) -> str:
@@ -221,7 +279,8 @@ def _case(info: dict) -> str:
     return "\n".join(lines)
 
 
-def _hardware(info: dict) -> str:
+def _hardware(info: dict, clusters: str | None = None) -> str:
+    """clusters, if given, names the clusters in place of the run's own."""
     cluster = info.get("cluster") if isinstance(info.get("cluster"), dict) else {}
     pools = cluster.get("node_pools") if isinstance(cluster.get("node_pools"), dict) else {}
     nodes = info.get("nodes") if isinstance(info.get("nodes"), dict) else {}
@@ -231,8 +290,9 @@ def _hardware(info: dict) -> str:
         lines.append("Neither the cluster's configuration nor its nodes were recorded.")
         return "\n".join(lines)
     if cluster:
+        named = clusters or f"cluster `{cluster.get('name') or UNKNOWN}`"
         lines.append(
-            f"GKE cluster `{cluster.get('name') or UNKNOWN}` in {cluster.get('location') or UNKNOWN}: "
+            f"GKE {named} in {cluster.get('location') or UNKNOWN}: "
             f"control plane {cluster.get('control_plane_version') or UNKNOWN}, "
             f"release channel {cluster.get('release_channel') or UNKNOWN}."
         )
@@ -267,7 +327,8 @@ def _hardware(info: dict) -> str:
     return "\n".join(lines)
 
 
-def _workers(info: dict) -> str:
+def _workers(info: dict, golden: bool = True) -> str:
+    """golden: with when the golden snapshot was taken."""
     pool = info.get("worker_pool") if isinstance(info.get("worker_pool"), dict) else {}
     templates = info.get("actor_templates") if isinstance(info.get("actor_templates"), dict) else {}
     configs = info.get("sandbox_configs") if isinstance(info.get("sandbox_configs"), dict) else {}
@@ -287,9 +348,9 @@ def _workers(info: dict) -> str:
         sandbox = tmpl.get("sandboxConfig") or {}
         config_name = sandbox.get("configName")
         parts = [f"sandbox config `{config_name or UNKNOWN}`"]
-        runtime = _sandbox_asset(configs.get(config_name))
+        runtime = _sandbox_assets(configs.get(config_name), info.get("bucket"))
         if runtime:
-            parts.append(f"runtime `{runtime}`")
+            parts.append(f"runtime {runtime}")
         memory = [
             r.get("quantity") for r in (tmpl.get("resources") or {}).get("limits") or [] if r.get("name") == "memory"
         ]
@@ -298,9 +359,9 @@ def _workers(info: dict) -> str:
         snapshots = tmpl.get("snapshotConfig") or {}
         if snapshots.get("onCommit"):
             parts.append(f"snapshot scope {snapshots['onCommit'].removeprefix('SNAPSHOT_CONTENT_SCOPE_')}")
-        golden = ((tmpl.get("status") or {}).get("goldenSnapshotStatus") or {}).get("takeGoldenSnapshotAt")
-        if golden:
-            parts.append(f"golden snapshot taken {golden}")
+        taken = ((tmpl.get("status") or {}).get("goldenSnapshotStatus") or {}).get("takeGoldenSnapshotAt")
+        if golden and taken:
+            parts.append(f"golden snapshot taken {taken}")
         lines.append("")
         lines.append(f"ActorTemplate `{name}`: " + ", ".join(parts) + ".")
     return "\n".join(lines)
@@ -326,10 +387,37 @@ def _versions(info: dict) -> str:
         if isinstance(dep, dict):
             for c in dep.get("containers") or []:
                 rows.append([f"Deployment `{name}` / {c.get('name')} x{dep.get('replicas', UNKNOWN)}", f"`{c.get('image')}`"])
+    for workload, containers in (info.get("control_plane_images") or {}).items():
+        if isinstance(containers, dict):
+            for container, image in containers.items():
+                rows.append([f"Control plane `{workload}` / {container}", _ran(image)])
+
+    tools = info.get("tools") if isinstance(info.get("tools"), dict) else {}
+    if any(tools.values()):
+        rows.append(["Tools", ", ".join(f"{tool} {version}" for tool, version in tools.items() if version)])
+    builders = info.get("builders") if isinstance(info.get("builders"), dict) else {}
+    if builders.get("where"):
+        used = [f"`{image}`" for key, image in builders.items() if key != "where" and image]
+        rows.append(["Images built with", ", ".join([builders["where"], *used])])
 
     if not rows:
         return ""
     return "\n".join(["## Versions and images", "", *_table(["Component", "Commit or image"], rows)])
+
+
+def _ran(image) -> str:
+    """A pod image as it ran: its name at each digest the nodes resolved it to."""
+    if not isinstance(image, dict):
+        return UNKNOWN
+    ref = str(image.get("image") or "")
+    digests = image.get("digests") or []
+    # A bare image ID, which the status shows for an image named by digest, names nothing.
+    if not ref or ref.startswith("sha256:"):
+        return ", ".join(f"`{digest}`" for digest in digests) or UNKNOWN
+    # Only the last path segment can carry a tag, which leaves a registry port alone.
+    head, _, last = ref.split("@", 1)[0].rpartition("/")
+    name = f"{head}/{last.split(':', 1)[0]}" if head else last.split(":", 1)[0]
+    return ", ".join(f"`{name}@{digest}`" for digest in digests) or f"`{ref}`"
 
 
 def _files() -> str:
@@ -352,11 +440,17 @@ def _status(status) -> str:
 
 
 def _failures(failures, max_ratio) -> str:
-    if not isinstance(failures, dict):
+    """Failed cycles, an actor that could not be started counting as one, as
+    max-failure-ratio judges them."""
+    if not isinstance(failures, dict) or "cycles" not in failures:
         return UNKNOWN
-    if failures.get("requests") == 0:
-        return "none; the run made no requests"
-    text = f"{failures['failed']:,} of {failures['requests']:,} ({failures['ratio']:.3%})"
+    starts = failures.get("failed_starts", 0)
+    attempted = failures["cycles"] + starts
+    if not attempted or failures.get("ratio") is None:
+        return "none; the run completed no cycle"
+    text = f"{failures['failed_cycles'] + starts:,} of {attempted:,} ({failures['ratio']:.3%})"
+    if starts:
+        text += f", {starts:,} of them actors not started"
     if isinstance(max_ratio, (int, float)):
         text += f", allowed {max_ratio * 100:g}%"
     return text
@@ -381,14 +475,25 @@ def _steady_window(window, warm_up) -> str:
     return f"{_window(window.get('start'), window.get('end'))}, from {warm_up or UNKNOWN} after the last user started"
 
 
-def _sandbox_asset(config) -> str:
-    """The amd64 runtime the SandboxConfig installs, which is what the nodes run."""
+def _sandbox_assets(config, bucket: str | None) -> str:
+    """The amd64 runtime the SandboxConfig installs, which is what the nodes
+    run: each asset by its sha256, and where from unless that is the run's own
+    bucket, which differs from run to run."""
     if not isinstance(config, dict):
         return ""
-    for asset in ((config.get("assets") or {}).get("amd64") or {}).values():
-        if isinstance(asset, dict) and asset.get("url"):
-            return asset["url"]
-    return ""
+    # New sandboxes boot with the version defaultVersion names.
+    versions = [v for v in config.get("versions") or [] if isinstance(v, dict)]
+    config = next((v for v in versions if v.get("name") == config.get("defaultVersion")), config)
+    parts = []
+    for name, asset in sorted(((config.get("assets") or {}).get("amd64") or {}).items()):
+        if not isinstance(asset, dict):
+            continue
+        url = asset.get("url") or ""
+        about = [f"sha256 `{asset['sha256']}`"] if asset.get("sha256") else []
+        if url and not (bucket and url.startswith(f"gs://{bucket}/")):
+            about.append(f"from `{url}`")
+        parts.append(f"`{name}`" + (f" ({', '.join(about)})" if about else ""))
+    return ", ".join(parts)
 
 
 def _local_ssd(pool: dict) -> str:

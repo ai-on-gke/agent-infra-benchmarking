@@ -32,3 +32,13 @@ output "github_service_account_email" {
   description = "Service account GitHub Actions write under source/ as, or null when var.github_actions_bucket is null."
   value       = one(google_service_account.github[*].email)
 }
+
+output "github_workload_identity_provider" {
+  description = "Workload Identity provider GitHub Actions authenticate through, as the github_service_account_email account, or null when var.github_actions_bucket is null."
+  value       = one(google_iam_workload_identity_pool_provider.github[*].name)
+}
+
+output "cleanup_job_name" {
+  description = "Name of the Cloud Run job that runs destroy-leftovers, or null when there is none."
+  value       = one(google_cloud_run_v2_job.cleanup[*].name)
+}

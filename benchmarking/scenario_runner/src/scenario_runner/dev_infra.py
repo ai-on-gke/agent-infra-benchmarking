@@ -70,11 +70,11 @@ def create_deployment(record: dict, infra: str, json_output: bool = False) -> De
     uncreated = deployment(record["name"], infra, json_output)
     variables = names.dev_infra_vars(record["project_id"], record["region"], record["name"], infra == "cluster")
     if infra == "scenario-runner":
-        return uncreated.create(RUNNER_INFRA_DIR, variables)
+        return uncreated.create(RUNNER_INFRA_DIR, {**variables, "image_writers": images.writers()})
     version = None if record.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
     # Applied before the cluster is created.
     repository = runner_outputs(record["name"])["artifact_registry_repository"]
-    return cluster_deployment(record["cluster"], uncreated, variables, version, repository)
+    return cluster_deployment(record["cluster"], uncreated, variables, version, repository, record.get("sandbox_class"))
 
 
 def runner_outputs(name: str) -> dict:

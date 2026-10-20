@@ -78,6 +78,8 @@ const (
 	resumeMetric        = "Resume"
 	suspendMetric       = "Suspend"
 	executionTimeMetric = "ExecutionTime"
+	writeRAMMetric      = "WriteRAM"
+	writeDiskMetric     = "WriteDisk"
 
 	// Transport label for TTFI and CycleTime. Their windows span gRPC calls and
 	// an HTTP instruction, so neither transport label describes them.
@@ -171,13 +173,37 @@ type Options struct {
 	// explicit.
 	ResumeMode string
 
-	// EgressAllow names the hosts every actor may connect to. Empty gives the
-	// actors no egress policy, which substrate's egress gateway treats as
-	// deny-all.
-	EgressAllow []string
+	// EgressAllow names the hosts every actor may connect to over cleartext
+	// HTTP, and EgressAllowTLS the ones it may reach over TLS, such as an
+	// https:// endpoint, which a cleartext rule does not let through. Both
+	// empty gives the actors no egress policy, which substrate's egress
+	// gateway treats as deny-all.
+	EgressAllow    []string
+	EgressAllowTLS []string
 
 	// SuspendDisabled controls whether the suspend phase is skipped during the benchmark.
 	SuspendDisabled bool
+
+	// InstructionsPerCycle is how many instructions each cycle sends between
+	// its resume and its suspend, the first one closing TTFI; below 1 is 1.
+	// More model a session of several turns per wake.
+	InstructionsPerCycle int
+
+	// ConcurrentInstructions is how many instructions are sent to the actor
+	// at once at each of those steps; below 1 is 1. TTFI closes once all of
+	// the first step's are served.
+	ConcurrentInstructions int
+
+	// GluttonWriteRAM, a size such as "64Mi", has every glutton cycle write
+	// that much of the actor's memory after its instructions, so the suspend
+	// snapshots dirtied memory. GluttonWriteDisk does the same with that many
+	// bytes of a file. Unset for none.
+	GluttonWriteRAM  string
+	GluttonWriteDisk int
+
+	// APIStubs are the connections to substrate's API the users are spread
+	// over, one each in turn. Empty uses the userclass.Config's one.
+	APIStubs []ateapipb.ControlClient
 }
 
 // configured is what SetOptions recorded, read once by initRunWorkload and
@@ -235,12 +261,24 @@ func initRunWorkload(cfg *userclass.Config) (taskFn func(), shutdown func(contex
 		slog.Error("fatal: invalid --actor-egress-allow", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	if len(hosts) > 0 {
-		slog.Info("actors may connect to", slog.Any("hosts", hosts))
+	tlsHosts, err := egressHosts(configured.EgressAllowTLS)
+	if err != nil {
+		slog.Error("fatal: invalid --actor-egress-allow-tls", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	if len(hosts)+len(tlsHosts) > 0 {
+		slog.Info("actors may connect to", slog.Any("hosts", hosts), slog.Any("tls_hosts", tlsHosts))
 	}
 	opts := configured
 	if opts.Timeout == 0 {
 		opts.Timeout = DefaultTimeout
+	}
+	opts.InstructionsPerCycle = max(opts.InstructionsPerCycle, 1)
+	opts.ConcurrentInstructions = max(opts.ConcurrentInstructions, 1)
+	if (opts.GluttonWriteRAM != "" || opts.GluttonWriteDisk > 0) && wl.Name() != gluttonWorkloadName {
+		slog.Error("fatal: --glutton-write-ram and --glutton-write-disk are for the glutton workload only",
+			slog.String("workload", wl.Name()))
+		os.Exit(1)
 	}
 	var dc dynamic.Interface
 	if opts.Provider == "agent-sandbox" {
@@ -251,7 +289,8 @@ func initRunWorkload(cfg *userclass.Config) (taskFn func(), shutdown func(contex
 			os.Exit(1)
 		}
 	}
-	rt := &runWorkloadRuntime{cfg: cfg, opts: opts, workload: wl, egressHosts: hosts, dynClient: dc}
+	rt := &runWorkloadRuntime{cfg: cfg, opts: opts, workload: wl, egressHosts: hosts, egressTLSHosts: tlsHosts,
+		dynClient: dc}
 	rt.run, rt.endRun = context.WithCancelCause(context.Background())
 	return rt.iterate, rt.shutdown
 }
@@ -263,8 +302,13 @@ type runWorkloadRuntime struct {
 	users     sync.Map // goroutineID -> *runWorkloadUser
 	dynClient dynamic.Interface
 
-	// Options.EgressAllow, checked; empty creates no egress policy.
-	egressHosts []string
+	// Options.EgressAllow and EgressAllowTLS, checked; both empty creates no
+	// egress policy.
+	egressHosts    []string
+	egressTLSHosts []string
+
+	// Counts the users started, to spread them over opts.APIStubs.
+	started atomic.Int64
 
 	// Gates the task function so the teardown can wait for the iterations
 	// boomer leaves running when it returns. See inflight.go.
@@ -393,6 +437,7 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, opts Options) (*runW
 
 	u := &runWorkloadUser{
 		cfg:             r.cfg,
+		api:             r.apiStub(),
 		workload:        r.workload,
 		actorName:       "sb-" + uuid.NewString(),
 		templateName:    tmpl,
@@ -402,6 +447,10 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, opts Options) (*runW
 		dynClient:       r.dynClient,
 		timeout:         opts.Timeout,
 		suspendDisabled: opts.SuspendDisabled,
+		steps:           max(opts.InstructionsPerCycle, 1),
+		concurrent:      max(opts.ConcurrentInstructions, 1),
+		writeRAM:        opts.GluttonWriteRAM,
+		writeDisk:       opts.GluttonWriteDisk,
 	}
 	bmetrics.UpdateUsers(runWorkloadUserClass, 1)
 	if opts.Provider == "agent-sandbox" {
@@ -415,8 +464,8 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, opts Options) (*runW
 		bmetrics.UpdateUsers(runWorkloadUserClass, -1)
 		return nil, err
 	}
-	if len(r.egressHosts) > 0 {
-		if err := u.allowEgress(ctx, r.egressHosts); err != nil {
+	if len(r.egressHosts)+len(r.egressTLSHosts) > 0 {
+		if err := u.allowEgress(ctx, r.egressHosts, r.egressTLSHosts); err != nil {
 			// Not yet resumed, so still SUSPENDED and deletable as it is.
 			if delErr := u.delete(ctx, false); delErr != nil {
 				slog.Warn("actor without an egress policy was left behind",
@@ -428,6 +477,14 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, opts Options) (*runW
 		}
 	}
 	return u, nil
+}
+
+// apiStub is the connection the next user started calls substrate over.
+func (r *runWorkloadRuntime) apiStub() ateapipb.ControlClient {
+	if len(r.opts.APIStubs) == 0 {
+		return r.cfg.APIStub
+	}
+	return r.opts.APIStubs[(r.started.Add(1)-1)%int64(len(r.opts.APIStubs))]
 }
 
 // shutdown removes every actor the run created, and says per actor whether it
@@ -507,7 +564,10 @@ func (r *runWorkloadRuntime) shutdown(ctx context.Context) {
 }
 
 type runWorkloadUser struct {
-	cfg          *userclass.Config
+	cfg *userclass.Config
+	// api is the connection to substrate's API this user's calls go over;
+	// nil for the config's.
+	api          ateapipb.ControlClient
 	workload     workload
 	actorName    string
 	templateName string
@@ -526,10 +586,30 @@ type runWorkloadUser struct {
 	// suspendDisabled controls whether the suspend phase is skipped during the benchmark.
 	suspendDisabled bool
 
+	// steps is how many instruction steps a cycle has, and concurrent how
+	// many instructions each step sends at once; zero is one.
+	steps      int
+	concurrent int
+
+	// What load writes each cycle, for a workload that is a loader, and
+	// whether this actor's memory has been written yet.
+	writeRAM   string
+	writeDisk  int
+	ramWritten bool
+
 	// Track the state of the actor so we don't double-count metrics if
 	// the benchmark calls Resume/Suspend idempotently or repeatedly.
 	isActive  bool
 	isCreated bool
+}
+
+// client is the connection the user's calls go over: its own, or the
+// config's for a user that was given none.
+func (u *runWorkloadUser) client() ateapipb.ControlClient {
+	if u.api != nil {
+		return u.api
+	}
+	return u.cfg.APIStub
 }
 
 func (u *runWorkloadUser) ref() *ateapipb.ObjectRef {
@@ -567,7 +647,7 @@ func (r *runWorkloadRuntime) ensureAtespace(ctx context.Context, u *runWorkloadU
 
 func (u *runWorkloadUser) ensureAtespace(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateAtespace", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapipb.CreateAtespaceRequest{
+		_, err := u.client().CreateAtespace(callCtx, &ateapipb.CreateAtespaceRequest{
 			Atespace: &ateapipb.Atespace{
 				Metadata: &ateapipb.ResourceMetadata{Name: u.cfg.Atespace},
 			},
@@ -584,7 +664,7 @@ func (u *runWorkloadUser) ensureAtespace(ctx context.Context) error {
 
 func (u *runWorkloadUser) create(ctx context.Context) error {
 	err := u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
+		_, err := u.client().CreateActor(callCtx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
 				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: u.templateName},
@@ -619,6 +699,14 @@ func (u *runWorkloadUser) cycle(ctx context.Context, mode string) (call string, 
 	if err := u.measureTTFI(ctx, mode); err != nil {
 		return ttfiMetric, err
 	}
+	for step := 1; step < u.steps; step++ {
+		if err := u.executeStep(ctx); err != nil {
+			return executionTimeMetric, err
+		}
+	}
+	if call, err := u.load(ctx); err != nil {
+		return call, err
+	}
 	if u.provider == "agent-sandbox" {
 		if err := u.releaseClaim(ctx); err != nil {
 			return suspendMetric, err
@@ -627,6 +715,71 @@ func (u *runWorkloadUser) cycle(ctx context.Context, mode string) (call string, 
 		return suspendMetric, err
 	}
 	return "", nil
+}
+
+// executeStep sends the actor u.concurrent instructions at once, each its own
+// ExecutionTime row, and returns once all of them are done, with their
+// errors joined.
+func (u *runWorkloadUser) executeStep(ctx context.Context) error {
+	if u.concurrent <= 1 {
+		return u.executeInstruction(ctx)
+	}
+	errs := make([]error, u.concurrent)
+	var wg sync.WaitGroup
+	for i := range errs {
+		wg.Go(func() { errs[i] = u.executeInstruction(ctx) })
+	}
+	wg.Wait()
+	return errors.Join(errs...)
+}
+
+// load writes u.writeRAM of the actor's memory and u.writeDisk bytes of its
+// disk, each its own row, so the suspend after it snapshots that much changed
+// state. It returns the name of the call that failed, if one did.
+func (u *runWorkloadUser) load(ctx context.Context) (string, error) {
+	loader, ok := u.workload.(loader)
+	if !ok {
+		return "", nil
+	}
+	if u.writeRAM != "" {
+		if err := u.loadCall(ctx, writeRAMMetric, func(ctx context.Context) error {
+			return loader.WriteRAM(ctx, u.actor(), u.writeRAM, !u.ramWritten)
+		}); err != nil {
+			return writeRAMMetric, err
+		}
+		u.ramWritten = true
+	}
+	if u.writeDisk > 0 {
+		if err := u.loadCall(ctx, writeDiskMetric, func(ctx context.Context) error {
+			return loader.WriteDisk(ctx, u.actor(), u.writeDisk)
+		}); err != nil {
+			return writeDiskMetric, err
+		}
+	}
+	return "", nil
+}
+
+// loadCall times one of load's calls as the row name, bounded by the user's
+// timeout like any instruction.
+func (u *runWorkloadUser) loadCall(ctx context.Context, name string, call func(context.Context) error) error {
+	ctx, span := u.cfg.Tracer.Start(ctx, name)
+	defer span.End()
+	callCtx, cancel := u.callContext(ctx)
+	defer cancel()
+
+	start := time.Now()
+	err := call(callCtx)
+	latency := time.Since(start)
+	if cutOff(ctx, err) {
+		return err
+	}
+	boomerutil.LogSampledTrace(span, name, latency, boomerutil.SourceClient, err)
+	if err != nil {
+		recordFailure("http", name, u.userClass, latency, err.Error())
+		return err
+	}
+	recordSuccess("http", name, u.userClass, latency)
+	return nil
 }
 
 // measureTTFI brings the actor back up, sends it one instruction, and reports
@@ -665,7 +818,7 @@ func (u *runWorkloadUser) measureTTFI(ctx context.Context, mode string) error {
 		}
 	}
 
-	err := u.executeInstruction(ctx)
+	err := u.executeStep(ctx)
 	u.recordWindow(ctx, span, ttfiMetric, time.Since(start), err)
 	return err
 }
@@ -679,10 +832,10 @@ func (u *runWorkloadUser) recordWindow(ctx context.Context, span trace.Span, nam
 	span.SetAttributes(attribute.Float64("total_ms", boomerutil.MsFloat(total)))
 	boomerutil.LogSampledTrace(span, name, total, boomerutil.SourceClient, err)
 	if err != nil {
-		bmetrics.RecordFailure(runWorkloadMethod, name, u.userClass, total, err.Error())
+		recordFailure(runWorkloadMethod, name, u.userClass, total, err.Error())
 		return
 	}
-	bmetrics.RecordSuccess(runWorkloadMethod, name, u.userClass, total, 0)
+	recordSuccess(runWorkloadMethod, name, u.userClass, total)
 }
 
 // executeInstruction sends one instruction and reports it as the ExecutionTime
@@ -712,10 +865,10 @@ func (u *runWorkloadUser) executeInstruction(ctx context.Context) error {
 	}
 	boomerutil.LogSampledTrace(span, executionTimeMetric, service, boomerutil.SourceClient, err)
 	if err != nil {
-		bmetrics.RecordFailure("http", executionTimeMetric, u.userClass, service, err.Error())
+		recordFailure("http", executionTimeMetric, u.userClass, service, err.Error())
 		return err
 	}
-	bmetrics.RecordSuccess("http", executionTimeMetric, u.userClass, service, 0)
+	recordSuccess("http", executionTimeMetric, u.userClass, service)
 	return nil
 }
 
@@ -725,7 +878,7 @@ func (u *runWorkloadUser) resume(ctx context.Context) error {
 	}
 
 	err := u.tracedCall(ctx, resumeMetric, func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
+		_, err := u.client().ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
@@ -750,7 +903,7 @@ func (u *runWorkloadUser) suspend(ctx context.Context) error {
 	}
 
 	err := u.tracedCall(ctx, suspendMetric, func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
+		_, err := u.client().SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
@@ -781,7 +934,7 @@ func (u *runWorkloadUser) suspend(ctx context.Context) error {
 // still in a transitional state, and the pair is what names that cause.
 func (u *runWorkloadUser) suspendAndDelete(ctx context.Context) error {
 	suspendCtx, cancel := u.callContext(ctx)
-	_, suspendErr := u.cfg.APIStub.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{
+	_, suspendErr := u.client().SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{
 		Actor: u.ref(),
 	})
 	cancel()
@@ -810,7 +963,7 @@ func (u *runWorkloadUser) suspendAndDelete(ctx context.Context) error {
 // frees the worker rather than only dropping the record.
 func (u *runWorkloadUser) delete(ctx context.Context, anyState bool) error {
 	err := u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
+		_, err := u.client().DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
 			Actor:    u.ref(),
 			AnyState: anyState,
 		}, grpc.Trailer(tr))
@@ -869,10 +1022,10 @@ func (u *runWorkloadUser) tracedCall(ctx context.Context, name string, do func(c
 	}
 	boomerutil.LogSampledTrace(span, name, latency, source, err)
 	if err != nil {
-		bmetrics.RecordFailure("grpc", name, u.userClass, latency, err.Error())
+		recordFailure("grpc", name, u.userClass, latency, err.Error())
 		return err
 	}
-	bmetrics.RecordSuccess("grpc", name, u.userClass, latency, 0)
+	recordSuccess("grpc", name, u.userClass, latency)
 	return nil
 }
 

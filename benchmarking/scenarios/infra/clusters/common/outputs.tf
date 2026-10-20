@@ -9,8 +9,13 @@ output "project_id" {
 }
 
 output "region" {
-  description = "Default region of the deployment: the Artifact Registry repo, the bucket, and the cluster."
+  description = "Default region of the deployment: the bucket's, and the cluster's or its zone's."
   value       = var.region
+}
+
+output "location" {
+  description = "Location of the cluster: var.zone, or var.region for a regional control plane."
+  value       = module.cluster.location
 }
 
 output "cluster_name" {
@@ -32,10 +37,10 @@ output "substrate_version" {
   value       = var.substrate_version
 }
 
-output "substrate_docker_repo" {
-  description = "Image path prefix of the repository substrate's images are installed from; null for none."
-  value = (var.substrate_image_repository == null ? null :
-  "${local.substrate_repository[3]}-docker.pkg.dev/${local.substrate_repository[1]}/${local.substrate_repository[5]}")
+output "image_docker_repo" {
+  description = "Image path prefix of var.image_repository, which substrate's images and the benchmark's are pulled from; null for none."
+  value = (var.image_repository == null ? null :
+  "${local.image_repository[3]}-docker.pkg.dev/${local.image_repository[1]}/${local.image_repository[5]}")
 }
 
 output "sandbox_class" {
@@ -53,20 +58,10 @@ output "subnetwork_name" {
   value       = reverse(split("/", local.subnetwork))[0]
 }
 
-output "artifact_registry_repository" {
-  description = "Full resource name of the Artifact Registry repository."
-  value       = google_artifact_registry_repository.this.name
-}
-
 # The same repository spelled as an image path prefix, which is the form a
 # docker push, a ko build or an ActorTemplate image field takes. Composed from
 # the inputs rather than from the resource so the spelling is the one that was
 # asked for, independent of how the registry echoes it back.
-output "artifact_registry_docker_repo" {
-  description = "Image path prefix for the Artifact Registry repository, e.g. us-docker.pkg.dev/my-project/my-repo."
-  value       = "${var.artifact_repository_location}-docker.pkg.dev/${var.project_id}/${local.artifact_repository_id}"
-}
-
 output "bucket_name" {
   description = "Name of the GCS bucket."
   value       = google_storage_bucket.this.name
@@ -88,8 +83,13 @@ output "atelet_wi_principal" {
 }
 
 output "node_service_account" {
-  description = "Service account the node pools run as. Holds the GKE minimum at project level, and read on this deployment's repository and bucket. An image this deployment's pods have to pull belongs in that repository, or this account needs naming on whatever holds it instead."
-  value       = google_service_account.node.email
+  description = "Service account the node pools run as. Holds the GKE minimum at project level, and read on this deployment's bucket and on var.image_repository. An image this deployment's pods have to pull belongs in that repository, or this account needs naming on whatever holds it instead."
+  value       = local.node_service_account
+}
+
+output "private_endpoint" {
+  description = "Whether the control plane has an internal endpoint only, which get-credentials needs --internal-ip for."
+  value       = var.enable_private_endpoint
 }
 
 output "get_credentials_command" {

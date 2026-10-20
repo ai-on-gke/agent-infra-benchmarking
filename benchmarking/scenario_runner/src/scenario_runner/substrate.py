@@ -21,12 +21,16 @@ mirrored into the cluster's bucket."""
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
+from pathlib import Path
+
+import yaml
 
 from . import RUNNER_DIR, images
 from .cluster import Cluster
@@ -36,7 +40,7 @@ from .process import output, retry, stream
 SUBSTRATE_DIR = RUNNER_DIR.parent.parent / "dependency-repos" / "substrate"
 SUBSTRATE_PATH = SUBSTRATE_DIR.relative_to(images.ROOT).as_posix()
 # Of the go.mod's Go version, with git.
-GO_BUILDER = "golang:1.27.2"
+GO_BUILDER = "golang:1.27.2@sha256:007a316059246276cb214df93950be77837545dc78007a73e0291a4963d5d3bf"
 LABEL_VALUE = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?")
 # What a pre-built install takes: images.Components in
 # cmd/ate-setup/internal/images, less the demos.
@@ -66,6 +70,15 @@ GVISOR_CONFIG = "gvisor-default"
 # Where in the cluster's bucket its assets are mirrored to, clear of the
 # snapshot locations the object-store plugin refuses assets under.
 ASSET_MIRROR_PREFIX = "sandbox-assets"
+MICROVM_SANDBOX_CONFIG = "manifests/microvm/sandboxconfig-microvm.yaml.tmpl"
+# The nodes' architecture, as the SandboxConfig's assets name it.
+MICROVM_ARCH = images.DEFAULT_PLATFORM.rsplit("/", 1)[-1]
+MICROVM_ASSETS = ("cloud-hypervisor", "virtiofsd", "vmlinux", "rootfs.img")
+MICROVM_ASSETS_DIR = SUBSTRATE_DIR / "bin" / "microvm-assets" / MICROVM_ARCH
+# The microvm scripts read these from the environment, so a developer's own
+# would change what they download and where; the versions are the ones the
+# submodule's scripts pin.
+MICROVM_ASSET_ENV = {"ARCH": MICROVM_ARCH, "OUT": str(MICROVM_ASSETS_DIR), "KATA_VER": None, "CH_VER": None}
 
 
 class SubstrateError(RuntimeError):
@@ -154,12 +167,12 @@ def cloud_build_images(ko_build: list[str], env: dict, repo: str, version: str, 
 
 def image_repo(cluster: Cluster) -> str:
     """Where the cluster's substrate images are, which build_images pushed to."""
-    if not cluster.substrate_docker_repo:
+    if not cluster.image_docker_repo:
         raise SubstrateError(
             f"cluster {cluster.name} names no repository of substrate images; a dev infra applied before it did"
             " needs --dev-infra-update"
         )
-    return cluster.substrate_docker_repo
+    return cluster.image_docker_repo
 
 
 def resolve(cluster: Cluster, manifest: str) -> str:
@@ -174,6 +187,38 @@ def missing_submodule() -> list[str]:
     return [] if (SUBSTRATE_DIR / "go.mod").is_file() else [f"the substrate submodule in {SUBSTRATE_DIR}"]
 
 
+def pinned_commit() -> str:
+    """The submodule commit the repo pins: in its index, which is HEAD's
+    unless a new one is staged."""
+    entry = output(["git", "ls-files", "--stage", "--", SUBSTRATE_PATH], cwd=images.ROOT).split()
+    if len(entry) < 2 or entry[0] != "160000":
+        raise SubstrateError(f"the repo pins no submodule at {SUBSTRATE_PATH}")
+    return entry[1]
+
+
+def checkout_commit() -> str:
+    return output(["git", "rev-parse", "HEAD"], cwd=SUBSTRATE_DIR).strip()
+
+
+def check_pinned() -> None:
+    """Refuses a submodule checked out at another commit than the one the
+    repo pins, as after a pull without git submodule update: the run would
+    build, benchmark and label that other substrate. A new pin staged with
+    git add counts, and uncommitted changes in the submodule are allowed: the
+    build version marks them -dirty, and run.json the repo's state."""
+    missing = missing_submodule()
+    if missing:
+        raise SubstrateError(f"{missing[0]} is not checked out; run git submodule update --init")
+    pinned, checked_out = pinned_commit(), checkout_commit()
+    if pinned != checked_out:
+        raise SubstrateError(
+            f"{SUBSTRATE_PATH} is checked out at {checked_out[:12]}, but the repo pins {pinned[:12]}; run"
+            f" git submodule update, or git add {SUBSTRATE_PATH} to benchmark the commit it is at"
+        )
+    if output(["git", "status", "--porcelain"], cwd=SUBSTRATE_DIR).strip():
+        log(f"substrate: {SUBSTRATE_PATH} has uncommitted changes; its build version is {build_version()}", "WARNING")
+
+
 def missing_requirements(cloud_build: bool = False) -> list[str]:
     missing = [tool for tool in ("go", "gcloud") if not shutil.which(tool)]
     return list(dict.fromkeys(missing + images.missing_requirements(cloud_build) + missing_submodule()))
@@ -186,6 +231,7 @@ def install(cluster: Cluster) -> None:
 
 
 def install_once(cluster: Cluster) -> None:
+    cluster.get_credentials()
     env = {
         "PROJECT_ID": cluster.project_id,
         "CLUSTER_NAME": cluster.name,
@@ -195,9 +241,9 @@ def install_once(cluster: Cluster) -> None:
         "ATE_IMAGE_TAG": build_version(),
         # The nodes' platform, whatever the build host's.
         "KO_DEFAULTPLATFORMS": images.DEFAULT_PLATFORM,
-        # Empty, so the installer runs get-credentials itself and uses the
-        # context it writes into KUBECONFIG, rather than the developer's own.
-        "KUBECTL_CONTEXT": "",
+        # The one get_credentials wrote, internal endpoint and all, rather than
+        # the developer's own, so the installer runs no get-credentials of its own.
+        "KUBECTL_CONTEXT": cluster.context,
         "KUBECONFIG": str(cluster.kubeconfig),
         # A .ate-dev-env.sh in the submodule would name another cluster.
         "NO_DEV_ENV": "1",
@@ -211,8 +257,12 @@ def install_once(cluster: Cluster) -> None:
     # install-ate.sh lays down only the gVisor SandboxConfig. This one needs
     # substrate's CRDs, so it comes after.
     if cluster.sandbox_class == "microvm":
+        # Assembled and checked here, so install-microvm-deps.sh only uploads
+        # them: it skips assembling a complete set it would assemble the same.
+        microvm_env = {**env, **MICROVM_ASSET_ENV}
+        verify_microvm_assets(assemble_microvm_assets(microvm_env))
         log(f"substrate: installing the microvm SandboxConfig and its assets on cluster {cluster.name}")
-        stream([str(SUBSTRATE_DIR / "hack" / "install-microvm-deps.sh"), "--install"], env=env, cwd=SUBSTRATE_DIR)
+        stream([str(SUBSTRATE_DIR / "hack" / "install-microvm-deps.sh"), "--install"], env=microvm_env, cwd=SUBSTRATE_DIR)
 
 
 def mirror_gvisor_assets(cluster: Cluster) -> None:
@@ -236,3 +286,47 @@ def mirror_gvisor_assets(cluster: Cluster) -> None:
                 patch.append({"op": "replace", "path": f"/spec/versions/{i}/assets/{arch}/{name}/url", "value": mirror})
     if patch:
         stream(cluster.kubectl("patch", "sandboxconfig", GVISOR_CONFIG, "--type=json", f"--patch={json.dumps(patch)}"))
+
+
+def assemble_microvm_assets(env: dict[str, str | None]) -> Path:
+    """Downloads the microvm assets into MICROVM_ASSETS_DIR unless a complete
+    set of the versions the submodule pins is there, and returns the dir."""
+    assemble = str(SUBSTRATE_DIR / "hack" / "microvm-assets" / "assemble.sh")
+    stamp = output([assemble, "--print-stamp"], env=env, cwd=SUBSTRATE_DIR).strip()
+    stamp_file = MICROVM_ASSETS_DIR / ".asset-versions"
+    complete = all((MICROVM_ASSETS_DIR / name).is_file() for name in MICROVM_ASSETS)
+    if not complete or not stamp_file.is_file() or stamp_file.read_text().strip() != stamp:
+        log(f"substrate: assembling the microvm assets into {MICROVM_ASSETS_DIR}")
+        stream([assemble], env=env, cwd=SUBSTRATE_DIR)
+    return MICROVM_ASSETS_DIR
+
+
+def pinned_asset_digests() -> dict[str, str]:
+    """The sha256 the microvm SandboxConfig pins, in its default version, for
+    each asset of the nodes' architecture, by its file name."""
+    spec = yaml.safe_load((SUBSTRATE_DIR / MICROVM_SANDBOX_CONFIG).read_text())["spec"]
+    version = next(v for v in spec["versions"] if v["name"] == spec["defaultVersion"])
+    assets = version["assets"][MICROVM_ARCH]
+    return {asset["url"].rsplit("/", 1)[-1]: asset["sha256"] for asset in assets.values()}
+
+
+def verify_microvm_assets(assets_dir: Path) -> None:
+    """Refuses assets other than the ones the SandboxConfig pins, before they
+    are uploaded. atelet checks them again on the node, but only once an actor
+    is resumed, where a mismatch shows as an actor stuck resuming."""
+    pinned = pinned_asset_digests()
+    if set(pinned) != set(MICROVM_ASSETS):
+        raise SubstrateError(f"{MICROVM_SANDBOX_CONFIG} pins {', '.join(sorted(pinned))}, not {', '.join(MICROVM_ASSETS)}")
+    wrong = []
+    for name, want in pinned.items():
+        digest = hashlib.sha256()
+        with (assets_dir / name).open("rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != want:
+            wrong.append(f"{name} is {digest.hexdigest()}, not {want}")
+    if wrong:
+        # Assembled again from scratch next time, rather than trusted.
+        (assets_dir / ".asset-versions").unlink(missing_ok=True)
+        raise SubstrateError(f"microvm assets in {assets_dir} do not match {MICROVM_SANDBOX_CONFIG}: {'; '.join(wrong)}")
+    log(f"substrate: microvm assets match the sha256s {MICROVM_SANDBOX_CONFIG} pins")

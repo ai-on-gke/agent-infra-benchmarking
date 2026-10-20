@@ -86,18 +86,18 @@ def check_client() -> None:
         raise EnvError(f"the env submodule is at {head}, but {PROVIDER.name}'s client is pinned to {pinned[1]}")
 
 
-def build_images(cluster: Cluster, cloud_build: bool = False, login: bool = True) -> None:
-    """Builds and pushes ate-env-api and ate-env-guest to the cluster's
-    repository, tagged images.tag() as the benchmark's own images are."""
+def build_images(repo: str, project_id: str, cloud_build: bool = False, login: bool = True) -> None:
+    """Builds and pushes ate-env-api and ate-env-guest to repo, tagged
+    images.tag() as the benchmark's own images are."""
     ko_build = ["go", "run", KO, "build", "--base-import-paths", f"--tags={images.tag()}", *PACKAGES]
-    env = {"KO_DEFAULTPLATFORMS": images.DEFAULT_PLATFORM, "KO_DOCKER_REPO": cluster.docker_repo}
-    log(f"env: building {', '.join(PACKAGES)} into {cluster.docker_repo}")
+    env = {"KO_DEFAULTPLATFORMS": images.DEFAULT_PLATFORM, "KO_DOCKER_REPO": repo}
+    log(f"env: building {', '.join(PACKAGES)} into {repo}")
     if cloud_build:
-        cloud_build_images(ko_build, env, cluster.project_id)
+        cloud_build_images(ko_build, env, project_id)
         return
     if login:
         # ko login, as ko doesn't push with docker.
-        host = cluster.docker_repo.split("/", 1)[0]
+        host = repo.split("/", 1)[0]
         ko_login = ["go", "run", KO, "login", host, "--username=oauth2accesstoken", "--password-stdin"]
         stream(ko_login, cwd=ENV_DIR, input=images.access_token(host))
     stream(ko_build, env=env, cwd=ENV_DIR)
@@ -121,9 +121,9 @@ def cloud_build_images(ko_build: list[str], env: dict, project_id: str) -> None:
     images.cloud_build_submit([step], [], paths, project_id)
 
 
-def pinned_image(cluster: Cluster, name: str) -> str:
-    """An image build_images pushed from this commit, pinned."""
-    return images.pin(images.ref(cluster.docker_repo, name))
+def pinned_image(repo: str, name: str) -> str:
+    """An image build_images pushed from this tree, pinned."""
+    return images.pin(images.ref(repo, name))
 
 
 @contextmanager
@@ -193,18 +193,19 @@ def render_template(
 
 def deploy(
     cluster: Cluster,
+    image_repo: str,
     sandbox_class: str,
     worker_count: int,
     actor_memory: str = DEFAULT_ACTOR_MEMORY,
     timeout: int = DEFAULT_TIMEOUT_SECS,
 ) -> None:
     """Deploys env and the template from the images build_images and
-    images.build_and_push pushed from this commit, and waits for the
-    template's golden snapshot. Always a new pool, so no run starts on workers
-    the last one warmed."""
+    images.build_and_push pushed to image_repo from this tree, and waits
+    for the template's golden snapshot. Always a new pool, so no run starts
+    on workers the last one warmed."""
     check_client()
-    api_image, guest_image = pinned_image(cluster, "ate-env-api"), pinned_image(cluster, "ate-env-guest")
-    rootfs_image = images.pin(images.image_ref(images.SANDBOX_BENCHMARK_IMAGES, cluster.docker_repo, ROOTFS_IMAGE))
+    api_image, guest_image = pinned_image(image_repo, "ate-env-api"), pinned_image(image_repo, "ate-env-guest")
+    rootfs_image = images.pin(images.image_ref(images.SANDBOX_BENCHMARK_IMAGES, image_repo, ROOTFS_IMAGE))
     with ate_env() as cli:
         stack = render_stack(cli, cluster, sandbox_class, worker_count, api_image)
         template = render_template(cli, cluster, sandbox_class, guest_image, rootfs_image, actor_memory)

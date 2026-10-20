@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.5"
+  required_version = ">= 1.9"
 
   # No backend here: the scenario-runner writes one into its copy of this
   # config, local or gcs as --state-backend says.
