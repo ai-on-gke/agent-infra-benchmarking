@@ -91,7 +91,7 @@ const (
 	// the teardown. Well under the budget the caller allows for the whole
 	// teardown, so that the actors already created are still removed when an
 	// iteration is wedged rather than merely slow.
-	drainTimeout = 15 * time.Second
+	drainTimeout = 35 * time.Second
 
 	// How long a VU refused by the teardown waits before boomer calls it again.
 	// Boomer keeps the VUs looping until the teardown returns, and without a
@@ -168,6 +168,9 @@ type Options struct {
 	// actors no egress policy, which substrate's egress gateway treats as
 	// deny-all.
 	EgressAllow []string
+
+	// SuspendDisabled controls whether the suspend phase is skipped during the benchmark.
+	SuspendDisabled bool
 }
 
 // configured is what SetOptions recorded, read once by initRunWorkload and
@@ -370,12 +373,13 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, opts Options) (*runW
 	}
 
 	u := &runWorkloadUser{
-		cfg:          r.cfg,
-		workload:     r.workload,
-		actorName:    "sb-" + uuid.NewString(),
-		templateName: tmpl,
-		userClass:    runWorkloadUserClass,
-		timeout:      opts.Timeout,
+		cfg:             r.cfg,
+		workload:        r.workload,
+		actorName:       "sb-" + uuid.NewString(),
+		templateName:    tmpl,
+		userClass:       runWorkloadUserClass,
+		timeout:         opts.Timeout,
+		suspendDisabled: opts.SuspendDisabled,
 	}
 	bmetrics.UpdateUsers(runWorkloadUserClass, 1)
 	if err := r.ensureAtespace(ctx, u); err != nil {
@@ -481,6 +485,9 @@ type runWorkloadUser struct {
 
 	// timeout bounds each call; zero leaves it unbounded.
 	timeout time.Duration
+
+	// suspendDisabled controls whether the suspend phase is skipped during the benchmark.
+	suspendDisabled bool
 
 	// Track the state of the actor so we don't double-count metrics if
 	// the benchmark calls Resume/Suspend idempotently or repeatedly.
@@ -665,6 +672,10 @@ func (u *runWorkloadUser) executeInstruction(ctx context.Context) error {
 }
 
 func (u *runWorkloadUser) resume(ctx context.Context) error {
+	if u.suspendDisabled && u.isActive {
+		return nil
+	}
+
 	err := u.tracedCall(ctx, resumeMetric, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
 			Actor: u.ref(),
@@ -686,6 +697,10 @@ func (u *runWorkloadUser) resume(ctx context.Context) error {
 // can leave the actor mid transition, and nothing reconciles it, so the
 // caller decides what the run does next rather than assuming it is suspended.
 func (u *runWorkloadUser) suspend(ctx context.Context) error {
+	if u.suspendDisabled {
+		return nil
+	}
+
 	err := u.tracedCall(ctx, suspendMetric, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
 			Actor: u.ref(),
