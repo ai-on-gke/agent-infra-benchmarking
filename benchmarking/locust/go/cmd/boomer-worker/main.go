@@ -89,8 +89,8 @@ func main() {
 			fmt.Sprintf("runworkload only: deadline on each control-plane call and instruction; one that runs past it counts as a failure. Unset selects %s.", runworkload.DefaultTimeout))
 		actorEgressAllow = flag.String("actor-egress-allow", "",
 			"runworkload only: comma-separated hostnames every actor may reach over cleartext HTTP or gRPC, on any port, each as the actor dials it. Unset gives actors no egress policy, so they can reach nothing.")
-		provider     = flag.String("provider", "agent-substrate", "Provider: agent-substrate or agent-sandbox.")
-		warmPoolName = flag.String("warm-pool-name", "", "agent-sandbox only: name of the SandboxWarmPool to claim from.")
+		provider        = flag.String("provider", "agent-substrate", "Provider: agent-substrate or agent-sandbox.")
+		warmPoolName    = flag.String("warm-pool-name", "", "agent-sandbox only: name of the SandboxWarmPool to claim from.")
 		suspendDisabled = flag.Bool("suspend-disabled", false,
 			"runworkload only: whether to skip the suspend phase during the benchmark.")
 	)

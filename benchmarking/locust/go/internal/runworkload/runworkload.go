@@ -392,15 +392,15 @@ func (r *runWorkloadRuntime) startUser(ctx context.Context, opts Options) (*runW
 	}
 
 	u := &runWorkloadUser{
-		cfg:          r.cfg,
-		workload:     r.workload,
-		actorName:    "sb-" + uuid.NewString(),
-		templateName: tmpl,
-		userClass:    runWorkloadUserClass,
-		provider:     opts.Provider,
-		warmPoolName: opts.WarmPoolName,
-		dynClient:    r.dynClient,
-		timeout:      opts.Timeout,
+		cfg:             r.cfg,
+		workload:        r.workload,
+		actorName:       "sb-" + uuid.NewString(),
+		templateName:    tmpl,
+		userClass:       runWorkloadUserClass,
+		provider:        opts.Provider,
+		warmPoolName:    opts.WarmPoolName,
+		dynClient:       r.dynClient,
+		timeout:         opts.Timeout,
 		suspendDisabled: opts.SuspendDisabled,
 	}
 	bmetrics.UpdateUsers(runWorkloadUserClass, 1)
