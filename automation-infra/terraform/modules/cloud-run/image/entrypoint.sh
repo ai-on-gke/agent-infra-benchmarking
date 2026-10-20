@@ -2,7 +2,8 @@
 
 # Extracts the tarball of SOURCE_BRANCH's latest commit, which
 # .github/workflows/upload-source.yml uploads to SOURCE_BUCKET, and runs the
-# scenario-runner in it with its arguments.
+# scenario-runner in it with its arguments; or, when they start with
+# destroy-leftovers, that tool with the rest.
 
 set -o errexit -o nounset -o pipefail
 
@@ -34,4 +35,9 @@ fi
 git log -1
 
 # Installs the scenario-runner's requirements in a venv of its own and runs it.
+# The cleanup job's: destroy what killed executions left, rather than run.
+if [[ "${1:-}" == destroy-leftovers ]]; then
+  shift
+  exec automation-infra/tools/destroy-leftovers "$@"
+fi
 exec benchmarking/tools/run "$@"

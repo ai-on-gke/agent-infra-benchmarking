@@ -1,6 +1,7 @@
-# Lets GitHub Actions write under source/ in var.github_actions_bucket. Its
-# key is made by automation-infra/tools/get-gh-actions-gcs-config, outside
-# of the state.
+# Lets GitHub Actions write under source/ in var.github_actions_bucket. They
+# authenticate as it through Workload Identity Federation, below, with no key;
+# automation-infra/tools/get-gh-actions-gcs-config sets the repository
+# variables the workflow reads.
 resource "google_service_account" "github" {
   count = var.github_actions_bucket == null ? 0 : 1
 
@@ -28,4 +29,43 @@ resource "google_storage_bucket_iam_member" "github_source" {
       "api.getAttribute(\"storage.googleapis.com/objectListPrefix\", \"\").startsWith(\"source/\")",
     ])
   }
+}
+
+# GitHub Actions authenticate as the account above with the OIDC token GitHub
+# issues each workflow run, rather than with a key: only runs of
+# var.github_repository can.
+resource "google_iam_workload_identity_pool" "github" {
+  count = var.github_actions_bucket == null ? 0 : 1
+
+  project                   = var.project_id
+  workload_identity_pool_id = "${substr(var.default_resource_name, 0, 25)}-gh"
+  display_name              = "GitHub Actions"
+
+  depends_on = [google_project_service.services]
+}
+
+resource "google_iam_workload_identity_pool_provider" "github" {
+  count = var.github_actions_bucket == null ? 0 : 1
+
+  project                            = var.project_id
+  workload_identity_pool_id          = google_iam_workload_identity_pool.github[0].workload_identity_pool_id
+  workload_identity_pool_provider_id = "github"
+  display_name                       = "GitHub Actions"
+  attribute_mapping = {
+    "google.subject"       = "assertion.sub"
+    "attribute.repository" = "assertion.repository"
+  }
+  attribute_condition = "assertion.repository == \"${var.github_repository}\""
+
+  oidc {
+    issuer_uri = "https://token.actions.githubusercontent.com"
+  }
+}
+
+resource "google_service_account_iam_member" "github_workload_identity" {
+  count = var.github_actions_bucket == null ? 0 : 1
+
+  service_account_id = google_service_account.github[0].name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github[0].name}/attribute.repository/${var.github_repository}"
 }

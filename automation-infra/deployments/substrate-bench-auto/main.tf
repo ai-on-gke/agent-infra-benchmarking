@@ -27,8 +27,19 @@ module "cloud_run" {
   reports_prefix        = "data"
   source_branch         = "main"
 
-  # Every case in scenarios.yaml, each repeat on a cluster of its own. Daily,
-  # so an execution ends before the next starts rather than running beside it.
+  # The cases the nightly tracks, each repeat on a cluster of its own; named
+  # rather than --all, so a case added to scenarios.yaml runs here only once it
+  # is listed.
+  args = [
+    "--scenario=glutton",
+    "--scenario=glutton-microvm",
+    "--scenario=openclaw",
+    "--scenario=openclaw-microvm",
+    "--scenario=dummy",
+  ]
+
+  # Daily, so an execution ends before the next starts rather than running
+  # beside it.
   schedule = "0 3 * * *"
 }
 

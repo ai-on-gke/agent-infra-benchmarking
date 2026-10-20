@@ -63,7 +63,7 @@ def labels(run_id: str, test_case: str | None = None) -> dict[str, str]:
         "benchmark-run-id": run_id,
         "benchmark-deployment": os.environ.get("CLOUD_RUN_JOB", "local"),
         "benchmark-trigger": os.environ.get("BENCHMARK_TRIGGER", "local"),
-        "benchmark-commit": images.tag(),
+        "benchmark-commit": images.commit(),
     }
     if "CLOUD_RUN_EXECUTION" in os.environ:
         values["benchmark-execution"] = os.environ["CLOUD_RUN_EXECUTION"]

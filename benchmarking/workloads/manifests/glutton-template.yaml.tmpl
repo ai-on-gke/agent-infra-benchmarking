@@ -53,8 +53,8 @@ containers:
       path: /readyz
       port: 80
 # Unset means the 2 GiB microvm default, which the benchmarks should not
-# silently inherit. Raise ${ACTOR_MEMORY}
-# for suites that exercise glutton's WriteRAM path.
+# silently inherit. A case sets it with `actor-memory`, raised for the ones
+# that exercise glutton's WriteRAM path.
 resources:
   limits:
   - name: memory

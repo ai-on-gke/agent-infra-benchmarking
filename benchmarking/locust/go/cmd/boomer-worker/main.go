@@ -88,7 +88,19 @@ func main() {
 		workloadTimeout = flag.Duration("workload-timeout", 0,
 			fmt.Sprintf("runworkload only: deadline on each control-plane call and instruction; one that runs past it counts as a failure. Unset selects %s.", runworkload.DefaultTimeout))
 		actorEgressAllow = flag.String("actor-egress-allow", "",
-			"runworkload only: comma-separated hostnames every actor may reach over cleartext HTTP or gRPC, on any port, each as the actor dials it. Unset gives actors no egress policy, so they can reach nothing.")
+			"runworkload only: comma-separated hostnames every actor may reach over cleartext HTTP or gRPC, on any port, each as the actor dials it. Unset, with --actor-egress-allow-tls unset too, gives actors no egress policy, so they can reach nothing.")
+		actorEgressAllowTLS = flag.String("actor-egress-allow-tls", "",
+			"runworkload only: comma-separated hostnames every actor may reach over TLS, such as an https:// endpoint, on any port, passed through undecrypted. A cleartext rule does not let TLS through.")
+		instructionsPerCycle = flag.Int("instructions-per-cycle", 1,
+			"runworkload only: instructions each cycle sends between its resume and its suspend; the first closes TTFI.")
+		concurrentInstructions = flag.Int("concurrent-instructions", 1,
+			"runworkload only: instructions sent to an actor at once at each of a cycle's steps.")
+		gluttonWriteRAM = flag.String("glutton-write-ram", "",
+			"runworkload with glutton only: memory each cycle rewrites in the actor before its suspend, such as 64Mi. Unset writes none.")
+		gluttonWriteDisk = flag.Int("glutton-write-disk", 0,
+			"runworkload with glutton only: bytes of a file each cycle rewrites in the actor before its suspend. Zero writes none.")
+		apiConnections = flag.Int("api-connections", 1,
+			"Connections to ateapi this worker spreads its users over.")
 		provider        = flag.String("provider", "agent-substrate", "Provider: agent-substrate or agent-sandbox.")
 		warmPoolName    = flag.String("warm-pool-name", "", "agent-sandbox only: name of the SandboxWarmPool to claim from.")
 		suspendDisabled = flag.Bool("suspend-disabled", false,
@@ -124,15 +136,29 @@ func main() {
 		_ = tp.Shutdown(shutdownCtx)
 	}()
 
-	var apiStub ateapipb.ControlClient
+	if *apiConnections < 1 || *instructionsPerCycle < 1 || *concurrentInstructions < 1 || *gluttonWriteDisk < 0 {
+		slog.Error("fatal: --api-connections, --instructions-per-cycle and --concurrent-instructions must be at least 1," +
+			" and --glutton-write-disk not negative")
+		os.Exit(1)
+	}
+	// Each its own HTTP/2 connection, so the users' calls are not all
+	// multiplexed over one. agent-sandbox calls no ateapi.
+	var apiStubs []ateapipb.ControlClient
 	if *provider == "agent-substrate" {
-		conn, stub, err := boomerutil.DialControl(*apiEndpoint)
-		if err != nil {
-			slog.Error("failed to dial ateapi", slog.String("err", err.Error()))
-			os.Exit(1)
+		apiStubs = make([]ateapipb.ControlClient, *apiConnections)
+		for i := range apiStubs {
+			conn, stub, err := boomerutil.DialControl(*apiEndpoint)
+			if err != nil {
+				slog.Error("failed to dial ateapi", slog.String("err", err.Error()))
+				os.Exit(1)
+			}
+			defer conn.Close()
+			apiStubs[i] = stub
 		}
-		defer conn.Close()
-		apiStub = stub
+	}
+	var apiStub ateapipb.ControlClient
+	if len(apiStubs) > 0 {
+		apiStub = apiStubs[0]
 	}
 
 	// Upstream's tuning. Every VU calls the one router host, and the default two
@@ -168,16 +194,22 @@ func main() {
 	// only that entry's Init reads these, so a run of another user class
 	// carries them without ever looking at them.
 	runworkload.SetOptions(runworkload.Options{
-		Provider:        *provider,
-		WarmPoolName:    *warmPoolName,
-		Workload:        *workloadName,
-		Template:        *workloadTemplate,
-		Timeout:         *workloadTimeout,
-		MinWait:         *minWait,
-		MaxWait:         *maxWait,
-		ResumeMode:      *resumeMode,
-		EgressAllow:     splitList(*actorEgressAllow),
-		SuspendDisabled: *suspendDisabled,
+		Provider:               *provider,
+		WarmPoolName:           *warmPoolName,
+		Workload:               *workloadName,
+		Template:               *workloadTemplate,
+		Timeout:                *workloadTimeout,
+		MinWait:                *minWait,
+		MaxWait:                *maxWait,
+		ResumeMode:             *resumeMode,
+		EgressAllow:            splitList(*actorEgressAllow),
+		EgressAllowTLS:         splitList(*actorEgressAllowTLS),
+		InstructionsPerCycle:   *instructionsPerCycle,
+		ConcurrentInstructions: *concurrentInstructions,
+		GluttonWriteRAM:        *gluttonWriteRAM,
+		GluttonWriteDisk:       *gluttonWriteDisk,
+		APIStubs:               apiStubs,
+		SuspendDisabled:        *suspendDisabled,
 	})
 
 	entry, ok := userclass.Lookup(class)

@@ -80,17 +80,19 @@ func (s *openclawServer) serve(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// Only the benchmark prompt is modeled: any other body would be a bug in
-	// the workload, and the empty reply below fails the verification that
-	// follows.
-	if strings.TrimSpace(string(body)) != openclawPrompt {
+	// Only the benchmark prompt is modeled, answered as mock-llm answers it:
+	// any other body would be a bug in the workload, and the empty reply
+	// below fails the verification that follows.
+	nonce, ok := strings.CutPrefix(strings.TrimSpace(string(body)), openclawPrompt+" (request ")
+	if !ok || !strings.HasSuffix(nonce, ")") {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+	nonce = strings.TrimSuffix(nonce, ")")
 
 	reply := s.Reply
 	if reply == "" {
-		reply = openclawExpectedReply
+		reply = "...tool output...\n" + openclawReplyFor(nonce)
 	}
 	w.Header().Set("Content-Type", textContentType)
 	_, _ = io.WriteString(w, reply)
@@ -132,8 +134,26 @@ func TestOpenclawSendsTheBenchmarkPrompt(t *testing.T) {
 	if reqs[0].path != openclawInvokePath {
 		t.Errorf("path: got %q, want %q", reqs[0].path, openclawInvokePath)
 	}
-	if reqs[0].body != openclawPrompt {
-		t.Errorf("body: got %q, want %q", reqs[0].body, openclawPrompt)
+	if !strings.HasPrefix(reqs[0].body, openclawPrompt+" (request ") {
+		t.Errorf("body: got %q, want the prompt %q with a nonce", reqs[0].body, openclawPrompt)
+	}
+}
+
+// Each instruction carries a nonce of its own, so a reply that is not this
+// turn's, such as one openclaw printed from an earlier turn, fails it.
+func TestOpenclawRejectsAnotherTurnsReply(t *testing.T) {
+	srv := &openclawServer{Reply: openclawReplyFor("00000000-0000-4000-8000-000000000000")}
+	actor := newOpenclawActor(t, srv)
+
+	if _, err := (openclawWorkload{}).SendInstruction(context.Background(), actor); err == nil {
+		t.Fatal("SendInstruction succeeded on another turn's reply, want failure")
+	}
+	if _, err := (openclawWorkload{}).SendInstruction(context.Background(), newOpenclawActor(t, &openclawServer{})); err != nil {
+		t.Fatalf("SendInstruction failed on its own turn's reply: %v", err)
+	}
+	reqs := srv.recordedRequests()
+	if len(reqs) != 1 {
+		t.Fatalf("requests: got %d, want 1", len(reqs))
 	}
 }
 

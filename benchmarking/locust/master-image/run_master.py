@@ -19,9 +19,9 @@ gs://<REPORT_BUCKET>/<REPORT_PREFIX>/<BENCHMARK_RUN_ID>/<BENCHMARK_TEST_CASE>/,
 REPORT_PREFIX being reports when unset or empty.
 
 An empty REPORT_BUCKET leaves the files on the pod. Exits with locust's
-status; TOO_MANY_FAILURES_EXIT for a run whose failed requests are more than
-MAX_FAILURE_RATIO of them, that made none, or whose load generator raised an
-exception; UPLOAD_FAILED_EXIT for a run that passed but did not all upload.
+status; TOO_MANY_FAILURES_EXIT for a run whose failed cycles are more than
+MAX_FAILURE_RATIO of them, that completed none, or whose load generator raised
+an exception; UPLOAD_FAILED_EXIT for a run that passed but did not all upload.
 """
 
 import base64
@@ -42,6 +42,13 @@ import upload
 
 UPLOAD_FAILED_EXIT = 3
 TOO_MANY_FAILURES_EXIT = 4
+# The row of one whole cycle: resume, instruction, suspend. A cycle that fails
+# on any of its calls fails this row once, where each call's own row, TTFI's
+# and CycleTime's would count the one failure three times.
+CYCLE_ROW = "CycleTime"
+# The calls that give a user its actor. One that fails is a cycle that never
+# started, so it counts as a failed cycle too.
+START_ROWS = ("CreateAtespace", "CreateActor", "CreateActorEgressPolicy")
 
 
 def write_reports(csv_prefix: Path, started: float) -> None:
@@ -62,33 +69,61 @@ def write_reports(csv_prefix: Path, started: float) -> None:
             print(f"No {filename}: {exc}", flush=True)
 
 
+def cycle_counts(stats_csv: Path) -> dict:
+    """The cycles a locust stats CSV holds, the failed ones, and the actors
+    that could not be started; with the failed share of all those cycles,
+    None if there were none."""
+    with open(stats_csv, newline="") as f:
+        rows = {row["Name"]: row for row in csv.DictReader(f)}
+    cycle = rows.get(CYCLE_ROW) or {}
+    cycles, failed = int(cycle.get("Request Count") or 0), int(cycle.get("Failure Count") or 0)
+    starts = sum(int(rows[name]["Failure Count"]) for name in START_ROWS if name in rows)
+    attempted = cycles + starts
+    aggregated = rows.get("Aggregated") or {}
+    return {
+        "cycles": cycles,
+        "failed_cycles": failed,
+        "failed_starts": starts,
+        "ratio": (failed + starts) / attempted if attempted else None,
+        "requests": int(aggregated.get("Request Count") or 0),
+        "failed_requests": int(aggregated.get("Failure Count") or 0),
+    }
+
+
 def count_failures(csv_prefix: Path) -> dict | None:
-    """The run's requests, failed requests and load generator exceptions, from
-    the CSVs locust wrote on exit; None, and said why, if they cannot be read."""
+    """The run's cycles and how many failed, over the whole run and over the
+    steady-state window if there is one, and the load generator's exceptions,
+    from the CSVs locust wrote on exit; None, and said why, if they cannot be
+    read."""
     try:
-        with open(f"{csv_prefix}_stats.csv", newline="") as f:
-            total = next(row for row in csv.DictReader(f) if row["Name"] == "Aggregated")
-        requests, failed = int(total["Request Count"]), int(total["Failure Count"])
+        counts = cycle_counts(Path(f"{csv_prefix}_stats.csv"))
         with open(f"{csv_prefix}_exceptions.csv", newline="") as f:
-            raised = sum(int(row["Count"]) for row in csv.DictReader(f))
-    except (OSError, StopIteration, KeyError, ValueError) as exc:
+            counts["exceptions"] = sum(int(row["Count"]) for row in csv.DictReader(f))
+    except (OSError, KeyError, ValueError) as exc:
         print(f"Cannot count the run's failures: {type(exc).__name__}: {exc}", flush=True)
         return None
-    return {"requests": requests, "failed": failed, "ratio": failed / requests if requests else None, "exceptions": raised}
+    steady = Path(f"{csv_prefix}_stats_steady.csv")
+    try:
+        counts["steady"] = cycle_counts(steady) if steady.is_file() else None
+    except (OSError, KeyError, ValueError) as exc:
+        print(f"Cannot count the steady state's failures: {type(exc).__name__}: {exc}", flush=True)
+        counts["steady"] = None
+    return counts
 
 
 def within_limits(failures: dict | None, max_ratio: float) -> bool:
-    """Whether the run stayed within its max-failure-ratio and raised no load
-    generator exceptions. --exit-code-on-error 0 keeps both out of locust's own
-    exit status, so this is what fails a run over them."""
+    """Whether the run stayed within its max-failure-ratio of failed cycles,
+    over the whole run, and raised no load generator exceptions.
+    --exit-code-on-error 0 keeps both out of locust's own exit status, so this
+    is what fails a run over them."""
     if failures is None:
         return False
-    if not failures["requests"]:
-        print("The run made no requests.", flush=True)
+    if failures["ratio"] is None or not failures["cycles"]:
+        print("The run completed no cycle.", flush=True)
         return False
     print(
-        f"Failed requests: {failures['failed']} of {failures['requests']} ({failures['ratio']:.3%}); "
-        f"max-failure-ratio allows {max_ratio:.3%}.",
+        f"Failed cycles: {failures['failed_cycles']} of {failures['cycles']}, and {failures['failed_starts']} actor(s)"
+        f" not started ({failures['ratio']:.3%}); max-failure-ratio allows {max_ratio:.3%}.",
         flush=True,
     )
     if failures["exceptions"]:
@@ -131,7 +166,12 @@ def write_run_json(csv_prefix: Path, started: float, ended: float, status: int, 
     report_dir = csv_prefix.parent
     (report_dir / "run.json").write_text(json.dumps(info, indent=2) + "\n")
     try:
-        (report_dir / "README.md").write_text(readme.render(info))
+        stats_file = next(
+            (path for path in (Path(f"{csv_prefix}_stats_steady.csv"), Path(f"{csv_prefix}_stats.csv")) if path.is_file()),
+            None,
+        )
+        stats = list(csv.DictReader(stats_file.open(newline=""))) if stats_file else []
+        (report_dir / "README.md").write_text(readme.render(info, stats, stats_file.name if stats_file else None))
     except Exception as exc:
         # run.json is the record either way.
         print(f"README.md skipped: {type(exc).__name__}: {exc}", flush=True)

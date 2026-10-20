@@ -1,0 +1,16 @@
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:41:53.725177172Z","level":"WARN","msg":"partial telemetry resource","err":"error detecting resource: conflicting Schema URL: https://opentelemetry.io/schemas/1.40.0 and https://opentelemetry.io/schemas/1.43.0"}
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:41:53.725900142Z","level":"INFO","msg":"actors may connect to","hosts":["mock-llm.benchmark-workloads.svc.cluster.local"],"tls_hosts":null}
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:41:53.725923914Z","level":"INFO","msg":"registered boomer task","user_class":"RunWorkloadUser","user_class_flag":"runworkload"}
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:41:53.725942118Z","level":"INFO","msg":"new slave runner"}
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:41:53.725946347Z","level":"INFO","msg":"Boomer is built with gomq support."}
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:41:53.75682891Z","level":"INFO","msg":"Boomer is connected to master(tcp://locust-master.benchmarking.svc.cluster.local:5557) press Ctrl+c to quit."}
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:41:54.534692935Z","level":"INFO","msg":"The total number of clients required is  3"}
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:41:54.534717153Z","level":"INFO","msg":"The current number of clients is 0, 3 clients will be added"}
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:43:54.534962523Z","level":"INFO","msg":"boomer:stop event received; suspending+deleting actors"}
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:43:57.660068772Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-b65e97ba-8a0d-4223-86ec-be3519fbb04f"}
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:44:00.698437905Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-cfce1770-ab1d-4fa2-bf61-cae776301e02"}
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:44:01.411447658Z","level":"INFO","msg":"teardown removed an actor","actor":"sb-83e2b14e-a223-4280-852d-b6162774493c"}
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:44:01.411477447Z","level":"INFO","msg":"teardown finished","removed":3,"left":0}
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:44:05.412505212Z","level":"INFO","msg":"Recv stop message from master, all the goroutines are stopped"}
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:44:05.548715941Z","level":"INFO","msg":"shutdown"}
+[pod/boomer-worker-xlkwh/boomer] {"time":"2026-10-15T18:44:05.54874371Z","level":"INFO","msg":"boomer exited; waiting for the final scrape","wait":15000000000}

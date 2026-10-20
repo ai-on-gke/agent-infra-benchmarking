@@ -22,6 +22,10 @@ metadata:
   name: boomer-worker
   namespace: benchmarking
 spec:
+  # One boomer worker per pod, each with its own connections to substrate;
+  # the master splits the users between them.
+  parallelism: ${LOCUST_WORKERS}
+  completions: ${LOCUST_WORKERS}
   backoffLimit: 0
   ttlSecondsAfterFinished: 86400
   template:

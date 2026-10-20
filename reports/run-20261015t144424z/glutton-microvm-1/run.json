@@ -1,0 +1,504 @@
+{
+  "run_id": "run-20261015t144424z",
+  "test_case": "glutton-microvm",
+  "record": "glutton-microvm-1",
+  "repeat": 1,
+  "status": 0,
+  "started": "2026-10-15T16:59:33.193773+00:00",
+  "ended": "2026-10-15T17:04:57.113550+00:00",
+  "max_failure_ratio": 0.01,
+  "failures": {
+    "cycles": 1056,
+    "failed_cycles": 0,
+    "failed_starts": 0,
+    "ratio": 0.0,
+    "requests": 5314,
+    "failed_requests": 0,
+    "exceptions": 0,
+    "steady": {
+      "cycles": 1019,
+      "failed_cycles": 0,
+      "failed_starts": 0,
+      "ratio": 0.0,
+      "requests": 5089,
+      "failed_requests": 0
+    }
+  },
+  "warm_up": "10s",
+  "steady_window": {
+    "start": "2026-10-15T16:59:52.173567+00:00",
+    "end": "2026-10-15T17:04:40.173604+00:00"
+  },
+  "master_args": [
+    "-f",
+    "/app/tests/runworkload.py",
+    "--headless",
+    "--master",
+    "--expect-workers",
+    "1",
+    "--expect-workers-max-wait",
+    "300",
+    "--exit-code-on-error",
+    "0",
+    "--run-time=5m",
+    "--users=10",
+    "--spawn-rate=10",
+    "--warm-up=10s"
+  ],
+  "case": {
+    "worker-count": 10,
+    "sandbox-class": "microvm",
+    "max-failure-ratio": 0.01,
+    "locust-workers": 1,
+    "type": "locust",
+    "infra": {
+      "cluster": {
+        "name": "common",
+        "tfvars": "default.tfvars",
+        "tfvars_inline": "sandboxed_node_count     = 1\nsandboxed_min_node_count = 1\nsandboxed_max_node_count = 1\n"
+      }
+    },
+    "repeats": 3,
+    "master": {
+      "run-time": "5m",
+      "users": 10,
+      "spawn-rate": 10,
+      "warm-up": "10s"
+    },
+    "worker": {
+      "actor-egress-allow": "opentelemetry-collector.gke-managed-otel.svc.cluster.local",
+      "workload-name": "glutton",
+      "workload-template": "glutton",
+      "resume-mode": "explicit"
+    },
+    "actor-memory": "256Mi"
+  },
+  "infra": {
+    "name": "common",
+    "tfvars": "default.tfvars",
+    "tfvars_inline": "sandboxed_node_count     = 1\nsandboxed_min_node_count = 1\nsandboxed_max_node_count = 1\n",
+    "tfvars_content": "region = \"us-central1\"\n\n# Lets terraform destroy delete the bucket, and with it every run's reports\n# under reports/. Download any worth keeping first, or set this to false.\nbucket_force_destroy = true\n\nsandboxed_machine_type = \"c2-standard-16\"\n"
+  },
+  "cluster": {
+    "name": "run-20261015t144424z-3af3b105",
+    "location": "us-central1-a",
+    "control_plane_version": "1.35.8-gke.1626001",
+    "release_channel": "REGULAR",
+    "node_pools": {
+      "default": {
+        "version": "1.35.8-gke.1626001",
+        "machine_type": "c2-standard-16",
+        "disk_type": "pd-balanced",
+        "disk_size_gb": 100,
+        "local_ssd_count": 0,
+        "image_type": "COS_CONTAINERD",
+        "spot": false,
+        "locations": [
+          "us-central1-a"
+        ],
+        "autoscaling": {
+          "min": 1,
+          "max": 1
+        },
+        "auto_upgrade": false,
+        "auto_repair": true
+      },
+      "monitoring": {
+        "version": "1.35.8-gke.1626001",
+        "machine_type": "e2-standard-4",
+        "disk_type": "pd-balanced",
+        "disk_size_gb": 100,
+        "local_ssd_count": 0,
+        "image_type": "COS_CONTAINERD",
+        "spot": false,
+        "locations": [
+          "us-central1-a"
+        ],
+        "autoscaling": {
+          "min": 1,
+          "max": 1
+        },
+        "auto_upgrade": false,
+        "auto_repair": true
+      },
+      "sandboxed": {
+        "version": "1.35.8-gke.1626001",
+        "machine_type": "c2-standard-16",
+        "disk_type": "pd-balanced",
+        "disk_size_gb": 100,
+        "local_ssd_count": 0,
+        "image_type": "COS_CONTAINERD",
+        "spot": false,
+        "locations": [
+          "us-central1-a"
+        ],
+        "autoscaling": {
+          "min": 1,
+          "max": 1
+        },
+        "auto_upgrade": false,
+        "auto_repair": true
+      }
+    }
+  },
+  "nodes": {
+    "default": {
+      "count": 1,
+      "ready": 1,
+      "machine_types": [
+        "c2-standard-16"
+      ],
+      "boot_disks": [
+        "pd-balanced"
+      ],
+      "zones": [
+        "us-central1-a"
+      ],
+      "cpu": [
+        "16"
+      ],
+      "memory_gib": [
+        62.8
+      ],
+      "kubelet_versions": [
+        "v1.35.8-gke.1626001"
+      ],
+      "os_images": [
+        "Container-Optimized OS from Google"
+      ],
+      "kernel_versions": [
+        "6.12.105+"
+      ],
+      "container_runtimes": [
+        "containerd://2.2.7"
+      ]
+    },
+    "monitoring": {
+      "count": 1,
+      "ready": 1,
+      "machine_types": [
+        "e2-standard-4"
+      ],
+      "boot_disks": [
+        "pd-balanced"
+      ],
+      "zones": [
+        "us-central1-a"
+      ],
+      "cpu": [
+        "4"
+      ],
+      "memory_gib": [
+        15.6
+      ],
+      "kubelet_versions": [
+        "v1.35.8-gke.1626001"
+      ],
+      "os_images": [
+        "Container-Optimized OS from Google"
+      ],
+      "kernel_versions": [
+        "6.12.105+"
+      ],
+      "container_runtimes": [
+        "containerd://2.2.7"
+      ]
+    },
+    "sandboxed": {
+      "count": 1,
+      "ready": 1,
+      "machine_types": [
+        "c2-standard-16"
+      ],
+      "boot_disks": [
+        "pd-balanced"
+      ],
+      "zones": [
+        "us-central1-a"
+      ],
+      "cpu": [
+        "16"
+      ],
+      "memory_gib": [
+        62.8
+      ],
+      "kubelet_versions": [
+        "v1.35.8-gke.1626001"
+      ],
+      "os_images": [
+        "Container-Optimized OS from Google"
+      ],
+      "kernel_versions": [
+        "6.12.105+"
+      ],
+      "container_runtimes": [
+        "containerd://2.2.7"
+      ]
+    }
+  },
+  "worker_pool": {
+    "spec": {
+      "replicas": 10,
+      "sandboxClass": "microvm",
+      "template": {
+        "nodeSelector": {
+          "benchmarking-worker": "true"
+        },
+        "tolerations": [
+          {
+            "effect": "NoSchedule",
+            "key": "ate.dev/sandboxClass",
+            "operator": "Equal",
+            "value": "microvm"
+          }
+        ]
+      },
+      "workerImage": "us-central1-docker.pkg.dev/akvelon-gke-aieco/run-20261015t144424z-23d2e428/ateom-microvm@sha256:04b597f408261e93d0f1bf5efbafdfd1e4ec918d955b47c6fb25eeb30eaab4bf"
+    },
+    "status": {
+      "readyReplicas": 10,
+      "replicas": 10,
+      "selector": "ate.dev/worker-pool=benchmark-ateom"
+    }
+  },
+  "actor_templates": {
+    "glutton": {
+      "containers": [
+        {
+          "command": [
+            "/ko-app/glutton",
+            "--grpc-listen-addr=:80",
+            "--metrics-listen-addr=:9090",
+            "--data-dir=/tmp/glutton",
+            "--mode=http"
+          ],
+          "env": [
+            {
+              "name": "OTEL_EXPORTER_OTLP_ENDPOINT",
+              "value": "http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317"
+            },
+            {
+              "name": "OTEL_RESOURCE_ATTRIBUTES",
+              "value": "service.name=glutton-actor"
+            }
+          ],
+          "image": "us-central1-docker.pkg.dev/akvelon-gke-aieco/run-20261015t144424z-23d2e428/glutton@sha256:3df5cafe2a9b9c492f5130dbc9414180508612f8e8abf918c7f1ff828eacb7a8",
+          "name": "glutton",
+          "wakeupProbe": {
+            "httpGet": {
+              "path": "/readyz",
+              "port": 80
+            },
+            "timeoutSeconds": 30
+          }
+        }
+      ],
+      "metadata": {
+        "atespace": "benchmark-workloads",
+        "createTime": "2026-10-15T16:58:58.796359902Z",
+        "name": "glutton",
+        "uid": "6417ea31-8260-4ebb-b678-7d1e02856dc1",
+        "updateTime": "2026-10-15T16:59:03.912613279Z",
+        "version": "3"
+      },
+      "resources": {
+        "limits": [
+          {
+            "name": "memory",
+            "quantity": "256Mi"
+          }
+        ]
+      },
+      "sandboxConfig": {
+        "configName": "microvm",
+        "sandboxClass": "SANDBOX_CLASS_MICROVM"
+      },
+      "snapshotConfig": {
+        "onCommit": "SNAPSHOT_CONTENT_SCOPE_FULL",
+        "storageLocation": "gs://akvelon-gke-aieco-run-20261015t144424z-3af3b105/benchmark-workloads/glutton/"
+      },
+      "status": {
+        "goldenSnapshotStatus": {
+          "goldenTag": {
+            "atespace": "ate-golden",
+            "name": "6417ea31-8260-4ebb-b678-7d1e02856dc1"
+          },
+          "takeGoldenSnapshotAt": "2026-10-15T16:59:02.492386093Z"
+        }
+      },
+      "workerSelector": {
+        "matchLabels": {
+          "workload": "benchmark-ateom"
+        }
+      }
+    }
+  },
+  "sandbox_configs": {
+    "microvm": {
+      "assets": {
+        "amd64": {
+          "cloud-hypervisor": {
+            "sha256": "448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc",
+            "url": "gs://akvelon-gke-aieco-run-20261015t144424z-3af3b105/kata-assets/cloud-hypervisor"
+          },
+          "kata-image": {
+            "sha256": "96497f64da1de9c7473fef46c3d29ddd0805d334731cf9d903a21a5b2c33cefb",
+            "url": "gs://akvelon-gke-aieco-run-20261015t144424z-3af3b105/kata-assets/rootfs.img"
+          },
+          "kata-kernel": {
+            "sha256": "8e9dbc3a6e4c26adb089d23d31201edebce905c7f3e31aa67b32bdd41df1b86f",
+            "url": "gs://akvelon-gke-aieco-run-20261015t144424z-3af3b105/kata-assets/vmlinux"
+          },
+          "virtiofsd": {
+            "sha256": "15b2e72a78cc08a9bd8a6943e89fb69c88cb3cbeb63069efceade835342ac7d4",
+            "url": "gs://akvelon-gke-aieco-run-20261015t144424z-3af3b105/kata-assets/virtiofsd"
+          }
+        },
+        "arm64": {
+          "cloud-hypervisor": {
+            "sha256": "f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850",
+            "url": "gs://akvelon-gke-aieco-run-20261015t144424z-3af3b105/kata-assets/cloud-hypervisor"
+          },
+          "kata-image": {
+            "sha256": "7e3bdd500eb92de17c377bd84f8ed57e50d6bb68c7ec08c88f5e1916cd49f30d",
+            "url": "gs://akvelon-gke-aieco-run-20261015t144424z-3af3b105/kata-assets/rootfs.img"
+          },
+          "kata-kernel": {
+            "sha256": "4960f6cf781274eaa445fc9f88bb8c5ce951649278bc9caa13afb1e99cfe80e6",
+            "url": "gs://akvelon-gke-aieco-run-20261015t144424z-3af3b105/kata-assets/vmlinux"
+          },
+          "virtiofsd": {
+            "sha256": "3aa9240045d2261930ef04138fe05cf288f94c867e63e5d0845758bac5e3d458",
+            "url": "gs://akvelon-gke-aieco-run-20261015t144424z-3af3b105/kata-assets/virtiofsd"
+          }
+        }
+      },
+      "sandboxClass": "microvm"
+    }
+  },
+  "deployments": {
+    "benchmark-ateom": {
+      "replicas": 10,
+      "containers": [
+        {
+          "name": "ateom",
+          "image": "us-central1-docker.pkg.dev/akvelon-gke-aieco/run-20261015t144424z-23d2e428/ateom-microvm@sha256:04b597f408261e93d0f1bf5efbafdfd1e4ec918d955b47c6fb25eeb30eaab4bf",
+          "resources": {
+            "limits": {
+              "ate.dev/kvm": "1"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "control_plane_images": {
+    "DaemonSet/atelet-v0-4-0": {
+      "atelet": {
+        "image": "us-central1-docker.pkg.dev/akvelon-gke-aieco/run-20261015t144424z-23d2e428/atelet:v0.4.0@sha256:126725f720b8d40cf8e93cd08c9935af40c58c8df02f139e9cbc6c0f92a1bcc0",
+        "digests": [
+          "sha256:126725f720b8d40cf8e93cd08c9935af40c58c8df02f139e9cbc6c0f92a1bcc0"
+        ]
+      }
+    },
+    "Deployment/ate-api-server": {
+      "ate-api-server": {
+        "image": "us-central1-docker.pkg.dev/akvelon-gke-aieco/run-20261015t144424z-23d2e428/ateapi:v0.4.0@sha256:d1902e37be73e25d6c7a82c6c9b9555c444dc8dd388ff604d0696a28899f0b64",
+        "digests": [
+          "sha256:d1902e37be73e25d6c7a82c6c9b9555c444dc8dd388ff604d0696a28899f0b64"
+        ]
+      }
+    },
+    "Deployment/ate-controller": {
+      "ate-controller": {
+        "image": "us-central1-docker.pkg.dev/akvelon-gke-aieco/run-20261015t144424z-23d2e428/atecontroller:v0.4.0@sha256:c498808de2651d14c58ccf4daba4d8bac91befb415861e58bddc5063726df643",
+        "digests": [
+          "sha256:c498808de2651d14c58ccf4daba4d8bac91befb415861e58bddc5063726df643"
+        ]
+      }
+    },
+    "Deployment/atenet-egress": {
+      "sdsmint": {
+        "image": "us-central1-docker.pkg.dev/akvelon-gke-aieco/run-20261015t144424z-23d2e428/atenet:v0.4.0@sha256:394000ea68a3c916c0d4774efa9d5bc0bb2d461bbb73e6a69654a77141b48675",
+        "digests": [
+          "sha256:394000ea68a3c916c0d4774efa9d5bc0bb2d461bbb73e6a69654a77141b48675"
+        ]
+      },
+      "envoy": {
+        "image": "us-central1-docker.pkg.dev/akvelon-gke-aieco/run-20261015t144424z-23d2e428/envoy-dataplane:v0.4.0@sha256:53af9e0af970b9d58c6c54c718cc5cd935706fb61e7d4fc0a0e0fe9a76f12d85",
+        "digests": [
+          "sha256:53af9e0af970b9d58c6c54c718cc5cd935706fb61e7d4fc0a0e0fe9a76f12d85"
+        ]
+      },
+      "ext-proc": {
+        "image": "us-central1-docker.pkg.dev/akvelon-gke-aieco/run-20261015t144424z-23d2e428/atenet:v0.4.0@sha256:394000ea68a3c916c0d4774efa9d5bc0bb2d461bbb73e6a69654a77141b48675",
+        "digests": [
+          "sha256:394000ea68a3c916c0d4774efa9d5bc0bb2d461bbb73e6a69654a77141b48675"
+        ]
+      }
+    },
+    "Deployment/atenet-router": {
+      "atenet-router": {
+        "image": "us-central1-docker.pkg.dev/akvelon-gke-aieco/run-20261015t144424z-23d2e428/atenet:v0.4.0@sha256:394000ea68a3c916c0d4774efa9d5bc0bb2d461bbb73e6a69654a77141b48675",
+        "digests": [
+          "sha256:394000ea68a3c916c0d4774efa9d5bc0bb2d461bbb73e6a69654a77141b48675"
+        ]
+      },
+      "envoy": {
+        "image": "envoyproxy/envoy:v1.39-latest@sha256:57e14a549d7bd43c8d3f6d03e8cfa653e037d4b38e133acd9b54f38c524401b4",
+        "digests": [
+          "sha256:57e14a549d7bd43c8d3f6d03e8cfa653e037d4b38e133acd9b54f38c524401b4"
+        ]
+      }
+    },
+    "StatefulSet/postgres": {
+      "tls-reloader": {
+        "image": "postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15",
+        "digests": [
+          "sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
+        ]
+      },
+      "postgres": {
+        "image": "postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15",
+        "digests": [
+          "sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
+        ]
+      }
+    }
+  },
+  "worker_pool_images": {
+    "Deployment/benchmark-ateom": {
+      "ateom": {
+        "image": "us-central1-docker.pkg.dev/akvelon-gke-aieco/run-20261015t144424z-23d2e428/ateom-microvm@sha256:04b597f408261e93d0f1bf5efbafdfd1e4ec918d955b47c6fb25eeb30eaab4bf",
+        "digests": [
+          "sha256:04b597f408261e93d0f1bf5efbafdfd1e4ec918d955b47c6fb25eeb30eaab4bf"
+        ]
+      }
+    }
+  },
+  "images": {
+    "locust-master": "us-central1-docker.pkg.dev/akvelon-gke-aieco/run-20261015t144424z-23d2e428/locust-master@sha256:0f80f4d619ca693c287d21c60783c0bfa0bb1b5a5ad9e3f86e2be0b6096f6783",
+    "boomer-worker": "us-central1-docker.pkg.dev/akvelon-gke-aieco/run-20261015t144424z-23d2e428/boomer-worker@sha256:6550bc271de98da4df97d8a1ba97533cd0db6dccef5a33134ec0a4c7fac7057d"
+  },
+  "locust_image": "us-central1-docker.pkg.dev/akvelon-gke-aieco/run-20261015t144424z-23d2e428/locust-master@sha256:0f80f4d619ca693c287d21c60783c0bfa0bb1b5a5ad9e3f86e2be0b6096f6783",
+  "commit": "1aa312ccb61e0636c73a98022cac97ae7e5c1628",
+  "image_tag": "1aa312ccb61e0636c73a98022cac97ae7e5c1628-dirty-4c131534d7df",
+  "commit_dirty": true,
+  "substrate_commit": "756c2a53741121e728f4cc3066c8a19e575b4919",
+  "substrate_version": "v0.4.0",
+  "tools": {
+    "terraform": "1.16.4",
+    "kubectl": "v1.37.1",
+    "gcloud": "573.0.0",
+    "go": "go1.27.1",
+    "docker": "29.8.1",
+    "ko": "v0.19.1",
+    "python": "3.14.8"
+  },
+  "builders": {
+    "where": "cloud build",
+    "docker": "gcr.io/cloud-builders/docker:24.0.9@sha256:9fcfbddaf676527b2be4a6473bb37ed028a88bc55bc5cd9dcc9db4f7d9bcebee",
+    "go": "golang:1.27.2@sha256:007a316059246276cb214df93950be77837545dc78007a73e0291a4963d5d3bf"
+  },
+  "bucket": "akvelon-gke-aieco-run-20261015t144424z-3af3b105"
+}

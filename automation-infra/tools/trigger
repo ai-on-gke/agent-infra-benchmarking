@@ -23,8 +23,9 @@
 # Stopping the script leaves the execution running.
 #
 # Any SCENARIO_RUNNER_ARG goes to the scenario-runner after the job's own
-# arguments, for this execution only, e.g. --scenario=glutton. Passing one also
-# needs run.jobs.runWithOverrides, e.g. roles/run.developer.
+# arguments, for this execution only; a --scenario or --all replaces the job's
+# choice of cases, e.g. --scenario=glutton. Passing one also needs
+# run.jobs.runWithOverrides, e.g. roles/run.developer.
 #
 #   trigger --deployment=DEPLOYMENT [SCENARIO_RUNNER_ARG...]
 
@@ -50,6 +51,13 @@ if [[ -z "${PROJECT_ID}" || -z "${REGION}" || -z "${JOB}" ]]; then
 fi
 
 POLL_SECS=10
+# The job's arguments without its choice of cases, as --scenario=NAME,
+# --scenario NAME or --all.
+DROP_CASES='reduce .[] as $arg ({args: [], skip: false};
+  if .skip then .skip = false
+  elif $arg == "--all" or ($arg | startswith("--scenario=")) then .
+  elif $arg == "--scenario" then .skip = true
+  else .args += [$arg] end) | .args'
 
 TOKEN="$(gcloud auth print-access-token)"
 JOB_URL="https://run.googleapis.com/v2/projects/${PROJECT_ID}/locations/${REGION}/jobs/${JOB}"
@@ -60,6 +68,12 @@ if [[ $# -gt 0 ]]; then
   # so it repeats the job's own first.
   JOB_ARGS="$(curl --silent --show-error --fail-with-body -H "Authorization: Bearer ${TOKEN}" "${JOB_URL}" |
     jq -c '.template.template.containers[0].args // []')"
+  for arg in "$@"; do
+    if [[ "${arg}" == --all || "${arg}" == --scenario || "${arg}" == --scenario=* ]]; then
+      JOB_ARGS="$(jq -c "${DROP_CASES}" <<<"${JOB_ARGS}")"
+      break
+    fi
+  done
   # On stdin, a line each, as jq would take one starting with -- for its own.
   REQUEST="$(printf '%s\n' "$@" | jq -cRn --argjson job "${JOB_ARGS}" \
     '{overrides: {containerOverrides: [{args: ($job + [inputs])}]}}')"

@@ -130,9 +130,12 @@ def upload_logs(
     Best-effort: a log not uploaded is still on its pod until the Job's TTL."""
     prefix = f"{report_prefix}/{run_id}/{name}"
     for job in jobs:
-        proc = subprocess.run(
-            cluster.kubectl("logs", f"job/{job}", namespace=namespace), capture_output=True, text=True
-        )
+        # Every pod's, each line prefixed with its pod, as a Job can have several.
+        cmd = cluster.kubectl("logs", f"--selector=job-name={job}", "--prefix", "--tail=-1", "--max-log-requests=50",
+                              namespace=namespace)  # fmt: skip
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode == 0 and not proc.stdout:
+            proc.returncode, proc.stderr = 1, "no pods"
         if proc.returncode != 0:
             log(f"reports: no log of {job} to upload: {proc.stderr.strip()}", "WARNING")
             continue
@@ -147,10 +150,10 @@ def upload_logs(
             log(f"reports: uploaded {uri}")
 
 
-def download_reports(bucket: str, report_prefix: str, run_id: str, name: str) -> None:
+def download_reports(bucket: str, report_prefix: str, run_id: str, name: str) -> bool:
     """Copies what the run uploaded into REPORTS_DIR/<run_id>/<name>/, while
-    the bucket, if it is the case's own, is still there. Best-effort: a failed
-    copy loses only the local one."""
+    the bucket, if it is the case's own, is still there, and returns whether
+    there was anything to copy and all of it was."""
     prefix = f"{report_prefix}/{run_id}/{name}/"
     dest = REPORTS_DIR / run_id / name
     log(f"reports: downloading the reports in gs://{bucket}/{prefix} to {dest}")
@@ -163,8 +166,9 @@ def download_reports(bucket: str, report_prefix: str, run_id: str, name: str) ->
             log(f"reports: downloaded {path}")
     except Exception as exc:
         log(f"reports: could not download gs://{bucket}/{prefix}: {exc}", "WARNING")
-        return
+        return False
     if blobs:
         log(f"reports: downloaded {len(blobs)} report files to {dest}")
     else:
         log(f"reports: no reports in gs://{bucket}/{prefix} to download", "WARNING")
+    return bool(blobs)

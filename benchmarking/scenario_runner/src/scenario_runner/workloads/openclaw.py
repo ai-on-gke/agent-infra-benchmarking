@@ -32,10 +32,11 @@ MOCK_LLM_IMAGE = "mock-llm"
 NAMESPACE = worker_pool.NAMESPACE
 
 
-def deploy_mock_llm(cluster: Cluster, timeout: int) -> None:
-    """Expects images.build_and_push to have built mock-llm from this commit."""
+def deploy_mock_llm(cluster: Cluster, image_repo: str, timeout: int) -> None:
+    """Expects images.build_and_push to have built mock-llm from this tree
+    into image_repo."""
     log("workloads: deploying mock-llm")
-    image = images.pin(images.image_ref(images.WORKLOADS_IMAGES, cluster.docker_repo, MOCK_LLM_IMAGE))
+    image = images.pin(images.image_ref(images.WORKLOADS_IMAGES, image_repo, MOCK_LLM_IMAGE))
     manifest = Template(MOCK_LLM_MANIFEST.read_text()).substitute(IMAGE_WITH_DIGEST=image)
     stream(cluster.kubectl("apply", "-f", "-", namespace=NAMESPACE), input=manifest)
     log(f"workloads: waiting for mock-llm to be ready (timeout: {timeout}s)")
