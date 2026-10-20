@@ -49,4 +49,4 @@ def deploy(cluster: Cluster) -> None:
     stream(cluster.kubectl("apply", "-f", str(MANIFEST)))
     rollout = ["rollout", "status", f"deployment/{NAME}", f"--timeout={TIMEOUT_SECS}s"]
     stream(cluster.kubectl(*rollout, namespace=NAMESPACE))
-    log(f"monitoring: {NAME} is up: kubectl port-forward -n {NAMESPACE} svc/{NAME} 9090:9090")
+    log(f"monitoring: {NAME} is up: kubectl port-forward -n {NAMESPACE} svc/{NAME} 9090:9090 --kubeconfig={cluster.kubeconfig}")

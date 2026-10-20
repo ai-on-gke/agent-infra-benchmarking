@@ -4,22 +4,22 @@ variable "project_id" {
 }
 
 variable "region" {
-  description = "Default region for the cluster, the Artifact Registry repo and the bucket."
+  description = "Default region for the cluster and the bucket."
   type        = string
   default     = "us-central1"
 }
 
 # The name every resource this config creates takes unless something more
-# specific is set for it. The bucket, the Artifact Registry repository and the
-# cluster all take it as-is. Change it per deployment to keep two deployments
-# in one project from naming the same resources.
+# specific is set for it. The bucket and the cluster take it as-is. Change it
+# per deployment to keep two deployments in one project from naming the same
+# resources.
 #
 # It does not reach the project-level IAM bindings below: those are keyed by
 # role and principal rather than by name, and the Workload Identity principal
 # is identical in every deployment of the project - so keep enable_atelet_iam
 # true in at most one deployment per project.
 variable "default_resource_name" {
-  description = "Name applied to the resources this config creates: the GCS bucket, the Artifact Registry repository, and the cluster. Per-resource variables override it."
+  description = "Name applied to the resources this config creates: the GCS bucket and the cluster. Per-resource variables override it."
   type        = string
 }
 
@@ -36,18 +36,18 @@ variable "labels" {
 }
 
 variable "network_name" {
-  description = "Name of the dedicated VPC network (and its one subnetwork) created for this deployment. Defaults to var.default_resource_name when empty, the same way the bucket and the Artifact Registry repository do."
+  description = "Name of the dedicated VPC network (and its one subnetwork) created for this deployment. Defaults to var.default_resource_name when empty, the same way the bucket does."
   type        = string
   default     = ""
 }
 
 variable "existing_network" {
-  description = "An existing VPC to deploy into instead of creating a dedicated one. network and subnetwork take a name or a self link; the subnetwork has to be in the cluster's region and carry secondary ranges for Pods and Services, named by pods_range_name and services_range_name. Its firewall rules are left to whoever owns the network: nodes, Pods and Services need to reach each other. Null, the default, creates the VPC from network_name and the CIDRs below, which are then unused."
+  description = "An existing VPC to deploy into instead of creating a dedicated one. network and subnetwork take a name or a self link; the subnetwork has to be in the cluster's region. Pods and Services take the subnetwork's secondary ranges named by pods_range_name and services_range_name, or without them ranges GKE adds to the subnetwork for the cluster, so clusters can share it. Its firewall rules and NAT are left to whoever owns the network: nodes, Pods and Services need to reach each other, and private nodes need a NAT to reach public registries. Null, the default, creates the VPC from network_name and the CIDRs below, which are then unused."
   type = object({
     network             = string
     subnetwork          = string
-    pods_range_name     = string
-    services_range_name = string
+    pods_range_name     = optional(string)
+    services_range_name = optional(string)
   })
   default = null
 }
@@ -72,8 +72,8 @@ variable "services_cidr" {
 
 # A minor version, as REGULAR stops offering each exact build within weeks;
 # run.json records the build a run got. It has to be one REGULAR offers in
-# var.region:
-#   gcloud container get-server-config --location=<region> \
+# var.zone, and in var.region too for a regional control plane:
+#   gcloud container get-server-config --location=<zone or region> \
 #     --flatten=channels --filter=channels.channel=REGULAR \
 #     --format="value(channels.validVersions)"
 # The cluster's upgrade exclusion keeps it on this minor version and the node
@@ -86,9 +86,46 @@ variable "kubernetes_version" {
 }
 
 variable "zone" {
-  description = "Zone every node pool is pinned to. Must be in var.region."
+  description = "Zone every node pool is pinned to, and the zonal cluster's location. Must be in var.region."
   type        = string
   default     = "us-central1-a"
+}
+
+variable "regional_control_plane" {
+  description = "Whether the control plane is regional, replicated across var.region's zones, rather than in var.zone with the node pools."
+  type        = bool
+  default     = false
+}
+
+# Without external IPs the nodes reach anything outside Google's APIs, such as
+# public image registries, through the Cloud NAT network.tf creates with the
+# network; an existing_network needs its own.
+variable "enable_private_nodes" {
+  description = "Whether the nodes have internal IPs only."
+  type        = bool
+  default     = true
+}
+
+variable "enable_private_endpoint" {
+  description = "Whether the control plane has an internal endpoint only, for a scenario-runner inside the cluster's network, such as automation-infra's Cloud Run job with existing_network. False, the default, gives it a public one too, which IAM still guards, for a scenario-runner outside."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_private_endpoint || var.enable_private_nodes
+    error_message = "enable_private_endpoint needs enable_private_nodes."
+  }
+}
+
+# Null leaves the public endpoint open to any address; access still takes IAM.
+# With enable_private_endpoint, the cluster's subnetwork is added to them.
+variable "master_authorized_networks" {
+  description = "CIDR blocks allowed to reach the control plane's public endpoint, with a display name each; null for any."
+  type = list(object({
+    cidr_block   = string
+    display_name = string
+  }))
+  default = null
 }
 
 variable "default_machine_type" {
@@ -97,14 +134,24 @@ variable "default_machine_type" {
   default     = "c2-standard-16"
 }
 
+# microvm guests boot on /dev/kvm, which only nested virtualization exposes,
+# and GCE offers it only on Intel machine families: not E2, AMD (n2d, c2d, ...)
+# or Arm (t2a, c4a, ...).
 variable "sandboxed_machine_type" {
   description = "Machine type of the sandboxed node pool, which runs the workers."
   type        = string
+
+  validation {
+    condition = var.sandbox_class != "microvm" || !(
+      split("-", var.sandboxed_machine_type)[0] == "e2"
+      || endswith(split("-", var.sandboxed_machine_type)[0], "d")
+      || endswith(split("-", var.sandboxed_machine_type)[0], "a")
+    )
+    error_message = "sandbox_class microvm needs nested virtualization, which GCE offers only on Intel machine families such as n2 or c2, not E2, AMD or Arm."
+  }
 }
 
-# microvm guests boot on /dev/kvm, which only nested virtualization exposes,
-# and GCE offers it on no E2 machine type, so sandboxed_machine_type has to be
-# n2/c2/c3 or similar.
+# The scenario-runner sets it from the case's sandbox-class.
 variable "sandbox_class" {
   description = "Sandbox class of the sandboxed node pool's workers: its ate.dev/sandboxClass taint, and nested virtualization for microvm."
   type        = string
@@ -127,18 +174,35 @@ variable "substrate_version" {
   type        = string
 }
 
-# The scenario-runner builds substrate's images once per execution, into its
-# own repository rather than each cluster's.
-variable "substrate_image_repository" {
-  description = "Full resource name of the Artifact Registry repository substrate's images are installed from, projects/P/locations/L/repositories/R, which the nodes and atelet are granted to pull from; null for none."
+# The scenario-runner builds substrate's images and the benchmark's once per
+# execution, into its own repository rather than each cluster's.
+variable "image_repository" {
+  description = "Full resource name of the Artifact Registry repository the cluster's images come from, projects/P/locations/L/repositories/R: substrate's and the benchmark's. The nodes and atelet are granted to pull from it; null for none."
   type        = string
   default     = null
+}
+
+# automation-infra's Cloud Run job sets it, so that the job only has to act as
+# one account, which its deployment created, rather than create one per run
+# and grant it project roles.
+variable "node_service_account" {
+  description = "Email of an existing service account for the node pools, which holds the project roles GKE nodes need (logging.logWriter, monitoring.metricWriter, monitoring.viewer, stackdriver.resourceMetadata.writer) already. Empty creates one for this deployment and grants it those."
+  type        = string
+  default     = ""
 }
 
 variable "sandboxed_node_count" {
   description = "Initial node count of the sandboxed node pool."
   type        = number
   default     = 1
+
+  validation {
+    condition = (
+      coalesce(var.sandboxed_min_node_count, var.sandboxed_node_count) <= var.sandboxed_node_count
+      && var.sandboxed_node_count <= coalesce(var.sandboxed_max_node_count, var.sandboxed_node_count)
+    )
+    error_message = "sandboxed_node_count must be between sandboxed_min_node_count and sandboxed_max_node_count."
+  }
 }
 
 # Autoscaling bounds. Unset pins the pool at sandboxed_node_count, so runs
@@ -186,23 +250,14 @@ variable "additional_node_pools" {
     )
     error_message = "additional_node_pools names must be unique and not default, sandboxed or monitoring."
   }
-}
 
-variable "artifact_repository_id" {
-  description = "ID of the Artifact Registry repository. Defaults to var.default_resource_name when empty. Set it only when that name is already taken in this project."
-  type        = string
-  default     = ""
-}
-variable "artifact_repository_location" {
-  description = "Location of the Artifact Registry repository: a multi-region (\"us\", \"europe\", \"asia\") or a region (\"us-central1\")."
-  type        = string
-  default     = "us"
-}
-
-variable "artifact_repository_format" {
-  description = "Format of the Artifact Registry repository (e.g. DOCKER, NPM, PYTHON)."
-  type        = string
-  default     = "DOCKER"
+  validation {
+    condition = alltrue([
+      for pool in var.additional_node_pools :
+      coalesce(pool.min_node_count, pool.node_count) <= pool.node_count && pool.node_count <= coalesce(pool.max_node_count, pool.node_count)
+    ])
+    error_message = "Each of additional_node_pools needs node_count between its min_node_count and max_node_count."
+  }
 }
 
 
@@ -255,7 +310,7 @@ variable "enable_atelet_bucket_iam" {
 }
 
 variable "enable_atelet_iam" {
-  description = "Grants atelet project-level storage and Artifact Registry roles, reaching every bucket and repository in the project. Off by default and rarely wanted: the repository-scoped grants in main.tf are unconditional and cover atelet for this deployment's own repository, and the nodes have their own service account rather than the project's default one. Turn this on only for a deployment that genuinely has to read or write outside what this config created. See cmd/iam.go and tools/setup-gcp/README.md for the authoritative list."
+  description = "Grants atelet project-level storage and Artifact Registry roles, reaching every bucket and repository in the project. Off by default and rarely wanted: the grants in main.tf on this deployment's bucket and on var.image_repository cover atelet, and the nodes have their own service account rather than the project's default one. Turn this on only for a deployment that genuinely has to read or write outside what this config created. See cmd/iam.go and tools/setup-gcp/README.md for the authoritative list."
   type        = bool
   default     = false
 }

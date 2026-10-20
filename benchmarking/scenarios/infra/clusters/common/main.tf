@@ -1,6 +1,5 @@
 locals {
-  bucket_name            = var.bucket_name != "" ? var.bucket_name : var.default_resource_name
-  artifact_repository_id = var.artifact_repository_id != "" ? var.artifact_repository_id : var.default_resource_name
+  bucket_name = var.bucket_name != "" ? var.bucket_name : var.default_resource_name
 
   bucket_location = var.bucket_location != "" ? var.bucket_location : var.region
 }
@@ -47,8 +46,13 @@ module "cluster" {
 
   project_id = var.project_id
   region     = var.region
+  location   = var.regional_control_plane ? var.region : var.zone
 
   cluster_name = var.default_resource_name
+
+  enable_private_nodes       = var.enable_private_nodes
+  enable_private_endpoint    = var.enable_private_endpoint
+  master_authorized_networks = local.master_authorized_networks
 
   network             = local.network
   subnetwork          = local.subnetwork
@@ -134,20 +138,7 @@ module "cluster" {
     }
   })
 
-  node_service_account = google_service_account.node.email
-
-  depends_on = [google_project_service.this]
-}
-
-# ---------------------------------------------------------------------------
-# Artifact Registry
-# ---------------------------------------------------------------------------
-
-resource "google_artifact_registry_repository" "this" {
-  project       = var.project_id
-  location      = var.artifact_repository_location
-  repository_id = local.artifact_repository_id
-  format        = var.artifact_repository_format
+  node_service_account = local.node_service_account
 
   depends_on = [google_project_service.this]
 }
@@ -203,6 +194,8 @@ resource "google_storage_bucket" "this" {
 
 data "google_project" "this" {
   project_id = var.project_id
+
+  depends_on = [google_project_service.this]
 }
 
 
@@ -217,6 +210,8 @@ resource "google_project_iam_member" "atelet_storage_object_admin" {
   project = var.project_id
   role    = "roles/storage.objectAdmin"
   member  = local.atelet_wi_principal
+
+  depends_on = [google_project_service.this]
 }
 
 resource "google_project_iam_member" "atelet_artifact_registry_reader" {
@@ -224,6 +219,8 @@ resource "google_project_iam_member" "atelet_artifact_registry_reader" {
   project = var.project_id
   role    = "roles/artifactregistry.reader"
   member  = local.atelet_wi_principal
+
+  depends_on = [google_project_service.this]
 }
 
 resource "google_project_iam_member" "atelet_artifact_registry_writer" {
@@ -231,6 +228,8 @@ resource "google_project_iam_member" "atelet_artifact_registry_writer" {
   project = var.project_id
   role    = "roles/artifactregistry.writer"
   member  = local.atelet_wi_principal
+
+  depends_on = [google_project_service.this]
 }
 
 resource "google_storage_bucket_iam_member" "atelet_bucket_object_admin" {
@@ -264,15 +263,29 @@ resource "google_storage_bucket_iam_member" "ate_api_server_bucket_viewer" {
   member = local.ate_api_server_wi_principal
 }
 
+locals {
+  node_service_account = var.node_service_account != "" ? var.node_service_account : google_service_account.node[0].email
+}
+
+moved {
+  from = google_service_account.node
+  to   = google_service_account.node[0]
+}
+
 resource "google_service_account" "node" {
+  count = var.node_service_account == "" ? 1 : 0
+
   project      = var.project_id
   account_id   = var.short_resource_name != "" ? "${var.short_resource_name}-node" : substr("${var.default_resource_name}-node", 0, 30)
   display_name = "GKE nodes for ${var.default_resource_name}"
-  description  = "Runs the node pools of the ${var.default_resource_name} deployment's cluster. Holds the minimum GKE requires, plus read on this deployment's Artifact Registry repository and snapshot bucket."
+  description  = "Runs the node pools of the ${var.default_resource_name} deployment's cluster. Holds the minimum GKE requires, plus read on this deployment's snapshot bucket and the runner's image repository."
+
+  depends_on = [google_project_service.this]
 }
 
+# An existing var.node_service_account holds these already.
 resource "google_project_iam_member" "node_minimal" {
-  for_each = toset([
+  for_each = var.node_service_account != "" ? toset([]) : toset([
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter",
     "roles/monitoring.viewer",
@@ -281,62 +294,40 @@ resource "google_project_iam_member" "node_minimal" {
 
   project = var.project_id
   role    = each.value
-  member  = "serviceAccount:${google_service_account.node.email}"
-}
+  member  = "serviceAccount:${local.node_service_account}"
 
-# Image pulls for every pod the nodes run.
-resource "google_artifact_registry_repository_iam_member" "node_reader" {
-  project    = var.project_id
-  location   = google_artifact_registry_repository.this.location
-  repository = google_artifact_registry_repository.this.name
-  role       = "roles/artifactregistry.reader"
-  member     = "serviceAccount:${google_service_account.node.email}"
+  depends_on = [google_project_service.this]
 }
 
 resource "google_storage_bucket_iam_member" "node_bucket_viewer" {
   bucket = google_storage_bucket.this.name
   role   = "roles/storage.objectViewer"
-  member = "serviceAccount:${google_service_account.node.email}"
-}
-
-# atelet pulls the image an ActorTemplate names and pushes what it builds.
-# Unconditional and repository-scoped, unlike the project-level pair under
-# enable_atelet_iam above, which is the broad form kept for a deployment that
-# has to grant across every repository in its project.
-resource "google_artifact_registry_repository_iam_member" "atelet_reader" {
-  project    = var.project_id
-  location   = google_artifact_registry_repository.this.location
-  repository = google_artifact_registry_repository.this.name
-  role       = "roles/artifactregistry.reader"
-  member     = local.atelet_wi_principal
+  member = "serviceAccount:${local.node_service_account}"
 }
 
 locals {
   # projects/P/locations/L/repositories/R
-  substrate_repository = var.substrate_image_repository == null ? null : split("/", var.substrate_image_repository)
+  image_repository = var.image_repository == null ? null : split("/", var.image_repository)
 }
 
-# Pulls of substrate's images, by the nodes for its pods and by atelet for an
-# ActorTemplate's.
-resource "google_artifact_registry_repository_iam_member" "substrate_reader" {
-  for_each = var.substrate_image_repository == null ? {} : {
-    node   = "serviceAccount:${google_service_account.node.email}"
+moved {
+  from = google_artifact_registry_repository_iam_member.substrate_reader
+  to   = google_artifact_registry_repository_iam_member.image_reader
+}
+
+# Pulls of substrate's images and the benchmark's, by the nodes for their pods
+# and by atelet for an ActorTemplate's.
+resource "google_artifact_registry_repository_iam_member" "image_reader" {
+  for_each = var.image_repository == null ? {} : {
+    node   = "serviceAccount:${local.node_service_account}"
     atelet = local.atelet_wi_principal
   }
 
-  project    = local.substrate_repository[1]
-  location   = local.substrate_repository[3]
-  repository = local.substrate_repository[5]
+  project    = local.image_repository[1]
+  location   = local.image_repository[3]
+  repository = local.image_repository[5]
   role       = "roles/artifactregistry.reader"
   member     = each.value
-}
-
-resource "google_artifact_registry_repository_iam_member" "atelet_writer" {
-  project    = var.project_id
-  location   = google_artifact_registry_repository.this.location
-  repository = google_artifact_registry_repository.this.name
-  role       = "roles/artifactregistry.writer"
-  member     = local.atelet_wi_principal
 }
 
 resource "google_storage_bucket_iam_member" "benchmark_runner_object_creator" {

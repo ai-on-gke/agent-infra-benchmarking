@@ -8,6 +8,33 @@ variable "region" {
   type        = string
 }
 
+variable "location" {
+  description = "Location of the cluster and its node pools: var.region for a regional control plane, or a zone in it for a zonal one. Empty is var.region."
+  type        = string
+  default     = ""
+}
+
+variable "enable_private_nodes" {
+  description = "Whether the nodes have internal IPs only."
+  type        = bool
+  default     = false
+}
+
+variable "enable_private_endpoint" {
+  description = "Whether the control plane has an internal endpoint only, reachable from the cluster's network; needs enable_private_nodes. False leaves it a public one too."
+  type        = bool
+  default     = false
+}
+
+variable "master_authorized_networks" {
+  description = "CIDR blocks allowed to reach the control plane's public endpoint; null for any."
+  type = list(object({
+    cidr_block   = string
+    display_name = string
+  }))
+  default = null
+}
+
 variable "cluster_name" {
   description = "Name of the GKE cluster."
   type        = string
@@ -30,13 +57,15 @@ variable "subnetwork" {
 }
 
 variable "pods_range_name" {
-  description = "Name of the subnetwork's secondary IP range to allocate Pod IPs from."
+  description = "Name of the subnetwork's secondary IP range to allocate Pod IPs from. Null has GKE add a /17 to the subnetwork for the cluster."
   type        = string
+  default     = null
 }
 
 variable "services_range_name" {
-  description = "Name of the subnetwork's secondary IP range to allocate Service IPs from."
+  description = "Name of the subnetwork's secondary IP range to allocate Service IPs from. Null has GKE add a /22 to the subnetwork for the cluster."
   type        = string
+  default     = null
 }
 
 variable "enable_dataplane_v2" {

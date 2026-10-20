@@ -11,7 +11,7 @@ resource "google_container_cluster" "autopilot" {
   provider = google-beta
 
   name     = var.cluster_name
-  location = var.region
+  location = local.location
   project  = var.project_id
 
   network    = var.network
@@ -31,6 +31,10 @@ resource "google_container_cluster" "autopilot" {
   ip_allocation_policy {
     cluster_secondary_range_name  = var.pods_range_name
     services_secondary_range_name = var.services_range_name
+    # Without a range name, GKE adds a range of this size to the subnetwork for
+    # the cluster, and removes it with the cluster.
+    cluster_ipv4_cidr_block  = var.pods_range_name == null ? "/17" : null
+    services_ipv4_cidr_block = var.services_range_name == null ? "/22" : null
   }
 
   workload_identity_config {
@@ -76,7 +80,7 @@ resource "google_container_cluster" "standard" {
   provider = google-beta
 
   name     = var.cluster_name
-  location = var.region
+  location = local.location
   project  = var.project_id
 
   network    = var.network
@@ -86,6 +90,35 @@ resource "google_container_cluster" "standard" {
   # default one created alongside the cluster.
   remove_default_node_pool = true
   initial_node_count       = 1
+
+  # The default pool GKE creates first, and the apply removes, runs as the
+  # nodes' account rather than the project's default compute one, which
+  # whoever applies would otherwise have to be allowed to act as.
+  node_config {
+    service_account = var.node_service_account
+    oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
+  }
+
+  dynamic "private_cluster_config" {
+    for_each = var.enable_private_nodes ? [1] : []
+    content {
+      enable_private_nodes    = true
+      enable_private_endpoint = var.enable_private_endpoint
+    }
+  }
+
+  dynamic "master_authorized_networks_config" {
+    for_each = var.master_authorized_networks == null ? [] : [1]
+    content {
+      dynamic "cidr_blocks" {
+        for_each = var.master_authorized_networks
+        content {
+          cidr_block   = cidr_blocks.value.cidr_block
+          display_name = cidr_blocks.value.display_name
+        }
+      }
+    }
+  }
 
   datapath_provider = var.enable_dataplane_v2 ? "ADVANCED_DATAPATH" : null
 
@@ -101,6 +134,10 @@ resource "google_container_cluster" "standard" {
   ip_allocation_policy {
     cluster_secondary_range_name  = var.pods_range_name
     services_secondary_range_name = var.services_range_name
+    # Without a range name, GKE adds a range of this size to the subnetwork for
+    # the cluster, and removes it with the cluster.
+    cluster_ipv4_cidr_block  = var.pods_range_name == null ? "/17" : null
+    services_ipv4_cidr_block = var.services_range_name == null ? "/22" : null
   }
 
   workload_identity_config {
@@ -159,6 +196,14 @@ resource "google_container_cluster" "standard" {
   deletion_protection = false
 
   lifecycle {
+    # Only the removed default pool's; a change would replace the cluster.
+    ignore_changes = [node_config]
+
+    precondition {
+      condition     = !var.enable_private_endpoint || var.enable_private_nodes
+      error_message = "enable_private_endpoint needs enable_private_nodes: GKE gives a cluster with public nodes a public endpoint."
+    }
+
     precondition {
       condition     = !var.block_upgrades || contains(["RAPID", "REGULAR", "STABLE", "EXTENDED"], var.release_channel)
       error_message = "block_upgrades needs release_channel set to RAPID, REGULAR, STABLE or EXTENDED: GKE takes this exclusion only on a cluster in a channel."
@@ -173,6 +218,7 @@ resource "time_static" "upgrade_exclusion" {
 }
 
 locals {
+  location         = var.location != "" ? var.location : var.region
   cluster_id       = var.autopilot ? google_container_cluster.autopilot[0].id : google_container_cluster.standard[0].id
   cluster_name     = var.autopilot ? google_container_cluster.autopilot[0].name : google_container_cluster.standard[0].name
   cluster_endpoint = var.autopilot ? google_container_cluster.autopilot[0].endpoint : google_container_cluster.standard[0].endpoint
@@ -184,7 +230,7 @@ resource "google_container_node_pool" "this" {
   # Unique only within the cluster, so the cluster's name can take all 40
   # characters a pool's name can.
   name     = each.key
-  location = var.region
+  location = local.location
   project  = var.project_id
   cluster  = local.cluster_name
   version  = each.value.version

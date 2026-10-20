@@ -21,37 +21,50 @@
 # is skipped. The destroy runs here as the gcloud account, which needs what the
 # job's account has.
 #
-# With --dry-run, only prints what it would destroy.
+# The deployment's settings come from its main.tf, or from the flags, which the
+# module's cleanup job passes, as it runs this on a schedule. With --dry-run,
+# only prints what it would destroy.
 #
 #   destroy-leftovers --deployment=DEPLOYMENT [--dry-run]
+#   destroy-leftovers --project-id=ID --region=REGION --job=JOB \
+#     --state-bucket=BUCKET --state-prefix=PREFIX [--dry-run]
 
 set -o errexit -o nounset -o pipefail
 
 source "$(dirname "$0")/lib.sh"
 
 usage() {
-  echo "Usage: $0 --deployment=DEPLOYMENT [--dry-run]" >&2
+  echo "Usage: $0 {--deployment=DEPLOYMENT | --project-id=ID --region=REGION --job=JOB" \
+    "--state-bucket=BUCKET --state-prefix=PREFIX} [--dry-run]" >&2
   exit 2
 }
 
-parse_deployment "$@"
-DRY_RUN=false
-for arg in "${ARGS[@]}"; do
+DEPLOYMENT="" PROJECT_ID="" REGION="" JOB="" STATE_BUCKET="" STATE_PREFIX="" DRY_RUN=false
+for arg in "$@"; do
   case "${arg}" in
+    --deployment=*) DEPLOYMENT="${arg#*=}" ;;
+    --project-id=*) PROJECT_ID="${arg#*=}" ;;
+    --region=*) REGION="${arg#*=}" ;;
+    --job=*) JOB="${arg#*=}" ;;
+    --state-bucket=*) STATE_BUCKET="${arg#*=}" ;;
+    --state-prefix=*) STATE_PREFIX="${arg#*=}" ;;
     --dry-run) DRY_RUN=true ;;
     *) usage ;;
   esac
 done
 
-PROJECT_ID="$(module_arg project_id)"
-REGION="$(module_arg region)"
-JOB="$(module_arg default_resource_name)"
-STATE_BUCKET="$(module_arg state_bucket)"
-STATE_PREFIX="$(module_arg state_bucket_prefix)"
+if [[ -n "${DEPLOYMENT}" ]]; then
+  parse_deployment --deployment="${DEPLOYMENT}"
+  PROJECT_ID="${PROJECT_ID:-$(module_arg project_id)}"
+  REGION="${REGION:-$(module_arg region)}"
+  JOB="${JOB:-$(module_arg default_resource_name)}"
+  STATE_BUCKET="${STATE_BUCKET:-$(module_arg state_bucket)}"
+  STATE_PREFIX="${STATE_PREFIX:-$(module_arg state_bucket_prefix)}"
+fi
 if [[ -z "${PROJECT_ID}" || -z "${REGION}" || -z "${JOB}" || -z "${STATE_BUCKET}" || -z "${STATE_PREFIX}" ]]; then
-  echo "Error: ${DEPLOYMENT_DIR}/main.tf does not set project_id, region, default_resource_name," \
-    "state_bucket and state_bucket_prefix" >&2
-  exit 1
+  echo "Error: the project id, region, job, state bucket and state prefix are not all set by the flags" \
+    "${DEPLOYMENT:+or by ${DEPLOYMENT_DIR}/main.tf}" >&2
+  usage
 fi
 
 RUNS=("$(dirname "$0")/../../benchmarking/tools/runs" --state-bucket="${STATE_BUCKET}" --state-prefix="${STATE_PREFIX}")

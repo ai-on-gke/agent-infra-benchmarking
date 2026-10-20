@@ -10,5 +10,10 @@ answers with a scripted tool-calling loop, so a run measures substrate and the
 agent's own work rather than a model's latency, and it needs no Google Cloud
 credentials, no service account and no key.
 
-`deploy-benchmarking.sh --deploy` builds and pushes the image and deploys the
-template and `mock-llm`; there is nothing to set up by hand.
+The scenario-runner builds and pushes the image (`../../images.json`) and
+deploys the template and `mock-llm` for every `openclaw` case
+(`benchmarking/README.md`); there is nothing to set up by hand.
+
+The worker puts a nonce in each prompt, `(request <uuid>)`, which `mock-llm`
+repeats at the end of its last answer, so the worker counts a turn only if its
+output carries that turn's nonce.

@@ -42,8 +42,9 @@ class Cluster:
 
     @property
     def location(self) -> str:
-        # The cluster is regional, in the region.
-        return self.outputs["region"]
+        # Its zone, or for a regional one or a state applied before the output
+        # existed, the region.
+        return self.outputs.get("location") or self.outputs["region"]
 
     @property
     def project_id(self) -> str:
@@ -54,14 +55,11 @@ class Cluster:
         return self.outputs["bucket_name"]
 
     @property
-    def docker_repo(self) -> str:
-        # The cluster's own repository, which its nodes are granted to pull from.
-        return self.outputs["artifact_registry_docker_repo"]
-
-    @property
-    def substrate_docker_repo(self) -> str | None:
-        # None for a cluster that runs no substrate, or one applied before the output existed.
-        return self.outputs.get("substrate_docker_repo")
+    def image_docker_repo(self) -> str | None:
+        """The runner infra's repository, which substrate's images and the
+        benchmark's are pulled from; None for a cluster granted none. The old
+        output's name for a state applied before it was renamed."""
+        return self.outputs.get("image_docker_repo") or self.outputs.get("substrate_docker_repo")
 
     @property
     def runner_ksa(self) -> str:
@@ -81,8 +79,13 @@ class Cluster:
         """A kubectl command for the cluster, in namespace if given."""
         return ["kubectl", *args, *self.kubectl_flags(namespace)]
 
+    @property
+    def context(self) -> str:
+        """The name get_credentials gives the cluster's context."""
+        return f"gke_{self.project_id}_{self.location}_{self.name}"
+
     def get_credentials(self) -> None:
-        """Writes the cluster's context into kubeconfig."""
+        """Writes the cluster's context into kubeconfig, as its current one."""
         stream(
             [
                 "gcloud",
@@ -92,6 +95,7 @@ class Cluster:
                 self.name,
                 f"--location={self.location}",
                 f"--project={self.outputs['project_id']}",
+                *(["--internal-ip"] if self.outputs.get("private_endpoint") else []),
             ],
             env={"KUBECONFIG": str(self.kubeconfig)},
         )

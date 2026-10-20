@@ -50,10 +50,12 @@ SANDBOX_CONFIGS = {
 # The smallest microvm admits, so actors don't get kata's 2 GiB and its page
 # cache in every snapshot.
 DEFAULT_ACTOR_MEMORY = "256Mi"
-# The least memory a workload's actors can do their work in. openclaw's
-# Node.js agent is OOM-killed at 256Mi, so a template deployed that way fails
-# every instruction.
-MIN_ACTOR_MEMORY_MIB = {"openclaw": 1024}
+# A case's `actor-memory` unless it states one, by workload.
+DEFAULT_ACTOR_MEMORY_BY_WORKLOAD = {"openclaw": "2Gi"}
+# The least memory a workload's actors can do their work in, by workload and
+# sandbox class. openclaw's Node.js agent is OOM-killed at 256Mi under gVisor,
+# and at 1Gi in a microvm, whose guest gets the limit less the VMM's share.
+MIN_ACTOR_MEMORY_MIB = {"openclaw": {"gvisor": 1024, "microvm": 2048}}
 # Kubernetes quantity suffixes, in bytes.
 QUANTITY_UNITS = {"": 1, "k": 10**3, "M": 10**6, "G": 10**9, "T": 10**12, "Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40}
 DEFAULT_TIMEOUT_SECS = 300
@@ -93,9 +95,18 @@ def kubectl_ate(cluster: Cluster) -> Iterator[KubectlAte]:
         yield lambda *args: [binary, *args, f"--kubeconfig={cluster.kubeconfig}"]
 
 
-def pinned_image(cluster: Cluster, name: str) -> str:
-    """The image images.build_and_push built from this commit, pinned."""
-    return images.pin(images.image_ref(images.WORKLOADS_IMAGES, cluster.docker_repo, name))
+def default_actor_memory(workload: str | None) -> str:
+    return DEFAULT_ACTOR_MEMORY_BY_WORKLOAD.get(workload or "", DEFAULT_ACTOR_MEMORY)
+
+
+def min_actor_memory_mib(workload: str | None, sandbox_class: str) -> int | None:
+    return MIN_ACTOR_MEMORY_MIB.get(workload or "", {}).get(sandbox_class)
+
+
+def pinned_image(image_repo: str, name: str) -> str:
+    """The image images.build_and_push built from this tree into image_repo,
+    pinned."""
+    return images.pin(images.image_ref(images.WORKLOADS_IMAGES, image_repo, name))
 
 
 def otlp_endpoint(cluster: Cluster) -> str:
@@ -138,7 +149,9 @@ def check_worker_pool(cluster: Cluster, sandbox_class: str, timeout: int) -> Non
     stream(cluster.kubectl(*rollout, namespace=NAMESPACE))
 
 
-def render_template(cluster: Cluster, name: str, sandbox_class: str, actor_memory: str, otlp: str) -> str:
+def render_template(
+    cluster: Cluster, name: str, sandbox_class: str, actor_memory: str, otlp: str, image_repo: str
+) -> str:
     config_name, class_enum = SANDBOX_CONFIGS[sandbox_class]
     values = {
         "BUCKET_NAME": cluster.bucket,
@@ -150,7 +163,7 @@ def render_template(cluster: Cluster, name: str, sandbox_class: str, actor_memor
         "ACTOR_MEMORY": actor_memory,
     }
     if name in TEMPLATE_IMAGES:
-        values["IMAGE_WITH_DIGEST"] = pinned_image(cluster, TEMPLATE_IMAGES[name])
+        values["IMAGE_WITH_DIGEST"] = pinned_image(image_repo, TEMPLATE_IMAGES[name])
     return Template((MANIFESTS_DIR / f"{name}-template.yaml.tmpl").read_text()).substitute(values)
 
 
@@ -200,8 +213,9 @@ def wait_golden_snapshot(ate: KubectlAte, cluster: Cluster, name: str, timeout: 
     # The golden actor's snapshot is published as a tag under the bucket.
     raise WorkloadError(
         f"no golden snapshot of {ATESPACE}/{name} within {timeout}s; check that gs://{cluster.bucket}/ exists"
-        f" and the workers can write to it, then the workers: kubectl get pods -n {NAMESPACE};"
-        f" kubectl logs -n {NAMESPACE} deployment/{worker_pool.NAME} --tail=50"
+        f" and the workers can write to it, then the workers: kubectl get pods -n {NAMESPACE}"
+        f" --kubeconfig={cluster.kubeconfig}; kubectl logs -n {NAMESPACE} deployment/{worker_pool.NAME} --tail=50"
+        f" --kubeconfig={cluster.kubeconfig}"
     )
 
 
@@ -209,12 +223,14 @@ def deploy(
     cluster: Cluster,
     names: list[str],
     sandbox_class: str,
+    image_repo: str,
     actor_memory: str = DEFAULT_ACTOR_MEMORY,
     otlp: str | None = None,
     timeout: int = DEFAULT_TIMEOUT_SECS,
 ) -> None:
-    """otlp is where an instrumented actor sends its telemetry; by default the
-    control plane's endpoint."""
+    """image_repo holds the workload images images.build_and_push built from
+    this tree. otlp is where an instrumented actor sends its telemetry; by
+    default the control plane's endpoint."""
     if not names:
         raise ValueError("no workload template to deploy")
     check_templates(names)
@@ -229,7 +245,7 @@ def deploy(
     )
     # The openclaw actors call it rather than a real LLM.
     if "openclaw" in names:
-        openclaw.deploy_mock_llm(cluster, timeout)
+        openclaw.deploy_mock_llm(cluster, image_repo, timeout)
 
     with kubectl_ate(cluster) as ate:
         # The store wants a template's atespace to exist when it is created.
@@ -239,7 +255,7 @@ def deploy(
             # Templates are immutable, and the endpoint and class change between
             # runs. Deleting one also deletes its golden actor and snapshot.
             delete_template(ate, name)
-            manifest = render_template(cluster, name, sandbox_class, actor_memory, otlp)
+            manifest = render_template(cluster, name, sandbox_class, actor_memory, otlp, image_repo)
             stream(ate("create", "actor-template", "-f", "-"), input=substrate.resolve(cluster, manifest))
         for i, name in enumerate(names, 1):
             log(f"workloads: [{i}/{len(names)}] waiting for the {ATESPACE}/{name} golden snapshot (timeout {timeout}s)")
@@ -256,18 +272,20 @@ def deployed_template(cluster: Cluster, name: str) -> dict:
             raise WorkloadError(f"no actor template {ATESPACE}/{name}; deploy the workloads first") from None
 
 
-def egress_hosts(template: dict) -> list[str]:
+def egress_hosts(template: dict) -> tuple[list[str], list[str]]:
     """The hosts of the URLs in the template's container env: what its actors
     are configured to call, such as the OTLP collector and openclaw's mock-llm.
     Substrate refuses every connection from an actor without an egress policy,
-    and the worker gives each one a policy that allows these."""
-    hosts = set()
+    and the worker gives each one a policy that allows these: the first list's
+    over cleartext HTTP (gRPC included), the second's, from https:// URLs,
+    over TLS, which a cleartext rule does not let through."""
+    cleartext, tls = set(), set()
     for container in template.get("containers") or []:
         for env in container.get("env") or []:
             url = urllib.parse.urlsplit(env.get("value") or "")
             if url.scheme and url.hostname:
-                hosts.add(url.hostname)
-    return sorted(hosts)
+                (tls if url.scheme == "https" else cleartext).add(url.hostname)
+    return sorted(cleartext), sorted(tls)
 
 
 def memory_mib(quantity: str) -> float | None:
@@ -278,7 +296,7 @@ def memory_mib(quantity: str) -> float | None:
     return float(match[1]) * QUANTITY_UNITS[match[2]] / 2**20
 
 
-def check_deployed(template: dict, name: str, sandbox_class: str, workload: str) -> None:
+def check_deployed(template: dict, name: str, sandbox_class: str, workload: str, actor_memory: str) -> None:
     """Refuses a deployed template the case cannot run on: one of another
     sandbox class, whose actors never schedule on the case's pool, or with
     less memory than the workload needs. Matters when the templates were not
@@ -287,11 +305,13 @@ def check_deployed(template: dict, name: str, sandbox_class: str, workload: str)
     have = (template.get("sandboxConfig") or {}).get("sandboxClass")
     if have != want:
         raise WorkloadError(f"actor template {ATESPACE}/{name} is {have or 'of no sandbox class'}, not {want}; deploy it again")
-    need = MIN_ACTOR_MEMORY_MIB.get(workload)
     limits = (template.get("resources") or {}).get("limits") or []
     quantity = next((limit.get("quantity") for limit in limits if limit.get("name") == "memory"), None)
-    if need and quantity and (memory_mib(quantity) or 0) < need:
-        raise WorkloadError(f"actor template {ATESPACE}/{name} limits actors to {quantity}; {workload} needs {need}Mi")
+    if quantity and memory_mib(quantity) != memory_mib(actor_memory):
+        raise WorkloadError(
+            f"actor template {ATESPACE}/{name} limits actors to {quantity}, but the case's actor-memory is"
+            f" {actor_memory}; deploy it again"
+        )
 
 
 def delete(cluster: Cluster, names: list[str] | None = None) -> None:

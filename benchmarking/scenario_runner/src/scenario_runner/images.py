@@ -13,13 +13,15 @@
 # limitations under the License.
 
 """Builds and pushes the images of the benchmarking images.json files to a
-cluster's repository, with local Docker or on Cloud Build, each named
-<repo>/<name>:<commit>; and pins one to the digest its registry serves."""
+repository, with local Docker or on Cloud Build, each named <repo>/<name>:<tag>;
+and pins one to the digest its registry serves."""
 
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
+import os
 import shutil
 import subprocess
 import tarfile
@@ -28,7 +30,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import RUNNER_DIR
-from .cluster import Cluster
 from .log import log
 from .process import output, stream
 
@@ -37,9 +38,25 @@ LOCUST_IMAGES = ROOT / "benchmarking" / "locust" / "images.json"
 WORKLOADS_IMAGES = ROOT / "benchmarking" / "workloads" / "images.json"
 # The nodes', whatever the build host's.
 DEFAULT_PLATFORM = "linux/amd64"
-CLOUD_BUILDER = "gcr.io/cloud-builders/docker:24.0.9"
+# By digest as well as tag, so a rebuilt tag cannot change the build; run.json records it.
+CLOUD_BUILDER = "gcr.io/cloud-builders/docker:24.0.9@sha256:9fcfbddaf676527b2be4a6473bb37ed028a88bc55bc5cd9dcc9db4f7d9bcebee"
+# Of the uncommitted changes' digest in a dirty tree's image tag, which a
+# Docker tag (128) and the commit label (63) both take with the commit.
+DIRTY_DIGEST_LENGTH = 12
+# Set by automation-infra's Cloud Run job: the account its Cloud Builds run as,
+# which may push to the runs' repositories only, and where their source is
+# staged for it to read. Unset, a build runs as the project's default account.
+CLOUD_BUILD_SERVICE_ACCOUNT = os.environ.get("CLOUD_BUILD_SERVICE_ACCOUNT")
+CLOUD_BUILD_STAGING_DIR = os.environ.get("CLOUD_BUILD_STAGING_DIR")
 # What tar --exclude-vcs leaves out of the Cloud Build source.
 VCS_NAMES = {".git", ".gitignore", ".gitattributes", ".gitmodules"}
+
+
+def writers() -> list[str]:
+    """Who besides the runner may push to the runner infra's repository,
+    which the repository grants: the account Cloud Builds run as, if not the
+    project's default."""
+    return [f"serviceAccount:{CLOUD_BUILD_SERVICE_ACCOUNT}"] if CLOUD_BUILD_SERVICE_ACCOUNT else []
 
 
 class ImageError(RuntimeError):
@@ -97,11 +114,40 @@ def read_images(*files: Path) -> list[Image]:
 
 
 @functools.cache
-def tag() -> str:
-    """The commit the repo is at, so a manifest names the image built from the
-    code that rendered it. Read once, so a commit made during a run doesn't
-    change the tag between the build and what reads it."""
+def commit() -> str:
+    """The commit the repo is at. Read once, so a commit made during a run
+    doesn't change it between the build and what reads it."""
     return output(["git", "rev-parse", "HEAD"], cwd=ROOT).strip()
+
+
+def changes_digest(repo: Path) -> str:
+    """A digest of repo's uncommitted changes, untracked files included and
+    ignored ones not; empty for a clean tree."""
+    diff = subprocess.run(["git", "diff", "--binary", "HEAD"], cwd=repo, capture_output=True, check=True).stdout
+    untracked = output(["git", "ls-files", "-z", "--others", "--exclude-standard"], cwd=repo).split("\0")
+    if not diff and not any(untracked):
+        return ""
+    digest = hashlib.sha256(diff)
+    for path in sorted(p for p in untracked if p):
+        digest.update(path.encode() + b"\0")
+        if (repo / path).is_file():
+            digest.update(hashlib.sha256((repo / path).read_bytes()).digest())
+    return digest.hexdigest()
+
+
+@functools.cache
+def tag() -> str:
+    """What the images built from this tree are tagged: the commit, and for a
+    tree with uncommitted changes, here or in the submodule the images build
+    from, -dirty-<digest of them>. So a manifest names the image built from
+    the code that rendered it, and --no-build reuses only an image of exactly
+    this code. Read once, like commit."""
+    from . import substrate
+
+    changes = changes_digest(ROOT) + changes_digest(substrate.SUBSTRATE_DIR)
+    if not changes:
+        return commit()
+    return f"{commit()}-dirty-{hashlib.sha256(changes.encode()).hexdigest()[:DIRTY_DIGEST_LENGTH]}"
 
 
 def ref(repo: str, name: str, image_tag: str | None = None) -> str:
@@ -115,19 +161,34 @@ def image_ref(file: Path, repo: str, name: str) -> str:
     return ref(repo, name)
 
 
+def digest(image: str) -> str | None:
+    """The digest the registry serves for image, or None if it has none or
+    gcloud's account cannot read it."""
+    describe = ["gcloud", "artifacts", "docker", "images", "describe", image, "--format=value(image_summary.digest)"]
+    proc = subprocess.run(describe, capture_output=True, text=True)
+    value = proc.stdout.strip()
+    return value if not proc.returncode and value.startswith("sha256:") else None
+
+
+def check_pushed(repo: str, files: list[Path]) -> None:
+    """Raises ImageError unless every image of files is in repo, tagged tag()."""
+    absent = [ref(repo, image.name) for image in read_images(*files) if digest(ref(repo, image.name)) is None]
+    if absent:
+        raise ImageError(
+            "these images of this tree are not in the repository; the tag covers uncommitted changes, so a"
+            " changed tree needs them built again. Run without --no-build:\n" + "\n".join(f"  {i}" for i in absent)
+        )
+
+
 def pin(image: str) -> str:
     """The image pinned to the digest its registry serves for its tag now, so
     what reads it and what runs it are the same bits even if the tag moves."""
-    describe = ["gcloud", "artifacts", "docker", "images", "describe", image, "--format=value(image_summary.digest)"]
-    try:
-        digest = output(describe).strip()
-    except subprocess.CalledProcessError:
-        digest = ""
-    if not digest.startswith("sha256:"):
+    image_digest = digest(image)
+    if image_digest is None:
         raise ImageError(f"cannot resolve {image} to a digest; is it pushed, and can gcloud's account read it?")
     # Only the last path segment can carry a tag, which leaves a registry port alone.
     head, _, last = image.split("@", 1)[0].rpartition("/")
-    return f"{head}/{last.split(':', 1)[0]}@{digest}"
+    return f"{head}/{last.split(':', 1)[0]}@{image_digest}"
 
 
 def access_token(host: str) -> str:
@@ -193,11 +254,13 @@ def cloud_build_submit(steps: list[dict], pushed: list[str], paths: list[str], p
                 tar.add(ROOT / path, arcname=path, filter=without_vcs)
         config_file = Path(tmp) / "cloudbuild.json"
         config_file.write_text(json.dumps(config))
+        submit = ["gcloud", "builds", "submit", str(source), f"--config={config_file}", f"--project={project_id}"]
+        if CLOUD_BUILD_SERVICE_ACCOUNT:
+            submit.append(f"--service-account=projects/{project_id}/serviceAccounts/{CLOUD_BUILD_SERVICE_ACCOUNT}")
+        if CLOUD_BUILD_STAGING_DIR:
+            submit.append(f"--gcs-source-staging-dir={CLOUD_BUILD_STAGING_DIR}")
         # gcloud holds the build log back until the end when stdout isn't a terminal.
-        stream(
-            ["gcloud", "builds", "submit", str(source), f"--config={config_file}", f"--project={project_id}"],
-            env={"PYTHONUNBUFFERED": "1"},
-        )
+        stream(submit, env={"PYTHONUNBUFFERED": "1"})
 
 
 def cloud_build_and_push(images: list[Image], repo: str, image_tag: str, platform: str, project_id: str) -> None:
@@ -210,17 +273,20 @@ def cloud_build_and_push(images: list[Image], repo: str, image_tag: str, platfor
 
 
 def build_and_push(
-    cluster: Cluster,
+    repo: str,
+    project_id: str,
     files: list[Path],
     cloud_build: bool = False,
     login: bool = True,
     platform: str = DEFAULT_PLATFORM,
 ) -> None:
-    """Builds and pushes the images of files to the cluster's repository.
-    cloud_build is for a host without a Docker daemon; without login, a local
-    build uses the registry credentials Docker already has."""
+    """Builds and pushes the images of files to repo, tagged tag(). The
+    scenario-runner does it once per execution, into its own repository, which
+    every case's cluster pulls from. cloud_build is for a host without a
+    Docker daemon; without login, a local build uses the registry credentials
+    Docker already has."""
     images = read_images(*files)
     if cloud_build:
-        cloud_build_and_push(images, cluster.docker_repo, tag(), platform, cluster.project_id)
+        cloud_build_and_push(images, repo, tag(), platform, project_id)
     else:
-        docker_build_and_push(images, cluster.docker_repo, tag(), platform, login)
+        docker_build_and_push(images, repo, tag(), platform, login)

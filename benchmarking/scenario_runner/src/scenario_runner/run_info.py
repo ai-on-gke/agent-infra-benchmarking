@@ -14,12 +14,16 @@
 
 """What a run was made of that its reports cannot say themselves: the case,
 the cluster and its nodes, the WorkerPool, the ActorTemplate and its
-SandboxConfig, the images by digest and the commits. The master writes it into
-run.json beside the reports, with how the run went."""
+SandboxConfig, every image by digest, substrate's control plane included, the
+commits, and the tools and builders the images were made with. The master
+writes it into run.json beside the reports, with how the run went."""
 
 from __future__ import annotations
 
+import functools
 import json
+import platform
+import re
 import subprocess
 from collections import defaultdict
 from typing import Callable
@@ -146,6 +150,81 @@ def deployments(cluster: Cluster) -> dict:
     }
 
 
+# Substrate's control plane: ateapi, atelet, atenet, the controller and the
+# dataplane, which hack/install-ate.sh deploys into it.
+CONTROL_PLANE_NAMESPACE = "ate-system"
+
+
+def workload_of(pod: dict) -> str:
+    """The Deployment, DaemonSet, StatefulSet or Job a pod belongs to, or the
+    pod itself."""
+    owners = pod["metadata"].get("ownerReferences") or []
+    if not owners:
+        return f"Pod/{pod['metadata']['name']}"
+    owner = owners[0]
+    if owner["kind"] == "ReplicaSet":
+        suffix = (pod["metadata"].get("labels") or {}).get("pod-template-hash")
+        name = owner["name"].removesuffix(f"-{suffix}") if suffix else owner["name"]
+        return f"Deployment/{name}"
+    return f"{owner['kind']}/{owner['name']}"
+
+
+def pod_images(cluster: Cluster, namespace: str) -> dict:
+    """Every container image the namespace's pods run, by their workload and
+    container, as the manifest named it, with the digests the nodes resolved
+    it to: what ran, whatever tag the manifest named."""
+    images_by_workload: dict[str, dict[str, dict]] = defaultdict(dict)
+    for pod in _kubectl_json(cluster, "pods", namespace=namespace)["items"]:
+        spec = pod.get("spec") or {}
+        # The status's image is a bare image ID for an image named by digest.
+        named = {c["name"]: c.get("image") for c in spec.get("initContainers", []) + spec.get("containers", [])}
+        statuses = (pod.get("status") or {}).get("initContainerStatuses", []) + (pod.get("status") or {}).get(
+            "containerStatuses", []
+        )
+        for status in statuses:
+            image = named.get(status["name"]) or status["image"]
+            entry = images_by_workload[workload_of(pod)].setdefault(status["name"], {"image": image, "digests": []})
+            digest = (status.get("imageID") or "").rpartition("@")[2]
+            if digest and digest not in entry["digests"]:
+                entry["digests"].append(digest)
+    return dict(sorted(images_by_workload.items()))
+
+
+def _version(cmd: list[str], pattern: str = r"\S+") -> str | None:
+    """The tool's version, or None for a tool this machine does not have, such
+    as Docker where the images build on Cloud Build."""
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        return None
+    match = re.search(pattern, proc.stdout)
+    return match[0] if match else None
+
+
+@functools.cache
+def tools() -> dict:
+    """The versions of the tools on this machine that built and deployed the
+    run: Terraform applied its infra, ko and Docker built its images unless
+    Cloud Build did, kubectl and gcloud deployed it."""
+    ko = re.search(r"github\.com/google/ko (v\S+)", (substrate.SUBSTRATE_DIR / "hack/tools/ko/go.mod").read_text())
+    return {
+        "terraform": _version(["terraform", "version", "-json"], r'(?<="terraform_version": ")[^"]+'),
+        "kubectl": _version(["kubectl", "version", "--client", "-o", "json"], r'(?<="gitVersion": ")[^"]+'),
+        "gcloud": _version(["gcloud", "version", "--format=value(\"Google Cloud SDK\")"]),
+        "go": _version(["go", "env", "GOVERSION"]),
+        "docker": _version(["docker", "version", "--format", "{{.Client.Version}}"]),
+        "ko": ko[1] if ko else None,
+        "python": platform.python_version(),
+    }
+
+
+def builders(cloud_build: bool) -> dict:
+    """Where the images were built, and with Cloud Build the builder images."""
+    if not cloud_build:
+        return {"where": "local docker"}
+    return {"where": "cloud build", "docker": images.CLOUD_BUILDER, "go": substrate.GO_BUILDER}
+
+
 def infra(case: dict) -> dict:
     """The case's cluster spec, with the text of the tfvars file it names, so
     a published run says what hardware it asked for."""
@@ -159,7 +238,13 @@ def infra(case: dict) -> dict:
 
 
 def collect(
-    cluster: Cluster, case: dict, template_name: str | None, template: dict | None, image_refs: dict, bucket: str
+    cluster: Cluster,
+    case: dict,
+    template_name: str | None,
+    template: dict | None,
+    image_refs: dict,
+    bucket: str,
+    cloud_build: bool = False,
 ) -> dict:
     errors: dict[str, str] = {}
     sandbox_configs = {}
@@ -182,12 +267,19 @@ def collect(
         "actor_templates": {template_name: template} if template_name and template else {},
         "sandbox_configs": sandbox_configs,
         "deployments": _read("deployments", lambda: deployments(cluster), errors),
+        "control_plane_images": _read(
+            "control plane images", lambda: pod_images(cluster, CONTROL_PLANE_NAMESPACE), errors
+        ),
+        "worker_pool_images": _read("worker pool images", lambda: pod_images(cluster, worker_pool.NAMESPACE), errors),
         "images": image_refs,
         "locust_image": image_refs.get("locust-master"),
-        "commit": images.tag(),
+        "commit": images.commit(),
+        "image_tag": images.tag(),
         "commit_dirty": dirty,
         "substrate_commit": _read("substrate commit", lambda: output(["git", "rev-parse", "HEAD"], cwd=substrate.SUBSTRATE_DIR).strip(), errors),
         "substrate_version": _read("substrate version", substrate.build_version, errors),
+        "tools": _read("tool versions", tools, errors),
+        "builders": builders(cloud_build),
         "bucket": bucket,
     }
     if errors:

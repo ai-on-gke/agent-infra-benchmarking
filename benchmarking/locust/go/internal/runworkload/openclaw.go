@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // The openclaw actor's surface, mirrored from
@@ -34,10 +36,12 @@ const (
 
 	openclawInvokePath = "/invoke"
 
-	// The instruction we send to OpenClaw to trigger the mock agent loop.
+	// The instruction we send to OpenClaw to trigger the mock agent loop,
+	// with a nonce after it.
 	openclawPrompt = "do something please"
 
-	// What the mock agent replies when it has successfully finished the loop.
+	// What the mock agent replies when it has successfully finished the loop,
+	// followed by the nonce it found in the prompt.
 	openclawExpectedReply = "I have successfully executed the bash commands!"
 
 	textContentType = "text/plain"
@@ -67,17 +71,29 @@ func (openclawWorkload) DefaultTemplate() string { return openclawTemplate }
 // turn fails and 504 when one times out; neither is reachable from the fast
 // path, so the shared retry classification treating 5xx as "still activating"
 // stays true here.
+// SendInstruction sends a prompt carrying a fresh nonce, which mock-llm puts
+// in its last answer, so a reply counts only if it is this turn's: one that
+// openclaw printed from an earlier turn, or without reaching the LLM, fails.
 func (openclawWorkload) SendInstruction(ctx context.Context, actor actorRef) (bool, error) {
+	nonce := uuid.NewString()
+	want := openclawReplyFor(nonce)
 	return sendHTTPInstruction(ctx, actor, httpInstruction{
 		Method:      http.MethodPost,
 		Path:        openclawInvokePath,
 		ContentType: textContentType,
-		Body:        []byte(openclawPrompt),
+		Body:        []byte(openclawPromptFor(nonce)),
 		Verify: func(respBody []byte) error {
-			if !strings.Contains(string(respBody), openclawExpectedReply) {
-				return fmt.Errorf("unexpected /invoke reply: got %q, want it to contain %q", string(respBody), openclawExpectedReply)
+			if !strings.Contains(string(respBody), want) {
+				return fmt.Errorf("unexpected /invoke reply: got %q, want it to contain %q", string(respBody), want)
 			}
 			return nil
 		},
 	})
 }
+
+// openclawPromptFor and openclawReplyFor carry the nonce in the form mock-llm
+// reads it from the prompt and writes it into its answer
+// (workloads/images/mock-llm/mock_llm.py).
+func openclawPromptFor(nonce string) string { return openclawPrompt + " (request " + nonce + ")" }
+
+func openclawReplyFor(nonce string) string { return openclawExpectedReply + " (request " + nonce + ")" }

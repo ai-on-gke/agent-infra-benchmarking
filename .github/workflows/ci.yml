@@ -54,9 +54,32 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The run info tests read the ko version substrate pins.
+          submodules: true
           persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          # The master image's.
+          python-version: "3.11"
+      # The preflight tests evaluate the cluster configs with it.
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.6
+          terraform_wrapper: false
       - name: compile
         run: python3 -m compileall -q benchmarking/scenario_runner/src benchmarking/locust/master-image benchmark-charts
+      - name: scenario-runner tests
+        run: |
+          python3 -m venv "$RUNNER_TEMP/runner"
+          "$RUNNER_TEMP/runner/bin/pip" install --quiet --require-hashes -r benchmarking/scenario_runner/requirements.txt
+          PYTHONPATH=benchmarking/scenario_runner/src "$RUNNER_TEMP/runner/bin/python" -m unittest discover \
+            -s benchmarking/scenario_runner/tests -t benchmarking/scenario_runner
+      - name: master image tests
+        run: |
+          python3 -m venv "$RUNNER_TEMP/master"
+          "$RUNNER_TEMP/master/bin/pip" install --quiet --require-hashes -r benchmarking/locust/master-image/requirements.txt
+          "$RUNNER_TEMP/master/bin/python" -W ignore -m unittest discover \
+            -s benchmarking/locust/master-image/unit_tests -t benchmarking/locust/master-image
 
   terraform:
     runs-on: ubuntu-latest
@@ -68,11 +91,12 @@ jobs:
         with:
           terraform_version: 1.15.6
       - name: terraform fmt
-        run: terraform fmt -check -recursive benchmarking/scenarios/infra/ benchmarking/scenario_runner/infra/
+        run: terraform fmt -check -recursive benchmarking/scenarios/infra/ benchmarking/scenario_runner/infra/ automation-infra/
       - name: terraform validate
         run: |
           for config in benchmarking/scenarios/infra/clusters/common benchmarking/scenarios/infra/clusters/dummy \
-              benchmarking/scenario_runner/infra; do
+              benchmarking/scenario_runner/infra automation-infra/terraform/modules/cloud-run \
+              automation-infra/deployments/substrate-bench-auto; do
             terraform -chdir="$config" init -backend=false -input=false
             terraform -chdir="$config" validate
           done
