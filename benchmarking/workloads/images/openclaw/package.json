@@ -2,9 +2,9 @@
   "name": "openclaw-workload",
   "private": true,
   "dependencies": {
-    "openclaw": "2026.9.7"
+    "openclaw": "2026.9.33"
   },
   "allowScripts": {
-    "openclaw@2026.9.7": true
+    "openclaw@2026.9.33": true
   }
 }
