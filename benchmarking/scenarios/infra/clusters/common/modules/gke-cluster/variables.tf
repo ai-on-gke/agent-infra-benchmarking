@@ -149,9 +149,40 @@ variable "node_pools" {
     # machine types; pick n2/c2/c3 or similar. Independent of sandbox_gvisor -
     # a microvm pool is not a gVisor pool.
     enable_nested_virtualization = optional(bool, false)
+    # Runs the pool on GCE bare metal instances (a "-metal" machine_type, e.g.
+    # c3-standard-192-metal) instead of a regular VM. There is no Google
+    # hypervisor layer on these at all, so /dev/kvm is already there for the
+    # microvm sandbox class without enable_nested_virtualization - leave that
+    # off, GCE rejects the combination. A "-metal" machine type also only boots
+    # off Hyperdisk, so a bare_metal pool must set disk_type to a hyperdisk-*
+    # type (GCE rejects pd-* with a 400). Bare metal is capacity-constrained
+    # and often stocks out per zone; see
+    # https://cloud.google.com/compute/docs/bare-metal-instances.
+    bare_metal = optional(bool, false)
   }))
   default = {
     default = {}
+  }
+
+  validation {
+    condition = alltrue([
+      for pool in var.node_pools : !pool.bare_metal || can(regex("-metal$", pool.machine_type))
+    ])
+    error_message = "node_pools: a pool with bare_metal = true must use a \"-metal\" machine_type (e.g. c3-standard-192-metal)."
+  }
+
+  validation {
+    condition = alltrue([
+      for pool in var.node_pools : !(pool.bare_metal && pool.enable_nested_virtualization)
+    ])
+    error_message = "node_pools: bare_metal and enable_nested_virtualization are mutually exclusive - a \"-metal\" node already exposes /dev/kvm natively and GCE rejects nested virtualization on it. Set only one."
+  }
+
+  validation {
+    condition = alltrue([
+      for pool in var.node_pools : !pool.bare_metal || startswith(pool.disk_type, "hyperdisk-")
+    ])
+    error_message = "node_pools: a pool with bare_metal = true must set disk_type to a hyperdisk-* type (e.g. hyperdisk-balanced) - \"-metal\" machine types do not boot off pd-* disks and GCE rejects them with a 400."
   }
 }
 

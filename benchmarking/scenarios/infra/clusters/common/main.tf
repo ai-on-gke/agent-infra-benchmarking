@@ -89,8 +89,13 @@ module "cluster" {
       max_node_count = var.sandboxed_max_node_count
       node_locations = [var.zone]
       labels         = merge(local.substrate_version_label, { "benchmarking-worker" = "true" })
-      # The microvm guests boot on /dev/kvm.
-      enable_nested_virtualization = var.sandbox_class == "microvm"
+      # The microvm guests boot on /dev/kvm. A "-metal" host exposes it
+      # natively, so bare metal takes it instead of nested virtualization (the
+      # two are mutually exclusive) and moves to the Hyperdisk a "-metal"
+      # machine type requires.
+      bare_metal                   = var.sandboxed_bare_metal
+      enable_nested_virtualization = var.sandbox_class == "microvm" && !var.sandboxed_bare_metal
+      disk_type                    = var.sandboxed_bare_metal ? "hyperdisk-balanced" : "pd-balanced"
       # worker-pool.yaml.tmpl's WorkerPool already tolerates this taint; without
       # it actually applied to the nodes, nothing stops substrate's own
       # control-plane pods (and anything else) from also landing here
