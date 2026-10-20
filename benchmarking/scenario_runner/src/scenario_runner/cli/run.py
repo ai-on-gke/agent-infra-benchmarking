@@ -44,6 +44,7 @@ from .. import (
     names,
     preflight,
     reports,
+    sandbox_benchmark,
     substrate,
     summary,
     terraform,
@@ -312,13 +313,15 @@ def check_requirements(args: argparse.Namespace, cases: dict[str, dict]) -> None
 def build_images(args: argparse.Namespace, cases: dict[str, dict], repo: str) -> None:
     """Builds the benchmark's images the cases run into the runner infra's
     repository once, for every case and repeat to pull from."""
-    benchmarks = [case for case in cases.values() if case["type"] != "noop"]
-    files = list(dict.fromkeys(file for case in benchmarks for file in IMAGE_FILES[case["type"]]))
+    benchmarks = {name: case for name, case in cases.items() if case["type"] != "noop"}
+    files = list(dict.fromkeys(file for case in benchmarks.values() for file in IMAGE_FILES[case["type"]]))
     if not files:
         return
-    # env's images are only read when it is deployed.
+    # env's images are only read when it is deployed, for the substrate provider.
     env = not args.no_deploy_workloads and any(
-        "substrate" in case["comparator"]["providers"] for case in benchmarks if case["type"] == "sandbox-benchmark"
+        "substrate" in sandbox_benchmark.check_case(name, case, deploy_workloads=True)["comparator"]["providers"]
+        for name, case in benchmarks.items()
+        if case["type"] == "sandbox-benchmark"
     )
     if args.no_build:
         images.check_pushed(repo, files)

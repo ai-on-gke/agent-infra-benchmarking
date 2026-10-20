@@ -202,6 +202,40 @@ class Jobs(unittest.TestCase):
             locust.wait_for_jobs(self.cluster, lambda grace: None)
 
 
+class BuildImages(unittest.TestCase):
+    """What the runner builds once into its repository, by the cases' types."""
+
+    def built(self, cases: dict) -> tuple[list, bool]:
+        import argparse
+
+        from scenario_runner import ate_env, images, sandbox_benchmark
+
+        args = argparse.Namespace(no_build=False, no_deploy_workloads=False, no_docker_login=False, cloud_build=True,
+                                  project_id="p")  # fmt: skip
+        with mock.patch.object(images, "build_and_push") as build, mock.patch.object(ate_env, "build_images") as env, \
+             mock.patch.object(sandbox_benchmark, "test_names", return_value=None):  # fmt: skip
+            run.build_images(args, cases, "repo")
+        return (build.call_args.args[2] if build.called else []), env.called
+
+    def test_locust_builds_its_and_the_workloads(self):
+        from scenario_runner import images
+
+        files, env = self.built({"a": {"type": "locust"}, "b": {"type": "noop"}})
+        self.assertEqual(files, [images.LOCUST_IMAGES, images.WORKLOADS_IMAGES])
+        self.assertFalse(env)
+
+    def test_sandbox_benchmark_builds_env_only_for_substrate(self):
+        from scenario_runner import images
+
+        case = {"type": "sandbox-benchmark", "comparator": {"tests": ["test_x"], "runs": 1}}
+        self.assertEqual(self.built({"a": case}), ([images.SANDBOX_BENCHMARK_IMAGES], True))
+        cloud = {**case, "comparator": {**case["comparator"], "providers": ["e2b"]}}
+        self.assertEqual(self.built({"a": cloud}), ([images.SANDBOX_BENCHMARK_IMAGES], False))
+
+    def test_noop_builds_nothing(self):
+        self.assertEqual(self.built({"a": {"type": "noop"}}), ([], False))
+
+
 class BenchmarkRun(unittest.TestCase):
     def test_options_reach_the_type_s_run_as_the_runner_passes_them(self):
         from scenario_runner import benchmark, monitoring

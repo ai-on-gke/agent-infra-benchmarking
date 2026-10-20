@@ -88,7 +88,10 @@ def missing_requirements(cloud_build: bool = False) -> list[str]:
 def build_images(repo: str, project_id: str, cloud_build: bool = False, login: bool = True) -> None:
     version = build_version()
     log(f"agent-sandbox: building the {version} images into {repo}")
-    images.docker_build_and_push(IMAGES, repo, version, images.DEFAULT_PLATFORM, login)
+    if cloud_build:
+        images.cloud_build_and_push(IMAGES, repo, version, images.DEFAULT_PLATFORM, project_id)
+    else:
+        images.docker_build_and_push(IMAGES, repo, version, images.DEFAULT_PLATFORM, login)
 
 
 def controller_image_ref(repo: str) -> str:
