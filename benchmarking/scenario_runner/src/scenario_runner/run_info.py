@@ -130,10 +130,10 @@ def nodes(cluster: Cluster) -> dict:
     }
 
 
-def deployments(cluster: Cluster) -> dict:
+def deployments(cluster: Cluster, namespace: str) -> dict:
     """The WorkerPool's workers and what the workload calls, such as mock-llm,
     which run as Deployments in the pool's namespace."""
-    items = _kubectl_json(cluster, "deployments", namespace=worker_pool.NAMESPACE)["items"]
+    items = _kubectl_json(cluster, "deployments", namespace=namespace)["items"]
     return {
         d["metadata"]["name"]: {
             "replicas": d["spec"].get("replicas"),
@@ -159,8 +159,16 @@ def infra(case: dict) -> dict:
 
 
 def collect(
-    cluster: Cluster, case: dict, template_name: str | None, template: dict | None, image_refs: dict, bucket: str
+    cluster: Cluster,
+    case: dict,
+    template_name: str | None,
+    template: dict | None,
+    image_refs: dict,
+    bucket: str,
+    pool: tuple[str, str] = (worker_pool.NAMESPACE, worker_pool.NAME),
 ) -> dict:
+    """pool is the namespace and name of the WorkerPool the run's actors run on."""
+    pool_namespace, pool_name = pool
     errors: dict[str, str] = {}
     sandbox_configs = {}
     config_name = ((template or {}).get("sandboxConfig") or {}).get("configName")
@@ -170,13 +178,13 @@ def collect(
     if case.get("provider") == "agent-sandbox":
         pool = _read(
             "warm pool",
-            lambda: _kubectl_json(cluster, "sandboxwarmpool", f"{template_name}-warm-pool", namespace=worker_pool.NAMESPACE),
+            lambda: _kubectl_json(cluster, "sandboxwarmpool", f"{template_name}-warm-pool", namespace=pool_namespace),
             errors,
         )
     else:
         pool = _read(
             "worker pool",
-            lambda: _kubectl_json(cluster, "workerpool", worker_pool.NAME, namespace=worker_pool.NAMESPACE),
+            lambda: _kubectl_json(cluster, "workerpool", pool_name, namespace=pool_namespace),
             errors,
         )
     dirty = _read("repo state", lambda: bool(output(["git", "status", "--porcelain"], cwd=images.ROOT).strip()), errors)
@@ -188,9 +196,8 @@ def collect(
         "worker_pool": {"spec": pool.get("spec"), "status": pool.get("status")} if pool else None,
         "actor_templates": {template_name: template} if template_name and template else {},
         "sandbox_configs": sandbox_configs,
-        "deployments": _read("deployments", lambda: deployments(cluster), errors),
+        "deployments": _read("deployments", lambda: deployments(cluster, pool_namespace), errors),
         "images": image_refs,
-        "locust_image": image_refs.get("locust-master"),
         "commit": images.tag(),
         "commit_dirty": dirty,
         "provider": case.get("provider", "agent-substrate"),
@@ -200,6 +207,9 @@ def collect(
         "agent_sandbox_version": _read("agent-sandbox version", agent_sandbox.build_version, errors) if case.get("provider") == "agent-sandbox" else None,
         "bucket": bucket,
     }
+    # A locust run's run.json keeps the key it has always had.
+    if "locust-master" in image_refs:
+        info["locust_image"] = image_refs["locust-master"]
     if errors:
         info["run_info_errors"] = errors
     return info

@@ -161,3 +161,98 @@ execution only:
 ```bash
 automation-infra/tools/trigger --deployment="$DEPLOYMENT" --scenario=glutton
 ```
+
+## Keeping your own runs' reports in BigQuery
+
+A run from your machine keeps its reports only in `reports/` once its cluster
+is gone. To query them in BigQuery, as the scheduled runs' are, apply
+[`dev/reports`](dev/reports): a bucket and a dataset of views over it, with no
+Cloud Run job. Then point your runs at its folder:
+
+```bash
+./benchmarking/tools/run --report-deployment=automation-infra/dev/reports --scenario glutton
+```
+
+### Creating the reports deployment
+
+Its Terraform state stays in `dev/reports/terraform.tfstate`, gitignored, so
+each checkout has one. Keep the file: destroying the deployment needs it.
+
+1. Log in to gcloud and for Application Default Credentials, as in steps 1-2 of
+   [Preparing](#preparing).
+
+2. Set the project and the deployment's name, which the steps below use. The
+   name also names the bucket, `$DEPLOYMENT-reports`, which must not be taken
+   in any project: 6-30 lowercase letters, digits and hyphens, starting with a
+   letter.
+
+   ```bash
+   PROJECT_ID='<YOUR_PROJECT>' DEPLOYMENT='<DEPLOYMENT_NAME>'
+   ```
+
+3. Write its `terraform.tfvars`. If your runs' clusters are in another project
+   than `$PROJECT_ID`, also add `writer_project_ids = ["<that project>"]`, so
+   their uploads are allowed:
+
+   ```bash
+   printf 'project_id = "%s"\nname       = "%s"\n' "$PROJECT_ID" "$DEPLOYMENT" > automation-infra/dev/reports/terraform.tfvars
+   ```
+
+4. Initialize it:
+
+   ```bash
+   terraform -chdir=automation-infra/dev/reports init
+   ```
+
+5. Apply it. It creates the bucket, the dataset, the bucket's grant to the
+   clusters and the dataset's tables and views:
+
+   ```bash
+   terraform -chdir=automation-infra/dev/reports apply
+   ```
+
+### Running into it
+
+`--report-deployment` reads the bucket and the prefix from the folder's
+`reports` output, as `terraform output` shows them, and sends a run's reports
+to `gs://$DEPLOYMENT-reports/data/<run-id>/<record>/` rather than to the
+cluster's own bucket. It works with any other option, `--dev-infra` included,
+and a local copy still lands in `reports/<run-id>/`:
+
+```bash
+./benchmarking/tools/run --report-deployment=automation-infra/dev/reports --scenario glutton
+```
+
+The run uploads the Jobs' logs with your own credentials, so your account
+needs write access to the bucket; `Owner` of the project has it.
+
+### Querying the reports
+
+The dataset is the deployment's name with underscores for hyphens. The views
+are the same as [substrate-bench-auto's](deployments/substrate-bench-auto/README.md#querying-the-reports),
+each a row per run and record. A view fails until a run has written the file it
+reads, so a sandbox-benchmark case's views work only after one has run.
+
+Each glutton or openclaw run's steady-state latency:
+
+```bash
+bq query --project_id="$PROJECT_ID" --use_legacy_sql=false \
+  "SELECT run_id, test_case, requests_per_sec, p50_ms, p95_ms FROM ${DEPLOYMENT//-/_}.locust_stats_steady WHERE name = 'CycleTime' ORDER BY 1, 2"
+```
+
+Each sandbox-benchmark run's metrics, per provider:
+
+```bash
+bq query --project_id="$PROJECT_ID" --use_legacy_sql=false \
+  "SELECT run_id, test_case, test, provider, metric, mean_ms, stddev_ms FROM ${DEPLOYMENT//-/_}.sandbox_benchmark_comparison ORDER BY 1, 2, 3, 5, 4"
+```
+
+### Removing it
+
+The bucket is not deleted while it holds reports. To drop them and everything
+else the deployment created:
+
+```bash
+gcloud storage rm --recursive "gs://$DEPLOYMENT-reports/**"
+terraform -chdir=automation-infra/dev/reports destroy
+```

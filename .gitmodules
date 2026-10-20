@@ -4,3 +4,10 @@
 [submodule "dependency-repos/agent-sandbox"]
 	path = dependency-repos/agent-sandbox
 	url = https://github.com/kubernetes-sigs/agent-sandbox
+[submodule "dependency-repos/ai-sandbox-benchmark"]
+	path = dependency-repos/ai-sandbox-benchmark
+	url = https://github.com/ArthurKamalov/ai-sandbox-benchmark
+	branch = add-substrape
+[submodule "dependency-repos/env"]
+	path = dependency-repos/env
+	url = https://github.com/agent-substrate/env

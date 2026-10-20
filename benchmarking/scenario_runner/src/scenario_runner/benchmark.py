@@ -18,13 +18,25 @@ from __future__ import annotations
 
 import argparse
 
-from . import images, locust, monitoring, workloads
+from . import ate_env, images, locust, monitoring, reports, sandbox_benchmark, workloads
 from .cluster import Cluster
 from .log import log
 
-RUNNERS = {"locust": locust}
+RUNNERS = {"locust": locust, "sandbox-benchmark": sandbox_benchmark}
 # What a failed run raises besides CalledProcessError.
-ERRORS = (locust.LocustError, workloads.WorkloadError, images.ImageError, monitoring.MonitoringError)
+ERRORS = (
+    locust.LocustError,
+    sandbox_benchmark.SandboxBenchmarkError,
+    ate_env.EnvError,
+    reports.ReportError,
+    workloads.WorkloadError,
+    images.ImageError,
+    monitoring.MonitoringError,
+)
+# A run that timed out is still going, so a series stops at it.
+TIMEOUTS = (locust.LocustTimeout, sandbox_benchmark.SandboxBenchmarkTimeout)
+# The types whose repeats summary.write can summarize.
+SUMMARIZED = {"locust"}
 
 
 def types() -> list[str]:
@@ -38,7 +50,7 @@ def check(name: str, case: dict) -> None:
 
 def check_run_id(run_id: str) -> str:
     # The runs' pods are labeled with it.
-    if not locust.LABEL_RE.fullmatch(run_id):
+    if not reports.LABEL_RE.fullmatch(run_id):
         raise argparse.ArgumentTypeError(
             f"{run_id!r}: use at most 63 letters, digits, '-', '_' and '.', starting and ending with a letter or digit"
         )

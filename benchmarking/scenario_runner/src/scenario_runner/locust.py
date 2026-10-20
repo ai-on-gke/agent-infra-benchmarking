@@ -21,29 +21,18 @@ from __future__ import annotations
 
 import base64
 import json
-import re
 import subprocess
-import threading
 import time
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from string import Template
-from typing import Callable, Iterator
+from typing import Callable
 
-from google.cloud import storage
-
-from . import RUNNER_DIR, images, run_info, worker_pool, workloads
+from . import RUNNER_DIR, images, jobs, reports, run_info, worker_pool, workloads
 from .cluster import Cluster
 from .log import ON_CLOUD_RUN, log
-from .process import output, stream
+from .process import stream
 
 MANIFESTS_DIR = RUNNER_DIR.parent / "locust" / "manifests"
-# Where a local run copies the master's uploads to, as <run-id>/<case>/ beneath
-# it, as they are under the report prefix in the bucket.
-REPORTS_DIR = RUNNER_DIR.parent.parent / "reports"
-# The default report prefix, which a case's own bucket deletes reports under
-# after its report_retention_days.
-REPORT_PREFIX = "reports"
 # Have to match metadata.name and namespace in the manifests.
 MASTER_JOB = "locust-master"
 WORKER_JOB = "boomer-worker"
@@ -62,11 +51,6 @@ DEFAULT_MAX_FAILURE_RATIO = 0.01
 # The worker's --atespace default, which its actors are created in unless the
 # case's `worker` sets `atespace`.
 ACTOR_ATESPACE = "benchmark"
-# How long after the run its actors get to be gone before the ones left are
-# recorded in cleanup.json.
-ACTOR_DELETE_WAIT_SECS = 60
-# The run id and case name end up as label values.
-LABEL_RE = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?")
 
 
 class LocustError(RuntimeError):
@@ -94,7 +78,7 @@ def flags(values: dict) -> list[str]:
 
 def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     """The case with its defaults filled in."""
-    if not LABEL_RE.fullmatch(name):
+    if not reports.LABEL_RE.fullmatch(name):
         raise ValueError(f"case name {name!r} is not a valid label value")
     master, worker = case.get("master"), case.get("worker")
     if worker is None:
@@ -158,17 +142,6 @@ def render(manifest: str, values: dict[str, str]) -> str:
     return Template((MANIFESTS_DIR / manifest).read_text()).substitute(values)
 
 
-def job_status(cluster: Cluster, job: str) -> tuple[int, int]:
-    """The Job's succeeded and failed pod counts; none for one not found."""
-    proc = subprocess.run(
-        cluster.kubectl("get", "job", job, "-o=jsonpath={.status.succeeded}|{.status.failed}", namespace=NAMESPACE),
-        capture_output=True,
-        text=True,
-    )
-    succeeded, _, failed = proc.stdout.partition("|") if proc.returncode == 0 else ("", "", "")
-    return int(succeeded or 0), int(failed or 0)
-
-
 def wait_master_ready(cluster: Cluster) -> None:
     """Boomer tries the master once at startup and doesn't retry, so the worker
     goes in only once this returns."""
@@ -184,7 +157,7 @@ def wait_master_ready(cluster: Cluster) -> None:
     while time.monotonic() < deadline:
         if subprocess.run(ready, capture_output=True, text=True).stdout == "True":
             return
-        if any(job_status(cluster, MASTER_JOB)):
+        if any(jobs.job_status(cluster, MASTER_JOB, NAMESPACE)):
             raise LocustError(f"{MASTER_JOB} ended before it was ready: kubectl logs job/{MASTER_JOB} -n {NAMESPACE}")
         time.sleep(2)
     try:
@@ -194,36 +167,13 @@ def wait_master_ready(cluster: Cluster) -> None:
     raise LocustError(f"the {MASTER_JOB} pod was not ready within {POD_START_TIMEOUT_SECS}s")
 
 
-@contextmanager
-def master_logs(cluster: Cluster) -> Iterator[Callable[[int], None]]:
-    """Logs the master's output as it comes, and yields what stops it, after
-    giving it up to that many seconds to print its last lines and end."""
-    follow = cluster.kubectl("logs", "--follow", f"job/{MASTER_JOB}", namespace=NAMESPACE)
-    proc = subprocess.Popen(follow, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    reader = threading.Thread(target=lambda: [log(line.rstrip("\n")) for line in proc.stdout], daemon=True)
-    reader.start()
-
-    def stop(grace: int = 0) -> None:
-        try:
-            proc.wait(grace)
-        except subprocess.TimeoutExpired:
-            proc.terminate()
-            proc.wait()
-        reader.join()
-
-    try:
-        yield stop
-    finally:
-        stop()
-
-
 def wait_for_jobs(cluster: Cluster, stop_logs: Callable[[int], None]) -> None:
     """Waits for both Jobs to end rather than the first to fail, as each one's
     log is part of the run."""
     log("locust: waiting for the run to finish")
     deadline = time.monotonic() + WAIT_TIMEOUT_SECS
     while time.monotonic() < deadline:
-        statuses = {job: job_status(cluster, job) for job in (MASTER_JOB, WORKER_JOB)}
+        statuses = {job: jobs.job_status(cluster, job, NAMESPACE) for job in (MASTER_JOB, WORKER_JOB)}
         if all(any(status) for status in statuses.values()):
             stop_logs(10)
             failed = [job for job, (succeeded, _) in statuses.items() if not succeeded]
@@ -245,136 +195,7 @@ def stop_run(cluster: Cluster) -> bool:
     actors, then writes and uploads the reports before the pod goes. The worker
     Job ends once its master is gone."""
     log(f"locust: interrupted; stopping {MASTER_JOB} so it can upload what it recorded")
-    delete = ["delete", "job", MASTER_JOB, "--ignore-not-found", "--cascade=foreground", "--wait",
-              f"--timeout={STOP_TIMEOUT_SECS}s"]  # fmt: skip
-    stopped = True
-    for cmd in (delete, [*delete[:2], WORKER_JOB, *delete[3:]]):
-        proc = subprocess.run(cluster.kubectl(*cmd, namespace=NAMESPACE), capture_output=True, text=True)
-        if proc.returncode:
-            stopped = False
-            log(f"locust: {' '.join(cmd[:3])} failed: {proc.stderr.strip()}", "WARNING")
-    return stopped
-
-
-def refuse_reused(bucket: str, report_prefix: str, run_id: str, name: str) -> None:
-    """Refuses a run id the case was already recorded under, whose reports
-    the bucket or the local copy hold: they would be mixed with this run's."""
-    prefix = f"{report_prefix}/{run_id}/{name}/"
-    local = REPORTS_DIR / run_id / name
-    if local.is_dir() and any(local.iterdir()):
-        raise LocustError(f"{local} already holds reports of {name} under run {run_id}; pick another run id")
-    try:
-        found = next(iter(storage.Client().list_blobs(bucket, prefix=prefix, max_results=1)), None)
-    except Exception as exc:
-        raise LocustError(f"cannot check gs://{bucket}/{prefix} for an earlier run: {exc}") from None
-    if found is not None:
-        raise LocustError(f"gs://{bucket}/{prefix} already holds reports; pick another run id")
-
-
-def record_cleanup(cluster: Cluster, atespace: str, bucket: str, report_prefix: str, run_id: str, name: str) -> None:
-    """Deletes the actors a run left in its atespace and writes what it found
-    as cleanup.json beside the reports, in the bucket and locally. The worker
-    deletes its own actors as the run ends; one it lost track of, or one stuck
-    DELETING (a substrate fault no delete clears), would otherwise go unrecorded
-    and, on a dev infra, hold a worker the next run cannot use."""
-    record = {
-        "atespace": atespace,
-        "listed": False,
-        "deleted": 0,
-        # Actor name -> the error its delete was refused with.
-        "delete_failed": {},
-        "wait_secs": ACTOR_DELETE_WAIT_SECS,
-        "left": [],
-    }
-    try:
-        with workloads.kubectl_ate(cluster) as ate:
-
-            def actors() -> list[dict]:
-                listed = json.loads(output(ate("get", "actors", "-a", atespace, "-o", "json")))
-                return [
-                    {"name": a["metadata"]["name"], "state": (a.get("status") or {}).get("state", "ACTOR_STATE_UNKNOWN")}
-                    for a in listed.get("actors") or []
-                ]
-
-            # Kept current, so a list that fails later leaves the last one seen.
-            left = record["left"] = actors()
-            record["listed"] = True
-            for actor in left:
-                proc = subprocess.run(ate("delete", "actor", actor["name"], "-a", atespace, "--any-state"),
-                                      capture_output=True, text=True)  # fmt: skip
-                if proc.returncode:
-                    record["delete_failed"][actor["name"]] = proc.stderr.strip()
-            record["deleted"] = len(left) - len(record["delete_failed"])
-            deadline = time.monotonic() + ACTOR_DELETE_WAIT_SECS
-            while left and time.monotonic() < deadline:
-                time.sleep(5)
-                left = record["left"] = actors()
-    except (subprocess.CalledProcessError, OSError, ValueError, KeyError) as exc:
-        log(f"locust: could not list the actors left in {atespace}: {exc}", "WARNING")
-    for actor, error in record["delete_failed"].items():
-        log(f"locust: could not delete actor {actor} in {atespace}: {error}", "WARNING")
-    if record["left"]:
-        names = ", ".join(f"{a['name']} ({a['state']})" for a in record["left"])
-        log(f"locust: {len(record['left'])} actor(s) still in {atespace} {ACTOR_DELETE_WAIT_SECS}s after"
-            f" deleting them: {names}", "WARNING")  # fmt: skip
-    elif record["listed"]:
-        log(f"locust: no actors left in {atespace} ({record['deleted']} deleted)")
-    body = json.dumps(record, indent=2) + "\n"
-    try:
-        storage.Client().bucket(bucket).blob(f"{report_prefix}/{run_id}/{name}/cleanup.json").upload_from_string(body)
-    except Exception as exc:
-        log(f"locust: could not upload cleanup.json: {exc}", "WARNING")
-    if not ON_CLOUD_RUN:
-        local = REPORTS_DIR / run_id / name
-        local.mkdir(parents=True, exist_ok=True)
-        (local / "cleanup.json").write_text(body)
-
-
-def upload_logs(cluster: Cluster, bucket: str, report_prefix: str, run_id: str, name: str) -> None:
-    """Puts each Job's log, as <job>.log, beside what the master uploaded to
-    bucket. Taken from the pods rather than uploaded by them so a crash is in
-    it too. Best-effort: a log not uploaded is still on its pod until the Job's
-    TTL."""
-    prefix = f"{report_prefix}/{run_id}/{name}"
-    for job in (MASTER_JOB, WORKER_JOB):
-        proc = subprocess.run(
-            cluster.kubectl("logs", f"job/{job}", namespace=NAMESPACE), capture_output=True, text=True
-        )
-        if proc.returncode != 0:
-            log(f"locust: no log of {job} to upload: {proc.stderr.strip()}", "WARNING")
-            continue
-        uri = f"gs://{bucket}/{prefix}/{job}.log"
-        try:
-            storage.Client().bucket(bucket).blob(f"{prefix}/{job}.log").upload_from_string(
-                proc.stdout, content_type="text/plain"
-            )
-        except Exception as exc:
-            log(f"locust: could not upload {uri}: {exc}", "WARNING")
-        else:
-            log(f"locust: uploaded {uri}")
-
-
-def download_reports(bucket: str, report_prefix: str, run_id: str, name: str) -> None:
-    """Copies what the master uploaded into REPORTS_DIR/<run_id>/<name>/, while
-    the bucket, if it is the case's own, is still there. Best-effort: a failed
-    copy loses only the local one."""
-    prefix = f"{report_prefix}/{run_id}/{name}/"
-    dest = REPORTS_DIR / run_id / name
-    log(f"locust: downloading the reports in gs://{bucket}/{prefix} to {dest}")
-    try:
-        blobs = list(storage.Client().list_blobs(bucket, prefix=prefix))
-        for blob in blobs:
-            path = dest / blob.name.removeprefix(prefix)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            blob.download_to_filename(path)
-            log(f"locust: downloaded {path}")
-    except Exception as exc:
-        log(f"locust: could not download gs://{bucket}/{prefix}: {exc}", "WARNING")
-        return
-    if blobs:
-        log(f"locust: downloaded {len(blobs)} report files to {dest}")
-    else:
-        log(f"locust: no reports in gs://{bucket}/{prefix} to download", "WARNING")
+    return jobs.stop(cluster, (MASTER_JOB, WORKER_JOB), NAMESPACE, STOP_TIMEOUT_SECS)
 
 
 def run(
@@ -387,7 +208,7 @@ def run(
     cloud_build: bool = False,
     docker_login: bool = True,
     report_bucket: str | None = None,
-    report_prefix: str = REPORT_PREFIX,
+    report_prefix: str = reports.REPORT_PREFIX,
     test_case: str | None = None,
     repeat: int = 0,
 ) -> None:
@@ -407,11 +228,11 @@ def run(
             f" {cluster.sandbox_class}; set the cluster's sandbox_class to match"
         )
     run_id = run_id or f"{datetime.now(timezone.utc):%Y%m%dt%H%M%Sz}-{images.tag()}"
-    if not LABEL_RE.fullmatch(run_id):
+    if not reports.LABEL_RE.fullmatch(run_id):
         raise ValueError(f"run id {run_id!r} is not a valid label value")
     bucket = report_bucket or cluster.bucket
     # Before the build, which is the slow part.
-    refuse_reused(bucket, report_prefix, run_id, name)
+    reports.refuse_reused(bucket, report_prefix, run_id, name)
 
     if build:
         # The workload images are only read when the workloads are deployed.
@@ -553,7 +374,7 @@ roleRef:
     still_running = False
     try:
         wait_master_ready(cluster)
-        with master_logs(cluster) as stop_logs:
+        with jobs.follow_logs(cluster, MASTER_JOB, NAMESPACE) as stop_logs:
             apply(cluster, render("worker-job.yaml", values))
             wait_for_jobs(cluster, stop_logs)
     except LocustTimeout:
@@ -573,11 +394,11 @@ roleRef:
                 log(f"locust: agent-sandbox cleanup: {rec['claims_deleted']} claims, {rec['sandboxes_deleted']} sandboxes deleted")
             else:
                 atespace = case["worker"].get("atespace") or ACTOR_ATESPACE
-                record_cleanup(cluster, atespace, bucket, report_prefix, run_id, name)
-        upload_logs(cluster, bucket, report_prefix, run_id, name)
+                reports.record_cleanup(cluster, atespace, bucket, report_prefix, run_id, name)
+        reports.upload_logs(cluster, NAMESPACE, (MASTER_JOB, WORKER_JOB), bucket, report_prefix, run_id, name)
         # A failed run's reports are kept too. On Cloud Run they'd go with the
         # container, so they stay only in the bucket.
         if ON_CLOUD_RUN:
             log(f"locust: on Cloud Run, so the reports stay only in gs://{bucket}/{report_prefix}/{run_id}/{name}/")
         else:
-            download_reports(bucket, report_prefix, run_id, name)
+            reports.download_reports(bucket, report_prefix, run_id, name)

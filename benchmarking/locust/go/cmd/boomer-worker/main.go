@@ -91,6 +91,8 @@ func main() {
 			"runworkload only: comma-separated hostnames every actor may reach over cleartext HTTP or gRPC, on any port, each as the actor dials it. Unset gives actors no egress policy, so they can reach nothing.")
 		provider     = flag.String("provider", "agent-substrate", "Provider: agent-substrate or agent-sandbox.")
 		warmPoolName = flag.String("warm-pool-name", "", "agent-sandbox only: name of the SandboxWarmPool to claim from.")
+		suspendDisabled = flag.Bool("suspend-disabled", false,
+			"runworkload only: whether to skip the suspend phase during the benchmark.")
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
@@ -166,15 +168,16 @@ func main() {
 	// only that entry's Init reads these, so a run of another user class
 	// carries them without ever looking at them.
 	runworkload.SetOptions(runworkload.Options{
-		Provider:     *provider,
-		WarmPoolName: *warmPoolName,
-		Workload:     *workloadName,
-		Template:     *workloadTemplate,
-		Timeout:      *workloadTimeout,
-		MinWait:      *minWait,
-		MaxWait:      *maxWait,
-		ResumeMode:   *resumeMode,
-		EgressAllow:  splitList(*actorEgressAllow),
+		Provider:        *provider,
+		WarmPoolName:    *warmPoolName,
+		Workload:        *workloadName,
+		Template:        *workloadTemplate,
+		Timeout:         *workloadTimeout,
+		MinWait:         *minWait,
+		MaxWait:         *maxWait,
+		ResumeMode:      *resumeMode,
+		EgressAllow:     splitList(*actorEgressAllow),
+		SuspendDisabled: *suspendDisabled,
 	})
 
 	entry, ok := userclass.Lookup(class)

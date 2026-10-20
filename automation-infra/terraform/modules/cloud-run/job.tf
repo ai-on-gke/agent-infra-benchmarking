@@ -68,7 +68,7 @@ locals {
     "--state-bucket=${var.state_bucket}",
     "--state-prefix=${var.state_bucket_prefix}",
     "--cloud-build",
-  ], var.reports_bucket == null ? [] : ["--report-bucket=${var.reports_bucket}", "--report-prefix=${var.reports_prefix}"])
+  ], flatten([for r in module.reports : ["--report-bucket=${r.bucket}", "--report-prefix=${r.prefix}"]]))
 }
 
 resource "google_cloud_run_v2_job" "job" {

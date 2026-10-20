@@ -1,0 +1,16 @@
+{
+  "sandbox-benchmark-comparator": {
+    "description": "Runs ai-sandbox-benchmark's tests on its substrate provider and uploads what they recorded. The submodule and env's Python client are build contexts of their own.",
+    "dockerfile": "benchmarking/sandbox-benchmark/image/Dockerfile",
+    "context": "benchmarking/sandbox-benchmark/image",
+    "build_contexts": {
+      "ai-sandbox-benchmark": "dependency-repos/ai-sandbox-benchmark",
+      "ate-env-client": "dependency-repos/env/clients/python"
+    }
+  },
+  "sandbox-benchmark-rootfs": {
+    "description": "The rootfs of the environments the tests run in: Python with their packages baked in, as the environments cannot reach PyPI.",
+    "dockerfile": "benchmarking/sandbox-benchmark/rootfs/Dockerfile",
+    "context": "benchmarking/sandbox-benchmark/rootfs"
+  }
+}
