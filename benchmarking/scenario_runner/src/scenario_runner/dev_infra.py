@@ -24,7 +24,7 @@ import re
 import shutil
 from pathlib import Path
 
-from . import LOCAL_DATA_DIR, names, substrate
+from . import LOCAL_DATA_DIR, agent_sandbox, images, names, substrate
 from .cases import SKIP_SUBSTRATE_INSTALL
 from .cluster import Cluster
 from .deployment import RUNNER_INFRA_DIR, VARIABLES_FILE, Deployment, cluster_deployment
@@ -144,6 +144,26 @@ def install_substrate(record: dict, cloud_build: bool = False, login: bool = Tru
     record = build_substrate_images(record, cloud_build, login)
     substrate.install(cluster(record["name"]))
     record = {**record, "substrate_installed": True}
+    write_record(record)
+    return record
+
+
+def build_agent_sandbox_images(record: dict, cloud_build: bool = False, login: bool = True) -> dict:
+    version = agent_sandbox.build_version()
+    if record.get("agent_sandbox_images") == version:
+        return record
+    agent_sandbox.build_images(runner_outputs(record["name"])["docker_repo"], record["project_id"], cloud_build, login)
+    record = {**record, "agent_sandbox_images": version}
+    write_record(record)
+    return record
+
+
+def install_agent_sandbox(record: dict, cloud_build: bool = False, login: bool = True) -> dict:
+    if record.get("agent_sandbox_installed"):
+        return record
+    record = build_agent_sandbox_images(record, cloud_build, login)
+    agent_sandbox.install(cluster(record["name"]))
+    record = {**record, "agent_sandbox_installed": True}
     write_record(record)
     return record
 

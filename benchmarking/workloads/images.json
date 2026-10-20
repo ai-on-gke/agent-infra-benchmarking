@@ -8,5 +8,10 @@
     "description": "The mock LLM deployed beside the workloads.",
     "dockerfile": "benchmarking/workloads/images/mock-llm/Dockerfile",
     "context": "benchmarking/workloads/images/mock-llm"
+  },
+  "glutton": {
+    "description": "The glutton echo workload container for agent-sandbox.",
+    "dockerfile": "benchmarking/workloads/images/glutton/Dockerfile",
+    "context": "dependency-repos/substrate"
   }
 }

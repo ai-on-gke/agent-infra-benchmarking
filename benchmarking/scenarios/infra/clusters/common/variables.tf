@@ -80,9 +80,9 @@ variable "services_cidr" {
 # pools where they are until end of support; GKE still patches the control
 # plane.
 variable "kubernetes_version" {
-  description = "GKE version of the control plane (GKE's min_master_version), which the node pools are created at: a minor such as 1.35, for which GKE picks a build the REGULAR channel offers, or an exact build."
+  description = "GKE version of the control plane (GKE's min_master_version), which the node pools are created at: a minor such as 1.35.8-gke.1439001, for which GKE picks a build the REGULAR channel offers, or an exact build."
   type        = string
-  default     = "1.35"
+  default     = "1.35.8-gke.1439001"
 }
 
 variable "zone" {
@@ -125,6 +125,7 @@ variable "sandbox_class" {
 variable "substrate_version" {
   description = "Build version of the substrate submodule, as the ate.dev/substrate-version label on every node pool."
   type        = string
+  default     = null
 }
 
 # The scenario-runner builds substrate's images once per execution, into its
@@ -293,4 +294,3 @@ variable "benchmark_runner_ksa_name" {
   type        = string
   default     = "benchmark-runner"
 }
-

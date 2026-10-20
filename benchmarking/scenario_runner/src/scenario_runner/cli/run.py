@@ -34,8 +34,8 @@ from typing import Callable, NoReturn
 
 import yaml
 
-from .. import LOCAL_DATA_DIR, benchmark, dev_infra, names, reports, substrate, summary, terraform
-from ..cases import SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases, record_names
+from .. import LOCAL_DATA_DIR, agent_sandbox, benchmark, dev_infra, locust, names, reports, substrate, summary, terraform
+from ..cases import PROVIDER_AGENT_SANDBOX, PROVIDER_SUBSTRATE, PROVIDERS, SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases, record_names
 from ..cluster import Cluster
 from ..deployment import RUNNER_INFRA_DIR, Deployment, GcsDeployment, cluster_deployment
 from ..log import ON_CLOUD_RUN, log
@@ -50,7 +50,7 @@ LOCAL_TERRAFORM_DIR = LOCAL_DATA_DIR / "runs" / "terraform"
 STATE_BACKENDS = ["local", "gcs"]
 
 # What a failed repeat raises, its infra's apply included.
-RUN_ERRORS = (subprocess.CalledProcessError, *benchmark.ERRORS, substrate.SubstrateError)
+RUN_ERRORS = (subprocess.CalledProcessError, *benchmark.ERRORS, substrate.SubstrateError, agent_sandbox.AgentSandboxError)
 
 
 class CaseFailed(RuntimeError):
@@ -70,6 +70,17 @@ def parse_args() -> argparse.Namespace:
         action="append",
         metavar="NAME",
         help="a case to run; repeat it for more. Default: every case",
+    )
+    p.add_argument(
+        "--provider",
+        choices=PROVIDERS,
+        help=f"infrastructure provider to test; one of {', '.join(PROVIDERS)}. Overrides case setting",
+    )
+    p.add_argument(
+        "--lifecycle-mode",
+        choices=["claim", "snapshot"],
+        default="claim",
+        help="agent-sandbox lifecycle mode: 'claim' (warm pool claim/release) or 'snapshot' (GKE Pod Snapshot hibernate/resume). Default: %(default)s",
     )
     p.add_argument(
         "--test",
@@ -220,6 +231,16 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
     if unknown:
         fail(f"no case {', '.join(unknown)} in {args.scenarios_file}; it has {', '.join(cases)}")
     selected = {name: cases[name] for name in names}
+    if args.provider:
+        for name, case in selected.items():
+            if case.get("type") == "locust":
+                case["provider"] = args.provider
+                if args.provider == PROVIDER_AGENT_SANDBOX:
+                    case[SKIP_SUBSTRATE_INSTALL] = True
+    if getattr(args, "lifecycle_mode", None):
+        for name, case in selected.items():
+            if case.get("type") == "locust":
+                case["lifecycle-mode"] = args.lifecycle_mode
     if args.test:
         others = [name for name, case in selected.items() if case["type"] != "sandbox-benchmark"]
         if others:
@@ -237,14 +258,23 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
 def check_requirements(cases: dict[str, dict], cloud_build: bool) -> None:
     if not shutil.which("terraform"):
         fail("terraform is required to apply the infra")
-    if not all(case.get(SKIP_SUBSTRATE_INSTALL) for case in cases.values()):
+    substrate_cases = [c for c in cases.values() if c.get("provider", PROVIDER_SUBSTRATE) == PROVIDER_SUBSTRATE and not c.get(SKIP_SUBSTRATE_INSTALL)]
+    if substrate_cases:
         missing = substrate.missing_requirements(cloud_build)
         if missing:
             fail(f"installing substrate requires {', '.join(missing)}")
-        # Its cluster's nodes are labeled with it.
         try:
             substrate.build_version()
         except substrate.SubstrateError as exc:
+            fail(str(exc))
+    agent_sandbox_cases = [c for c in cases.values() if c.get("provider") == PROVIDER_AGENT_SANDBOX]
+    if agent_sandbox_cases:
+        missing = agent_sandbox.missing_requirements(cloud_build)
+        if missing:
+            fail(f"installing agent-sandbox requires {', '.join(missing)}")
+        try:
+            agent_sandbox.build_version()
+        except agent_sandbox.AgentSandboxError as exc:
             fail(str(exc))
     benchmarks = {name: case for name, case in cases.items() if case["type"] != "noop"}
     missing = benchmark.missing_requirements(benchmarks, cloud_build)
@@ -385,9 +415,11 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
 
     def run(name: str, case: dict) -> None:
         nonlocal record
-        if not case.get(SKIP_SUBSTRATE_INSTALL):
+        if case.get("provider") == PROVIDER_AGENT_SANDBOX:
+            record = dev_infra.install_agent_sandbox(record, args.cloud_build, not args.no_docker_login)
+        elif not case.get(SKIP_SUBSTRATE_INSTALL):
             record = dev_infra.install_substrate(record, args.cloud_build, not args.no_docker_login)
-        run_repeats(name, case, lambda run_name, repeat: run_case(args, run_name, case, cluster, name, repeat))
+        run_repeats(name, case, lambda record_name, repeat: run_case(args, record_name, case, cluster, name, repeat))
 
     return run_cases(args, cases, run)
 
@@ -412,7 +444,9 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
         with case_infra.applied():
             cluster = Cluster(case_infra.outputs(), case_infra.data / "kubeconfig")
             try:
-                if not case.get(SKIP_SUBSTRATE_INSTALL):
+                if case.get("provider") == PROVIDER_AGENT_SANDBOX:
+                    agent_sandbox.install(cluster)
+                elif not case.get(SKIP_SUBSTRATE_INSTALL):
                     substrate.install(cluster)
                 run_case(args, record, case, cluster, name, repeat)
             finally:
@@ -424,9 +458,11 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
         outputs = runner_infra.outputs()
         # Once, into the runner infra's repository, which every case's cluster
         # installs substrate from.
-        if not all(case.get(SKIP_SUBSTRATE_INSTALL) for case in cases.values()):
-            login = not args.no_docker_login
+        login = not args.no_docker_login
+        if any(c.get("provider", PROVIDER_SUBSTRATE) == PROVIDER_SUBSTRATE and not c.get(SKIP_SUBSTRATE_INSTALL) for c in cases.values()):
             substrate.build_images(outputs["docker_repo"], args.project_id, args.cloud_build, login)
+        if any(c.get("provider") == PROVIDER_AGENT_SANDBOX for c in cases.values()):
+            agent_sandbox.build_images(outputs["docker_repo"], args.project_id, args.cloud_build, login)
         repository = outputs["artifact_registry_repository"]
         return run_cases(
             args,
