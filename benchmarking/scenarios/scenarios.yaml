@@ -16,17 +16,25 @@
 #
 #   python3 -m scenario_runner.cli.run --scenario glutton ...
 #
-# `type` picks scenario_runner/src/scenario_runner/<type>.py, which documents
-# the rest.
+# `type` picks scenario_runner/src/scenario_runner/<type>.py, '-' spelled '_',
+# which documents the rest.
 # For locust: `worker-count` and `sandbox-class` shape the WorkerPool, and
 # every key in `master` and `worker` becomes `--key=value` on that process.
+# For sandbox-benchmark: `comparator.tests` names ai-sandbox-benchmark's tests
+# by function name, run `comparator.runs` times each, and `env-worker-count`
+# and `actor-memory` size env's WorkerPool and its environments.
+# `comparator.providers` runs them on each of substrate and local in turn,
+# [substrate] by default, and combines their results into one comparison,
+# the first provider the others are compared with. `cost-sheet: true` adds
+# cost_sheet.csv, the sandbox cost sheet, to that comparison.
 # `sandbox-class` has to be the cluster's `sandbox_class`, gvisor by default.
 # `noop` is the scenario-runner's alone: it applies and destroys the case's
 # cluster, and runs nothing on it.
 #
 # `max-failure-ratio` is the share of requests, 0 to 1, that may fail before a
 # run of the case counts as failed, 0.01 by default; a run that makes no
-# requests, or whose load generator raises any exception, fails too.
+# requests, or whose load generator raises any exception, fails too. For
+# sandbox-benchmark it is the share of test runs.
 #
 # `repeats` is how many times the case runs, 1 by default, each on its own
 # cluster applied for it, or one after another on a --dev-infra's. Above 1,
@@ -339,6 +347,51 @@ cases:
       max-wait: 106000ms
       # Without an egress policy the actors can't reach mock-llm.
       actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
+
+  sandbox-benchmark:
+    type: sandbox-benchmark
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 2
+          sandboxed_min_node_count = 2
+          sandboxed_max_node_count = 2
+    sandbox-class: gvisor
+    # The comparator starts every run at once, each in an environment of its
+    # own on a worker of its own.
+    env-worker-count: 3
+    actor-memory: 4Gi
+    comparator:
+      # e2b, daytona, modal, anthropic and openai need E2B_API_KEY,
+      # DAYTONA_API_KEY, MODAL_TOKEN_ID/MODAL_TOKEN_SECRET, ANTHROPIC_API_KEY
+      # and OPENAI_API_KEY in the scenario-runner's environment.
+      providers: [substrate, local, e2b, daytona, modal, anthropic, openai]
+      tests:
+      - test_suspend_resume
+      runs: 3
+
+  # The sandbox cost sheet, from the providers' suspend and resume overheads.
+  # Cloud providers only, so neither substrate nor env is installed.
+  sandbox-benchmark-cost:
+    type: sandbox-benchmark
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 1
+          sandboxed_min_node_count = 1
+          sandboxed_max_node_count = 1
+    skip-substrate-install: true
+    cost-sheet: true
+    comparator:
+      providers: [e2b, modal, daytona, anthropic, openai]
+      tests:
+      - test_suspend_resume
+      runs: 10
+      warmup-runs: 1
 
   # The scenario-runner's Terraform path on infra/clusters/dummy, which creates
   # no GCP resources and so has nothing to benchmark on.

@@ -1,0 +1,30 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The comparator image's Python: ai-sandbox-benchmark's own requirements, as
+# comparator.py imports every provider's SDK; ate-env-client's dependencies,
+# the client itself being installed from the env submodule; and
+# google-cloud-storage for run_comparator.py's upload. requirements.txt is
+# compiled from this with every transitive dependency pinned and hashed, for
+# the image's Python 3.12 on linux/amd64, again whenever the submodule's
+# requirements change:
+#
+#   uv pip compile requirements.in --python-version 3.12 \
+#     --python-platform x86_64-manylinux_2_28 --generate-hashes -o requirements.txt
+
+-r ../../../dependency-repos/ai-sandbox-benchmark/requirements.txt
+# ate-env-client's, from dependency-repos/env/clients/python/pyproject.toml.
+grpcio>=1.83
+protobuf>=7.35
+google-cloud-storage==3.17.0

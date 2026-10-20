@@ -103,6 +103,15 @@ changing a case or the code it runs, keep one cluster up instead:
 See [Keeping a cluster between runs](#keeping-a-cluster-between-runs) for
 reusing it and destroying it afterwards.
 
+A run's reports are kept only in `reports/` once its cluster is gone. To query
+your runs in BigQuery instead, send them to a reports deployment of your own;
+creating one is in
+[Keeping your own runs' reports in BigQuery](../automation-infra/README.md#keeping-your-own-runs-reports-in-bigquery):
+
+```bash
+./benchmarking/tools/run --report-deployment automation-infra/dev/reports --scenario glutton
+```
+
 Useful flags (`--help` lists them all):
 
 | Flag | |
@@ -112,6 +121,7 @@ Useful flags (`--help` lists them all):
 | `--project-id ID` | overrides `PROJECT_ID` |
 | `--region REGION` | default `us-central1` |
 | `--state-backend local\|gcs` | overrides `STATE_BACKEND`, see [Terraform state](#terraform-state) |
+| `--report-deployment DIR` | send the reports to the bucket of that applied reports deployment, such as `automation-infra/dev/reports`, to be queried in its BigQuery dataset |
 | `--cloud-build` | build images on Cloud Build rather than local Docker |
 | `--no-docker-login` | push with Docker's own registry credentials rather than gcloud's access token |
 | `--scenarios-file PATH` | another scenarios file, e.g. a local copy with a smaller load |
@@ -152,7 +162,7 @@ The `common` cluster's nodes are C2 by default; see
 
 | What | Where |
 |---|---|
-| Reports and Job logs | `reports/<run-id>/<record>/` at the repo root. The bucket is destroyed with the cluster, so this is the only copy left |
+| Reports and Job logs | `reports/<run-id>/<record>/` at the repo root. The bucket is destroyed with the cluster, so this is the only copy left, unless `--report-deployment` sent them to a bucket of their own |
 | Terraform deployments | `scenario_runner/.local-data/runs/terraform/<run-id>/`: `scenario-runner/` and `scenarios/<record>/`, each with `config/`, `tf-data/` and, with the local backend, `tfstates/` |
 | The cluster's kubeconfig | `tf-data/kubeconfig` in the repeat's deployment |
 | GCP resources | labeled `benchmark-run-id=<run-id>` and `benchmark-test-case=<record>` |
@@ -301,6 +311,17 @@ Add an entry under `cases:` in `scenarios.yaml`. The comments at the top of that
 file describe each key. To change the load or the worker pool, add a new case
 rather than editing an existing one, so results stay tied to the case name
 they were recorded under.
+
+### Comparing sandbox providers' costs
+
+The `sandbox-benchmark-cost` case measures E2B's, Modal's and Daytona's
+suspend and resume overheads and writes a monthly cost sheet next to Anthropic
+Managed Agents and OpenAI. It needs the providers' API keys; see
+[sandbox-benchmark-cost.md](sandbox-benchmark/sandbox-benchmark-cost.md):
+
+```bash
+./benchmarking/tools/run --dev-infra cost-dev --scenario sandbox-benchmark-cost
+```
 
 ## Reading the results
 

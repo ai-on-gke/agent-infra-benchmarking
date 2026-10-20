@@ -35,6 +35,7 @@ from .process import output, stream
 ROOT = RUNNER_DIR.parent.parent
 LOCUST_IMAGES = ROOT / "benchmarking" / "locust" / "images.json"
 WORKLOADS_IMAGES = ROOT / "benchmarking" / "workloads" / "images.json"
+SANDBOX_BENCHMARK_IMAGES = ROOT / "benchmarking" / "sandbox-benchmark" / "images.json"
 # The nodes', whatever the build host's.
 DEFAULT_PLATFORM = "linux/amd64"
 CLOUD_BUILDER = "gcr.io/cloud-builders/docker:24.0.9"
