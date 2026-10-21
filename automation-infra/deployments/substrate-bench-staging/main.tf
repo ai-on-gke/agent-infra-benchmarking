@@ -49,16 +49,12 @@ module "cloud_run" {
   reports_prefix        = "data"
   source_branch         = "push-images-instead-of-source"
 
-  # The same cases as substrate-bench-auto's nightly.
-  args = [
-    "--scenario=glutton",
-    "--scenario=glutton-microvm",
-    "--scenario=openclaw",
-    "--scenario=openclaw-microvm",
-    "--scenario=dummy",
-  ]
+  # Only the dummy case, which creates no cluster.
+  args = ["--scenario=dummy"]
 
-  # No schedule, and so no cleanup job: run by hand with tools/trigger.
+  # Daily, an hour after substrate-bench-auto's. No cleanup job, since dummy
+  # leaves nothing behind.
+  schedule = "0 4 * * *"
 }
 
 output "cloud_run" {
