@@ -175,8 +175,8 @@ variable "substrate_version" {
   default     = null
 }
 
-# benchmarking/tools/build-images builds substrate's images and the
-# benchmark's ahead of the runs, into a repository that outlives them.
+# Substrate's images and the benchmark's are built before the cluster pulls
+# them, by benchmarking/tools/build-images or the run itself.
 variable "image_repository" {
   description = "Full resource name of the Artifact Registry repository the cluster's images come from, projects/P/locations/L/repositories/R: substrate's and the benchmark's. A node service account this config creates is granted to pull from it; atelet's read, and an existing var.node_service_account's, are the repository owner's to grant. null for none."
   type        = string

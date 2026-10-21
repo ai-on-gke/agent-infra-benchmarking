@@ -16,8 +16,8 @@ against it and destroys it afterwards.
 - kubectl 1.31 or later
 - gcloud's `gke-gcloud-auth-plugin` (`gcloud components install
   gke-gcloud-auth-plugin`), which kubectl reaches the clusters through
-- Docker with Buildx, for `tools/build-images`: the image builds use
-  `--build-context`
+- Docker with Buildx, for building the images, by `tools/build-images` or a
+  run: the image builds use `--build-context`
 - curl and a `tar` with zstd support, for `sandbox-class: microvm` cases
 
 ### Cost and quota
@@ -86,19 +86,25 @@ without creating a cluster:
 
 ## Running scenarios from your machine
 
-A run pulls its images from a repository they were built into beforehand, such
-as automation-infra's deployment's (its `image_repo` output) or a dev infra's.
-Set `IMAGE_REPO` to it in `benchmarking/.env.sh`, or pass `--image-repo`, and
-build the images of your tree into it; only the ones it lacks are built:
-
-```bash
-./benchmarking/tools/build-images --repo=us-central1-docker.pkg.dev/<project-id>/<repository>
-```
-
-Then run a case:
+To run a case:
 
 ```bash
 ./benchmarking/tools/run --scenario glutton
+```
+
+A run pulls its images from a repository and first builds the images of your
+tree that it lacks, so the first run of a tree takes longer. Without a
+repository, it applies one of its own and destroys it after its clusters, so
+every such run builds every image again. To keep the images between runs,
+point it at a repository that lasts, such as automation-infra's deployment's
+(its `image_repo` output): set `IMAGE_REPO` in `benchmarking/.env.sh`, or
+pass `--image-repo`. A dev infra has a repository of its own.
+
+To build the images into a repository ahead of a run, without running
+anything, only the ones it lacks being built:
+
+```bash
+./benchmarking/tools/build-images --repo=us-central1-docker.pkg.dev/<project-id>/<repository>
 ```
 
 To run more than one case, repeat `--scenario`; they run in the order given.
@@ -109,9 +115,7 @@ fresh cluster. A failed repeat doesn't stop the ones after it.
 
 Before it applies anything, the run checks what the cases need, and names
 every problem it finds: the tools and their versions, Application Default
-Credentials and gcloud's login, the images of this tree in the repository,
-which it names with the `tools/build-images` command that builds them, the
-substrate submodule checked out at the commit the repo pins, and for each case
+Credentials and gcloud's login, the substrate submodule checked out at the commit the repo pins, and for each case
 its cluster's config as Terraform evaluates it, such as a machine type that
 can run `microvm`, a mock-llm node pool for `openclaw` and a GKE version the
 REGULAR channel still offers.
@@ -260,7 +264,8 @@ With no argument it charts the latest run in `./reports`.
 
 ### Images and versions
 
-`tools/build-images` builds the images from the working tree as it is, and
+`tools/build-images`, and a run that builds them itself, builds the images
+from the working tree as it is, and
 tags them with the repo's `HEAD` commit; a tree with uncommitted changes, here
 or in the submodules, gets `<commit>-dirty-<digest of the changes>` instead, so
 an image is only ever reused for exactly the code it was built from, and
@@ -339,17 +344,15 @@ To iterate without creating a cluster on every run, use `--dev-infra NAME`. It
 keeps an image repository and a cluster between executions, and repeats run
 one after another on that cluster. Each scenario needs its own `--dev-infra`
 name, because a dev infra keeps the cluster of the case it was first created
-for. The first run applies it, and stops if the repository lacks the images;
-build them into it, and run again:
+for. The first run applies it, builds the images into its repository and runs
+the case; later runs reuse both:
 
 ```bash
 ./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton
-./benchmarking/tools/build-images --dev-infra glutton-dev
-./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton
 ```
 
-After changing the code, build again before the run; only the images of the
-changed tree are built. To reuse the workloads already deployed, or reapply the
+After changing the code, the next run builds the images of the changed tree
+before it starts. To reuse the workloads already deployed, or reapply the
 cluster config after changing it, reinstalling substrate if its version
 changed:
 

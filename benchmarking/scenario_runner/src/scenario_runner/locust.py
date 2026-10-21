@@ -255,7 +255,7 @@ def run(
     keeps_bucket: bool = False,
 ) -> None:
     """Runs the case, recorded under name, as part of run_id, by default a UTC
-    timestamp and the commit, with the images build-images pushed to
+    timestamp and the commit, with the images built from this tree into
     image_repo. test_case and repeat say which case it is a repeat of; repeat
     is 0 for a case run once. Without deploy_workloads, uses the mock-llm and
     ActorTemplates already deployed. The worker pool is recreated either way.

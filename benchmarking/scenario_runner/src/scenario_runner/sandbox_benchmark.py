@@ -404,7 +404,7 @@ def run(
 ) -> None:
     """Runs the case, recorded under name, as part of run_id, by default a UTC
     timestamp and the commit: on each of its providers in turn, then combines
-    their results, with the images build-images pushed to image_repo. A
+    their results, with the images built from this tree into image_repo. A
     provider whose run fails does not stop the ones after it; the run fails
     once they have run. test_case and repeat say which case it is a repeat of;
     repeat is 0 for a case run once. Without

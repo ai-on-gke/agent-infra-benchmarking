@@ -189,8 +189,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--image-repo",
         metavar="REPO",
-        help="the repository benchmarking/tools/build-images built this tree's images into,"
-        " <location>-docker.pkg.dev/<project>/<name>, which every case's cluster pulls from; not with --dev-infra,"
+        help="the repository every case's cluster pulls this tree's images from,"
+        " <location>-docker.pkg.dev/<project>/<name>; from a machine, the ones it lacks are built into it first."
+        " Not with --dev-infra,"
         " which uses its own. Default: $IMAGE_REPO, else from a machine one applied for the execution",
     )
     p.add_argument(

@@ -16,7 +16,8 @@
 repository, which its --image-repo then names, or a dev infra's: substrate's,
 env's, agent-sandbox's and the benchmark's own. Each is built only if the
 repository does not have it at its tag yet, except a submodule's at a -dirty
-version, which is always built again."""
+version, which is always built again. A run from a machine builds the ones
+it lacks itself, so this is for building ahead of one, and for CI."""
 
 from __future__ import annotations
 
