@@ -99,12 +99,13 @@ def image_refs(repo: str) -> list[str]:
     """ate-env-api and ate-env-guest in repo, which builder.py pushes, each
     named after the last element of its package as ko --base-import-paths
     names it."""
+    repo = images.group_repo(repo, "env")
     return [images.ref(repo, package.rsplit("/", 1)[-1], build_version()) for package in PACKAGES]
 
 
 def pinned_image(repo: str, name: str) -> str:
     """One of image_refs, pinned."""
-    return images.pin(images.ref(repo, name, build_version()))
+    return images.pin(images.ref(images.group_repo(repo, "env"), name, build_version()))
 
 
 @contextmanager

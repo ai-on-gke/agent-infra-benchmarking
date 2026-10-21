@@ -234,9 +234,9 @@ class NeededImages(unittest.TestCase):
         self.assertEqual(set(needed), {"substrate", "benchmark"})
         with mock.patch.object(images, "tag", return_value="t"):
             self.assertEqual(needed["benchmark"], images.refs("repo", [images.LOCUST_IMAGES, images.WORKLOADS_IMAGES]))
-        self.assertIn("repo/atelet:v", needed["substrate"])
-        self.assertIn("repo/glutton:v", needed["substrate"])
-        self.assertIn("repo/envoy-dataplane:v", needed["substrate"])
+        self.assertIn("repo/substrate/atelet:v", needed["substrate"])
+        self.assertIn("repo/substrate/glutton:v", needed["substrate"])
+        self.assertIn("repo/substrate/envoy-dataplane:v", needed["substrate"])
 
     def test_sandbox_benchmark_needs_env_only_for_substrate(self):
         from scenario_runner.cases import SKIP_SUBSTRATE_INSTALL
@@ -245,7 +245,7 @@ class NeededImages(unittest.TestCase):
         case = {"type": "sandbox-benchmark", "comparator": comparator, SKIP_SUBSTRATE_INSTALL: True}
         needed = self.needed({"a": case})
         self.assertEqual(set(needed), {"env", "benchmark"})
-        self.assertEqual(needed["env"], ["repo/ate-env-api:e", "repo/ate-env-guest:e"])
+        self.assertEqual(needed["env"], ["repo/env/ate-env-api:e", "repo/env/ate-env-guest:e"])
         cloud = {**case, "comparator": {**case["comparator"], "providers": ["e2b"]}}
         self.assertEqual(set(self.needed({"a": cloud})), {"benchmark"})
 

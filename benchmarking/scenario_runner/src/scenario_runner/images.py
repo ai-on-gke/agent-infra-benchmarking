@@ -13,8 +13,8 @@
 # limitations under the License.
 
 """Names the images of the benchmarking images.json files in a repository,
-each <repo>/<name>:<tag>, as builder.py pushes them; checks they are there,
-and pins one to the digest its registry serves."""
+each <repo>/benchmark/<name>:<tag>, as builder.py pushes them; checks they
+are there, and pins one to the digest its registry serves."""
 
 from __future__ import annotations
 
@@ -151,11 +151,17 @@ def ref(repo: str, name: str, image_tag: str | None = None) -> str:
     return f"{repo}/{name}:{image_tag or tag()}"
 
 
+def group_repo(repo: str, group: str) -> str:
+    """The folder of repo a group of images goes in: substrate, env,
+    benchmark or agent-sandbox."""
+    return f"{repo}/{group}"
+
+
 def image_ref(file: Path, repo: str, name: str) -> str:
     """As ref, for an image that has to be one of file's."""
     if name not in json.loads(file.read_text()):
         raise ImageError(f"no image {name} in {file}")
-    return ref(repo, name)
+    return ref(group_repo(repo, "benchmark"), name)
 
 
 def digest(image: str) -> str | None:
@@ -168,8 +174,8 @@ def digest(image: str) -> str | None:
 
 
 def refs(repo: str, files: list[Path]) -> list[str]:
-    """The images of files in repo, tagged tag()."""
-    return [ref(repo, image.name) for image in read_images(*files)]
+    """The images of files in repo's benchmark folder, tagged tag()."""
+    return [ref(group_repo(repo, "benchmark"), image.name) for image in read_images(*files)]
 
 
 def missing(image_refs: list[str]) -> list[str]:

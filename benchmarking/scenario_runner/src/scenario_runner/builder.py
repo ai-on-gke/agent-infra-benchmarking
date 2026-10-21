@@ -87,6 +87,7 @@ def build(group: str, repo: str, image_refs: list[str], project_id: str, cloud_b
     elif group == "env":
         build_env(repo, project_id, cloud_build, login)
     else:
+        repo = images.group_repo(repo, group)
         wanted = [i for i in images.read_images(*images.IMAGE_FILES) if images.ref(repo, i.name) in image_refs]
         build_and_push(wanted, repo, images.tag(), project_id, cloud_build, login)
 
@@ -191,6 +192,7 @@ def submodule_paths(submodule: Path) -> list[str]:
 def build_substrate(repo: str, project_id: str, cloud_build: bool, login: bool) -> None:
     """Pushes substrate.image_refs: with cloud_build all of them on Cloud
     Build, else with ko and Docker here."""
+    repo = images.group_repo(repo, "substrate")
     version = substrate.build_version()
     log(f"substrate: building the {version} images into {repo}")
     ko_build = ["hack/run-tool.sh", "ko", "build", "--base-import-paths", f"--tags={version}",
@@ -235,6 +237,7 @@ def cloud_build_substrate(ko_build: list[str], env: dict, repo: str, version: st
 
 def build_env(repo: str, project_id: str, cloud_build: bool, login: bool) -> None:
     """Pushes ate_env.image_refs."""
+    repo = images.group_repo(repo, "env")
     ko_build = ["go", "run", KO, "build", "--base-import-paths", f"--tags={ate_env.build_version()}", *ate_env.PACKAGES]
     env = {"KO_DEFAULTPLATFORMS": images.DEFAULT_PLATFORM, "KO_DOCKER_REPO": repo}
     log(f"env: building {', '.join(ate_env.PACKAGES)} into {repo}")

@@ -115,17 +115,19 @@ def image_refs(repo: str) -> list[str]:
     after the last element of its package, as ate-setup's ko runner
     (cmd/ate-setup/internal/ko) names them."""
     names = [package.rsplit("/", 1)[-1] for package in [*SUBSTRATE_PACKAGES, *WORKLOAD_PACKAGES]]
+    repo = images.group_repo(repo, "substrate")
     return [images.ref(repo, name, build_version()) for name in [*names, ENVOY_DATAPLANE.name]]
 
 
 def image_repo(cluster: Cluster) -> str:
-    """Where the cluster's substrate images are, image_refs's repo."""
+    """Where the cluster's substrate images are: the substrate folder of its
+    repository, as image_refs names them."""
     if not cluster.image_docker_repo:
         raise SubstrateError(
             f"cluster {cluster.name} names no repository of substrate images; a dev infra applied before it did"
             " needs --dev-infra-update"
         )
-    return cluster.image_docker_repo
+    return images.group_repo(cluster.image_docker_repo, "substrate")
 
 
 def resolve(cluster: Cluster, manifest: str) -> str:

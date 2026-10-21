@@ -86,6 +86,7 @@ def missing_requirements(cloud_build: bool = False) -> list[str]:
 
 
 def build_images(repo: str, project_id: str, cloud_build: bool = False, login: bool = True) -> None:
+    repo = images.group_repo(repo, "agent-sandbox")
     version = build_version()
     log(f"agent-sandbox: building the {version} images into {repo}")
     if cloud_build:
@@ -95,11 +96,11 @@ def build_images(repo: str, project_id: str, cloud_build: bool = False, login: b
 
 
 def controller_image_ref(repo: str) -> str:
-    return f"{repo}/{CONTROLLER_IMAGE.name}:{build_version()}"
+    return f"{images.group_repo(repo, 'agent-sandbox')}/{CONTROLLER_IMAGE.name}:{build_version()}"
 
 
 def router_image_ref(repo: str) -> str:
-    return f"{repo}/{ROUTER_IMAGE.name}:{build_version()}"
+    return f"{images.group_repo(repo, 'agent-sandbox')}/{ROUTER_IMAGE.name}:{build_version()}"
 
 
 def install(cluster: Cluster) -> None:
@@ -111,9 +112,7 @@ def install_once(cluster: Cluster) -> None:
     repo = cluster.image_docker_repo
     if not repo:
         raise AgentSandboxError(f"cluster {cluster.name} names no repository of agent-sandbox images")
-    version = build_version()
-    controller_ref = f"{repo}/{CONTROLLER_IMAGE.name}:{version}"
-    router_ref = f"{repo}/{ROUTER_IMAGE.name}:{version}"
+    controller_ref, router_ref = controller_image_ref(repo), router_image_ref(repo)
     try:
         controller_img = images.pin(controller_ref)
         router_img = images.pin(router_ref)

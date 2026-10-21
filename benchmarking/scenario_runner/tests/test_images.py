@@ -102,7 +102,7 @@ class Refs(unittest.TestCase):
         names = [image.name for image in images.read_images(*files)]
         with mock.patch.object(images, "tag", return_value="t"):
             refs = images.refs(repo, files)
-        self.assertEqual(refs, [f"{repo}/{name}:t" for name in names])
+        self.assertEqual(refs, [f"{repo}/benchmark/{name}:t" for name in names])
         pushed = {ref: "sha256:abc" for ref in refs}
         with described(pushed):
             self.assertEqual(images.missing(refs), [])
