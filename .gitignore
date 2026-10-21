@@ -2,8 +2,6 @@
 
 # Reports downloaded from the bucket.
 /reports/*
-!/reports/run-20261015t144424z/
-!/reports/run-20261015t192645z/
 
 # What `pip install ./benchmark-charts` leaves behind.
 /.venv/
