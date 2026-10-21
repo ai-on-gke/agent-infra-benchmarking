@@ -49,7 +49,10 @@
 #
 # `repeats` is how many times the case runs, 1 by default, each on its own
 # cluster applied for it, or one after another on a --dev-infra's. Above 1,
-# they are recorded as <case>-1 to <case>-N.
+# they are recorded as <case>-1 to <case>-N. With `repeat-cluster: shared`
+# rather than the default `fresh`, they run one after another on one cluster
+# applied for the case, after `warmup-repeats` runs, 1 by default, recorded as
+# <case>-warmup-1 to <case>-warmup-N and left out of the summary.
 #
 # The scenario-runner installs substrate on the case's cluster before running
 # it, unless `skip-substrate-install` is true.

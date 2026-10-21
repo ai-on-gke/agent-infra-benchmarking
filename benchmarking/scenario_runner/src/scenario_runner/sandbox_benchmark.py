@@ -60,8 +60,9 @@ DEFAULT_MAX_FAILURE_RATIO = 0.01
 # ate-env manifest's own default.
 DEFAULT_ENV_WORKER_COUNT = 5
 CASE_KEYS = {
-    "type", "infra", "repeats", "skip-substrate-install", "sandbox-class", "env-worker-count", "actor-memory",
-    "actor-cpu", "max-failure-ratio", "comparator", "cost-sheet", "provider", "lifecycle-mode",
+    "type", "infra", "repeats", "repeat-cluster", "warmup-repeats", "skip-substrate-install", "sandbox-class",
+    "env-worker-count", "actor-memory", "actor-cpu", "max-failure-ratio", "comparator", "cost-sheet", "provider",
+    "lifecycle-mode",
 }  # fmt: skip
 COMPARATOR_KEYS = {"providers", "tests", "runs", "warmup-runs"}
 PROVIDERS = ("substrate", "local", "e2b", "daytona", "modal", "anthropic", "openai")
@@ -229,6 +230,7 @@ def run_provider(
     report_prefix: str,
     test_case: str | None,
     repeat: int,
+    warmup: int,
 ) -> None:
     """Runs the case's tests on provider, as one comparator Job, whose reports
     go under <run_id>/<name>/<provider>/."""
@@ -262,6 +264,7 @@ def run_provider(
     if on_env:
         info["env_commit"] = commit(ate_env.ENV_DIR)
     info["ai_sandbox_benchmark_commit"] = commit(AI_SANDBOX_BENCHMARK_DIR)
+    info["warmup"] = warmup or None
     values = {
         "COMPARATOR_IMAGE": comparator_image,
         "BENCHMARK_RUNNER_KSA": cluster.runner_ksa,
@@ -400,6 +403,7 @@ def run(
     report_prefix: str = reports.REPORT_PREFIX,
     test_case: str | None = None,
     repeat: int = 0,
+    warmup: int = 0,
     keeps_bucket: bool = False,
 ) -> None:
     """Runs the case, recorded under name, as part of run_id, by default a UTC
@@ -407,7 +411,7 @@ def run(
     their results, with the images built from this tree into image_repo. A
     provider whose run fails does not stop the ones after it; the run fails
     once they have run. test_case and repeat say which case it is a repeat of;
-    repeat is 0 for a case run once. Without
+    repeat is 0 for a case run once, or a warm-up, which warmup numbers. Without
     deploy_workloads, uses the env and template already deployed. The reports
     go under report_prefix in report_bucket, by default the cluster's own,
     which keeps_bucket says outlives the run, as a dev infra's does. Expects
@@ -437,7 +441,7 @@ def run(
             try:
                 run_provider(
                     cluster, name, case, provider, run_id, comparator_image, image_repo, deploy_workloads, bucket,
-                    report_prefix, test_case, repeat,
+                    report_prefix, test_case, repeat, warmup,
                 )  # fmt: skip
             except SandboxBenchmarkTimeout:
                 raise

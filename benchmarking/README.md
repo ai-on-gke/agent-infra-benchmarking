@@ -111,7 +111,8 @@ To run more than one case, repeat `--scenario`; they run in the order given.
 `--all` runs every case in `scenarios.yaml`, in the order listed; one or the
 other is required, as every case means a cluster or more. A case with
 `repeats: N` runs N times, recorded as `<case>-1` to `<case>-N`, each on a
-fresh cluster. A failed repeat doesn't stop the ones after it.
+fresh cluster, or all on one with `repeat-cluster: shared` (see
+[Repeats](#repeats)). A failed repeat doesn't stop the ones after it.
 
 Before it applies anything, the run checks what the cases need, and names
 every problem it finds: the tools and their versions, Application Default
@@ -526,3 +527,12 @@ One run is one sample. A case's `repeats` runs it that many times, each on its
 own cluster unless `--dev-infra` is given. Compare cases across their repeats,
 not by a single one: `<case>-summary.csv` gives the min, median and max of
 each stat over them, as the example's `glutton-summary.csv` does.
+
+With `repeat-cluster: shared`, a case's repeats run one after another on one
+cluster applied for the case, after `warmup-repeats` runs (1 by default) that
+take the cold start: image pulls, node scale-up, substrate's first snapshots.
+A warm-up is recorded as `<case>-warmup-<n>`, so BigQuery's `scenario` for it
+is `<case>-warmup`, and is left out of the summary; one that fails only warns.
+Shared repeats are tighter but less independent, as they leave out how one
+cluster differs from the next, so compare a shared case only with another
+shared one. On a `--dev-infra`, a shared case's warm-ups run too.

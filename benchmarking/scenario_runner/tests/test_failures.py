@@ -116,7 +116,7 @@ class Series(unittest.TestCase):
     def test_a_failed_repeat_does_not_stop_the_others(self):
         ran = []
 
-        def repeat(record, n):
+        def repeat(record, n, warmup):
             ran.append(record)
             if n == 1:
                 raise locust.LocustError("boom")
@@ -125,12 +125,28 @@ class Series(unittest.TestCase):
             run.run_repeats("c", {"repeats": 3}, repeat, shared_cluster=False)
         self.assertEqual(ran, ["c-1", "c-2", "c-3"])
 
+    def test_a_failed_warmup_only_warns(self):
+        ran = []
+
+        def repeat(record, n, warmup):
+            ran.append((record, n, warmup))
+            if warmup:
+                raise locust.LocustError("cold")
+
+        case = {"repeats": 2, "repeat-cluster": "shared", "warmup-repeats": 2}
+        with mock.patch.object(run, "log") as log:
+            run.run_repeats("c", case, repeat, shared_cluster=True)
+        self.assertEqual(ran, [("c-warmup-1", 0, 1), ("c-warmup-2", 0, 2), ("c-1", 1, 0), ("c-2", 2, 0)])
+        self.assertTrue(any("only a warm-up" in call.args[0] for call in log.call_args_list))
+
     def test_a_stuck_run_stops_a_shared_cluster_only(self):
-        def stuck(record, n):
+        def stuck(record, n, warmup):
             raise locust.LocustTimeout("still going")
 
         with self.assertRaises(locust.LocustStillRunning):
             run.run_repeats("c", {"repeats": 2}, stuck, shared_cluster=True)
+        with self.assertRaises(locust.LocustStillRunning):
+            run.run_repeats("c", {"repeat-cluster": "shared"}, stuck, shared_cluster=True)
         with self.assertRaises(run.CaseFailed):
             run.run_repeats("c", {"repeats": 2}, stuck, shared_cluster=False)
 
@@ -281,7 +297,7 @@ class BenchmarkRun(unittest.TestCase):
         args = argparse.Namespace(name="run-1", no_deploy_workloads=False, report_bucket=None,
                                   report_prefix="reports", dev_infra=None)  # fmt: skip
         with mock.patch.object(benchmark, "run") as bench_run:
-            run.run_case(args, "c-1", {"type": "locust"}, mock.Mock(), "c", 1, "repo")
+            run.run_case(args, "c-1", {"type": "locust"}, mock.Mock(), "c", 1, 0, "repo")
         for type_, module in benchmark.RUNNERS.items():
             params = inspect.signature(module.run).parameters
             self.assertLessEqual(set(bench_run.call_args.kwargs), set(params), type_)

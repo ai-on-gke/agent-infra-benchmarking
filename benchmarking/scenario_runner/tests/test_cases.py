@@ -23,7 +23,7 @@ from pathlib import Path
 import yaml
 
 from scenario_runner import locust
-from scenario_runner.cases import SCENARIOS_FILE, load_cases, record_names
+from scenario_runner.cases import SCENARIOS_FILE, load_cases, record_names, warmup_names
 
 GLUTTON = {
     "type": "locust",
@@ -107,9 +107,17 @@ class CaseChecks(unittest.TestCase):
         self.assertEqual(record_names("c", {"repeats": 3}), ["c-1", "c-2", "c-3"])
         self.assertEqual(record_names("c", {}), ["c"])
 
+    def test_warmups_only_on_a_shared_cluster(self):
+        self.assertEqual(warmup_names("c", {"repeat-cluster": "shared"}), ["c-warmup-1"])
+        self.assertEqual(warmup_names("c", {"repeat-cluster": "shared", "warmup-repeats": 0}), [])
+        self.assertEqual(warmup_names("c", {"repeats": 3}), [])
+
     def test_load_refuses_bad_cases(self):
         for case in (
             {**GLUTTON, "repeats": 0},
+            {**GLUTTON, "repeat-cluster": "kept"},
+            {**GLUTTON, "repeat-cluster": "shared", "warmup-repeats": -1},
+            {**GLUTTON, "warmup-repeats": 1},
             {**GLUTTON, "infra": {"cluster": {"name": "common", "unknown": 1}}},
             {**GLUTTON, "infra": {"cluster": {"name": "nowhere"}}},
             {**GLUTTON, "type": "jmeter"},

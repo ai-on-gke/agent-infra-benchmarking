@@ -252,13 +252,15 @@ def run(
     report_prefix: str = reports.REPORT_PREFIX,
     test_case: str | None = None,
     repeat: int = 0,
+    warmup: int = 0,
     keeps_bucket: bool = False,
 ) -> None:
     """Runs the case, recorded under name, as part of run_id, by default a UTC
     timestamp and the commit, with the images built from this tree into
     image_repo. test_case and repeat say which case it is a repeat of; repeat
-    is 0 for a case run once. Without deploy_workloads, uses the mock-llm and
-    ActorTemplates already deployed. The worker pool is recreated either way.
+    is 0 for a case run once, or a warm-up, which warmup numbers. Without
+    deploy_workloads, uses the mock-llm and ActorTemplates already deployed.
+    The worker pool is recreated either way.
     The reports go under report_prefix in report_bucket, by default the
     cluster's own, which keeps_bucket says outlives the run, as a dev infra's
     does. Expects the cluster's credentials in its kubeconfig."""
@@ -381,6 +383,7 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io"""
 
     info = run_info.collect(cluster, case, template_name, template, image_refs, bucket)
+    info["warmup"] = warmup or None
     values = {
         "LOCUST_IMAGE": image_refs["locust-master"],
         "BOOMER_IMAGE": image_refs["boomer-worker"],

@@ -106,7 +106,8 @@ def _summary_header(case: str, jobs) -> str:
     infos = [info for _, info, _ in jobs if info]
     run_id = next((i["run_id"] for i in infos if i.get("run_id")), UNKNOWN)
     used = sum(1 for _, _, reason in jobs if not reason)
-    lines = [f"# {case}, {len(jobs)} repeats, run {run_id}", ""]
+    shared = any(isinstance(i.get("case"), dict) and i["case"].get("repeat-cluster") == "shared" for i in infos)
+    lines = [f"# {case}, {len(jobs)} repeats{' on one cluster' if shared else ''}, run {run_id}", ""]
     lines.append(f"- **Summarized:** {used} of {len(jobs)} repeats, the ones that passed")
 
     counted = [i["failures"] for i in infos if isinstance(i.get("failures"), dict) and "cycles" in i["failures"]]
@@ -197,7 +198,9 @@ def _summary_files(case: str, jobs) -> str:
 
 def _header(info: dict) -> str:
     title = info.get("test_case") or UNKNOWN
-    if info.get("repeat"):
+    if info.get("warmup"):
+        title += f", warm-up {info['warmup']}, not one of its repeats"
+    elif info.get("repeat"):
         case = info.get("case") if isinstance(info.get("case"), dict) else {}
         title += f", repeat {info['repeat']} of {case.get('repeats') or UNKNOWN}"
     lines = [f"# {title}, run {info.get('run_id') or UNKNOWN}", ""]

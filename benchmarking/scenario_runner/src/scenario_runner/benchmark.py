@@ -64,7 +64,7 @@ def missing_requirements(cases: dict[str, dict]) -> list[str]:
 
 def run(name: str, case: dict, run_id: str, cluster: Cluster, **options: object) -> None:
     """options are those of its type's run, e.g. locust.run's image_repo, and
-    test_case and repeat for one of a case's repeats."""
+    test_case and repeat, or warmup, for one of a case's repeats."""
     cluster.get_credentials()
     log(f"{name}: running as {run_id} on cluster {cluster.name}")
     # First, so it is watching before the run deploys anything to watch.

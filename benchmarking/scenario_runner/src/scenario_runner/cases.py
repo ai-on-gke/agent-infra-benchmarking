@@ -32,6 +32,12 @@ PROVIDER_SUBSTRATE = "agent-substrate"
 PROVIDER_AGENT_SANDBOX = "agent-sandbox"
 PROVIDERS = [PROVIDER_SUBSTRATE, PROVIDER_AGENT_SANDBOX]
 DEFAULT_PROVIDER = PROVIDER_SUBSTRATE
+# Whether each of a case's repeats gets a cluster of its own, or they all share
+# one, after `warmup-repeats` runs that are not counted.
+REPEAT_CLUSTER = "repeat-cluster"
+REPEAT_CLUSTERS = ["fresh", "shared"]
+WARMUP_REPEATS = "warmup-repeats"
+DEFAULT_WARMUP_REPEATS = 1
 
 
 def load_cases(scenarios_file: Path) -> dict[str, dict]:
@@ -59,11 +65,25 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
         repeats = case.get("repeats", 1)
         if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats < 1:
             raise ValueError(f"{scenarios_file}: case {name}'s `repeats` must be a whole number from 1, got {repeats!r}")
+        if case.get(REPEAT_CLUSTER, "fresh") not in REPEAT_CLUSTERS:
+            raise ValueError(
+                f"{scenarios_file}: case {name}'s `{REPEAT_CLUSTER}` must be one of {', '.join(REPEAT_CLUSTERS)}"
+            )
+        warmups = case.get(WARMUP_REPEATS, 0)
+        if not isinstance(warmups, int) or isinstance(warmups, bool) or warmups < 0:
+            raise ValueError(
+                f"{scenarios_file}: case {name}'s `{WARMUP_REPEATS}` must be a whole number, got {warmups!r}"
+            )
+        # A warm-up on a cluster destroyed after it warms nothing.
+        if WARMUP_REPEATS in case and not shares_cluster(case):
+            raise ValueError(
+                f"{scenarios_file}: case {name}'s `{WARMUP_REPEATS}` is only for `{REPEAT_CLUSTER}: shared`"
+            )
         check_cluster(f"{scenarios_file}: case {name}", case)
         if case["type"] != "noop":
             try:
                 # As each repeat runs under its own name.
-                for record in record_names(name, case):
+                for record in warmup_names(name, case) + record_names(name, case):
                     benchmark.check(record, case)
             except ValueError as exc:
                 raise ValueError(f"{scenarios_file}: {exc}") from None
@@ -75,6 +95,17 @@ def record_names(name: str, case: dict) -> list[str]:
     above 1."""
     repeats = case.get("repeats", 1)
     return [f"{name}-{n}" for n in range(1, repeats + 1)] if repeats > 1 else [name]
+
+
+def shares_cluster(case: dict) -> bool:
+    return case.get(REPEAT_CLUSTER) == "shared"
+
+
+def warmup_names(name: str, case: dict) -> list[str]:
+    """What each of the case's warm-ups is recorded under, <name>-warmup-1 to
+    <name>-warmup-N; none unless its repeats share a cluster."""
+    warmups = case.get(WARMUP_REPEATS, DEFAULT_WARMUP_REPEATS) if shares_cluster(case) else 0
+    return [f"{name}-warmup-{n}" for n in range(1, warmups + 1)]
 
 
 def check_cluster(where: str, case: dict) -> None:
