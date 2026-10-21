@@ -263,6 +263,10 @@ def _case(info: dict) -> str:
     master = case.get("master") if isinstance(case.get("master"), dict) else {}
     worker = case.get("worker") if isinstance(case.get("worker"), dict) else {}
     keys = [[k, v] for k, v in case.items() if k not in ("master", "worker", "infra")]
+    users = master.get("users")
+    workers = case.get("worker-count")
+    if isinstance(users, (int, float)) and isinstance(workers, (int, float)) and workers > 0:
+        keys.append(["density", f"{users / workers:g}x ({users} actors / {workers} workers)"])
     lines += _table(["Key", "Value"], keys)
 
     users, rate = master.get("users"), master.get("spawn-rate")
@@ -338,10 +342,20 @@ def _workers(info: dict, golden: bool = True) -> str:
     lines = ["## Workers and actors", ""]
     if pool:
         spec, status = pool.get("spec") or {}, pool.get("status") or {}
+        ready = status.get('readyReplicas', 0)
+        replicas = spec.get('replicas', UNKNOWN)
         lines.append(
-            f"WorkerPool: {status.get('readyReplicas', 0)}/{spec.get('replicas', UNKNOWN)} workers ready, "
+            f"WorkerPool: {ready}/{replicas} workers ready, "
             f"sandbox class {spec.get('sandboxClass') or UNKNOWN}."
         )
+        case = info.get("case") or {}
+        users = (case.get("master") or {}).get("users")
+        workers = spec.get("replicas") or case.get("worker-count")
+        if isinstance(users, (int, float)) and isinstance(workers, (int, float)) and workers > 0:
+            density = users / workers
+            sandboxed = ((info.get("nodes") or {}).get("sandboxed") or {}).get("count")
+            node_desc = f", {users / sandboxed:g} actors/node" if sandboxed else ""
+            lines.append(f"Density: {density:g}x ({users} actors / {workers} workers{node_desc}).")
     for name, tmpl in templates.items():
         if not isinstance(tmpl, dict):
             continue

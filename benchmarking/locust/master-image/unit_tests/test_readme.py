@@ -71,6 +71,16 @@ class Render(unittest.TestCase):
         self.assertIn("| Tools | terraform 1.15.6 |", text)
         self.assertIn("| Images built with | cloud build, `d@sha256:3` |", text)
 
+    def test_density_renders_in_case_and_workers(self):
+        info = self.info()
+        info["case"]["worker-count"] = 100
+        info["case"]["master"] = {"users": 500, "spawn-rate": 1}
+        info["worker_pool"] = {"spec": {"replicas": 100}, "status": {"readyReplicas": 100}}
+        info["nodes"] = {"sandboxed": {"count": 10, "ready": 10}}
+        text = readme.render(info)
+        self.assertIn("| density | 5x (500 actors / 100 workers) |", text)
+        self.assertIn("Density: 5x (500 actors / 100 workers, 50 actors/node).", text)
+
     def test_no_cycles(self):
         failures = {"cycles": 0, "failed_cycles": 0, "failed_starts": 0, "ratio": None}
         self.assertEqual(readme._failures(failures, 0.01), "none; the run completed no cycle")

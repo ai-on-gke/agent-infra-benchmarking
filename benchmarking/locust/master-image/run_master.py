@@ -58,8 +58,20 @@ def write_reports(csv_prefix: Path, started: float) -> None:
     time.sleep(custom_history.SETTLE_SECS)
     ended = time.time()
     run_id, test_case = os.environ.get("BENCHMARK_RUN_ID", ""), os.environ.get("BENCHMARK_TEST_CASE", "")
+    worker_count = None
+    try:
+        passed = json.loads(base64.b64decode(os.environ.get("BENCHMARK_RUN_INFO", "")))
+        worker_count = (
+            (passed.get("case") or {}).get("worker-count")
+            or ((passed.get("worker_pool") or {}).get("spec") or {}).get("replicas")
+            or ((passed.get("worker_pool") or {}).get("status") or {}).get("readyReplicas")
+        )
+    except (ValueError, KeyError, TypeError, OSError):
+        pass
     reports = {
-        custom_history.FILENAME: lambda: custom_history.write(csv_prefix, run_id, test_case, started, ended),
+        custom_history.FILENAME: lambda: custom_history.write(
+            csv_prefix, run_id, test_case, started, ended, worker_count=worker_count
+        ),
         cluster_vitals.FILENAME: lambda: cluster_vitals.write(csv_prefix, started, ended),
     }
     for filename, write in reports.items():

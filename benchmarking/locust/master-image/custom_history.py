@@ -105,7 +105,33 @@ def write_history(
     return path
 
 
-def write(csv_prefix: Path, run_id: str, test_case: str, started: float, ended: float) -> Path:
+def resolve_worker_count(worker_count: float | None = None) -> float | None:
+    """Attempts to determine the number of workers in the WorkerPool."""
+    if worker_count and float(worker_count) > 0:
+        return float(worker_count)
+    try:
+        import base64
+        passed = json.loads(base64.b64decode(os.environ.get("BENCHMARK_RUN_INFO", "")))
+        count = (
+            (passed.get("case") or {}).get("worker-count")
+            or ((passed.get("worker_pool") or {}).get("spec") or {}).get("replicas")
+            or ((passed.get("worker_pool") or {}).get("status") or {}).get("readyReplicas")
+        )
+        if count and float(count) > 0:
+            return float(count)
+    except (ValueError, KeyError, TypeError, OSError):
+        pass
+    return None
+
+
+def write(
+    csv_prefix: Path,
+    run_id: str,
+    test_case: str,
+    started: float,
+    ended: float,
+    worker_count: float | None = None,
+) -> Path:
     """Writes the file beside locust's CSVs and returns its path."""
     labels = f'run_id="{run_id}",test_case="{test_case}"'
     values = {
@@ -113,4 +139,18 @@ def write(csv_prefix: Path, run_id: str, test_case: str, started: float, ended: 
     }
     if not any(values.values()):
         raise ValueError(f"Prometheus has no actor gauges for run_id={run_id} test_case={test_case}")
-    return write_history(csv_prefix.parent / FILENAME, user_counts(csv_prefix), values)
+    users = user_counts(csv_prefix)
+    workers = resolve_worker_count(worker_count)
+    if workers and workers > 0:
+        density = {}
+        for ts, u_str in users.items():
+            try:
+                density[ts] = round(float(u_str) / workers, 3)
+            except (ValueError, TypeError):
+                pass
+        if density:
+            values[("gauge", "Density")] = density
+        active = values.get(("gauge", "ActiveActors"))
+        if active:
+            values[("gauge", "ActiveDensity")] = {ts: round(val / workers, 3) for ts, val in active.items()}
+    return write_history(csv_prefix.parent / FILENAME, users, values)

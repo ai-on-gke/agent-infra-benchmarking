@@ -229,7 +229,9 @@ locals {
         TIMESTAMP_DIFF(time, ANY_VALUE(start.first), SECOND) AS elapsed_secs, steady,
         ANY_VALUE(user_count) AS actors,
         MAX(IF(name = 'ActiveActors', value, NULL)) AS active_actors,
-        MAX(IF(name = 'IdleActors', value, NULL)) AS idle_actors
+        MAX(IF(name = 'IdleActors', value, NULL)) AS idle_actors,
+        MAX(IF(name = 'Density', value, NULL)) AS density,
+        MAX(IF(name = 'ActiveDensity', value, NULL)) AS active_density
       FROM `${local.dataset_ref}.custom_stats_history`
       JOIN start USING (run_id, test_case)
       GROUP BY run_id, test_case, scenario, time, steady
