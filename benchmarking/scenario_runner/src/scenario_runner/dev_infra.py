@@ -129,20 +129,12 @@ def install_substrate(record: dict) -> dict:
     return record
 
 
-def build_agent_sandbox_images(record: dict, cloud_build: bool = False, login: bool = True) -> dict:
-    version = agent_sandbox.build_version()
-    if record.get("agent_sandbox_images") == version:
-        return record
-    agent_sandbox.build_images(runner_outputs(record["name"])["docker_repo"], record["project_id"], cloud_build, login)
-    record = {**record, "agent_sandbox_images": version}
-    write_record(record)
-    return record
-
-
-def install_agent_sandbox(record: dict, cloud_build: bool = False, login: bool = True) -> dict:
+def install_agent_sandbox(record: dict) -> dict:
+    """Installs agent-sandbox on the dev infra's cluster from the images in its
+    repository unless its record says it is installed, and returns its
+    record."""
     if record.get("agent_sandbox_installed"):
         return record
-    record = build_agent_sandbox_images(record, cloud_build, login)
     agent_sandbox.install(cluster(record["name"]))
     record = {**record, "agent_sandbox_installed": True}
     write_record(record)

@@ -12,19 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Builds agent-sandbox's images and installs agent-sandbox (controller, CRDs,
-extensions, and sandbox-router) on a case's cluster."""
+"""Installs agent-sandbox (controller, CRDs, extensions, and sandbox-router) on
+a case's cluster, from the images builder.py built into its repository."""
 
 from __future__ import annotations
 
 import functools
 import os
 import re
-import shutil
 import subprocess
 import time
 
-from . import RUNNER_DIR, builder, images
+from . import RUNNER_DIR, images
 from .cluster import Cluster
 from .log import log
 from .process import retry, stream
@@ -79,20 +78,9 @@ def missing_submodule() -> list[str]:
     return [] if (AGENT_SANDBOX_DIR / "go.mod").is_file() else [f"the agent-sandbox submodule in {AGENT_SANDBOX_DIR}"]
 
 
-def missing_requirements(cloud_build: bool = False) -> list[str]:
-    tools = ["git", "gcloud"] + ([] if cloud_build else ["docker"])
-    missing = [tool for tool in tools if not shutil.which(tool)]
-    return list(dict.fromkeys(missing + missing_submodule()))
-
-
-def build_images(repo: str, project_id: str, cloud_build: bool = False, login: bool = True) -> None:
-    repo = images.group_repo(repo, "agent-sandbox")
-    version = build_version()
-    log(f"agent-sandbox: building the {version} images into {repo}")
-    if cloud_build:
-        builder.cloud_build_and_push(IMAGES, repo, version, images.DEFAULT_PLATFORM, project_id)
-    else:
-        builder.docker_build_and_push(IMAGES, repo, version, images.DEFAULT_PLATFORM, login)
+def image_refs(repo: str) -> list[str]:
+    """What install takes from repo, tagged build_version()."""
+    return [controller_image_ref(repo), router_image_ref(repo)]
 
 
 def controller_image_ref(repo: str) -> str:
@@ -112,15 +100,8 @@ def install_once(cluster: Cluster) -> None:
     repo = cluster.image_docker_repo
     if not repo:
         raise AgentSandboxError(f"cluster {cluster.name} names no repository of agent-sandbox images")
-    controller_ref, router_ref = controller_image_ref(repo), router_image_ref(repo)
-    try:
-        controller_img = images.pin(controller_ref)
-        router_img = images.pin(router_ref)
-    except images.ImageError:
-        log(f"agent-sandbox: images not found in {repo}; building and pushing...")
-        build_images(repo, cluster.project_id)
-        controller_img = images.pin(controller_ref)
-        router_img = images.pin(router_ref)
+    controller_img = images.pin(controller_image_ref(repo))
+    router_img = images.pin(router_image_ref(repo))
     log(f"agent-sandbox: installing on cluster {cluster.name} (controller: {controller_img}, router: {router_img})")
 
     # 1. Apply CRDs

@@ -26,7 +26,7 @@ variable "command" {
 }
 
 variable "args" {
-  description = "Arguments passed to the entrypoint after --project-id, --region, --state-backend, --state-bucket, --state-prefix, --cloud-build and, with reports_bucket, --report-bucket and --report-prefix, which the module passes itself."
+  description = "Arguments passed to the entrypoint after --project-id, --region, --state-backend, --state-bucket, --state-prefix, --image-repo and, with reports_bucket, --report-bucket and --report-prefix, which the module passes itself."
   type        = list(string)
   default     = []
 }

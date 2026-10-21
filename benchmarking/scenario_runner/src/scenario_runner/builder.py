@@ -14,9 +14,9 @@
 
 """Builds the images the scenario-runner pulls and pushes them to a
 repository ahead of its runs, with local Docker and ko or on Cloud Build, each
-under the name and tag images.py, substrate.py and ate_env.py look it up by.
-The groups are substrate's, env's, and the benchmark's own of the images.json
-files."""
+under the name and tag images.py, substrate.py, ate_env.py and
+agent_sandbox.py look it up by. The groups are substrate's, env's,
+agent-sandbox's, and the benchmark's own of the images.json files."""
 
 from __future__ import annotations
 
@@ -29,12 +29,12 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-from . import ate_env, images, substrate
+from . import agent_sandbox, ate_env, images, substrate
 from .images import Image, ImageError
 from .log import log
 from .process import output, stream
 
-GROUPS = ("substrate", "env", "benchmark")
+GROUPS = ("substrate", "env", "agent-sandbox", "benchmark")
 # By digest as well as tag, so a rebuilt tag cannot change the build.
 CLOUD_BUILDER = "gcr.io/cloud-builders/docker:24.0.9@sha256:9fcfbddaf676527b2be4a6473bb37ed028a88bc55bc5cd9dcc9db4f7d9bcebee"
 # Of the go.mod's Go version, with git.
@@ -56,6 +56,8 @@ def missing_requirements(groups: list[str], cloud_build: bool = False) -> list[s
         missing += substrate.missing_submodule()
     if "env" in groups and not (ate_env.ENV_DIR / "go.mod").is_file():
         missing.append(f"the env submodule in {ate_env.ENV_DIR}")
+    if "agent-sandbox" in groups:
+        missing += agent_sandbox.missing_submodule()
     return missing
 
 
@@ -65,6 +67,8 @@ def refs(group: str, repo: str) -> list[str]:
         return substrate.image_refs(repo)
     if group == "env":
         return ate_env.image_refs(repo)
+    if group == "agent-sandbox":
+        return agent_sandbox.image_refs(repo)
     return images.refs(repo, images.IMAGE_FILES)
 
 
@@ -76,16 +80,20 @@ def dirty(group: str) -> bool:
         return substrate.build_version().endswith("-dirty")
     if group == "env":
         return ate_env.build_version().endswith("-dirty")
+    if group == "agent-sandbox":
+        return agent_sandbox.build_version().endswith("-dirty")
     return False
 
 
 def build(group: str, repo: str, image_refs: list[str], project_id: str, cloud_build: bool, login: bool) -> None:
     """Builds and pushes group's images to repo: of the benchmark's, only
-    image_refs; of the others, all of them, which one ko build makes."""
+    image_refs; of the others, all of them."""
     if group == "substrate":
         build_substrate(repo, project_id, cloud_build, login)
     elif group == "env":
         build_env(repo, project_id, cloud_build, login)
+    elif group == "agent-sandbox":
+        build_agent_sandbox(repo, project_id, cloud_build, login)
     else:
         repo = images.group_repo(repo, group)
         wanted = [i for i in images.read_images(*images.IMAGE_FILES) if images.ref(repo, i.name) in image_refs]
@@ -233,6 +241,14 @@ def cloud_build_substrate(ko_build: list[str], env: dict, repo: str, version: st
     log(f"substrate: building on Cloud Build, envoy-dataplane as {envoy}")
     envoy_step = cloud_build_step(substrate.ENVOY_DATAPLANE, envoy, images.DEFAULT_PLATFORM)
     cloud_build_submit([ko, envoy_step], [envoy], submodule_paths(substrate.SUBSTRATE_DIR), project_id)
+
+
+def build_agent_sandbox(repo: str, project_id: str, cloud_build: bool, login: bool) -> None:
+    """Pushes agent_sandbox.image_refs."""
+    repo = images.group_repo(repo, "agent-sandbox")
+    version = agent_sandbox.build_version()
+    log(f"agent-sandbox: building the {version} images into {repo}")
+    build_and_push(agent_sandbox.IMAGES, repo, version, project_id, cloud_build, login)
 
 
 def build_env(repo: str, project_id: str, cloud_build: bool, login: bool) -> None:

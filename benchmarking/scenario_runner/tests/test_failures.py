@@ -278,7 +278,7 @@ class BenchmarkRun(unittest.TestCase):
 
         from scenario_runner import benchmark
 
-        args = argparse.Namespace(name="run-1", cloud_build=False, no_deploy_workloads=False, report_bucket=None,
+        args = argparse.Namespace(name="run-1", no_deploy_workloads=False, report_bucket=None,
                                   report_prefix="reports", dev_infra=None)  # fmt: skip
         with mock.patch.object(benchmark, "run") as bench_run:
             run.run_case(args, "c-1", {"type": "locust"}, mock.Mock(), "c", 1, "repo")

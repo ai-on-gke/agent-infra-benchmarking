@@ -151,8 +151,6 @@ Useful flags (`--help` lists them all):
 | `--state-backend local\|gcs` | overrides `STATE_BACKEND`, see [Terraform state](#terraform-state) |
 | `--report-deployment DIR` | send the reports to the bucket of that applied reports deployment, such as `automation-infra/dev/reports`, to be queried in its BigQuery dataset |
 | `--image-repo REPO` | overrides `IMAGE_REPO`, the repository the images are pulled from |
-| `--cloud-build` | build an agent-sandbox case's images on Cloud Build rather than local Docker |
-| `--no-docker-login` | push an agent-sandbox case's images with Docker's own registry credentials rather than gcloud's access token |
 | `--scenarios-file PATH` | another scenarios file, e.g. a local copy with a smaller load |
 | `--report-bucket BUCKET` | keep the reports in this bucket, under `--report-prefix` (`reports` by default), rather than in each cluster's own |
 | `--terraform-output json` | log Terraform as JSON |
@@ -266,8 +264,8 @@ tags them with the repo's `HEAD` commit; a tree with uncommitted changes, here
 or in the submodules, gets `<commit>-dirty-<digest of the changes>` instead, so
 an image is only ever reused for exactly the code it was built from, and
 `run.json` records which. Commit before a run whose results you want to tie to
-a commit. Substrate's and env's images are tagged with their submodule's
-version instead, below; a `-dirty` one is built again every time. The images
+a commit. Substrate's, env's and agent-sandbox's images are tagged with their
+submodule's version instead, below; a `-dirty` one is built again every time. The images
 are built for `linux/amd64`, the nodes' platform, whatever the build host's;
 on an ARM machine that needs Docker's emulation (with Rosetta on Apple
 silicon), or `tools/build-images --cloud-build`, whose builder images are

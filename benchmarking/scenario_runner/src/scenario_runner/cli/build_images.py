@@ -14,9 +14,9 @@
 
 """Builds the images the scenario-runner runs from this tree into a
 repository, which its --image-repo then names, or a dev infra's: substrate's,
-env's and the benchmark's own. Each is built only if the repository does not
-have it at its tag yet, except a submodule's at a -dirty version, which is
-always built again."""
+env's, agent-sandbox's and the benchmark's own. Each is built only if the
+repository does not have it at its tag yet, except a submodule's at a -dirty
+version, which is always built again."""
 
 from __future__ import annotations
 

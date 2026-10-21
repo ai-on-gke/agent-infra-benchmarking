@@ -190,18 +190,6 @@ def parse_args() -> argparse.Namespace:
         " which uses its own. Default: $IMAGE_REPO",
     )
     p.add_argument(
-        "--cloud-build",
-        action="store_true",
-        help="build agent-sandbox's images, which an agent-sandbox case builds as it runs, on Cloud Build rather"
-        " than with local Docker",
-    )
-    p.add_argument(
-        "--no-docker-login",
-        action="store_true",
-        help="leave a local build of agent-sandbox's images to Docker's own registry credentials, rather than"
-        " logging in with gcloud's access token",
-    )
-    p.add_argument(
         "--no-deploy-workloads",
         action="store_true",
         help="use the mock-llm and ActorTemplates already deployed rather than deploying the case's; only with"
@@ -308,7 +296,7 @@ def applied_clusters(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
 def check_requirements(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     """Fails, naming every problem, before anything is applied."""
     log(f"run: checking what {', '.join(cases)} need before applying anything")
-    problems = preflight.check(cases, args.project_id, args.region, args.cloud_build, applied_clusters(args, cases))
+    problems = preflight.check(cases, args.project_id, args.region, applied_clusters(args, cases))
     if problems:
         fail("cannot run, as:\n" + "\n".join(f"  - {problem}" for problem in problems))
     if not args.dev_infra and not args.image_repo and any(map(pulls_images, cases.values())):
@@ -337,11 +325,15 @@ def pulls_images(case: dict) -> bool:
 
 
 def needed_images(args: argparse.Namespace, cases: dict[str, dict]) -> dict[str, list[str]]:
-    """The images the cases pull from args.image_repo, by builder.py's group:
-    agent-sandbox's, which a case builds as it runs, aside."""
+    """The images the cases pull from args.image_repo, by builder.py's group."""
     needed = {}
-    if not all(case.get(SKIP_SUBSTRATE_INSTALL) for case in cases.values()):
+    if any(
+        not case.get(SKIP_SUBSTRATE_INSTALL) and case.get("provider") != PROVIDER_AGENT_SANDBOX
+        for case in cases.values()
+    ):
         needed["substrate"] = substrate.image_refs(args.image_repo)
+    if any(case.get("provider") == PROVIDER_AGENT_SANDBOX for case in cases.values()):
+        needed["agent-sandbox"] = agent_sandbox.image_refs(args.image_repo)
     benchmarks = {name: case for name, case in cases.items() if case["type"] != "noop"}
     # env's images are only read when it is deployed, for the substrate provider.
     if not args.no_deploy_workloads and any(
@@ -542,7 +534,7 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
     def run(name: str, case: dict) -> None:
         nonlocal record
         if case.get("provider") == PROVIDER_AGENT_SANDBOX:
-            record = dev_infra.install_agent_sandbox(record, args.cloud_build, not args.no_docker_login)
+            record = dev_infra.install_agent_sandbox(record)
         elif not case.get(SKIP_SUBSTRATE_INSTALL):
             record = dev_infra.install_substrate(record)
         run_repeats(
@@ -586,8 +578,6 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
                 if pulls:
                     cluster.delete_volumes()
 
-    if any(case.get("provider") == PROVIDER_AGENT_SANDBOX for case in cases.values()):
-        agent_sandbox.build_images(args.image_repo, args.project_id, args.cloud_build, not args.no_docker_login)
     return run_cases(
         args,
         cases,
