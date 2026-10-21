@@ -19,8 +19,8 @@ output "execute_command" {
 }
 
 output "runner_image" {
-  description = "The runner image the job runs, by digest."
-  value       = data.google_artifact_registry_docker_image.runner.self_link
+  description = "The image the jobs run: unless runner_image, by the tag .github/workflows/runner-image.yml moves to source_branch's latest commit."
+  value       = local.runner_image
 }
 
 output "reports_dataset" {
@@ -29,7 +29,7 @@ output "reports_dataset" {
 }
 
 output "github_service_account_email" {
-  description = "Service account GitHub Actions write under source/ as, or null when var.github_actions_bucket is null."
+  description = "Service account GitHub Actions push the runner image and write under source/ as, or null when var.github_actions_bucket is null."
   value       = one(google_service_account.github[*].email)
 }
 

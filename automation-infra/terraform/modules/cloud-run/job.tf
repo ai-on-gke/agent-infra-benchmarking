@@ -20,20 +20,6 @@ resource "google_storage_bucket_iam_member" "job_state" {
   }
 }
 
-# The source tarballs the image fetches, which GitHub Actions uploads.
-resource "google_storage_bucket_iam_member" "job_source" {
-  count = var.github_actions_bucket == null ? 0 : 1
-
-  bucket = var.github_actions_bucket
-  role   = "roles/storage.objectViewer"
-  member = "serviceAccount:${google_service_account.job.email}"
-
-  condition {
-    title      = "source-only"
-    expression = "resource.name.startsWith(\"projects/_/buckets/${var.github_actions_bucket}/objects/source/\")"
-  }
-}
-
 # What scenario_runner/infra creates in the project, and what the run does on
 # it: substrate's install on the cluster and the images' Cloud Build. The job
 # creates no service account and grants no project role: its clusters' nodes
@@ -194,7 +180,7 @@ resource "google_cloud_run_v2_job" "job" {
       max_retries     = var.max_retries
 
       containers {
-        image   = data.google_artifact_registry_docker_image.runner.self_link
+        image   = local.runner_image
         command = var.command
         args    = concat(local.module_args, var.args)
 
@@ -208,9 +194,6 @@ resource "google_cloud_run_v2_job" "job" {
             CLOUD_BUILD_STAGING_DIR     = "gs://${google_storage_bucket.build_source.name}/benchmark"
             CLUSTER_NETWORK             = google_compute_network.runs.id
             CLUSTER_SUBNETWORK          = google_compute_subnetwork.runs.id
-            }, var.github_actions_bucket == null ? {} : {
-            SOURCE_BUCKET = var.github_actions_bucket
-            SOURCE_BRANCH = var.source_branch
           }, var.env)
           content {
             name  = env.key

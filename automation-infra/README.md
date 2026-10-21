@@ -1,15 +1,17 @@
 # Automation
 
 A Cloud Run job that runs the scenario-runner (`benchmarking/tools/run`), on a
-schedule or by hand. Each run uses the latest commit of one branch, which
-[`.github/workflows/upload-source.yml`](../.github/workflows/upload-source.yml)
-uploads to a bucket on every push.
+schedule or by hand. Each run uses the image of the latest commit of one
+branch, which
+[`.github/workflows/runner-image.yml`](../.github/workflows/runner-image.yml)
+builds from [`image/Dockerfile`](image/Dockerfile) on every push.
 
 A deployment is a folder under [`deployments/`](deployments) that calls the
 [`terraform/modules/cloud-run`](terraform/modules/cloud-run) module. The module
-deploys the job and builds its image. It also creates the network the runs'
-clusters go into, which the job joins: their control planes have an internal
-endpoint only, and their nodes reach out through its Cloud NAT. See
+deploys the job and the repository its image goes to. It also creates the
+network the runs' clusters go into, which the job joins: their control planes
+have an internal endpoint only, and their nodes reach out through its Cloud
+NAT. See
 [`deployments/substrate-bench-auto`](deployments/substrate-bench-auto) for an
 example.
 
@@ -122,18 +124,14 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
    terraform -chdir="automation-infra/deployments/$DEPLOYMENT" init
    ```
 
-3. Apply. This also builds the job's image on Cloud Build, which takes a few
-   minutes. The image is rebuilt whenever the commit or the image's files change.
-   The build is started from this machine, with `gcloud builds submit`, as the
-   module's build account; building it from a Cloud Build trigger instead would
-   need the repo connected to Cloud Build, which an organization admin has to
-   set up:
+3. Apply, with a placeholder for the job's image. The workflow can only push
+   the image once this apply has let it:
 
    ```bash
-   terraform -chdir="automation-infra/deployments/$DEPLOYMENT" apply
+   terraform -chdir="automation-infra/deployments/$DEPLOYMENT" apply -var=runner_image=us-docker.pkg.dev/cloudrun/container/job:latest
    ```
 
-4. Let GitHub Actions upload the source without a key: this sets the repo
+4. Let GitHub Actions push the image without a key: this sets the repo
    variables `GCP_WORKLOAD_IDENTITY_PROVIDER_<DEPLOYMENT>` and
    `GCP_SERVICE_ACCOUNT_<DEPLOYMENT>`, which the workflow authenticates with
    through Workload Identity Federation, and deletes any key of that account
@@ -144,18 +142,24 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
    ```
 
 5. Add the deployment to the `deployment` matrix of both jobs in
-   `upload-source.yml`:
+   `runner-image.yml` and `upload-source.yml`:
 
    ```bash
-   sed -i "s/deployment: \[\(.*\)\]/deployment: [\1, $DEPLOYMENT]/" .github/workflows/upload-source.yml
+   sed -i "s/deployment: \[\(.*\)\]/deployment: [\1, $DEPLOYMENT]/" .github/workflows/runner-image.yml .github/workflows/upload-source.yml
    ```
 
 6. Commit the deployment's folder (`main.tf`, `.gitignore` and
-   `.terraform.lock.hcl`) and the workflow, then push to `$SOURCE_BRANCH`. The
-   push uploads the source that the job runs. Wait for the Upload source
-   workflow to finish.
+   `.terraform.lock.hcl`) and the workflows, then push to `$SOURCE_BRANCH`. The
+   push builds the job's image. Wait for the Runner image workflow to finish.
 
-7. Run the `dummy` case to check the deployment. It creates no cluster:
+7. Apply again, without the placeholder, so the job runs the image the
+   workflow pushed:
+
+   ```bash
+   terraform -chdir="automation-infra/deployments/$DEPLOYMENT" apply
+   ```
+
+8. Run the `dummy` case to check the deployment. It creates no cluster:
 
    ```bash
    automation-infra/tools/trigger-dummy --deployment="$DEPLOYMENT"

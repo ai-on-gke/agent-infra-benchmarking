@@ -19,7 +19,7 @@ resource "google_cloud_run_v2_job" "cleanup" {
       max_retries     = 0
 
       containers {
-        image = data.google_artifact_registry_docker_image.runner.self_link
+        image = local.runner_image
         args = [
           "destroy-leftovers",
           "--project-id=${var.project_id}",
@@ -28,17 +28,6 @@ resource "google_cloud_run_v2_job" "cleanup" {
           "--state-bucket=${var.state_bucket}",
           "--state-prefix=${var.state_bucket_prefix}",
         ]
-
-        dynamic "env" {
-          for_each = var.github_actions_bucket == null ? {} : {
-            SOURCE_BUCKET = var.github_actions_bucket
-            SOURCE_BRANCH = var.source_branch
-          }
-          content {
-            name  = env.key
-            value = env.value
-          }
-        }
 
         resources {
           limits = {

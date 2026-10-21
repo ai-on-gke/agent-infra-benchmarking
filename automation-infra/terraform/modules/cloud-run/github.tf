@@ -1,7 +1,8 @@
-# Lets GitHub Actions write under source/ in var.github_actions_bucket. They
-# authenticate as it through Workload Identity Federation, below, with no key;
+# Lets GitHub Actions push the runner image and write under source/ in
+# var.github_actions_bucket. They authenticate as it through Workload Identity
+# Federation, below, with no key;
 # automation-infra/tools/get-gh-actions-gcs-config sets the repository
-# variables the workflow reads.
+# variables the workflows read.
 resource "google_service_account" "github" {
   count = var.github_actions_bucket == null ? 0 : 1
 
@@ -29,6 +30,17 @@ resource "google_storage_bucket_iam_member" "github_source" {
       "api.getAttribute(\"storage.googleapis.com/objectListPrefix\", \"\").startsWith(\"source/\")",
     ])
   }
+}
+
+# .github/workflows/runner-image.yml's pushes, build cache and tags.
+resource "google_artifact_registry_repository_iam_member" "github_writer" {
+  count = var.github_actions_bucket == null ? 0 : 1
+
+  project    = var.project_id
+  location   = google_artifact_registry_repository.images.location
+  repository = google_artifact_registry_repository.images.name
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.github[0].email}"
 }
 
 # GitHub Actions authenticate as the account above with the OIDC token GitHub

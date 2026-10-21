@@ -119,15 +119,21 @@ variable "reports_writer_project_ids" {
 }
 
 variable "github_actions_bucket" {
-  description = "Bucket under whose source/ GitHub Actions may write, as the github_service_account_email account, and the job reads its source from. Null creates no account and leaves the job without source, so it fails."
+  description = "Bucket under whose source/ GitHub Actions may write, as the github_service_account_email account, which also pushes the runner image. Null creates no account, so no workflow can push the image the job runs."
   type        = string
   default     = null
 }
 
 variable "source_branch" {
-  description = "Branch whose latest uploaded commit the job fetches from github_actions_bucket."
+  description = "Branch whose latest commit's runner image the job runs, as .github/workflows/runner-image.yml tags it."
   type        = string
   default     = "main"
+}
+
+variable "runner_image" {
+  description = "Image both jobs run in place of source_branch's runner image, e.g. one commit's <repository>/test-runner:<commit>, or a placeholder until the workflow has pushed the first. Null runs source_branch's."
+  type        = string
+  default     = null
 }
 
 variable "cleanup_schedule" {
