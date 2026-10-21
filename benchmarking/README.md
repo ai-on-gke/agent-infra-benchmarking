@@ -25,15 +25,16 @@ against it and destroys it afterwards.
 Each run of a case applies a cluster of its own in one zone (`us-central1-a`)
 and destroys it afterwards. It has a `default` node, `c2-standard-16`
 (`default_machine_type`); the `sandboxed` workers, `sandboxed_node_count` of
-`sandboxed_machine_type` (one `c2-standard-16` in the shipped cases); and an
-`e2-standard-4` for Prometheus. The openclaw case adds an `e2-standard-8` for
-its mock LLM. So a run needs at least 32 vCPUs of C2 quota in the region, all
-billed while it is up. Check it with:
+`sandboxed_machine_type` (one `c2-standard-16` in the shipped cases, an
+`n2-standard-16` in `sandbox-benchmark`); and an `e2-standard-4` for
+Prometheus. The openclaw case adds an `e2-standard-8` for its mock LLM. So a
+run needs at least 32 vCPUs of C2 quota in the region, or 16 of C2 and 16 of
+N2 for `sandbox-benchmark`, all billed while it is up. Check it with:
 
 ```bash
 gcloud compute regions describe us-central1 --project <project-id> \
   --flatten=quotas --format="table(quotas.metric,quotas.usage,quotas.limit)" |
-  grep -E "^(METRIC|C2_CPUS) "
+  grep -E "^(METRIC|C2_CPUS|N2_CPUS) "
 ```
 
 Short of C2, set `default_machine_type` and `sandboxed_machine_type` in the

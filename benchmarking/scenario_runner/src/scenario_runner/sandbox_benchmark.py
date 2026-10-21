@@ -19,7 +19,7 @@ into those of one comparator run of them all. The case's `comparator` names
 the providers, the tests by function name, how many times each runs and how
 many warmup runs go before. The substrate provider runs them through
 agent-substrate/env deployed for them by ate_env, whose pool and environments
-`env-worker-count` and `actor-memory` size; local runs them in the
+`env-worker-count`, `actor-memory` and `actor-cpu` size; local runs them in the
 comparator's own pod; e2b, daytona, modal, anthropic and openai in their
 clouds, with the PROVIDER_KEYS of the scenario-runner's environment."""
 
@@ -61,7 +61,7 @@ DEFAULT_MAX_FAILURE_RATIO = 0.01
 DEFAULT_ENV_WORKER_COUNT = 5
 CASE_KEYS = {
     "type", "infra", "repeats", "skip-substrate-install", "sandbox-class", "env-worker-count", "actor-memory",
-    "max-failure-ratio", "comparator", "cost-sheet", "provider", "lifecycle-mode",
+    "actor-cpu", "max-failure-ratio", "comparator", "cost-sheet", "provider", "lifecycle-mode",
 }  # fmt: skip
 COMPARATOR_KEYS = {"providers", "tests", "runs", "warmup-runs"}
 PROVIDERS = ("substrate", "local", "e2b", "daytona", "modal", "anthropic", "openai")
@@ -126,6 +126,9 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     memory = case.get("actor-memory", ate_env.DEFAULT_ACTOR_MEMORY)
     if not isinstance(memory, str) or workloads.memory_mib(memory) is None:
         raise ValueError(f"case {name}'s `actor-memory` must be a Kubernetes quantity such as 1Gi, got {memory!r}")
+    cpu = case.get("actor-cpu", ate_env.DEFAULT_ACTOR_CPU)
+    if not isinstance(cpu, str) or not re.fullmatch(r"[1-9][0-9]*m?|[0-9]*\.[0-9]+", cpu):
+        raise ValueError(f"case {name}'s `actor-cpu` must be a quoted cpu quantity such as \"2\" or \"1500m\", got {cpu!r}")
     ratio = case.get("max-failure-ratio", DEFAULT_MAX_FAILURE_RATIO)
     if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 <= ratio <= 1:
         raise ValueError(f"case {name}'s `max-failure-ratio` must be a number from 0 to 1, got {ratio!r}")
@@ -163,6 +166,7 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
         "sandbox-class": "gvisor",
         "env-worker-count": DEFAULT_ENV_WORKER_COUNT,
         "actor-memory": ate_env.DEFAULT_ACTOR_MEMORY,
+        "actor-cpu": ate_env.DEFAULT_ACTOR_CPU,
         "max-failure-ratio": DEFAULT_MAX_FAILURE_RATIO,
         "cost-sheet": False,
         **case,
@@ -238,7 +242,9 @@ def run_provider(
     template = None
     if on_env:
         if deploy_workloads:
-            ate_env.deploy(cluster, image_repo, sandbox_class, case["env-worker-count"], case["actor-memory"])
+            ate_env.deploy(
+                cluster, image_repo, sandbox_class, case["env-worker-count"], case["actor-memory"], case["actor-cpu"]
+            )
         template = workloads.deployed_template(cluster, ate_env.TEMPLATE, ate_env.ENV_ATESPACE)
         # Matters when the template was not deployed by this run (--no-deploy-workloads).
         want = workloads.SANDBOX_CONFIGS[sandbox_class][1]

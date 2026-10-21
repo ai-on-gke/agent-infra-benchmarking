@@ -22,12 +22,17 @@
 # For locust: `worker-count` and `sandbox-class` shape the WorkerPool, and
 # every key in `master` and `worker` becomes `--key=value` on that process.
 # For sandbox-benchmark: `comparator.tests` names ai-sandbox-benchmark's tests
-# by function name, run `comparator.runs` times each, and `env-worker-count`
-# and `actor-memory` size env's WorkerPool and its environments.
-# `comparator.providers` runs them on each of substrate and local in turn,
-# [substrate] by default, and combines their results into one comparison,
-# the first provider the others are compared with. `cost-sheet: true` adds
-# cost_sheet.csv, the sandbox cost sheet, to that comparison.
+# by function name, run `comparator.runs` times each, and `env-worker-count`,
+# `actor-memory` and `actor-cpu` size env's WorkerPool and its environments.
+# `actor-cpu`, "2" by default, caps substrate's sandbox at the 2 vCPU the
+# cloud providers' get; with `actor-memory: 2Gi` the sizes match.
+# `comparator.providers` runs them on each of substrate, local, e2b, daytona,
+# modal, anthropic and openai it lists in turn, [substrate] by default, and
+# combines their results into one comparison, the first provider the others
+# are compared with. The cloud ones need their API keys in the
+# scenario-runner's environment, sandbox_benchmark.PROVIDER_KEYS.
+# `cost-sheet: true` adds cost_sheet.csv, the sandbox cost sheet, to that
+# comparison.
 # `sandbox-class`, gvisor by default, is also the class the case's cluster is
 # applied for (its `sandbox_class`), so it is stated here only.
 # `actor-memory` is the actors' memory limit, which on microvm is the guest's
@@ -506,6 +511,8 @@ cases:
       workload-template: glutton
       resume-mode: explicit
 
+  # substrate's sandbox sized as the cloud providers' are, 2 vCPU and 2 GiB, on
+  # a general-purpose node rather than default.tfvars' compute-optimized c2.
   sandbox-benchmark:
     type: sandbox-benchmark
     infra:
@@ -513,14 +520,16 @@ cases:
         name: common
         tfvars: default.tfvars
         tfvars_inline: |
-          sandboxed_node_count     = 2
-          sandboxed_min_node_count = 2
-          sandboxed_max_node_count = 2
+          sandboxed_machine_type   = "n2-standard-16"
+          sandboxed_node_count     = 1
+          sandboxed_min_node_count = 1
+          sandboxed_max_node_count = 1
     sandbox-class: gvisor
     # The comparator starts every run at once, each in an environment of its
-    # own on a worker of its own.
+    # own on a worker of its own: 3 sandboxes of 2 vCPU on the node's 16.
     env-worker-count: 3
-    actor-memory: 4Gi
+    actor-cpu: "2"
+    actor-memory: 2Gi
     comparator:
       # e2b, daytona, modal, anthropic and openai need E2B_API_KEY,
       # DAYTONA_API_KEY, MODAL_TOKEN_ID/MODAL_TOKEN_SECRET, ANTHROPIC_API_KEY

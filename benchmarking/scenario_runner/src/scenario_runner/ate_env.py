@@ -57,6 +57,8 @@ POOL_LABELS = {"workload": "sandbox-benchmark-ateom"}
 ROOTFS_IMAGE = "sandbox-benchmark-rootfs"
 # numpy, scipy and pandas do not fit workloads' 256Mi default.
 DEFAULT_ACTOR_MEMORY = "1Gi"
+# The vCPUs the other providers' sandboxes get, so substrate's is no bigger.
+DEFAULT_ACTOR_CPU = "2"
 DEFAULT_TIMEOUT_SECS = 300
 
 AteEnv = Callable[..., list[str]]
@@ -149,7 +151,13 @@ def render_stack(cli: AteEnv, cluster: Cluster, sandbox_class: str, worker_count
 
 
 def render_template(
-    cli: AteEnv, cluster: Cluster, sandbox_class: str, guest_image: str, rootfs_image: str, actor_memory: str
+    cli: AteEnv,
+    cluster: Cluster,
+    sandbox_class: str,
+    guest_image: str,
+    rootfs_image: str,
+    actor_memory: str,
+    actor_cpu: str,
 ) -> str:
     """env's ActorTemplate running rootfs_image, with the guest mounted into
     it, on the case's sandbox class and the pool render_stack labels."""
@@ -168,8 +176,10 @@ def render_template(
     config_name, class_enum = workloads.SANDBOX_CONFIGS[sandbox_class]
     template["sandboxConfig"] = {"sandboxClass": class_enum, "configName": config_name}
     template["workerSelector"] = {"matchLabels": POOL_LABELS}
-    # Unset, microvm gives every actor 2 GiB.
-    template["resources"] = {"limits": [{"name": "memory", "quantity": actor_memory}]}
+    # Unset, microvm gives every actor 2 GiB, and gVisor no cpu limit at all.
+    template["resources"] = {
+        "limits": [{"name": "cpu", "quantity": actor_cpu}, {"name": "memory", "quantity": actor_memory}]
+    }
     return yaml.safe_dump(template, sort_keys=False)
 
 
@@ -179,6 +189,7 @@ def deploy(
     sandbox_class: str,
     worker_count: int,
     actor_memory: str = DEFAULT_ACTOR_MEMORY,
+    actor_cpu: str = DEFAULT_ACTOR_CPU,
     timeout: int = DEFAULT_TIMEOUT_SECS,
 ) -> None:
     """Deploys env and the template from their images in image_repo, image_refs
@@ -190,7 +201,7 @@ def deploy(
     rootfs_image = images.pin(images.image_ref(images.SANDBOX_BENCHMARK_IMAGES, image_repo, ROOTFS_IMAGE))
     with ate_env() as cli:
         stack = render_stack(cli, cluster, sandbox_class, worker_count, api_image)
-        template = render_template(cli, cluster, sandbox_class, guest_image, rootfs_image, actor_memory)
+        template = render_template(cli, cluster, sandbox_class, guest_image, rootfs_image, actor_memory, actor_cpu)
 
     worker_pool.delete(cluster, timeout, POOL, NAMESPACE)
     log(f"env: deploying {API} and {POOL} (replicas={worker_count}, sandbox_class={sandbox_class}) in {NAMESPACE}")
@@ -200,6 +211,7 @@ def deploy(
 
     log(
         f"env: registering {ENV_ATESPACE}/{TEMPLATE} (rootfs={rootfs_image}, actor_memory={actor_memory},"
+        f" actor_cpu={actor_cpu},"
         f" bucket=gs://{cluster.bucket}/{ENV_ATESPACE}/{TEMPLATE}/)"
     )
     with workloads.kubectl_ate(cluster) as ate:
