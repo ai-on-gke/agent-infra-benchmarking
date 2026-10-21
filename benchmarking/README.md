@@ -16,8 +16,8 @@ against it and destroys it afterwards.
 - kubectl 1.31 or later
 - gcloud's `gke-gcloud-auth-plugin` (`gcloud components install
   gke-gcloud-auth-plugin`), which kubectl reaches the clusters through
-- Docker with Buildx, for `tools/build-images` unless you pass it
-  `--cloud-build`: the image builds use `--build-context`
+- Docker with Buildx, for `tools/build-images`: the image builds use
+  `--build-context`
 - curl and a `tar` with zstd support, for `sandbox-class: microvm` cases
 
 ### Cost and quota
@@ -268,8 +268,7 @@ a commit. Substrate's, env's and agent-sandbox's images are tagged with their
 submodule's version instead, below; a `-dirty` one is built again every time. The images
 are built for `linux/amd64`, the nodes' platform, whatever the build host's;
 on an ARM machine that needs Docker's emulation (with Rosetta on Apple
-silicon), or `tools/build-images --cloud-build`, whose builder images are
-pinned by digest.
+silicon).
 
 Substrate is built from `dependency-repos/substrate`, which has to be checked
 out at the commit the repo pins: after a pull, run `git submodule update`. To

@@ -196,8 +196,7 @@ def pod_images(cluster: Cluster, namespace: str) -> dict:
 
 
 def _version(cmd: list[str], pattern: str = r"\S+") -> str | None:
-    """The tool's version, or None for a tool this machine does not have, such
-    as Docker where the images build on Cloud Build."""
+    """The tool's version, or None for a tool this machine does not have."""
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError:
@@ -209,8 +208,8 @@ def _version(cmd: list[str], pattern: str = r"\S+") -> str | None:
 @functools.cache
 def tools() -> dict:
     """The versions of the tools on this machine that built and deployed the
-    run: Terraform applied its infra, ko and Docker built its images unless
-    Cloud Build did, kubectl and gcloud deployed it."""
+    run: Terraform applied its infra, ko and Docker built its images, kubectl
+    and gcloud deployed it."""
     ko = re.search(r"github\.com/google/ko (v\S+)", (substrate.SUBSTRATE_DIR / "hack/tools/ko/go.mod").read_text())
     return {
         "terraform": _version(["terraform", "version", "-json"], r'(?<="terraform_version": ")[^"]+'),

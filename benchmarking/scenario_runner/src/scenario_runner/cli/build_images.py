@@ -21,7 +21,6 @@ version, which is always built again."""
 from __future__ import annotations
 
 import argparse
-import os
 import subprocess
 import sys
 from typing import NoReturn
@@ -68,12 +67,6 @@ def parse_args() -> argparse.Namespace:
         metavar="GROUPS",
         help=f"which of {', '.join(builder.GROUPS)} to build, comma-separated. Default: all",
     )
-    p.add_argument("--cloud-build", action="store_true", help="build on Cloud Build rather than with local Docker and ko")
-    p.add_argument(
-        "--project-id",
-        default=os.environ.get("PROJECT_ID"),
-        help="the project Cloud Build runs in; only with --cloud-build. Default: $PROJECT_ID, or the dev infra's",
-    )
     p.add_argument(
         "--no-docker-login",
         action="store_true",
@@ -89,15 +82,12 @@ def parse_args() -> argparse.Namespace:
         if not outputs.get("docker_repo"):
             p.error(f"--dev-infra: dev infra {args.dev_infra} has no repository yet; run it once to apply it")
         args.repo = outputs["docker_repo"]
-        args.project_id = args.project_id or record["project_id"]
-    if args.cloud_build and not args.project_id:
-        p.error("--cloud-build requires --project-id, or PROJECT_ID")
     return args
 
 
 def main() -> None:
     args = parse_args()
-    missing = builder.missing_requirements(args.images, args.cloud_build)
+    missing = builder.missing_requirements(args.images)
     if missing:
         fail(f"building {', '.join(args.images)} requires {', '.join(missing)}")
     try:
@@ -118,7 +108,7 @@ def main() -> None:
                 log(f"build-images: {group}: would build\n{listed}")
                 continue
             log(f"build-images: {group}: building\n{listed}")
-            builder.build(group, args.repo, wanted, args.project_id, args.cloud_build, not args.no_docker_login)
+            builder.build(group, args.repo, wanted, not args.no_docker_login)
     except subprocess.CalledProcessError as exc:
         fail(failure(exc))
     except (images.ImageError, substrate.SubstrateError) as exc:

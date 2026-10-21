@@ -118,9 +118,3 @@ class Refs(unittest.TestCase):
         for bad in ("us-central1-docker.pkg.dev/my-project", "gcr.io/my-project/my-repo", "x-docker.pkg.dev/p/r/extra"):
             with self.assertRaises(ValueError):
                 images.repository_name(bad)
-
-    def test_builders_are_pinned_by_digest(self):
-        from scenario_runner import builder
-
-        for image in (builder.CLOUD_BUILDER, builder.GO_BUILDER):
-            self.assertRegex(image, r"@sha256:[0-9a-f]{64}$")

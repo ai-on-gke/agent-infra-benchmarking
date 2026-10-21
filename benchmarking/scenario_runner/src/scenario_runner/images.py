@@ -73,13 +73,6 @@ class Image:
             args.append(f"--target={self.target}")
         return [*args, *self.args, self.context]
 
-    def sources(self) -> list[str]:
-        """The paths its build reads."""
-        paths = [self.context, *self.build_contexts.values()]
-        if not self.dockerfile.startswith(self.context + "/"):
-            paths.append(self.dockerfile)
-        return paths
-
 
 def missing_requirements() -> list[str]:
     return [tool for tool in ("git", "gcloud") if not shutil.which(tool)]
