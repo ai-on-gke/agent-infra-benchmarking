@@ -33,8 +33,9 @@ from ..process import failure
 from .dev_infra import resource_count
 from .run import LOCAL_TERRAFORM_DIR
 
-# scenario_runner/infra, which an execution from before the image repository
-# outlived it applied, and destroyed after its clusters.
+# scenario_runner/infra, which an execution from a machine without
+# --image-repo, or from before the image repository outlived it, applied, and
+# destroyed after its clusters.
 RUNNER_KEY = "scenario-runner"
 
 

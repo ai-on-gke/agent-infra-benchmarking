@@ -1,6 +1,8 @@
 # The repository benchmarking/tools/build-images builds a dev infra's images
 # into, which outlives its runs: built once per version, they are pulled by
-# every cluster of the dev infra, or of a run whose --image-repo names it.
+# every cluster of the dev infra, or of a run whose --image-repo names it. A run
+# from a machine without --image-repo applies one for itself, and destroys it
+# after its clusters.
 
 resource "google_project_service" "artifactregistry" {
   service = "artifactregistry.googleapis.com"
