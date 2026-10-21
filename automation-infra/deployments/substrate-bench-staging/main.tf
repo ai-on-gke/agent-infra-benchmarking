@@ -49,11 +49,13 @@ module "cloud_run" {
   reports_prefix        = "data"
   source_branch         = "push-images-instead-of-source"
 
-  # Only the dummy case, which creates no cluster.
-  args = ["--scenario=dummy"]
+  # dummy, which creates no cluster, and glutton-single, one glutton run.
+  args = [
+    "--scenario=dummy",
+    "--scenario=glutton-single",
+  ]
 
-  # Daily, an hour after substrate-bench-auto's. No cleanup job, since dummy
-  # leaves nothing behind.
+  # Daily, an hour after substrate-bench-auto's.
   schedule = "0 4 * * *"
 }
 

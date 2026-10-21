@@ -106,6 +106,30 @@ cases:
       workload-template: glutton
       resume-mode: explicit
 
+  # glutton once rather than three times, for a quicker check of the path.
+  glutton-single:
+    type: locust
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 1
+          sandboxed_min_node_count = 1
+          sandboxed_max_node_count = 1
+    repeats: 1
+    worker-count: 10
+    sandbox-class: gvisor
+    master:
+      run-time: 5m
+      users: 10
+      spawn-rate: 10
+      warm-up: 10s
+    worker:
+      workload-name: glutton
+      workload-template: glutton
+      resume-mode: explicit
+
   glutton-baseline:
     type: locust
     infra:
