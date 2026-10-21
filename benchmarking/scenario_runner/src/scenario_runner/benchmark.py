@@ -57,8 +57,8 @@ def check_run_id(run_id: str) -> str:
     return run_id
 
 
-def missing_requirements(cases: dict[str, dict], cloud_build: bool = False) -> list[str]:
-    missing = [tool for case in cases.values() for tool in RUNNERS[case["type"]].missing_requirements(cloud_build)]
+def missing_requirements(cases: dict[str, dict]) -> list[str]:
+    missing = [tool for case in cases.values() for tool in RUNNERS[case["type"]].missing_requirements()]
     return list(dict.fromkeys(missing))
 
 

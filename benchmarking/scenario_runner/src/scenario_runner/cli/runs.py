@@ -33,6 +33,8 @@ from ..process import failure
 from .dev_infra import resource_count
 from .run import LOCAL_TERRAFORM_DIR
 
+# scenario_runner/infra, which an execution from before the image repository
+# outlived it applied, and destroyed after its clusters.
 RUNNER_KEY = "scenario-runner"
 
 
@@ -50,7 +52,7 @@ def deployment(args: argparse.Namespace, key: tuple[str, ...]) -> GcsDeployment:
 
 
 def leftovers(args: argparse.Namespace) -> dict[str, list[GcsDeployment]]:
-    """Each run's deployments not destroyed, by run id, the clusters before the
+    """Each run's deployments not destroyed, by run id, the clusters before any
     scenario-runner as the execution destroys them."""
     created, destroyed = set(), set()
     for blob in storage_client().list_blobs(args.state_bucket, prefix=f"{args.state_prefix}/"):
@@ -65,11 +67,16 @@ def leftovers(args: argparse.Namespace) -> dict[str, list[GcsDeployment]]:
     return runs
 
 
-def run_labels(args: argparse.Namespace, run_id: str) -> dict[str, str]:
-    """The labels of the run's scenario-runner, which its clusters' share."""
-    name = f"{args.state_prefix}/{run_id}/{RUNNER_KEY}/config/{VARIABLES_FILE}"
-    blob = storage_client().bucket(args.state_bucket).blob(name)
-    return json.loads(blob.download_as_text()).get("labels", {}) if blob.exists() else {}
+def run_labels(args: argparse.Namespace, infras: list[GcsDeployment]) -> dict[str, str]:
+    """The labels the run's deployments share, read off the first one's
+    variables that has them, less a cluster's own test case."""
+    for infra in infras:
+        blob = storage_client().bucket(args.state_bucket).blob(f"{infra.prefix}/config/{VARIABLES_FILE}")
+        if blob.exists():
+            labels = json.loads(blob.download_as_text()).get("labels", {})
+            labels.pop("benchmark-test-case", None)
+            return labels
+    return {}
 
 
 def deployment_info(run_id: str, infra: GcsDeployment) -> dict:
@@ -83,7 +90,7 @@ def print_list(args: argparse.Namespace) -> None:
     runs = [
         {
             "run_id": run_id,
-            "labels": run_labels(args, run_id),
+            "labels": run_labels(args, infras),
             "deployments": [deployment_info(run_id, infra) for infra in infras],
         }
         for run_id, infras in leftovers(args).items()
@@ -112,7 +119,8 @@ def print_list(args: argparse.Namespace) -> None:
 
 def destroy(args: argparse.Namespace) -> bool:
     """Destroys each run's leftovers, and says whether every destroy succeeded.
-    A run's scenario-runner stays if one of its clusters fails to destroy."""
+    A run's scenario-runner, if it has one, stays if one of its clusters fails
+    to destroy."""
     runs = leftovers(args)
     succeeded = True
     for run_id in args.run_ids:

@@ -24,7 +24,7 @@ import shutil
 import subprocess
 import time
 
-from . import RUNNER_DIR, images
+from . import RUNNER_DIR, builder, images
 from .cluster import Cluster
 from .log import log
 from .process import retry, stream
@@ -89,9 +89,9 @@ def build_images(repo: str, project_id: str, cloud_build: bool = False, login: b
     version = build_version()
     log(f"agent-sandbox: building the {version} images into {repo}")
     if cloud_build:
-        images.cloud_build_and_push(IMAGES, repo, version, images.DEFAULT_PLATFORM, project_id)
+        builder.cloud_build_and_push(IMAGES, repo, version, images.DEFAULT_PLATFORM, project_id)
     else:
-        images.docker_build_and_push(IMAGES, repo, version, images.DEFAULT_PLATFORM, login)
+        builder.docker_build_and_push(IMAGES, repo, version, images.DEFAULT_PLATFORM, login)
 
 
 def controller_image_ref(repo: str) -> str:

@@ -15,7 +15,7 @@
 """What a run was made of that its reports cannot say themselves: the case,
 the cluster and its nodes, the WorkerPool, the ActorTemplate and its
 SandboxConfig, every image by digest, substrate's control plane included, the
-commits, and the tools and builders the images were made with. The master
+commits, and the tools the run had. The master
 writes it into run.json beside the reports, with how the run went."""
 
 from __future__ import annotations
@@ -223,13 +223,6 @@ def tools() -> dict:
     }
 
 
-def builders(cloud_build: bool) -> dict:
-    """Where the images were built, and with Cloud Build the builder images."""
-    if not cloud_build:
-        return {"where": "local docker"}
-    return {"where": "cloud build", "docker": images.CLOUD_BUILDER, "go": substrate.GO_BUILDER}
-
-
 def infra(case: dict) -> dict:
     """The case's cluster spec, with the text of the tfvars file it names, so
     a published run says what hardware it asked for."""
@@ -250,10 +243,8 @@ def collect(
     image_refs: dict,
     bucket: str,
     pool: tuple[str, str] = (worker_pool.NAMESPACE, worker_pool.NAME),
-    cloud_build: bool = False,
 ) -> dict:
-    """pool is the namespace and name of the WorkerPool the run's actors run on;
-    cloud_build says where the images were built."""
+    """pool is the namespace and name of the WorkerPool the run's actors run on."""
     pool_namespace, pool_name = pool
     errors: dict[str, str] = {}
     sandbox_configs = {}
@@ -293,7 +284,6 @@ def collect(
         "image_tag": images.tag(),
         "commit_dirty": dirty,
         "tools": _read("tool versions", tools, errors),
-        "builders": builders(cloud_build),
         "provider": case.get("provider", "agent-substrate"),
         "substrate_commit": _read("substrate commit", lambda: output(["git", "rev-parse", "HEAD"], cwd=substrate.SUBSTRATE_DIR).strip(), errors) if case.get("provider", "agent-substrate") == "agent-substrate" else None,
         "substrate_version": _read("substrate version", substrate.build_version, errors) if case.get("provider", "agent-substrate") == "agent-substrate" else None,

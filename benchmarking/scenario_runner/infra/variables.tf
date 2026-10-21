@@ -24,9 +24,3 @@ variable "labels" {
   type        = map(string)
   default     = {}
 }
-
-variable "image_writers" {
-  description = "IAM members, such as serviceAccount:<email>, that may push to the repository: the account Cloud Builds of the run's images run as, when it is not the project's default."
-  type        = list(string)
-  default     = []
-}

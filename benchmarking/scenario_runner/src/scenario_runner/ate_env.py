@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Builds agent-substrate/env from its submodule and deploys it on a case's
-cluster for the sandbox-benchmark: the ate-env-api service and a WorkerPool,
+"""Deploys agent-substrate/env, from its submodule and the images builder.py
+pushes of it, on a case's cluster for the sandbox-benchmark: the ate-env-api service and a WorkerPool,
 as env's own `ate-env manifest` writes them, and the py312 ActorTemplate, as
 `ate-env manifest template` writes it, running the benchmark's rootfs image.
 env writes them for a stock cluster's gVisor; what is overridden for this
@@ -21,6 +21,7 @@ one is said where it is. Or deletes them."""
 
 from __future__ import annotations
 
+import functools
 import re
 import shutil
 import subprocess
@@ -40,8 +41,6 @@ ENV_DIR = DEPENDENCY_REPOS / "env"
 ENV_PATH = ENV_DIR.relative_to(images.ROOT).as_posix()
 # Pins the env commit its ate_env client and the API it calls are from.
 PROVIDER = DEPENDENCY_REPOS / "ai-sandbox-benchmark" / "providers" / "substrate.py"
-# The ko substrate's hack/tools/ko pins.
-KO = "github.com/google/ko@v0.19.1"
 PACKAGES = ["./cmd/ate-env-api", "./cmd/ate-env-guest"]
 # env's defaults. ate-env-api creates the environments' atespace as it starts.
 NAMESPACE = "ate-env"
@@ -86,44 +85,26 @@ def check_client() -> None:
         raise EnvError(f"the env submodule is at {head}, but {PROVIDER.name}'s client is pinned to {pinned[1]}")
 
 
-def build_images(repo: str, project_id: str, cloud_build: bool = False, login: bool = True) -> None:
-    """Builds and pushes ate-env-api and ate-env-guest to repo, tagged
-    images.tag() as the benchmark's own images are."""
-    ko_build = ["go", "run", KO, "build", "--base-import-paths", f"--tags={images.tag()}", *PACKAGES]
-    env = {"KO_DEFAULTPLATFORMS": images.DEFAULT_PLATFORM, "KO_DOCKER_REPO": repo}
-    log(f"env: building {', '.join(PACKAGES)} into {repo}")
-    if cloud_build:
-        cloud_build_images(ko_build, env, project_id)
-        return
-    if login:
-        # ko login, as ko doesn't push with docker.
-        host = repo.split("/", 1)[0]
-        ko_login = ["go", "run", KO, "login", host, "--username=oauth2accesstoken", "--password-stdin"]
-        stream(ko_login, cwd=ENV_DIR, input=images.access_token(host))
-    stream(ko_build, env=env, cwd=ENV_DIR)
+@functools.cache
+def build_version() -> str:
+    """What env's images are tagged, read once per run: git describe in the
+    submodule, as substrate's build version is, so they are built again only
+    once it moves."""
+    describe = ["git", "describe", "--tags", "--always", "--dirty"]
+    proc = subprocess.run(describe, cwd=ENV_DIR, capture_output=True, text=True)
+    return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else "dev"
 
 
-def cloud_build_images(ko_build: list[str], env: dict, project_id: str) -> None:
-    """Runs the ko build on Cloud Build, uploading the submodule's files git
-    doesn't ignore. ko pushes as the build's service account."""
-    step = {
-        "id": "ko",
-        "name": substrate.GO_BUILDER,
-        "dir": ENV_PATH,
-        "entrypoint": ko_build[0],
-        "args": ko_build[1:],
-        # VCS stamping fails in the upload, which has no .git.
-        "env": [f"{key}={value}" for key, value in env.items()] + ["GOFLAGS=-buildvcs=false"],
-        "waitFor": ["-"],
-    }
-    files = output(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=ENV_DIR)
-    paths = [f"{ENV_PATH}/{file}" for file in files.split("\0") if file and (ENV_DIR / file).exists()]
-    images.cloud_build_submit([step], [], paths, project_id)
+def image_refs(repo: str) -> list[str]:
+    """ate-env-api and ate-env-guest in repo, which builder.py pushes, each
+    named after the last element of its package as ko --base-import-paths
+    names it."""
+    return [images.ref(repo, package.rsplit("/", 1)[-1], build_version()) for package in PACKAGES]
 
 
 def pinned_image(repo: str, name: str) -> str:
-    """An image build_images pushed from this tree, pinned."""
-    return images.pin(images.ref(repo, name))
+    """One of image_refs, pinned."""
+    return images.pin(images.ref(repo, name, build_version()))
 
 
 @contextmanager
@@ -144,7 +125,7 @@ def render_stack(cli: AteEnv, cluster: Cluster, sandbox_class: str, worker_count
             f"--namespace={NAMESPACE}",
             f"--template={TEMPLATE}",
             f"--api-image={api_image}",
-            # substrate.resolve pins it to the image substrate.build_images pushed.
+            # substrate.resolve pins it to its image in the repository.
             f"--worker-image=ko://github.com/agent-substrate/substrate/cmd/ateom-{sandbox_class}",
             f"--replicas={worker_count}",
         )
@@ -199,8 +180,8 @@ def deploy(
     actor_memory: str = DEFAULT_ACTOR_MEMORY,
     timeout: int = DEFAULT_TIMEOUT_SECS,
 ) -> None:
-    """Deploys env and the template from the images build_images and
-    images.build_and_push pushed to image_repo from this tree, and waits
+    """Deploys env and the template from their images in image_repo, image_refs
+    and the sandbox-benchmark's rootfs of this tree, and waits
     for the template's golden snapshot. Always a new pool, so no run starts
     on workers the last one warmed."""
     check_client()

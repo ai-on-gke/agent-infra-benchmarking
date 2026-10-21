@@ -87,8 +87,8 @@ class SandboxBenchmarkTimeout(SandboxBenchmarkError):
     the next run would recreate env's pool under it, so a series stops here."""
 
 
-def missing_requirements(cloud_build: bool = False) -> list[str]:
-    missing = images.missing_requirements(cloud_build) + ate_env.missing_requirements()
+def missing_requirements() -> list[str]:
+    missing = images.missing_requirements() + ate_env.missing_requirements()
     if not (AI_SANDBOX_BENCHMARK_DIR / "comparator.py").is_file():
         missing.append(f"the ai-sandbox-benchmark submodule in {AI_SANDBOX_BENCHMARK_DIR}")
     return list(dict.fromkeys(missing))
@@ -225,7 +225,6 @@ def run_provider(
     report_prefix: str,
     test_case: str | None,
     repeat: int,
-    cloud_build: bool,
 ) -> None:
     """Runs the case's tests on provider, as one comparator Job, whose reports
     go under <run_id>/<name>/<provider>/."""
@@ -252,7 +251,7 @@ def run_provider(
 
     info = run_info.collect(
         cluster, case, ate_env.TEMPLATE if on_env else None, template, {COMPARATOR_IMAGE: comparator_image}, bucket,
-        pool=(ate_env.NAMESPACE, ate_env.POOL), cloud_build=cloud_build,
+        pool=(ate_env.NAMESPACE, ate_env.POOL),
     )  # fmt: skip
     if on_env:
         info["env_commit"] = commit(ate_env.ENV_DIR)
@@ -395,20 +394,18 @@ def run(
     report_prefix: str = reports.REPORT_PREFIX,
     test_case: str | None = None,
     repeat: int = 0,
-    cloud_build: bool = False,
     keeps_bucket: bool = False,
 ) -> None:
     """Runs the case, recorded under name, as part of run_id, by default a UTC
     timestamp and the commit: on each of its providers in turn, then combines
-    their results, with the images build_images and ate_env.build_images
-    pushed to image_repo. A provider whose run fails does not stop the ones
-    after it; the run fails once they have run. test_case and repeat say which
-    case it is a repeat of; repeat is 0 for a case run once. Without
+    their results, with the images build-images pushed to image_repo. A
+    provider whose run fails does not stop the ones after it; the run fails
+    once they have run. test_case and repeat say which case it is a repeat of;
+    repeat is 0 for a case run once. Without
     deploy_workloads, uses the env and template already deployed. The reports
     go under report_prefix in report_bucket, by default the cluster's own,
-    which keeps_bucket says outlives the run, as a dev infra's does.
-    cloud_build says, for run.json, where the images were built. Expects the
-    cluster's credentials in its kubeconfig."""
+    which keeps_bucket says outlives the run, as a dev infra's does. Expects
+    the cluster's credentials in its kubeconfig."""
     case = check_case(name, case, deploy_workloads)
     sandbox_class = case["sandbox-class"]
     providers = case["comparator"]["providers"]
@@ -434,7 +431,7 @@ def run(
             try:
                 run_provider(
                     cluster, name, case, provider, run_id, comparator_image, image_repo, deploy_workloads, bucket,
-                    report_prefix, test_case, repeat, cloud_build,
+                    report_prefix, test_case, repeat,
                 )  # fmt: skip
             except SandboxBenchmarkTimeout:
                 raise

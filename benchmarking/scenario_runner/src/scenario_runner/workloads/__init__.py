@@ -104,7 +104,7 @@ def min_actor_memory_mib(workload: str | None, sandbox_class: str) -> int | None
 
 
 def pinned_image(image_repo: str, name: str) -> str:
-    """The image images.build_and_push built from this tree into image_repo,
+    """The image build-images built from this tree into image_repo,
     pinned."""
     return images.pin(images.image_ref(images.WORKLOADS_IMAGES, image_repo, name))
 
@@ -237,7 +237,7 @@ def deploy(
     otlp: str | None = None,
     timeout: int = DEFAULT_TIMEOUT_SECS,
 ) -> None:
-    """image_repo holds the workload images images.build_and_push built from
+    """image_repo holds the workload images build-images built from
     this tree. otlp is where an instrumented actor sends its telemetry; by
     default the control plane's endpoint."""
     if not names:

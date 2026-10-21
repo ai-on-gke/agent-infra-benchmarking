@@ -2,16 +2,18 @@ name: Runner image
 
 # Builds the Cloud Run job's image, automation-infra/image/Dockerfile, from each
 # pushed commit and pushes it as test-runner:<commit> to the Artifact Registry
-# repository of each deployment in the matrix, then tags it
-# test-runner:<branch>, which the deployment's job runs: the branch with each
-# character a tag can't hold as a hyphen. The repository is the one the
-# deployment's main.tf names by its project_id, region and
+# repository of each deployment in the matrix, with the images the job's runs
+# pull, then tags it test-runner:<branch>, which the deployment's job runs: the
+# branch with each character a tag can't hold as a hyphen. The repository is
+# the one the deployment's main.tf names by its project_id, region and
 # default_resource_name. The workflow authenticates as
 # .github/workflows/upload-source.yml does.
 
 on:
   push:
     branches: ['**']
+  # For the runs' images of a branch no deployment tracks.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -91,10 +93,100 @@ jobs:
           cache-to: type=registry,ref=${{ steps.deployment.outputs.image }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
           provenance: false
 
+  # The images the deployment's runs pull, built with
+  # benchmarking/tools/build-images for the commits of the branch its job runs,
+  # source_branch in its main.tf, and of any branch dispatched by hand. Each is
+  # built only if the repository lacks it: substrate's and env's once per
+  # submodule version, the benchmark's own once per commit.
+  images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      matrix:
+        # The same as build's.
+        deployment: [substrate-bench-auto]
+    concurrency:
+      group: ${{ github.workflow }}-images-${{ matrix.deployment }}-${{ github.ref }}
+    steps:
+      # As build's, so git describe gives the submodules the versions the
+      # runner image does.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: true
+          sparse-checkout: |
+            benchmarking
+            dependency-repos
+            automation-infra
+          persist-credentials: false
+      - name: Deployment
+        id: deployment
+        env:
+          DEPLOYMENT: ${{ matrix.deployment }}
+          EVENT: ${{ github.event_name }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          source automation-infra/tools/lib.sh
+          DEPLOYMENT_DIR="automation-infra/deployments/$DEPLOYMENT"
+          project="$(module_arg project_id)" region="$(module_arg region)" name="$(module_arg default_resource_name)"
+          [[ -n "$project" && -n "$region" && -n "$name" ]] || {
+            echo "$DEPLOYMENT's main.tf does not set project_id, region and default_resource_name." >&2
+            exit 1
+          }
+          # The module's default.
+          tracked="$(module_arg source_branch)" tracked="${tracked:-main}"
+          if [[ "$EVENT" == workflow_dispatch || "$BRANCH" == "$tracked" ]]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$DEPLOYMENT runs $tracked, not $BRANCH; building no images."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "repo=$region-docker.pkg.dev/$project/$name" >> "$GITHUB_OUTPUT"
+          suffix="$(tr 'a-z-' 'A-Z_' <<<"$DEPLOYMENT")"
+          echo "credentials_secret=GCP_CREDENTIALS_$suffix" >> "$GITHUB_OUTPUT"
+          echo "provider_variable=GCP_WORKLOAD_IDENTITY_PROVIDER_$suffix" >> "$GITHUB_OUTPUT"
+          echo "account_variable=GCP_SERVICE_ACCOUNT_$suffix" >> "$GITHUB_OUTPUT"
+      # substrate's ko build and the Docker builds outgrow what the runner has free.
+      - if: steps.deployment.outputs.build == 'true'
+        name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      # The key auth writes into the workspace would make the tree dirty, and
+      # so the images' tag another commit's than the runner image's.
+      - if: steps.deployment.outputs.build == 'true'
+        run: echo 'gha-creds-*.json' >> .git/info/exclude
+      - if: steps.deployment.outputs.build == 'true' && vars[steps.deployment.outputs.provider_variable] != ''
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars[steps.deployment.outputs.provider_variable] }}
+          service_account: ${{ vars[steps.deployment.outputs.account_variable] }}
+      - if: steps.deployment.outputs.build == 'true' && vars[steps.deployment.outputs.provider_variable] == ''
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets[steps.deployment.outputs.credentials_secret] }} # zizmor: ignore[overprovisioned-secrets]
+      - if: steps.deployment.outputs.build == 'true'
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - if: steps.deployment.outputs.build == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: dependency-repos/substrate/go.mod
+          cache-dependency-path: |
+            dependency-repos/substrate/go.sum
+            dependency-repos/env/go.sum
+      - if: steps.deployment.outputs.build == 'true'
+        name: Build
+        env:
+          REPO: ${{ steps.deployment.outputs.repo }}
+        run: benchmarking/tools/build-images --repo="$REPO"
+
   # Only while the commit is the branch's tip, as upload-source.yml's
-  # upload-latest, and for the same reasons.
+  # upload-latest, and for the same reasons; and only once the images its runs
+  # pull are there, so the job never runs a commit whose images are missing.
   tag:
-    needs: build
+    needs: [build, images]
     runs-on: ubuntu-latest
     permissions:
       contents: read

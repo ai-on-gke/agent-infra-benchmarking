@@ -33,7 +33,7 @@ NAMESPACE = worker_pool.NAMESPACE
 
 
 def deploy_mock_llm(cluster: Cluster, image_repo: str, timeout: int) -> None:
-    """Expects images.build_and_push to have built mock-llm from this tree
+    """Expects build-images to have built mock-llm from this tree
     into image_repo."""
     log("workloads: deploying mock-llm")
     image = images.pin(images.image_ref(images.WORKLOADS_IMAGES, image_repo, MOCK_LLM_IMAGE))

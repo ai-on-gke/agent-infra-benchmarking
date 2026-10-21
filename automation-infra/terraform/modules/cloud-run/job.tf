@@ -4,7 +4,7 @@ resource "google_service_account" "job" {
   display_name = "Cloud Run job ${var.default_resource_name}"
 }
 
-# The Terraform state of scenario_runner/infra, under var.state_bucket_prefix.
+# The Terraform state of the runs' clusters, under var.state_bucket_prefix.
 # Listing is checked on the bucket rather than an object, hence its own clause.
 resource "google_storage_bucket_iam_member" "job_state" {
   bucket = var.state_bucket
@@ -20,20 +20,19 @@ resource "google_storage_bucket_iam_member" "job_state" {
   }
 }
 
-# What scenario_runner/infra creates in the project, and what the run does on
-# it: substrate's install on the cluster and the images' Cloud Build. The job
-# creates no service account and grants no project role: its clusters' nodes
-# run as the nodes account below, and its builds as the images one.
+# What the runs' clusters are, and what a run does on them, such as
+# substrate's install. The job creates no service account and grants no
+# project role: its clusters' nodes run as the nodes account below.
 resource "google_project_iam_member" "job" {
   for_each = toset([
     "roles/serviceusage.serviceUsageAdmin",
+    # Reading the images the runs pull, and destroying the per-run repository
+    # of an execution from before they pulled from the deployment's, which
+    # destroy-leftovers may still find.
     "roles/artifactregistry.admin",
     "roles/container.admin",
     "roles/compute.networkAdmin",
     "roles/compute.securityAdmin",
-    "roles/cloudbuild.builds.editor",
-    # For gcloud builds submit to stream the build's log.
-    "roles/logging.viewer",
     # For destroy-leftovers to tell a running execution from an ended one.
     "roles/run.viewer",
   ])
@@ -111,53 +110,41 @@ resource "google_storage_bucket_iam_member" "job_reports" {
   }
 }
 
-# The account the job's Cloud Builds run as (images.py and substrate.py in the
-# scenario-runner), rather than the project's default, which the job would
-# otherwise have to act as. Each run's repository grants it push itself
-# (scenario_runner/infra's image_writers), so it holds no repository role here.
-resource "google_service_account" "images" {
-  project      = var.project_id
-  account_id   = "${substr(var.default_resource_name, 0, 23)}-images"
-  display_name = "Cloud Build of ${var.default_resource_name}'s benchmark images"
+data "google_project" "this" {
+  project_id = var.project_id
 }
 
-resource "google_project_iam_member" "images_logs" {
-  project = var.project_id
-  role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${google_service_account.images.email}"
-}
+# The runs' pulls of the images .github/workflows/runner-image.yml builds into
+# the deployment's repository: by their nodes, which run as the shared account
+# above, and by atelet for an ActorTemplate's, whose principal is the same for
+# every cluster in the project. Granted here rather than by each run's
+# cluster, whose destroy would take them from the runs still going. The
+# namespace and account are the cluster config's atelet_namespace and
+# atelet_ksa_name defaults.
+resource "google_artifact_registry_repository_iam_member" "image_readers" {
+  for_each = {
+    nodes  = "serviceAccount:${google_service_account.nodes.email}"
+    atelet = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/ate-system/sa/atelet"
+  }
 
-resource "google_service_account_iam_member" "job_act_as_images" {
-  service_account_id = google_service_account.images.name
-  role               = "roles/iam.serviceAccountUser"
-  member             = "serviceAccount:${google_service_account.job.email}"
-}
-
-# Where the job stages the source of those builds, for the images account to
-# read.
-resource "google_storage_bucket_iam_member" "job_build_source" {
-  bucket = google_storage_bucket.build_source.name
-  role   = "roles/storage.admin"
-  member = "serviceAccount:${google_service_account.job.email}"
-}
-
-resource "google_storage_bucket_iam_member" "images_build_source" {
-  bucket = google_storage_bucket.build_source.name
-  role   = "roles/storage.objectViewer"
-  member = "serviceAccount:${google_service_account.images.email}"
+  project    = var.project_id
+  location   = google_artifact_registry_repository.images.location
+  repository = google_artifact_registry_repository.images.name
+  role       = "roles/artifactregistry.reader"
+  member     = each.value
 }
 
 locals {
   # The scenario-runner's infra goes in this deployment's project and region,
-  # with its state in the deployment's state bucket. The image has no Docker,
-  # so the benchmark images build on Cloud Build.
+  # with its state in the deployment's state bucket, and pulls the images
+  # .github/workflows/runner-image.yml builds into the deployment's repository.
   module_args = concat([
     "--project-id=${var.project_id}",
     "--region=${var.region}",
     "--state-backend=gcs",
     "--state-bucket=${var.state_bucket}",
     "--state-prefix=${var.state_bucket_prefix}",
-    "--cloud-build",
+    "--image-repo=${google_artifact_registry_repository.images.registry_uri}",
   ], flatten([for r in module.reports : ["--report-bucket=${r.bucket}", "--report-prefix=${r.prefix}"]]))
 }
 
@@ -188,12 +175,10 @@ resource "google_cloud_run_v2_job" "job" {
         # the scheduler's run overrides with scheduled.
         dynamic "env" {
           for_each = merge({
-            BENCHMARK_TRIGGER           = "manual"
-            CLOUD_BUILD_SERVICE_ACCOUNT = google_service_account.images.email
-            NODE_SERVICE_ACCOUNT        = google_service_account.nodes.email
-            CLOUD_BUILD_STAGING_DIR     = "gs://${google_storage_bucket.build_source.name}/benchmark"
-            CLUSTER_NETWORK             = google_compute_network.runs.id
-            CLUSTER_SUBNETWORK          = google_compute_subnetwork.runs.id
+            BENCHMARK_TRIGGER    = "manual"
+            NODE_SERVICE_ACCOUNT = google_service_account.nodes.email
+            CLUSTER_NETWORK      = google_compute_network.runs.id
+            CLUSTER_SUBNETWORK   = google_compute_subnetwork.runs.id
           }, var.env)
           content {
             name  = env.key

@@ -16,8 +16,8 @@ against it and destroys it afterwards.
 - kubectl 1.31 or later
 - gcloud's `gke-gcloud-auth-plugin` (`gcloud components install
   gke-gcloud-auth-plugin`), which kubectl reaches the clusters through
-- Docker with Buildx, unless you pass `--cloud-build`: the image builds use
-  `--build-context`
+- Docker with Buildx, for `tools/build-images` unless you pass it
+  `--cloud-build`: the image builds use `--build-context`
 - curl and a `tar` with zstd support, for `sandbox-class: microvm` cases
 
 ### Cost and quota
@@ -85,6 +85,17 @@ without creating a cluster:
 
 ## Running scenarios from your machine
 
+A run pulls its images from a repository they were built into beforehand, such
+as automation-infra's deployment's (its `image_repo` output) or a dev infra's.
+Set `IMAGE_REPO` to it in `benchmarking/.env.sh`, or pass `--image-repo`, and
+build the images of your tree into it; only the ones it lacks are built:
+
+```bash
+./benchmarking/tools/build-images --repo=us-central1-docker.pkg.dev/<project-id>/<repository>
+```
+
+Then run a case:
+
 ```bash
 ./benchmarking/tools/run --scenario glutton
 ```
@@ -97,7 +108,8 @@ fresh cluster. A failed repeat doesn't stop the ones after it.
 
 Before it applies anything, the run checks what the cases need, and names
 every problem it finds: the tools and their versions, Application Default
-Credentials and gcloud's login, Docker and buildx unless `--cloud-build`, the
+Credentials and gcloud's login, the images of this tree in the repository,
+which it names with the `tools/build-images` command that builds them, the
 substrate submodule checked out at the commit the repo pins, and for each case
 its cluster's config as Terraform evaluates it, such as a machine type that
 can run `microvm`, a mock-llm node pool for `openclaw` and a GKE version the
@@ -138,8 +150,9 @@ Useful flags (`--help` lists them all):
 | `--region REGION` | default `us-central1` |
 | `--state-backend local\|gcs` | overrides `STATE_BACKEND`, see [Terraform state](#terraform-state) |
 | `--report-deployment DIR` | send the reports to the bucket of that applied reports deployment, such as `automation-infra/dev/reports`, to be queried in its BigQuery dataset |
-| `--cloud-build` | build images on Cloud Build rather than local Docker |
-| `--no-docker-login` | push with Docker's own registry credentials rather than gcloud's access token |
+| `--image-repo REPO` | overrides `IMAGE_REPO`, the repository the images are pulled from |
+| `--cloud-build` | build an agent-sandbox case's images on Cloud Build rather than local Docker |
+| `--no-docker-login` | push an agent-sandbox case's images with Docker's own registry credentials rather than gcloud's access token |
 | `--scenarios-file PATH` | another scenarios file, e.g. a local copy with a smaller load |
 | `--report-bucket BUCKET` | keep the reports in this bucket, under `--report-prefix` (`reports` by default), rather than in each cluster's own |
 | `--terraform-output json` | log Terraform as JSON |
@@ -157,13 +170,11 @@ set the case's `worker: actor-egress-allow` (cleartext) or
 
 ### What a run does
 
-1. Checks what the cases need, as above.
-2. Applies `scenario_runner/infra`: an Artifact Registry repository for the
-   run.
-3. Builds substrate's images from the submodule, and the locust and workload
-   images (`locust/images.json`, `workloads/images.json`), once, into that
-   repository, which every repeat's cluster pulls from.
-4. For each repeat of each case:
+1. Checks what the cases need, as above, the images in `--image-repo`
+   included: substrate's from the submodule, and the locust and workload
+   images (`locust/images.json`, `workloads/images.json`), which every
+   repeat's cluster pulls.
+2. For each repeat of each case:
    1. Applies the case's cluster from `scenarios/infra/clusters/<name>/`: a
       zonal GKE cluster whose nodes have no public IP and reach out through
       Cloud NAT, its node pools, a GCS bucket for the reports and the IAM the
@@ -180,7 +191,6 @@ set the case's `worker: actor-egress-allow` (cleartext) or
       uploads the Jobs' logs to the bucket beside the master's CSVs, and
       copies everything to `reports/<run-id>/<record>/`.
    5. Destroys the cluster, and its bucket with it.
-5. Destroys `scenario_runner/infra`.
 
 The `common` cluster's nodes are C2 by default; see
 [Cost and quota](#cost-and-quota) before raising `sandboxed_node_count`.
@@ -190,7 +200,7 @@ The `common` cluster's nodes are C2 by default; see
 | What | Where |
 |---|---|
 | Reports and Job logs | `reports/<run-id>/<record>/` at the repo root, and with `--report-bucket` or `--report-deployment` in that bucket. The cluster's own bucket is destroyed with it |
-| Terraform deployments | `scenario_runner/.local-data/runs/terraform/<run-id>/`: `scenario-runner/` and `scenarios/<record>/`, each with `config/`, `tf-data/` and, with the local backend, `tfstates/` |
+| Terraform deployments | `scenario_runner/.local-data/runs/terraform/<run-id>/`: `scenarios/<record>/`, each with `config/`, `tf-data/` and, with the local backend, `tfstates/` |
 | The cluster's kubeconfig | `tf-data/kubeconfig` in the repeat's deployment |
 | GCP resources | labeled `benchmark-run-id=<run-id>` and `benchmark-test-case=<record>` |
 
@@ -221,7 +231,7 @@ Each folder under `reports/<run-id>/` holds:
   WorkerPool, ActorTemplate and SandboxConfig, every image by the digest its
   pods ran, substrate's control plane in `ate-system` included, the commits
   and whether the tree had uncommitted changes, and the versions of the tools
-  and builders the images were made with. `README.md` is the same for a
+  the run had. `README.md` is the same for a
   reader, with a results table.
 - `locust-master.log`, `boomer-worker.log`: the Jobs' logs, every pod's,
   taken from the pods once the run ends. A run stopped with Ctrl-C has none,
@@ -251,14 +261,17 @@ With no argument it charts the latest run in `./reports`.
 
 ### Images and versions
 
-The images are built from the working tree as it is, and tagged with the
-repo's `HEAD` commit; a tree with uncommitted changes, here or in the
-submodule, gets `<commit>-dirty-<digest of the changes>` instead, so an image
-is only ever reused for exactly the code it was built from, and `run.json`
-records which. Commit before a run whose results you want to tie to a commit.
-The images are built for `linux/amd64`, the nodes' platform, whatever the build
-host's; on an ARM machine that needs Docker's emulation (with Rosetta on Apple
-silicon), or `--cloud-build`, whose builder images are pinned by digest.
+`tools/build-images` builds the images from the working tree as it is, and
+tags them with the repo's `HEAD` commit; a tree with uncommitted changes, here
+or in the submodules, gets `<commit>-dirty-<digest of the changes>` instead, so
+an image is only ever reused for exactly the code it was built from, and
+`run.json` records which. Commit before a run whose results you want to tie to
+a commit. Substrate's and env's images are tagged with their submodule's
+version instead, below; a `-dirty` one is built again every time. The images
+are built for `linux/amd64`, the nodes' platform, whatever the build host's;
+on an ARM machine that needs Docker's emulation (with Rosetta on Apple
+silicon), or `tools/build-images --cloud-build`, whose builder images are
+pinned by digest.
 
 Substrate is built from `dependency-repos/substrate`, which has to be checked
 out at the commit the repo pins: after a pull, run `git submodule update`. To
@@ -300,10 +313,9 @@ minutes, fails its repeat. Its cluster is destroyed with it, and the series goes
 on, except on a dev infra, where the next run would deploy under it, so the
 series stops.
 
-A failed apply, install or benchmark still destroys the repeat's cluster, and
-the run destroys `scenario_runner/infra` before it exits. If that destroy
-fails, the run says what failed before it too, and stops the series rather
-than apply more.
+A failed apply, install or benchmark still destroys the repeat's cluster. If
+that destroy fails, the run says what failed before it too, and stops the
+series rather than apply more.
 
 Ctrl-C stops the run in progress the way its end would: the master stops the
 worker, which deletes its actors, and uploads what it recorded, and the
@@ -320,29 +332,36 @@ cd benchmarking/scenario_runner/.local-data/runs/terraform/<run-id>/scenarios/<r
 TF_DATA_DIR=../tf-data terraform destroy
 ```
 
-Destroy the repeats' clusters before `scenario-runner/`. Anything still left
-can be found in the console by the `benchmark-run-id` label.
+Anything still left can be found in the console by the `benchmark-run-id`
+label.
 
 ### Keeping a cluster between runs
 
 To iterate without creating a cluster on every run, use `--dev-infra NAME`. It
-keeps the runner infra and cluster between executions, and repeats run one
-after another on that cluster. Each scenario needs its own `--dev-infra` name,
-because a dev infra keeps the cluster of the case it was first created for:
+keeps an image repository and a cluster between executions, and repeats run
+one after another on that cluster. Each scenario needs its own `--dev-infra`
+name, because a dev infra keeps the cluster of the case it was first created
+for. The first run applies it, and stops if the repository lacks the images;
+build them into it, and run again:
 
 ```bash
 ./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton
-# reuse the images and workloads already deployed
-./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton --no-build --no-deploy-workloads
-# reapply the cluster config after changing it, reinstalling substrate if its version changed
+./benchmarking/tools/build-images --dev-infra glutton-dev
+./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton
+```
+
+After changing the code, build again before the run; only the images of the
+changed tree are built. To reuse the workloads already deployed, or reapply the
+cluster config after changing it, reinstalling substrate if its version
+changed:
+
+```bash
+./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton --no-deploy-workloads
 ./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton --dev-infra-update
 ```
 
-`--no-build` needs the images of the current tree already pushed to it: of
-`HEAD`, or for uncommitted changes, of exactly those; it refuses to start
-otherwise. A dev infra's sandboxed
-node pool is applied for one sandbox class, so a case of the other needs a dev
-infra of its own.
+A dev infra's sandboxed node pool is applied for one sandbox class, so a case
+of the other needs a dev infra of its own.
 
 A dev infra's state is always local, in
 `scenario_runner/.local-data/dev-infra/terraform/<name>/`, and its kubeconfig
@@ -356,8 +375,8 @@ in `cluster/tf-data/kubeconfig` there. `tools/dev-infra` manages them:
 ```
 
 A dev infra keeps costing money until it is destroyed, so destroy it once you
-are done iterating. This destroys its cluster and runner infra and removes its
-local files:
+are done iterating. This destroys its cluster and image repository and removes
+its local files:
 
 ```bash
 ./benchmarking/tools/dev-infra destroy glutton-dev

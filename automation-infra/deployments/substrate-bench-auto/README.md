@@ -36,11 +36,10 @@ names to differ:
 | Cloud Scheduler job that starts it, daily at 03:00 UTC | `substrate-bench-auto` |
 | Cloud Run job, and its scheduler, that destroys what a killed execution left (`tools/destroy-leftovers`), daily at 15:00 UTC | `substrate-bench-auto-cleanup` |
 | Alert policy on a failed execution of either job | `substrate-bench-auto: failed execution` |
-| Artifact Registry repository of the job's image, which the Runner image workflow pushes to | `substrate-bench-auto` |
+| Artifact Registry repository of the job's image and the images its runs pull, which the Runner image workflow pushes to | `substrate-bench-auto` |
 | Service account the job, and so the scenario-runner, runs as | `substrate-bench-auto` |
-| Service accounts of the scheduler, the benchmark images' builds, the runs' cluster nodes and GitHub Actions | `substrate-bench-auto-sched`, `-images`, `-nodes`, `-gh` |
+| Service accounts of the scheduler, the runs' cluster nodes and GitHub Actions | `substrate-bench-auto-sched`, `-nodes`, `-gh` |
 | Workload Identity pool and provider GitHub Actions authenticate through | `substrate-bench-auto-gh`, `github` |
-| Bucket Cloud Build stages the benchmark images' source in | `substrate-bench-auto-build-source` |
 | Network, subnetwork and Cloud NAT the runs' clusters go into, with an internal control-plane endpoint only, and the job joins | `substrate-bench-auto` |
 | BigQuery dataset of the reports' views | [`substrate_bench_auto`](https://console.cloud.google.com/bigquery?project=akvelon-gke-aieco&p=akvelon-gke-aieco&d=substrate_bench_auto&page=dataset) |
 

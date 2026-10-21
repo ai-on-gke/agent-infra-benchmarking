@@ -1,6 +1,6 @@
-# Lets GitHub Actions push the runner image and write under source/ in
-# var.github_actions_bucket. They authenticate as it through Workload Identity
-# Federation, below, with no key;
+# Lets GitHub Actions push the runner image and the runs' images, and write
+# under source/ in var.github_actions_bucket. They authenticate as it through
+# Workload Identity Federation, below, with no key;
 # automation-infra/tools/get-gh-actions-gcs-config sets the repository
 # variables the workflows read.
 resource "google_service_account" "github" {
@@ -32,7 +32,8 @@ resource "google_storage_bucket_iam_member" "github_source" {
   }
 }
 
-# .github/workflows/runner-image.yml's pushes, build cache and tags.
+# .github/workflows/runner-image.yml's pushes, build cache and tags, of the
+# runner image and of the images the runs pull.
 resource "google_artifact_registry_repository_iam_member" "github_writer" {
   count = var.github_actions_bucket == null ? 0 : 1
 
