@@ -291,10 +291,10 @@ automation-infra/tools/destroy-leftovers --deployment=substrate-bench-auto
 
 ## Removing it
 
-Destroying the deployment deletes everything in [What it creates](#what-it-creates),
-but not the state bucket, the APIs it enabled, or the repo variables
-`GCP_WORKLOAD_IDENTITY_PROVIDER_SUBSTRATE_BENCH_AUTO` and
-`GCP_SERVICE_ACCOUNT_SUBSTRATE_BENCH_AUTO`. The Workload Identity pool stays
+Destroying the deployment deletes everything in [What it creates](#what-it-creates)
+and the repo variables `GCP_WORKLOAD_IDENTITY_PROVIDER_SUBSTRATE_BENCH_AUTO` and
+`GCP_SERVICE_ACCOUNT_SUBSTRATE_BENCH_AUTO`, but not the state bucket or the APIs
+it enabled. The Workload Identity pool stays
 deleted for 30 days, during which its name cannot be used again:
 
 ```bash

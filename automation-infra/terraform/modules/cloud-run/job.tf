@@ -149,6 +149,8 @@ locals {
 }
 
 resource "google_cloud_run_v2_job" "job" {
+  count = var.create_jobs ? 1 : 0
+
   project  = var.project_id
   name     = var.default_resource_name
   location = var.region
@@ -209,8 +211,18 @@ resource "google_cloud_run_v2_job" "job" {
   depends_on = [google_project_service.services]
 }
 
+# Where the job was before create_jobs.
+moved {
+  from = google_cloud_run_v2_job.job
+  to   = google_cloud_run_v2_job.job[0]
+}
+
+locals {
+  scheduled = var.create_jobs && var.schedule != null
+}
+
 resource "google_service_account" "scheduler" {
-  count = var.schedule == null ? 0 : 1
+  count = local.scheduled ? 1 : 0
 
   project = var.project_id
   # account_id is capped at 30 characters, the same as var.default_resource_name.
@@ -219,18 +231,18 @@ resource "google_service_account" "scheduler" {
 }
 
 resource "google_cloud_run_v2_job_iam_member" "scheduler_invoker" {
-  count = var.schedule == null ? 0 : 1
+  count = local.scheduled ? 1 : 0
 
   project  = var.project_id
-  name     = google_cloud_run_v2_job.job.name
-  location = google_cloud_run_v2_job.job.location
+  name     = google_cloud_run_v2_job.job[0].name
+  location = google_cloud_run_v2_job.job[0].location
   # Not run.invoker, which lacks run.jobs.runWithOverrides.
   role   = "roles/run.jobsExecutorWithOverrides"
   member = "serviceAccount:${google_service_account.scheduler[0].email}"
 }
 
 resource "google_cloud_scheduler_job" "trigger" {
-  count = var.schedule == null ? 0 : 1
+  count = local.scheduled ? 1 : 0
 
   project   = var.project_id
   name      = var.default_resource_name
@@ -245,7 +257,7 @@ resource "google_cloud_scheduler_job" "trigger" {
 
   http_target {
     http_method = "POST"
-    uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.job.name}:run"
+    uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.job[0].name}:run"
     # env is merged into the job's, while args replace its own, hence the
     # module's again.
     body = base64encode(jsonencode({

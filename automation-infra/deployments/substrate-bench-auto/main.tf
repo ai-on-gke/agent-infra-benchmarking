@@ -1,6 +1,12 @@
 terraform {
   required_version = ">= 1.5"
 
+  required_providers {
+    github = {
+      source = "integrations/github"
+    }
+  }
+
   backend "gcs" {
     bucket = "substrate-bench-auto-tfstate"
     prefix = "automation/cloud-run/substrate-bench-auto"
@@ -11,6 +17,12 @@ locals {
   # The backend's bucket, which the backend block cannot take from here. Also
   # read by .github/workflows/upload-source.yml.
   state_bucket = "substrate-bench-auto-tfstate"
+}
+
+# Authenticates as gh auth token, or GITHUB_TOKEN, which may set the repository's
+# Actions variables.
+provider "github" {
+  owner = "ai-on-gke"
 }
 
 module "cloud_run" {

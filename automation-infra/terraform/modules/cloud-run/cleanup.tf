@@ -2,7 +2,7 @@
 # destroys what an execution of the job left when it was killed before its own
 # destroy, once that execution has ended.
 resource "google_cloud_run_v2_job" "cleanup" {
-  count = var.schedule == null || var.cleanup_schedule == null ? 0 : 1
+  count = local.scheduled && var.cleanup_schedule != null ? 1 : 0
 
   project             = var.project_id
   name                = "${var.default_resource_name}-cleanup"
@@ -24,7 +24,7 @@ resource "google_cloud_run_v2_job" "cleanup" {
           "destroy-leftovers",
           "--project-id=${var.project_id}",
           "--region=${var.region}",
-          "--job=${google_cloud_run_v2_job.job.name}",
+          "--job=${google_cloud_run_v2_job.job[0].name}",
           "--state-bucket=${var.state_bucket}",
           "--state-prefix=${var.state_bucket_prefix}",
         ]

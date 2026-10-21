@@ -6,9 +6,8 @@ name: Upload source
 # bucket is the state_bucket local of the deployment's main.tf. The workflow
 # authenticates through Workload Identity Federation, with the repository
 # variables GCP_WORKLOAD_IDENTITY_PROVIDER_<DEPLOYMENT> and
-# GCP_SERVICE_ACCOUNT_<DEPLOYMENT> that
-# automation-infra/tools/get-gh-actions-gcs-config sets; a deployment without
-# them yet falls back to the key in the secret GCP_CREDENTIALS_<DEPLOYMENT>.
+# GCP_SERVICE_ACCOUNT_<DEPLOYMENT> that the deployment's apply sets; a
+# deployment without them yet falls back to the key in the secret GCP_CREDENTIALS_<DEPLOYMENT>.
 
 on:
   push:
@@ -26,7 +25,7 @@ jobs:
       id-token: write
     strategy:
       matrix:
-        deployment: [substrate-bench-auto]
+        deployment: [substrate-bench-auto, substrate-bench-staging]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -84,7 +83,7 @@ jobs:
     strategy:
       matrix:
         # The same as upload-tarball's.
-        deployment: [substrate-bench-auto]
+        deployment: [substrate-bench-auto, substrate-bench-staging]
     concurrency:
       group: ${{ github.workflow }}-latest-${{ matrix.deployment }}-${{ github.ref }}
     steps:

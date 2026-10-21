@@ -1,8 +1,7 @@
 # Lets GitHub Actions push the runner image and the runs' images, and write
 # under source/ in var.github_actions_bucket. They authenticate as it through
-# Workload Identity Federation, below, with no key;
-# automation-infra/tools/get-gh-actions-gcs-config sets the repository
-# variables the workflows read.
+# Workload Identity Federation, below, with no key, through the repository
+# variables at the end.
 resource "google_service_account" "github" {
   count = var.github_actions_bucket == null ? 0 : 1
 
@@ -81,4 +80,26 @@ resource "google_service_account_iam_member" "github_workload_identity" {
   service_account_id = google_service_account.github[0].name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github[0].name}/attribute.repository/${var.github_repository}"
+}
+
+# The variables the workflows authenticate with, named after the deployment's
+# folder, which is default_resource_name.
+locals {
+  github_variable_suffix = upper(replace(var.default_resource_name, "-", "_"))
+}
+
+resource "github_actions_variable" "workload_identity_provider" {
+  count = var.github_actions_bucket == null ? 0 : 1
+
+  repository    = split("/", var.github_repository)[1]
+  variable_name = "GCP_WORKLOAD_IDENTITY_PROVIDER_${local.github_variable_suffix}"
+  value         = google_iam_workload_identity_pool_provider.github[0].name
+}
+
+resource "github_actions_variable" "service_account" {
+  count = var.github_actions_bucket == null ? 0 : 1
+
+  repository    = split("/", var.github_repository)[1]
+  variable_name = "GCP_SERVICE_ACCOUNT_${local.github_variable_suffix}"
+  value         = google_service_account.github[0].email
 }

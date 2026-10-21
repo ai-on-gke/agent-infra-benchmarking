@@ -131,9 +131,15 @@ variable "source_branch" {
 }
 
 variable "runner_image" {
-  description = "Image both jobs run in place of source_branch's runner image, e.g. one commit's <repository>/test-runner:<commit>, or a placeholder until the workflow has pushed the first. Null runs source_branch's."
+  description = "Image both jobs run in place of source_branch's runner image, e.g. one commit's <repository>/test-runner:<commit>. Null runs source_branch's."
   type        = string
   default     = null
+}
+
+variable "create_jobs" {
+  description = "Whether to create the job, its cleanup job and their schedulers. False for a new deployment's first apply, before the workflow has pushed the runner image they run."
+  type        = bool
+  default     = true
 }
 
 variable "cleanup_schedule" {
@@ -155,7 +161,7 @@ variable "alert_emails" {
 }
 
 variable "github_repository" {
-  description = "GitHub repository, owner/name, whose Actions may upload source as the github_service_account_email account, through Workload Identity Federation rather than a key."
+  description = "GitHub repository, owner/name, whose Actions may upload source as the github_service_account_email account, through Workload Identity Federation rather than a key, and which gets the variables they authenticate with. Its owner must be the github provider's."
   type        = string
   default     = "ai-on-gke/agent-infra-benchmarking"
 }

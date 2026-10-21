@@ -85,6 +85,12 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
    terraform {
      required_version = ">= 1.5"
 
+     required_providers {
+       github = {
+         source = "integrations/github"
+       }
+     }
+
      backend "gcs" {
        bucket = "$STATE_BUCKET"
        prefix = "automation/cloud-run/$DEPLOYMENT"
@@ -97,12 +103,23 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
      state_bucket = "$STATE_BUCKET"
    }
 
+   variable "create_jobs" {
+     description = "False for the first apply, before the workflow has pushed the runner image."
+     type        = bool
+     default     = true
+   }
+
+   provider "github" {
+     owner = "ai-on-gke"
+   }
+
    module "cloud_run" {
      source = "../../terraform/modules/cloud-run"
 
      project_id            = "$PROJECT_ID"
      region                = "$REGION"
      default_resource_name = "$DEPLOYMENT"
+     create_jobs           = var.create_jobs
 
      state_bucket          = local.state_bucket
      state_bucket_prefix   = "terraform"
@@ -124,42 +141,34 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
    terraform -chdir="automation-infra/deployments/$DEPLOYMENT" init
    ```
 
-3. Apply, with a placeholder for the job's image. The workflow can only push
-   the image once this apply has let it:
+3. Apply everything but the jobs, which need the image the workflow can only
+   push once this apply has let it. This also sets the repo variables
+   `GCP_WORKLOAD_IDENTITY_PROVIDER_<DEPLOYMENT>` and
+   `GCP_SERVICE_ACCOUNT_<DEPLOYMENT>`, which the workflows authenticate with
+   through Workload Identity Federation, as your `gh` login:
 
    ```bash
-   terraform -chdir="automation-infra/deployments/$DEPLOYMENT" apply -var=runner_image=us-docker.pkg.dev/cloudrun/container/job:latest
+   terraform -chdir="automation-infra/deployments/$DEPLOYMENT" apply -var=create_jobs=false
    ```
 
-4. Let GitHub Actions push the image without a key: this sets the repo
-   variables `GCP_WORKLOAD_IDENTITY_PROVIDER_<DEPLOYMENT>` and
-   `GCP_SERVICE_ACCOUNT_<DEPLOYMENT>`, which the workflow authenticates with
-   through Workload Identity Federation, and deletes any key of that account
-   and the old `GCP_CREDENTIALS_<DEPLOYMENT>` secret:
-
-   ```bash
-   automation-infra/tools/get-gh-actions-gcs-config --deployment="$DEPLOYMENT" --set
-   ```
-
-5. Add the deployment to the `deployment` matrix of both jobs in
+4. Add the deployment to the `deployment` matrix of both jobs in
    `runner-image.yml` and `upload-source.yml`:
 
    ```bash
    sed -i "s/deployment: \[\(.*\)\]/deployment: [\1, $DEPLOYMENT]/" .github/workflows/runner-image.yml .github/workflows/upload-source.yml
    ```
 
-6. Commit the deployment's folder (`main.tf`, `.gitignore` and
+5. Commit the deployment's folder (`main.tf`, `.gitignore` and
    `.terraform.lock.hcl`) and the workflows, then push to `$SOURCE_BRANCH`. The
    push builds the job's image. Wait for the Runner image workflow to finish.
 
-7. Apply again, without the placeholder, so the job runs the image the
-   workflow pushed:
+6. Apply again, which creates the jobs, running the image the workflow pushed:
 
    ```bash
    terraform -chdir="automation-infra/deployments/$DEPLOYMENT" apply
    ```
 
-8. Run the `dummy` case to check the deployment. It creates no cluster:
+7. Run the `dummy` case to check the deployment. It creates no cluster:
 
    ```bash
    automation-infra/tools/trigger-dummy --deployment="$DEPLOYMENT"

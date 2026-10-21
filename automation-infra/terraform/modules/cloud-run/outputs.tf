@@ -1,6 +1,6 @@
 output "job_name" {
-  description = "Name of the Cloud Run job."
-  value       = google_cloud_run_v2_job.job.name
+  description = "Name of the Cloud Run job, or null when create_jobs is false."
+  value       = one(google_cloud_run_v2_job.job[*].name)
 }
 
 output "service_account_email" {
@@ -9,13 +9,13 @@ output "service_account_email" {
 }
 
 output "scheduler_job_name" {
-  description = "Name of the Cloud Scheduler job, or null when var.schedule is null."
+  description = "Name of the Cloud Scheduler job, or null when var.schedule is null or create_jobs false."
   value       = one(google_cloud_scheduler_job.trigger[*].name)
 }
 
 output "execute_command" {
-  description = "Runs the job once, now."
-  value       = "gcloud run jobs execute ${google_cloud_run_v2_job.job.name} --project=${var.project_id} --region=${var.region}"
+  description = "Runs the job once, now, or null when create_jobs is false."
+  value       = var.create_jobs ? "gcloud run jobs execute ${google_cloud_run_v2_job.job[0].name} --project=${var.project_id} --region=${var.region}" : null
 }
 
 output "image_repo" {

@@ -27,7 +27,7 @@ jobs:
       id-token: write
     strategy:
       matrix:
-        deployment: [substrate-bench-auto]
+        deployment: [substrate-bench-auto, substrate-bench-staging]
     steps:
       # Only what the image holds, so its tree stays clean in git's eyes.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -106,7 +106,7 @@ jobs:
     strategy:
       matrix:
         # The same as build's.
-        deployment: [substrate-bench-auto]
+        deployment: [substrate-bench-auto, substrate-bench-staging]
     concurrency:
       group: ${{ github.workflow }}-images-${{ matrix.deployment }}-${{ github.ref }}
     steps:
@@ -194,7 +194,7 @@ jobs:
     strategy:
       matrix:
         # The same as build's.
-        deployment: [substrate-bench-auto]
+        deployment: [substrate-bench-auto, substrate-bench-staging]
     concurrency:
       group: ${{ github.workflow }}-tag-${{ matrix.deployment }}-${{ github.ref }}
     steps:
