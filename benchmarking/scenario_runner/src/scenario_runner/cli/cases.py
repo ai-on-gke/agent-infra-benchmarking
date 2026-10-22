@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Prints cases as the scenario-runner runs them: with the templates they
-extend merged in and each subcase a case of its own. A case with subcases
-prints them all; no case named prints every one."""
+"""Prints the scenarios file with a case made of each choice of its cases'
+parameters, a file the scenario-runner runs the same; a case's subcases stay in
+it, the parameters' values in theirs, for the scenario-runner to make cases of.
+No case named prints every one."""
 
 from __future__ import annotations
 
@@ -24,27 +25,30 @@ from pathlib import Path
 
 import yaml
 
-from ..cases import SCENARIOS_FILE, grouped, load_cases
+from ..cases import SCENARIOS_FILE, load_cases, resolved
 from ..log import log
 
 
 def main() -> None:
     p = argparse.ArgumentParser(prog="python3 -m scenario_runner.cli.cases", description=__doc__)
     p.add_argument("--scenarios-file", type=Path, default=SCENARIOS_FILE, help=f"default: {SCENARIOS_FILE}")
-    p.add_argument("case", nargs="*", help="a case, or one with subcases")
+    p.add_argument("case", nargs="*", help="a case")
     args = p.parse_args()
     try:
-        cases = load_cases(args.scenarios_file)
+        # Checked as the scenario-runner checks it.
+        load_cases(args.scenarios_file)
+        scenarios = resolved(args.scenarios_file)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         log(f"cases: {exc}", "ERROR")
         sys.exit(1)
-    groups = grouped(cases)
-    unknown = [name for name in args.case if name not in cases and name not in groups]
+    cases = scenarios["cases"]
+    unknown = [name for name in args.case if name not in cases]
     if unknown:
         log(f"cases: no case {', '.join(unknown)} in {args.scenarios_file}", "ERROR")
         sys.exit(1)
-    names = [member for name in args.case for member in groups.get(name, [name])] or list(cases)
-    yaml.safe_dump({name: cases[name] for name in names}, sys.stdout, sort_keys=False)
+    if args.case:
+        scenarios["cases"] = {name: cases[name] for name in args.case}
+    yaml.safe_dump(scenarios, sys.stdout, sort_keys=False)
 
 
 if __name__ == "__main__":

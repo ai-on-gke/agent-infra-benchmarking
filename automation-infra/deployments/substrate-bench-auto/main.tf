@@ -48,9 +48,9 @@ module "cloud_run" {
   # rather than --all, so a case added to scenarios.yaml runs here only once it
   # is listed.
   args = [
-    "--scenario=glutton",
+    "--scenario=glutton-gvisor",
     "--scenario=glutton-microvm",
-    "--scenario=openclaw",
+    "--scenario=openclaw-gvisor",
     "--scenario=openclaw-microvm",
     "--scenario=dummy",
   ]

@@ -10,7 +10,7 @@ repeat of a case gets a cluster of its own, destroyed after it.
 To run it now with one case rather than waiting for the schedule:
 
 ```bash
-automation-infra/tools/trigger --deployment=substrate-bench-auto --scenario=glutton
+automation-infra/tools/trigger --deployment=substrate-bench-auto --scenario=glutton-gvisor
 ```
 
 Every run's reports can be queried in BigQuery, in the dataset
@@ -60,7 +60,7 @@ names, like the schedule. Any argument goes to the scenario-runner instead, so
 `--scenario` picks the cases:
 
 ```bash
-automation-infra/tools/trigger --deployment=substrate-bench-auto --scenario=glutton
+automation-infra/tools/trigger --deployment=substrate-bench-auto --scenario=glutton-gvisor
 ```
 
 To check the job works without creating a cluster, run the `dummy` case:
@@ -126,8 +126,8 @@ Every view has these columns to filter or group by:
 | Column | What |
 |---|---|
 | `run_id` | The execution, e.g. `run-20261009t191551z` |
-| `test_case` | The record, e.g. `glutton-2` |
-| `scenario` | The case in `scenarios.yaml`, e.g. `glutton`, so a case's repeats can be compared |
+| `test_case` | The record, e.g. `glutton-gvisor-2` |
+| `scenario` | The case in `scenarios.yaml`, e.g. `glutton-gvisor`, so a case's repeats can be compared |
 
 The per-second views also have `time`, `elapsed_secs` since the repeat's first
 row, which lines repeats up against each other, and `steady`, whether the row
@@ -151,7 +151,7 @@ To compare a case's repeats over their steady-state windows:
 ```bash
 bq query --project_id=akvelon-gke-aieco --use_legacy_sql=false \
   'SELECT run_id, test_case, request_count, failure_count, requests_per_sec, p50_ms, p95_ms, p99_ms
-   FROM substrate_bench_auto.locust_stats_steady WHERE scenario = "glutton" AND name = "CycleTime" ORDER BY 1, 2'
+   FROM substrate_bench_auto.locust_stats_steady WHERE scenario = "glutton-gvisor" AND name = "CycleTime" ORDER BY 1, 2'
 ```
 
 To follow the worker's active actors through each repeat, second by second:
@@ -217,7 +217,7 @@ series:
 ```sql
 SELECT elapsed_secs, test_case, p50_ms
 FROM substrate_bench_auto.latency_chart
-WHERE scenario = 'glutton' AND request = 'TTFI'
+WHERE scenario = 'glutton-gvisor' AND request = 'TTFI'
 ORDER BY elapsed_secs
 ```
 
