@@ -40,8 +40,8 @@ SHARED = "shared"
 PER_REPEAT = "per-repeat"
 REPEAT_CLUSTERS = [SHARED, PER_REPEAT]
 
-# Named keys of a case that cases and templates take by `extends`, one name or
-# a list merged in order, with their own keys on top.
+# Named keys of a case that cases and templates take by `extends`, one's name,
+# with their own keys on top.
 TEMPLATES = "templates"
 EXTENDS = "extends"
 
@@ -125,7 +125,7 @@ def merged(base: dict, over: dict) -> dict:
 
 
 def with_templates(where: str, templates: dict, cases: dict) -> dict[str, dict]:
-    """The cases, each with the templates it extends merged in under its own
+    """The cases, each with the template it extends merged in under its own
     keys. Every template is resolved, so one no case uses is checked too."""
     if not isinstance(templates, dict):
         raise ValueError(f"{where}: `{TEMPLATES}` must be a mapping of names to the keys they hold")
@@ -134,20 +134,19 @@ def with_templates(where: str, templates: dict, cases: dict) -> dict[str, dict]:
     def resolve(what: str, keys: object, chain: tuple[str, ...]) -> dict:
         if not isinstance(keys, dict):
             raise ValueError(f"{where}: {what} is not a mapping")
-        parents = keys.get(EXTENDS, [])
-        parents = [parents] if isinstance(parents, str) else parents
-        if not isinstance(parents, list) or not all(isinstance(parent, str) for parent in parents):
-            raise ValueError(f"{where}: {what}'s `{EXTENDS}` must be a template's name or a list of them")
-        base = {}
-        for parent in parents:
-            if parent not in templates:
-                raise ValueError(f"{where}: {what} extends {parent}, which is not a template")
-            if parent in chain:
-                raise ValueError(f"{where}: template {parent} extends itself, by {' > '.join([*chain, parent])}")
-            if parent not in resolved:
-                resolved[parent] = resolve(f"template {parent}", templates[parent], (*chain, parent))
-            base = merged(base, resolved[parent])
-        return merged(base, {key: value for key, value in keys.items() if key != EXTENDS})
+        own = {key: value for key, value in keys.items() if key != EXTENDS}
+        if EXTENDS not in keys:
+            return own
+        parent = keys[EXTENDS]
+        if not isinstance(parent, str):
+            raise ValueError(f"{where}: {what}'s `{EXTENDS}` must be one template's name")
+        if parent not in templates:
+            raise ValueError(f"{where}: {what} extends {parent}, which is not a template")
+        if parent in chain:
+            raise ValueError(f"{where}: template {parent} extends itself, by {' > '.join([*chain, parent])}")
+        if parent not in resolved:
+            resolved[parent] = resolve(f"template {parent}", templates[parent], (*chain, parent))
+        return merged(resolved[parent], own)
 
     for name, keys in templates.items():
         if name not in resolved:

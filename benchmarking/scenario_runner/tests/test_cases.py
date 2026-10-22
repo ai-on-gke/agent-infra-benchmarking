@@ -298,17 +298,16 @@ class Templates(unittest.TestCase):
         self.assertEqual(cases["c"]["locust"]["worker"], GLUTTON["locust"]["worker"])
         self.assertNotIn("extends", cases["c"])
 
-    def test_templates_extend_templates_and_merge_in_order(self):
+    def test_a_template_extends_a_template(self):
         templates = {
             "g": GLUTTON,
-            "micro": {"locust": {**on("microvm"), "master": {"users": 5}}},
-            "slow": {"extends": "g", "locust": {"master": {"run-time": "9m", "users": 7}}},
+            "slow": {"extends": "g", "locust": {"master": {"run-time": "9m"}}},
+            "micro": {"extends": "slow", "locust": on("microvm")},
         }
-        cases = load({"a": {"extends": ["slow", "micro"]}, "b": {"extends": ["micro", "slow"]}}, templates)
-        self.assertEqual(cases["a"]["locust"]["master"], {"run-time": "9m", "users": 5})
-        self.assertEqual(cases["a"]["locust"]["install"], on("microvm")["install"])
-        self.assertEqual(cases["b"]["locust"]["master"], {"run-time": "9m", "users": 7})
-        self.assertEqual(cases["b"]["locust"]["install"], GLUTTON["locust"]["install"])
+        cases = load({"c": {"extends": "micro", "locust": {"master": {"users": 5}}}}, templates)
+        self.assertEqual(cases["c"]["locust"]["master"], {"run-time": "9m", "users": 5})
+        self.assertEqual(cases["c"]["locust"]["install"], on("microvm")["install"])
+        self.assertEqual(cases["c"]["locust"]["worker"], GLUTTON["locust"]["worker"])
 
     def test_null_drops_a_key(self):
         cases = load(
@@ -332,8 +331,9 @@ class Templates(unittest.TestCase):
     def test_bad_templates_are_refused(self):
         for templates, case, error in (
             ({"g": GLUTTON}, {"extends": "x"}, "x, which is not a template"),
-            ({"g": GLUTTON}, {"extends": {"g": 1}}, "must be a template's name"),
-            ({"g": GLUTTON}, {"extends": ["g", 1]}, "must be a template's name"),
+            ({"g": GLUTTON}, {"extends": {"g": 1}}, "must be one template's name"),
+            ({"g": GLUTTON, "h": {}}, {"extends": ["g", "h"]}, "must be one template's name"),
+            ({"g": {"extends": ["h"]}, "h": GLUTTON}, GLUTTON, "template g's `extends` must be one template's name"),
             ({"g": 1}, {"extends": "g"}, "template g is not a mapping"),
             ({"g": {"extends": "g"}}, GLUTTON, "template g extends itself, by g > g"),
             ({"g": {"extends": "h"}, "h": {"extends": "g"}}, GLUTTON, "template g extends itself, by g > h > g"),

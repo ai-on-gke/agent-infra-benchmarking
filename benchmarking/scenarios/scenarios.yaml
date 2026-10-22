@@ -46,10 +46,10 @@
 # another, then the type's summary of them all; --scenario <case>-<subcase>
 # just that one. Those alike in their cluster share one, applied for them all.
 #
-# `extends` takes a case's keys from `templates`, one by name or a list merged
-# in order, the case's own keys on top, merged as a subcase's are; a template
-# extends others the same way. A key set to null, here or in a subcase, drops
-# it. Templates are not cases, and need not be whole ones.
+# `extends` takes a case's keys from one of `templates`, by name, the case's
+# own keys on top, merged as a subcase's are; a template extends another the
+# same way. A key set to null, here or in a subcase, drops it. Templates are
+# not cases, and need not be whole ones.
 #   python3 -m scenario_runner.cli.cases glutton-density
 # prints a case as it runs, with its templates and subcases in it.
 #
@@ -172,31 +172,6 @@ templates:
         # Without an egress policy the actors can't reach mock-llm.
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
-  # On microvm rather than gvisor, with the nested virtualization it boots its
-  # guests on.
-  microvm:
-    locust:
-      install:
-        substrate:
-          sandbox-class: microvm
-      infra:
-        cluster:
-          nested-virtualization: true
-
-  # 100 workers over 10 nodes with suspend on, after a workload's template;
-  # its subcases set the VUs, and with no warm-up.
-  density:
-    locust:
-      infra:
-        cluster:
-          sandboxed-nodes: 10
-      worker-count: 100
-      master:
-        users: null
-        warm-up: null
-      worker:
-        suspend-disabled: false
-
 cases:
   glutton:
     extends: glutton
@@ -206,9 +181,16 @@ cases:
   # glutton on microvm: the same as glutton but the class, and the nested
   # virtualization it boots its guests on, so the two compare.
   glutton-microvm:
-    extends: [glutton, microvm]
+    extends: glutton
     repeats:
       count: 3
+    locust:
+      install:
+        substrate:
+          sandbox-class: microvm
+      infra:
+        cluster:
+          nested-virtualization: true
 
   # glutton once rather than three times, with no warm-up, for a quicker check
   # of the path.
@@ -218,10 +200,19 @@ cases:
       warmups: 0
 
   glutton-density:
-    extends: [glutton, density]
+    extends: glutton
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 10
+      worker-count: 100
       master:
         run-time: 3m
+        # Set by each subcase.
+        users: null
+        warm-up: null
+      worker:
+        suspend-disabled: false
     subcases:
       baseline:
         locust:
@@ -245,13 +236,29 @@ cases:
     extends: openclaw
 
   openclaw-microvm:
-    extends: [openclaw, microvm]
+    extends: openclaw
+    locust:
+      install:
+        substrate:
+          sandbox-class: microvm
+      infra:
+        cluster:
+          nested-virtualization: true
 
   openclaw-density:
-    extends: [openclaw, density]
+    extends: openclaw
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 10
+      worker-count: 100
       master:
         run-time: 5m
+        # Set by each subcase.
+        users: null
+        warm-up: null
+      worker:
+        suspend-disabled: false
     subcases:
       baseline:
         locust:
