@@ -47,7 +47,7 @@ module "cloud_run" {
   github_actions_bucket = local.state_bucket
   reports_bucket        = local.state_bucket
   reports_prefix        = "data"
-  source_branch         = "push-images-instead-of-source"
+  source_branch         = "main"
 
   # dummy, which creates no cluster, and glutton-single, one glutton run.
   args = [
