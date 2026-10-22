@@ -40,6 +40,11 @@ SHARED = "shared"
 PER_REPEAT = "per-repeat"
 REPEAT_CLUSTERS = [SHARED, PER_REPEAT]
 
+# Named keys of a case that cases and templates take by `extends`, one name or
+# a list merged in order, with their own keys on top.
+TEMPLATES = "templates"
+EXTENDS = "extends"
+
 # A case's subcases, each run as a case of its own, <case>-<subcase>: the
 # case's keys with the subcase's on top.
 SUBCASES = "subcases"
@@ -54,12 +59,14 @@ def types() -> list[str]:
 
 
 def load_cases(scenarios_file: Path) -> dict[str, dict]:
-    """The cases, each with subcases in their place and `type` filled in from
-    the mapping that names it."""
+    """The cases, each with its templates merged in, subcases in their place
+    and `type` filled in from the mapping that names it."""
     with scenarios_file.open() as f:
-        cases = (yaml.safe_load(f) or {}).get("cases")
+        loaded = yaml.safe_load(f) or {}
+    cases = loaded.get("cases")
     if not isinstance(cases, dict) or not cases:
         raise ValueError(f"{scenarios_file} has no `cases` mapping")
+    cases = with_templates(str(scenarios_file), loaded.get(TEMPLATES) or {}, cases)
     cases = with_subcases(str(scenarios_file), cases)
     known = types()
     for name, case in cases.items():
@@ -106,11 +113,50 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
 
 
 def merged(base: dict, over: dict) -> dict:
-    """base with over's keys on top, a mapping in both merged in turn."""
+    """base with over's keys on top, a mapping in both merged in turn, and
+    those over has null dropped."""
     out = dict(base)
     for key, value in over.items():
-        out[key] = merged(out[key], value) if isinstance(value, dict) and isinstance(out.get(key), dict) else value
+        if value is None:
+            out.pop(key, None)
+        else:
+            out[key] = merged(out[key], value) if isinstance(value, dict) and isinstance(out.get(key), dict) else value
     return out
+
+
+def with_templates(where: str, templates: dict, cases: dict) -> dict[str, dict]:
+    """The cases, each with the templates it extends merged in under its own
+    keys. Every template is resolved, so one no case uses is checked too."""
+    if not isinstance(templates, dict):
+        raise ValueError(f"{where}: `{TEMPLATES}` must be a mapping of names to the keys they hold")
+    resolved = {}
+
+    def resolve(what: str, keys: object, chain: tuple[str, ...]) -> dict:
+        if not isinstance(keys, dict):
+            raise ValueError(f"{where}: {what} is not a mapping")
+        parents = keys.get(EXTENDS, [])
+        parents = [parents] if isinstance(parents, str) else parents
+        if not isinstance(parents, list) or not all(isinstance(parent, str) for parent in parents):
+            raise ValueError(f"{where}: {what}'s `{EXTENDS}` must be a template's name or a list of them")
+        base = {}
+        for parent in parents:
+            if parent not in templates:
+                raise ValueError(f"{where}: {what} extends {parent}, which is not a template")
+            if parent in chain:
+                raise ValueError(f"{where}: template {parent} extends itself, by {' > '.join([*chain, parent])}")
+            if parent not in resolved:
+                resolved[parent] = resolve(f"template {parent}", templates[parent], (*chain, parent))
+            base = merged(base, resolved[parent])
+        return merged(base, {key: value for key, value in keys.items() if key != EXTENDS})
+
+    for name, keys in templates.items():
+        if name not in resolved:
+            resolved[name] = resolve(f"template {name}", keys, (name,))
+    # Copied, as the cases are filled in where they are.
+    return {
+        name: copy.deepcopy(resolve(f"case {name}", case, ())) if isinstance(case, dict) and EXTENDS in case else case
+        for name, case in cases.items()
+    }
 
 
 def with_subcases(where: str, cases: dict) -> dict[str, dict]:

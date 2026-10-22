@@ -72,9 +72,9 @@ OPENCLAW = {
 }
 
 
-def load(cases: dict) -> dict:
+def load(cases: dict, templates: dict | None = None) -> dict:
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
-        yaml.safe_dump({"cases": cases}, f)
+        yaml.safe_dump({"cases": cases, **({"templates": templates} if templates is not None else {})}, f)
     try:
         return load_cases(Path(f.name))
     finally:
@@ -289,6 +289,60 @@ class Subcases(unittest.TestCase):
         cases = load({"c": {**GLUTTON, "subcases": {"a": {"bare-metal": True}, "b": {}}}})
         cases = with_bare_metal(cases, set(cases), False, None, PLACEMENTS)
         self.assertEqual(grouped(cases), {"c-metal": ["c-a-metal"], "c": ["c-b"]})
+
+
+class Templates(unittest.TestCase):
+    def test_a_case_takes_its_template_s_keys_under_its_own(self):
+        cases = load({"c": {"extends": "g", "locust": {"master": {"users": 3}}}}, {"g": GLUTTON})
+        self.assertEqual(cases["c"]["locust"]["master"], {"run-time": "1m", "users": 3})
+        self.assertEqual(cases["c"]["locust"]["worker"], GLUTTON["locust"]["worker"])
+        self.assertNotIn("extends", cases["c"])
+
+    def test_templates_extend_templates_and_merge_in_order(self):
+        templates = {
+            "g": GLUTTON,
+            "micro": {"locust": {**on("microvm"), "master": {"users": 5}}},
+            "slow": {"extends": "g", "locust": {"master": {"run-time": "9m", "users": 7}}},
+        }
+        cases = load({"a": {"extends": ["slow", "micro"]}, "b": {"extends": ["micro", "slow"]}}, templates)
+        self.assertEqual(cases["a"]["locust"]["master"], {"run-time": "9m", "users": 5})
+        self.assertEqual(cases["a"]["locust"]["install"], on("microvm")["install"])
+        self.assertEqual(cases["b"]["locust"]["master"], {"run-time": "9m", "users": 7})
+        self.assertEqual(cases["b"]["locust"]["install"], GLUTTON["locust"]["install"])
+
+    def test_null_drops_a_key(self):
+        cases = load(
+            {"c": {"extends": "g", "locust": {"master": {"warm-up": None}}, "subcases": {"s": {"repeats": None}}}},
+            {"g": {**glutton({"master": {**GLUTTON["locust"]["master"], "warm-up": "10s"}}), "repeats": {"count": 3}}},
+        )
+        self.assertEqual(cases["c-s"]["locust"]["master"], GLUTTON["locust"]["master"])
+        self.assertEqual(cases["c-s"]["repeats"]["count"], 1)
+
+    def test_a_template_s_subcases_are_the_case_s(self):
+        cases = load(
+            {"c": {"extends": "g", "subcases": {"b": {"bare-metal": True}}}}, {"g": {**GLUTTON, "subcases": {"a": {}}}}
+        )
+        self.assertEqual(grouped(cases), {"c": ["c-a", "c-b"]})
+
+    def test_cases_do_not_share_what_they_extend(self):
+        cases = load({"a": {"extends": "g"}, "b": {"extends": "g"}}, {"g": GLUTTON})
+        cases["a"]["locust"]["master"]["users"] = 99
+        self.assertEqual(cases["b"]["locust"]["master"]["users"], 10)
+
+    def test_bad_templates_are_refused(self):
+        for templates, case, error in (
+            ({"g": GLUTTON}, {"extends": "x"}, "x, which is not a template"),
+            ({"g": GLUTTON}, {"extends": {"g": 1}}, "must be a template's name"),
+            ({"g": GLUTTON}, {"extends": ["g", 1]}, "must be a template's name"),
+            ({"g": 1}, {"extends": "g"}, "template g is not a mapping"),
+            ({"g": {"extends": "g"}}, GLUTTON, "template g extends itself, by g > g"),
+            ({"g": {"extends": "h"}, "h": {"extends": "g"}}, GLUTTON, "template g extends itself, by g > h > g"),
+            ({"g": {"extends": "x"}}, GLUTTON, "template g extends x"),
+            (["g"], GLUTTON, "`templates` must be a mapping"),
+            ({"g": {}}, {"extends": "g"}, "needs a mapping of exactly one type"),
+        ):
+            with self.subTest(templates=templates, case=case), self.assertRaisesRegex(ValueError, error):
+                load({"c": case}, templates)
 
 
 class SandboxBenchmarkCases(unittest.TestCase):

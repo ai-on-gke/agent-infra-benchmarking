@@ -46,6 +46,13 @@
 # another, then the type's summary of them all; --scenario <case>-<subcase>
 # just that one. Those alike in their cluster share one, applied for them all.
 #
+# `extends` takes a case's keys from `templates`, one by name or a list merged
+# in order, the case's own keys on top, merged as a subcase's are; a template
+# extends others the same way. A key set to null, here or in a subcase, drops
+# it. Templates are not cases, and need not be whole ones.
+#   python3 -m scenario_runner.cli.cases glutton-density
+# prints a case as it runs, with its templates and subcases in it.
+#
 # `max-failure-ratio`, in the type's mapping, is the share of cycles, 0 to 1,
 # that may fail before a run of the case counts as failed, 0.01 by default. A
 # cycle fails on any of its calls, and an actor that could not be created
@@ -120,10 +127,10 @@ bare-metal:
   - zone: us-central1-a
     machine-type: c3-highmem-192-metal
 
-cases:
-  glutton:
-    repeats:
-      count: 3
+templates:
+  # 10 VUs (virtual users) on 10 workers on one gvisor node for 5 minutes,
+  # each actor woken by a ResumeActor first.
+  locust:
     locust:
       install:
         substrate:
@@ -138,74 +145,83 @@ cases:
         spawn-rate: 10
         warm-up: 10s
       worker:
-        workload-name: glutton
-        workload-template: glutton
         resume-mode: explicit
 
-  # glutton on microvm: the same as glutton but the class, and the nested
-  # virtualization it boots its guests on, so the two compare.
-  glutton-microvm:
-    repeats:
-      count: 3
+  glutton:
+    extends: locust
+    locust:
+      worker:
+        workload-name: glutton
+        workload-template: glutton
+
+  openclaw:
+    extends: locust
+    locust:
+      infra:
+        cluster:
+          configuration: openclaw
+      master:
+        run-time: 2m
+        users: 3
+      worker:
+        workload-name: openclaw
+        workload-template: openclaw
+        # Above the template's OPENCLAW_TIMEOUT_SECS (100), so the actor's own
+        # timeout reports a slow turn first.
+        workload-timeout: 120s
+        # Without an egress policy the actors can't reach mock-llm.
+        actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
+
+  # On microvm rather than gvisor, with the nested virtualization it boots its
+  # guests on.
+  microvm:
     locust:
       install:
         substrate:
           sandbox-class: microvm
       infra:
         cluster:
-          sandboxed-nodes: 1
           nested-virtualization: true
-      worker-count: 10
-      master:
-        run-time: 5m
-        users: 10
-        spawn-rate: 10
-        warm-up: 10s
-      worker:
-        workload-name: glutton
-        workload-template: glutton
-        resume-mode: explicit
 
-  # glutton once rather than three times, with no warm-up, for a quicker check
-  # of the path.
-  glutton-single:
-    repeats:
-      warmups: 0
+  # 100 workers over 10 nodes with suspend on, after a workload's template;
+  # its subcases set the VUs, and with no warm-up.
+  density:
     locust:
-      install:
-        substrate:
-          sandbox-class: gvisor
-      infra:
-        cluster:
-          sandboxed-nodes: 1
-      worker-count: 10
-      master:
-        run-time: 5m
-        users: 10
-        spawn-rate: 10
-        warm-up: 10s
-      worker:
-        workload-name: glutton
-        workload-template: glutton
-        resume-mode: explicit
-
-  glutton-density:
-    locust:
-      install:
-        substrate:
-          sandbox-class: gvisor
       infra:
         cluster:
           sandboxed-nodes: 10
       worker-count: 100
       master:
-        run-time: 3m
-        spawn-rate: 10
+        users: null
+        warm-up: null
       worker:
-        workload-name: glutton
-        workload-template: glutton
-        resume-mode: explicit
         suspend-disabled: false
+
+cases:
+  glutton:
+    extends: glutton
+    repeats:
+      count: 3
+
+  # glutton on microvm: the same as glutton but the class, and the nested
+  # virtualization it boots its guests on, so the two compare.
+  glutton-microvm:
+    extends: [glutton, microvm]
+    repeats:
+      count: 3
+
+  # glutton once rather than three times, with no warm-up, for a quicker check
+  # of the path.
+  glutton-single:
+    extends: glutton
+    repeats:
+      warmups: 0
+
+  glutton-density:
+    extends: [glutton, density]
+    locust:
+      master:
+        run-time: 3m
     subcases:
       baseline:
         locust:
@@ -226,73 +242,16 @@ cases:
           worker: {min-wait: 6000ms, max-wait: 6000ms}
 
   openclaw:
-    locust:
-      install:
-        substrate:
-          sandbox-class: gvisor
-      infra:
-        cluster:
-          configuration: openclaw
-          sandboxed-nodes: 1
-      worker-count: 10
-      master:
-        run-time: 2m
-        users: 3
-        spawn-rate: 10
-        warm-up: 10s
-      worker:
-        workload-name: openclaw
-        workload-template: openclaw
-        # Above the template's OPENCLAW_TIMEOUT_SECS (100), so the actor's own
-        # timeout reports a slow turn first.
-        workload-timeout: 120s
-        resume-mode: explicit
-        actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
+    extends: openclaw
 
   openclaw-microvm:
-    locust:
-      install:
-        substrate:
-          sandbox-class: microvm
-      infra:
-        cluster:
-          configuration: openclaw
-          sandboxed-nodes: 1
-          nested-virtualization: true
-      worker-count: 10
-      master:
-        run-time: 2m
-        users: 3
-        spawn-rate: 10
-        warm-up: 10s
-      worker:
-        workload-name: openclaw
-        workload-template: openclaw
-        workload-timeout: 120s
-        resume-mode: explicit
-        actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
+    extends: [openclaw, microvm]
 
   openclaw-density:
+    extends: [openclaw, density]
     locust:
-      install:
-        substrate:
-          sandbox-class: gvisor
-      infra:
-        cluster:
-          configuration: openclaw
-          sandboxed-nodes: 10
-      worker-count: 100
       master:
         run-time: 5m
-        spawn-rate: 10
-      worker:
-        workload-name: openclaw
-        workload-template: openclaw
-        workload-timeout: 120s
-        resume-mode: explicit
-        suspend-disabled: false
-        # Without an egress policy the actors can't reach mock-llm.
-        actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
     subcases:
       baseline:
         locust:
@@ -314,115 +273,51 @@ cases:
   # glutton woken by its instruction, through the router, rather than by a
   # ResumeActor first: TTFI is then the router's wake.
   glutton-implicit:
+    extends: glutton
     locust:
-      install:
-        substrate:
-          sandbox-class: gvisor
-      infra:
-        cluster:
-          sandboxed-nodes: 1
-      worker-count: 10
-      master:
-        run-time: 5m
-        users: 10
-        spawn-rate: 10
-        warm-up: 10s
       worker:
-        workload-name: glutton
-        workload-template: glutton
         resume-mode: implicit
 
   # glutton with memory and disk to snapshot: each cycle rewrites 64Mi of the
   # actor's memory and a 16Mi file before its suspend (WriteRAM and WriteDisk
   # rows).
   glutton-load:
+    extends: glutton
     locust:
-      install:
-        substrate:
-          sandbox-class: gvisor
-      infra:
-        cluster:
-          sandboxed-nodes: 1
-      worker-count: 10
       actor-memory: 512Mi
-      master:
-        run-time: 5m
-        users: 10
-        spawn-rate: 10
-        warm-up: 10s
       worker:
-        workload-name: glutton
-        workload-template: glutton
-        resume-mode: explicit
         glutton-write-ram: 64Mi
         glutton-write-disk: 16777216
 
   # A session of five instructions per wake, rather than one.
   glutton-session:
+    extends: glutton
     locust:
-      install:
-        substrate:
-          sandbox-class: gvisor
-      infra:
-        cluster:
-          sandboxed-nodes: 1
-      worker-count: 10
-      master:
-        run-time: 5m
-        users: 10
-        spawn-rate: 10
-        warm-up: 10s
       worker:
-        workload-name: glutton
-        workload-template: glutton
-        resume-mode: explicit
         instructions-per-cycle: 5
 
   # Four instructions at once to each actor at every step.
   glutton-concurrent:
+    extends: glutton
     locust:
-      install:
-        substrate:
-          sandbox-class: gvisor
-      infra:
-        cluster:
-          sandboxed-nodes: 1
-      worker-count: 10
-      master:
-        run-time: 5m
-        users: 10
-        spawn-rate: 10
-        warm-up: 10s
       worker:
-        workload-name: glutton
-        workload-template: glutton
-        resume-mode: explicit
         concurrent-instructions: 4
 
-  # glutton at scale: 100 users on 100 workers over 25 sandboxed nodes, the
+  # glutton at scale: 100 VUs on 100 workers over 25 sandboxed nodes, the
   # load spread over four boomer pods. Its 26 c2-standard-16 nodes take 416 of
   # a region's default 500 C2 vCPUs, so it runs by hand rather than nightly.
   glutton-large:
+    extends: glutton
     repeats:
       count: 3
     locust:
-      install:
-        substrate:
-          sandbox-class: gvisor
       infra:
         cluster:
           sandboxed-nodes: 25
       worker-count: 100
       locust-workers: 4
       master:
-        run-time: 5m
         users: 100
-        spawn-rate: 10
-        warm-up: 10s
-      worker:
-        workload-name: glutton
-        workload-template: glutton
-        resume-mode: explicit
 
   # substrate's sandbox sized as the cloud providers' are, 2 vCPU and 2 GiB, on
   # a general-purpose node rather than the default compute-optimized c2.
