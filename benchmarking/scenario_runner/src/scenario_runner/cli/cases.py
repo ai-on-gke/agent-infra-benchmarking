@@ -26,7 +26,7 @@ from pathlib import Path
 import yaml
 
 from ..log import log
-from ..scenarios.cases import SCENARIOS_FILE, load_cases, resolved
+from ..scenarios.file import SCENARIOS_FILE, load_scenarios
 
 
 def main() -> None:
@@ -36,8 +36,7 @@ def main() -> None:
     args = p.parse_args()
     try:
         # Checked as the scenario-runner checks it.
-        load_cases(args.scenarios_file)
-        scenarios = resolved(args.scenarios_file)
+        scenarios = load_scenarios(args.scenarios_file).resolved
     except (OSError, ValueError, yaml.YAMLError) as exc:
         log(f"cases: {exc}", "ERROR")
         sys.exit(1)

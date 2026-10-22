@@ -33,7 +33,7 @@ from .infra.deployment import Deployment, declared_variables, tf_vars
 from .infra.terraform import data_env
 from .log import log
 from .process import environ
-from .scenarios.cases import BARE_METAL
+from .scenarios.bare_metal import BARE_METAL
 from .scenarios.install import AGENT_SANDBOX, SUBSTRATE, control_plane, sandbox_class
 
 # `kubectl wait --for=create`, which the runner waits for the worker pool with.

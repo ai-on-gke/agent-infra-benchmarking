@@ -65,6 +65,8 @@ KEYS = {
     "infra", INSTALL, "worker-count", "locust-workers", "actor-memory", "max-failure-ratio", "lifecycle-mode", "master",
     "worker",
 }
+# The images.json files of the images a run pulls.
+IMAGE_FILES = [images.LOCUST_IMAGES, images.WORKLOADS_IMAGES]
 
 
 class LocustError(RuntimeError):

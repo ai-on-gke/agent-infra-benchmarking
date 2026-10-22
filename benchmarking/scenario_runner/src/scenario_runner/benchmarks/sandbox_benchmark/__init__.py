@@ -46,6 +46,7 @@ from ...infra.cluster_configs import CommonCluster, from_infra
 from ...log import ON_CLOUD_RUN, log
 from ...process import stream
 from ...reports import run_info
+from ...scenarios.expand import SUBCASE, group_record
 from ...scenarios.install import INSTALL, SANDBOX_CLASS, SUBSTRATE, control_plane, sandbox_class
 from .. import jobs
 from . import ate_env, combine
@@ -69,6 +70,8 @@ DEFAULT_ENV_WORKER_COUNT = 5
 # The case's mapping of its type, and what it may state.
 TYPE = "sandbox-benchmark"
 KEYS = {"infra", INSTALL, "provider", "tests", "runs", "warmup-runs", "max-failure-ratio", "cost-sheet"}
+# The images.json files of the images a run pulls.
+IMAGE_FILES = [images.SANDBOX_BENCHMARK_IMAGES]
 PROVIDERS = ("substrate", "local", "e2b", "daytona", "modal", "anthropic", "openai")
 # What a provider's mapping may state besides its name, and their defaults.
 PROVIDER_OPTIONS = {
@@ -242,8 +245,8 @@ def report_folder(record: str, key: str, case: dict) -> str:
     """Where under the run id the run of case key recorded as record reports:
     in <record>/<provider>/, or a subcase's in <group record>/<subcase>/,
     beside the others of its group."""
-    if reports.SUBCASE in case:
-        return f"{reports.group_record(record, key, case)}/{case[reports.SUBCASE]['name']}"
+    if SUBCASE in case:
+        return f"{group_record(record, key, case)}/{case[SUBCASE]['name']}"
     return f"{record}/{provider_name(case)}"
 
 

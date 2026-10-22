@@ -12,20 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runs a case on its cluster with the module its `type` names."""
+"""The case types, each run by the module its `type` names."""
 
 from __future__ import annotations
 
-import argparse
+from pathlib import Path
 
 from .. import images, reports, workloads
 from ..infra.cluster import Cluster
-from ..infra.cluster_configs import CLUSTER_CONFIGS, ClusterConfig, from_infra
+from ..infra.cluster_configs import ClusterConfig
 from ..log import log
-from . import locust, monitoring, sandbox_benchmark
+from . import locust, monitoring, noop, sandbox_benchmark
 from .sandbox_benchmark import ate_env
 
-RUNNERS = {"locust": locust, "sandbox-benchmark": sandbox_benchmark}
+RUNNERS = {module.TYPE: module for module in (locust, noop, sandbox_benchmark)}
 # What a failed run raises besides CalledProcessError.
 ERRORS = (
     locust.LocustError,
@@ -52,20 +52,13 @@ def check(name: str, case: dict) -> None:
 
 
 def cluster_config(name: str, case: dict) -> ClusterConfig:
-    """The cluster the case runs on, as its type asks for it; a noop's on any
-    configuration its `noop.infra.cluster.configuration` picks."""
-    if case["type"] == "noop":
-        return from_infra(name, "noop.infra", case["noop"].get("infra"), tuple(CLUSTER_CONFIGS.values()))
+    """The cluster the case runs on, as its type asks for it."""
     return RUNNERS[case["type"]].cluster_config(name, case)
 
 
-def check_run_id(run_id: str) -> str:
-    # The runs' pods are labeled with it.
-    if not reports.LABEL_RE.fullmatch(run_id):
-        raise argparse.ArgumentTypeError(
-            f"{run_id!r}: use at most 63 letters, digits, '-', '_' and '.', starting and ending with a letter or digit"
-        )
-    return run_id
+def image_files(case: dict) -> list[Path]:
+    """The images.json files of the images the case's runs pull."""
+    return RUNNERS[case["type"]].IMAGE_FILES
 
 
 def missing_requirements(cases: dict[str, dict]) -> list[str]:
@@ -76,6 +69,9 @@ def missing_requirements(cases: dict[str, dict]) -> list[str]:
 def run(name: str, case: dict, run_id: str, cluster: Cluster, **options: object) -> None:
     """options are those of its type's run, e.g. locust.run's image_repo, and
     test_case and repeat, or warmup, for one of a case's repeats."""
+    if case["type"] == noop.TYPE:
+        log(f"{name}: noop, nothing to run")
+        return
     cluster.get_credentials()
     log(f"{name}: running as {run_id} on cluster {cluster.name}")
     # First, so it is watching before the run deploys anything to watch.
@@ -87,6 +83,6 @@ def summarize(runs: list[tuple[str, str, dict]], run_id: str, bucket: str | None
     """What a case's type does once all of it has run, its subcases too, if
     it does anything: runs are each record of each, its case's name and the
     case. bucket is the one they all reported to, if it is still there."""
-    summarize = getattr(RUNNERS.get(runs[0][2]["type"]), "summarize", None)
+    summarize = getattr(RUNNERS[runs[0][2]["type"]], "summarize", None)
     if summarize:
         summarize(runs, run_id, bucket, report_prefix)

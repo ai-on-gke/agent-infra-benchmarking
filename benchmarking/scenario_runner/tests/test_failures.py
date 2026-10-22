@@ -277,7 +277,7 @@ class Series(unittest.TestCase):
             run.run_cases(self.args, cases, case, shared_cluster=True)
 
     def subcases(self, *names: str, infra: dict | None = None) -> dict:
-        from scenario_runner.reports import SUBCASE
+        from scenario_runner.scenarios.expand import SUBCASE
 
         return {f"g-{n}": {**LOCUST, "locust": {"infra": infra}, SUBCASE: {"of": "g", "name": n}} for n in names}
 
@@ -464,5 +464,8 @@ class BenchmarkRun(unittest.TestCase):
         with mock.patch.object(benchmarks, "run") as bench_run:
             run.run_case(args, "c-1", {"type": "locust"}, mock.Mock(), "c", 1, 0, "repo")
         for type_, module in benchmarks.RUNNERS.items():
+            # benchmarks.run runs nothing of a noop's.
+            if module is benchmarks.noop:
+                continue
             params = inspect.signature(module.run).parameters
             self.assertLessEqual(set(bench_run.call_args.kwargs), set(params), type_)
