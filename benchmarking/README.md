@@ -389,7 +389,9 @@ Add an entry under `cases:` in `scenarios.yaml`. The comments at the top of that
 file describe each key. To change the load or the worker pool, add a new case
 rather than editing an existing one, so results stay tied to the case name
 they were recorded under. To compare gVisor and microvm, add both, the same
-but for `sandbox-class`.
+but for `sandbox-class` and the microvm one's
+`infra.cluster.nested-virtualization: true`, which off bare metal gives its
+guests `/dev/kvm`.
 
 Besides the load, a case can shape each cycle with the worker's options:
 

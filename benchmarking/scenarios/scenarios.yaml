@@ -39,8 +39,9 @@
 # sandbox cost sheet, to it.
 # `noop` is the scenario-runner's alone, and holds its `infra` at most: it
 # applies and destroys the case's cluster, and runs nothing on it.
-# `sandbox-class`, gvisor by default, is also the class the case's cluster is
-# applied for, so it is stated here only.
+# `sandbox-class`, gvisor by default, is also what substrate is installed with,
+# so it is stated here only. microvm's guests boot on /dev/kvm, which the
+# cluster has with `infra.cluster.nested-virtualization: true` or on bare metal.
 #
 # `variants` makes a case of each of its entries, <case>-<variant>: the case's
 # keys with the entry's on top, a mapping merged into a mapping. An entry can
@@ -85,6 +86,9 @@
 #   sandboxed-max-nodes     the most it autoscales up to, if it does
 #   sandboxed-machine-type  its machine type, c2-standard-16 by default
 #   zone                    the zone of every pool, the config's by default
+#   nested-virtualization   true for /dev/kvm on the sandboxed pool off bare
+#                           metal, which a microvm case's guests boot on; off by
+#                           default, and only on Intel machine families
 #   default-machine-type    common's and openclaw's default pool's,
 #                           c2-standard-16 by default
 # locust runs on common or openclaw, sandbox-benchmark on common, and a noop on
@@ -133,7 +137,8 @@ cases:
         workload-template: glutton
         resume-mode: explicit
 
-  # glutton on microvm: the same as glutton but the class, so the two compare.
+  # glutton on microvm: the same as glutton but the class, and the nested
+  # virtualization it boots its guests on, so the two compare.
   glutton-microvm:
     repeats:
       count: 3
@@ -142,6 +147,7 @@ cases:
       infra:
         cluster:
           sandboxed-nodes: 1
+          nested-virtualization: true
       worker-count: 10
       master:
         run-time: 5m
@@ -277,6 +283,7 @@ cases:
         cluster:
           configuration: openclaw
           sandboxed-nodes: 1
+          nested-virtualization: true
       worker-count: 10
       master:
         run-time: 2m

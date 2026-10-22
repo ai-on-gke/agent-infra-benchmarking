@@ -90,7 +90,8 @@ class ShippedCases(unittest.TestCase):
         self.assertIn("glutton", load_cases(SCENARIOS_FILE))
 
     def test_each_microvm_case_pairs_with_its_gvisor_case(self):
-        # gVisor and microvm compare only if the cases differ in the class alone.
+        # gVisor and microvm compare only if the cases differ in the class, and
+        # the nested virtualization microvm boots its guests on, alone.
         cases = load_cases(SCENARIOS_FILE)
         for name, case in cases.items():
             if not name.endswith("-microvm"):
@@ -99,13 +100,14 @@ class ShippedCases(unittest.TestCase):
             self.assertEqual(pair.pop("sandbox-class"), "gvisor")
             mine = copy.deepcopy(case)
             self.assertEqual(mine.pop("sandbox-class"), "microvm")
+            self.assertIs(mine["locust"]["infra"]["cluster"].pop("nested-virtualization"), True)
             self.assertEqual(mine, pair, f"{name} differs from its gVisor case in more than the class")
 
     def test_each_case_asks_for_its_cluster(self):
         cases = load_cases(SCENARIOS_FILE)
         clusters = {name: benchmark.cluster_config(name, case) for name, case in cases.items()}
         self.assertEqual(clusters["glutton"], CommonCluster(sandboxed_nodes=1))
-        self.assertEqual(clusters["glutton-microvm"], CommonCluster(sandbox_class="microvm"))
+        self.assertEqual(clusters["glutton-microvm"], CommonCluster(sandboxed_nodes=1, nested_virtualization=True))
         self.assertEqual(clusters["openclaw-baseline"], OpenclawCluster(sandboxed_nodes=10))
         self.assertEqual(clusters["sandbox-benchmark-e2b"].sandboxed_machine_type, "n2-standard-16")
         self.assertEqual(clusters["dummy"], DummyCluster(sandboxed_nodes=10))
@@ -205,9 +207,10 @@ class CaseChecks(unittest.TestCase):
 
 
 class Clusters(unittest.TestCase):
-    def test_locust_asks_for_its_class_and_configuration(self):
-        case = load({"c": glutton({"infra": {"cluster": {"sandboxed-nodes": 3}}}, **{"sandbox-class": "microvm"})})["c"]
-        self.assertEqual(benchmark.cluster_config("c", case), CommonCluster(3, sandbox_class="microvm"))
+    def test_locust_asks_for_its_configuration(self):
+        cluster = {"sandboxed-nodes": 3, "nested-virtualization": True}
+        case = load({"c": glutton({"infra": {"cluster": cluster}}, **{"sandbox-class": "microvm"})})["c"]
+        self.assertEqual(benchmark.cluster_config("c", case), CommonCluster(3, nested_virtualization=True))
         openclaw = load({"c": glutton({"infra": {"cluster": {"configuration": "openclaw"}}})})["c"]
         self.assertEqual(benchmark.cluster_config("c", openclaw), OpenclawCluster())
 
@@ -243,7 +246,6 @@ class Variants(unittest.TestCase):
     def test_a_variant_changes_any_key_and_merges_mappings(self):
         variants = {"micro": {"sandbox-class": "microvm", "locust": {"master": {"users": 3}}}, "plain": None}
         cases = load({"c": {**GLUTTON, "variants": variants}, "d": GLUTTON})
-        self.assertEqual(benchmark.cluster_config("c-micro", cases["c-micro"]).sandbox_class, "microvm")
         self.assertEqual(list(cases), ["c-micro", "c-plain", "d"])
         self.assertEqual(cases["c-micro"]["sandbox-class"], "microvm")
         self.assertEqual(cases["c-micro"]["locust"]["master"], {"run-time": "1m", "users": 3})

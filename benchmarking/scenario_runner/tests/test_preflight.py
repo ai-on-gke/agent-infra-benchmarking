@@ -23,7 +23,7 @@ from scenario_runner.cluster_configs import CommonCluster
 
 CONFIG = CommonCluster()
 SETTINGS = {
-    "sandbox_class": "gvisor",
+    "nested_virtualization": False,
     "sandboxed_machine_type": "c2-standard-16",
     "additional_node_pools": [],
     "kubernetes_version": "1.35.8-gke.1225000",
@@ -42,10 +42,10 @@ class Rules(unittest.TestCase):
     def test_a_good_case_has_no_problems(self):
         self.assertEqual(preflight.cluster_problems("c", CONFIG, SETTINGS, ["1.35.8-gke.1225000"], True, "z"), [])
 
-    def test_microvm_on_e2(self):
-        settings = {**SETTINGS, "sandbox_class": "microvm", "sandboxed_machine_type": "e2-standard-8"}
+    def test_nested_virtualization_on_e2(self):
+        settings = {**SETTINGS, "nested_virtualization": True, "sandboxed_machine_type": "e2-standard-8"}
         problems = preflight.cluster_problems("c", CONFIG, settings, None, True, "z")
-        self.assertRegex(problems[0], "needs nested virtualization")
+        self.assertRegex(problems[0], "has nested virtualization, but its sandboxed pool is e2-standard-8")
 
     def test_a_version_the_channel_does_not_offer_where_the_cluster_goes(self):
         problems = preflight.cluster_problems(
@@ -116,7 +116,6 @@ class DevInfraConfiguration(unittest.TestCase):
             "project_id": "p",
             "region": "r",
             "cluster": to_record(CLUSTER_CONFIGS[applied]()),
-            "sandbox_class": None,
             "bare_metal": False,
             "complete": True,
         }
@@ -181,9 +180,9 @@ class ClusterSettings(unittest.TestCase):
     """Evaluated by terraform from the shipped common config, as the run would
     apply it."""
 
-    def test_the_case_sets_the_class(self):
-        settings = preflight.cluster_settings(CommonCluster(sandbox_class="microvm"), "my-project", "us-central1")
-        self.assertEqual(settings["sandbox_class"], "microvm")
+    def test_a_case_asks_for_nested_virtualization(self):
+        settings = preflight.cluster_settings(CommonCluster(nested_virtualization=True), "my-project", "us-central1")
+        self.assertIs(settings["nested_virtualization"], True)
         self.assertEqual(settings["sandboxed_machine_type"], "c2-standard-16")
         self.assertEqual(preflight.cluster_location(settings, "us-central1"), "us-central1-a")
 
@@ -201,18 +200,18 @@ class ClusterSettings(unittest.TestCase):
                    "CLUSTER_SUBNETWORK": "projects/p/regions/us-central1/subnetworks/runs"}  # fmt: skip
         with mock.patch.multiple(cluster_configs, **network):
             settings = preflight.cluster_settings(CommonCluster(), "my-project", "us-central1")
-        self.assertEqual(settings["sandbox_class"], "gvisor")
+        self.assertIs(settings["nested_virtualization"], False)
 
     def test_a_metal_machine_type_runs_microvm(self):
         placement = {"zone": "us-central1-c", "machine-type": "c3-highcpu-192-metal"}
-        config = CommonCluster(sandbox_class="microvm").placed(placement)
+        config = CommonCluster(nested_virtualization=True).placed(placement)
         settings = preflight.cluster_settings(config, "my-project", "us-central1")
         self.assertEqual(settings["sandboxed_machine_type"], "c3-highcpu-192-metal")
         self.assertEqual(preflight.cluster_location(settings, "us-central1"), "us-central1-c")
 
-    def test_the_config_refuses_microvm_without_nested_virtualization(self):
-        config = CommonCluster(sandboxed_machine_type="e2-standard-8", sandbox_class="microvm")
-        with self.assertRaisesRegex(ValueError, "nested virtualization"):
+    def test_the_config_refuses_nested_virtualization_off_intel(self):
+        config = CommonCluster(sandboxed_machine_type="e2-standard-8", nested_virtualization=True)
+        with self.assertRaisesRegex(ValueError, "Nested virtualization is offered only on Intel"):
             preflight.cluster_settings(config, "my-project", "us-central1")
 
 

@@ -43,9 +43,9 @@ output "image_docker_repo" {
   "${local.image_repository[3]}-docker.pkg.dev/${local.image_repository[1]}/${local.image_repository[5]}")
 }
 
-output "sandbox_class" {
-  description = "Sandbox class of the sandboxed node pool's workers."
-  value       = var.sandbox_class
+output "sandboxed_kvm" {
+  description = "Whether the sandboxed node pool has /dev/kvm, which microvm workers boot their guests on."
+  value       = var.nested_virtualization || local.sandboxed_bare_metal
 }
 
 output "network_name" {

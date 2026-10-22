@@ -164,13 +164,12 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
 
 def cluster_config(name: str, case: dict) -> CommonCluster:
     """The cluster the case runs on: its `locust.infra.cluster`, common or
-    openclaw, for its sandbox class."""
+    openclaw."""
     return from_infra(
         name,
         f"{TYPE}.infra",
         case[TYPE].get("infra"),
         (CommonCluster, OpenclawCluster),
-        sandbox_class=case.get("sandbox-class", "gvisor"),
     )
 
 
@@ -304,11 +303,9 @@ def run(
     cluster's own, which keeps_bucket says outlives the run, as a dev infra's
     does. Expects the cluster's credentials in its kubeconfig."""
     case = check_case(name, case, deploy_workloads)
-    # The workers would never schedule past the sandboxed pool's taint.
-    if case["sandbox-class"] != cluster.sandbox_class:
+    if case["sandbox-class"] == "microvm" and not cluster.sandboxed_kvm:
         raise LocustError(
-            f"case {name} is {case['sandbox-class']}, but cluster {cluster.name}'s sandboxed pool is"
-            f" {cluster.sandbox_class}; set the cluster's sandbox_class to match"
+            f"case {name} is microvm, but cluster {cluster.name}'s sandboxed pool has no /dev/kvm for its guests"
         )
     run_id = run_id or f"{datetime.now(timezone.utc):%Y%m%dt%H%M%Sz}-{images.commit()[:12]}"
     if not reports.LABEL_RE.fullmatch(run_id):

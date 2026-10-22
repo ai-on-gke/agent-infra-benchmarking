@@ -39,7 +39,7 @@ from .terraform import data_env
 MIN_KUBECTL = (1, 31)
 # The settings of a case's cluster the checks read, if its config declares them.
 CLUSTER_SETTINGS = (
-    "sandbox_class",
+    "nested_virtualization",
     "sandboxed_machine_type",
     "sandboxed_node_count",
     "sandboxed_min_node_count",
@@ -160,10 +160,10 @@ def cluster_problems(
 ) -> list[str]:
     problems = []
     machine_type = settings.get("sandboxed_machine_type")
-    if settings.get("sandbox_class") == "microvm" and machine_type and not nested_virtualization(machine_type):
+    if settings.get("nested_virtualization") and machine_type and not nested_virtualization(machine_type):
         problems.append(
-            f"case {name} is microvm, which needs nested virtualization, but its sandboxed pool is {machine_type};"
-            " use an Intel family such as n2 or c2 (not E2, AMD or Arm)"
+            f"case {name}'s cluster has nested virtualization, but its sandboxed pool is {machine_type}, which GCE"
+            " offers it on only in an Intel family such as n2 or c2 (not E2, AMD or Arm)"
         )
     version = settings.get("kubernetes_version")
     if gke and version and versions is not None and not offered(version, versions):
@@ -302,6 +302,11 @@ def check(
         # Evaluated at the first placement; the others only move its pool.
         if bare_metal:
             config = config.placed(placements[0])
+        if case.get("sandbox-class") == "microvm" and not (config.sandboxed_kvm or case.get(BARE_METAL)):
+            problems.append(
+                f"case {name} is microvm, whose guests boot on /dev/kvm, but its sandboxed pool has none; set its"
+                " `infra.cluster.nested-virtualization: true` or run it on bare metal"
+            )
         # Cases on the same cluster are evaluated once.
         if config not in evaluated:
             try:

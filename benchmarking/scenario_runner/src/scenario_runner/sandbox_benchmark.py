@@ -204,8 +204,8 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
 
 def cluster_config(name: str, case: dict) -> CommonCluster:
     """The cluster the case runs on, its comparator Job whatever its
-    provider: its `sandbox-benchmark.infra.cluster`, for its sandbox class."""
-    return from_infra(name, f"{TYPE}.infra", case[TYPE].get("infra"), sandbox_class=case.get("sandbox-class", "gvisor"))
+    provider: its `sandbox-benchmark.infra.cluster`."""
+    return from_infra(name, f"{TYPE}.infra", case[TYPE].get("infra"))
 
 
 def report_folder(record: str, key: str, case: dict) -> str:
@@ -485,11 +485,9 @@ def run(
     folder = report_folder(name, test_case or name, case)
     case = check_case(name, case, deploy_workloads)
     sandbox_class = case["sandbox-class"]
-    # env's workers would never schedule past the sandboxed pool's taint.
-    if case[TYPE]["provider"]["name"] == "substrate" and sandbox_class != cluster.sandbox_class:
+    if case[TYPE]["provider"]["name"] == "substrate" and sandbox_class == "microvm" and not cluster.sandboxed_kvm:
         raise SandboxBenchmarkError(
-            f"case {name} is {sandbox_class}, but cluster {cluster.name}'s sandboxed pool is"
-            f" {cluster.sandbox_class}; set the cluster's sandbox_class to match"
+            f"case {name} is microvm, but cluster {cluster.name}'s sandboxed pool has no /dev/kvm for its guests"
         )
     run_id = run_id or f"{datetime.now(timezone.utc):%Y%m%dt%H%M%Sz}-{images.commit()[:12]}"
     if not reports.LABEL_RE.fullmatch(run_id):

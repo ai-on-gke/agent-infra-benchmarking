@@ -14,10 +14,10 @@
 
 """The configurations of the infra/clusters/ configs, each as what may be
 asked of it: its inputs, which the `infra.cluster` in a case's type gives in
-kebab-case, and what the type sets itself. Only these turn them into the
-config's Terraform variables, with what the execution decides of every cluster
-it applies. A configuration's subclass is the cluster of its parent's and
-more, so a case of the parent's runs on it too."""
+kebab-case. Only these turn them into the config's Terraform variables, with
+what the execution decides of every cluster it applies. A configuration's
+subclass is the cluster of its parent's and more, so a case of the parent's
+runs on it too."""
 
 from __future__ import annotations
 
@@ -81,14 +81,17 @@ class ClusterConfig:
     # What infra.cluster.configuration names it by.
     CONFIGURATION: ClassVar[str]
     CONFIG: ClassVar[Path]
-    # The fields a case's infra.cluster may give; the rest its type sets.
-    INPUTS: ClassVar[tuple[str, ...]] = ("sandboxed_nodes", "sandboxed_max_nodes", "sandboxed_machine_type", "zone")
+    # The fields a case's infra.cluster may give.
+    INPUTS: ClassVar[tuple[str, ...]] = (
+        "sandboxed_nodes", "sandboxed_max_nodes", "sandboxed_machine_type", "zone", "nested_virtualization"
+    )
 
     sandboxed_nodes: int = 1
     sandboxed_max_nodes: int | None = None
     sandboxed_machine_type: str = "c2-standard-16"
     zone: str | None = None
-    sandbox_class: str = "gvisor"
+    # /dev/kvm off bare metal, which microvm's guests boot on.
+    nested_virtualization: bool = False
 
     def __post_init__(self) -> None:
         for name in ("sandboxed_nodes", "sandboxed_max_nodes"):
@@ -103,11 +106,13 @@ class ClusterConfig:
             value = getattr(self, name)
             if value is not None and not (isinstance(value, str) and value):
                 raise ValueError(f"`{kebab(name)}` must be a non-empty string, got {value!r}")
+        if not isinstance(self.nested_virtualization, bool):
+            raise ValueError(f"`nested-virtualization` must be true or false, got {self.nested_virtualization!r}")
 
     @classmethod
-    def from_yaml(cls, given: dict | None, **from_type) -> Self:
-        """The cluster a case's infra.cluster gives the inputs of, with what
-        its type sets; raises ValueError, its message what is wrong."""
+    def from_yaml(cls, given: dict | None) -> Self:
+        """The cluster a case's infra.cluster gives the inputs of; raises
+        ValueError, its message what is wrong."""
         given = {} if given is None else given
         if not isinstance(given, dict):
             raise ValueError(f"must be a mapping of {', '.join(map(kebab, cls.INPUTS))}, got {given!r}")
@@ -116,7 +121,13 @@ class ClusterConfig:
             raise ValueError(
                 f"has unknown {', '.join(sorted(map(str, unknown)))}; it takes {', '.join(map(kebab, cls.INPUTS))}"
             )
-        return cls(**{key.replace("-", "_"): value for key, value in given.items()}, **from_type)
+        return cls(**{key.replace("-", "_"): value for key, value in given.items()})
+
+    @property
+    def sandboxed_kvm(self) -> bool:
+        """Whether the sandboxed pool has /dev/kvm, as the config's
+        sandboxed_kvm output says: nested or on bare metal."""
+        return self.nested_virtualization or self.sandboxed_machine_type.endswith("-metal")
 
     @property
     def name(self) -> str:
@@ -129,7 +140,7 @@ class ClusterConfig:
 
     def sandboxed_pool(self) -> dict:
         variables = {
-            "sandbox_class": self.sandbox_class,
+            "nested_virtualization": self.nested_virtualization,
             "sandboxed_machine_type": self.sandboxed_machine_type,
             "sandboxed_node_count": self.sandboxed_nodes,
             "sandboxed_min_node_count": self.sandboxed_nodes,
@@ -216,7 +227,6 @@ def from_infra(
     path: str,
     infra: object,
     configs: tuple[type[ClusterConfig], ...] = (CommonCluster,),
-    **from_type,
 ) -> ClusterConfig:
     """The cluster the `infra` at path in the case asks for: its `cluster`'s
     inputs of the one of configs its `configuration` picks, common unless it
@@ -234,7 +244,7 @@ def from_infra(
     if isinstance(given, dict):
         given = {key: value for key, value in given.items() if key != "configuration"}
     try:
-        return config.from_yaml(given, **from_type)
+        return config.from_yaml(given)
     except ValueError as exc:
         raise ValueError(f"{where}.cluster`: {exc}") from None
 
@@ -254,6 +264,9 @@ def from_record(record: dict) -> ClusterConfig:
     write, such as a dev infra's from before the clusters were these."""
     values = dict(record)
     values.pop("name", None)
+    # Recorded before the case's class became nested-virtualization's input.
+    if "sandbox_class" in values:
+        values["nested_virtualization"] = values.pop("sandbox_class") == "microvm"
     config = CLUSTER_CONFIGS.get(values.pop("configuration", None))
     try:
         if config is None:

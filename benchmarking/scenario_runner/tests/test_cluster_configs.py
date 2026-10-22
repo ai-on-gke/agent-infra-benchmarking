@@ -45,13 +45,13 @@ EXECUTION = Execution(
     node_service_account="nodes@p.iam.gserviceaccount.com",
     network={"network": "n", "subnetwork": "s"},
 )
-# Every input and what a type sets.
+# Every input.
 EVERYTHING = {
     "sandboxed_nodes": 2,
     "sandboxed_max_nodes": 3,
     "sandboxed_machine_type": "n2-standard-16",
     "zone": "us-central1-c",
-    "sandbox_class": "microvm",
+    "nested_virtualization": True,
 }
 
 
@@ -68,11 +68,17 @@ class Variables(unittest.TestCase):
         scaling = CommonCluster(sandboxed_nodes=2, sandboxed_max_nodes=5).variables(EXECUTION)
         self.assertEqual([scaling[f"sandboxed_{key}node_count"] for key in ("", "min_", "max_")], [2, 2, 5])
 
+    def test_the_sandboxed_pool_has_kvm_nested_or_on_bare_metal(self):
+        self.assertFalse(CommonCluster().sandboxed_kvm)
+        self.assertTrue(CommonCluster(nested_virtualization=True).sandboxed_kvm)
+        placement = {"zone": "us-central1-c", "machine-type": "c3-highcpu-192-metal"}
+        self.assertTrue(CommonCluster().placed(placement).sandboxed_kvm)
+
     def test_common_has_default_tfvars_defaults(self):
         variables = CommonCluster().variables(Execution(NAMED))
         self.assertEqual(variables["sandboxed_machine_type"], "c2-standard-16")
         self.assertIs(variables["bucket_force_destroy"], True)
-        self.assertEqual(variables["sandbox_class"], "gvisor")
+        self.assertIs(variables["nested_virtualization"], False)
         # The config's own default, and none of what the execution left out.
         for name in ("zone", "additional_node_pools", "image_repository", "substrate_version",
                      "node_service_account", "existing_network", "enable_private_endpoint"):  # fmt: skip
@@ -105,11 +111,8 @@ class Variables(unittest.TestCase):
 class FromYaml(unittest.TestCase):
     def test_kebab_case_inputs_are_the_fields(self):
         given = {"sandboxed-nodes": 2, "sandboxed-max-nodes": 4, "sandboxed-machine-type": "n2-standard-16",
-                 "zone": "us-central1-c"}  # fmt: skip
-        self.assertEqual(
-            CommonCluster.from_yaml(given, sandbox_class="microvm"),
-            CommonCluster(2, 4, "n2-standard-16", "us-central1-c", "microvm"),
-        )
+                 "zone": "us-central1-c", "nested-virtualization": True}  # fmt: skip
+        self.assertEqual(CommonCluster.from_yaml(given), CommonCluster(2, 4, "n2-standard-16", "us-central1-c", True))
 
     def test_none_is_every_default(self):
         self.assertEqual(CommonCluster.from_yaml(None), CommonCluster())
@@ -127,6 +130,7 @@ class FromYaml(unittest.TestCase):
             ({"sandboxed-nodes": 3, "sandboxed-max-nodes": 2}, "`sandboxed-max-nodes` 2 is less than"),
             ({"sandboxed-machine-type": ""}, "`sandboxed-machine-type` must be a non-empty string"),
             ({"zone": 1}, "`zone` must be a non-empty string"),
+            ({"nested-virtualization": "yes"}, "`nested-virtualization` must be true or false"),
         ]:
             with self.subTest(given=given), self.assertRaisesRegex(ValueError, message):
                 DummyCluster.from_yaml(given)
@@ -158,10 +162,15 @@ class Configs(unittest.TestCase):
             self.assertEqual(config.CONFIGURATION, name)
 
     def test_a_record_is_read_back_as_its_configuration(self):
-        for config in (CommonCluster(sandboxed_nodes=2), OpenclawCluster(sandbox_class="microvm"), DummyCluster()):
+        for config in (CommonCluster(sandboxed_nodes=2), OpenclawCluster(nested_virtualization=True), DummyCluster()):
             with self.subTest(config=type(config).__name__):
                 self.assertEqual(from_record(to_record(config)), config)
         self.assertEqual(to_record(OpenclawCluster())["name"], "common")
+
+    def test_a_record_of_a_class_has_nested_virtualization_for_microvm(self):
+        record = {**to_record(CommonCluster()), "sandbox_class": "microvm"}
+        del record["nested_virtualization"]
+        self.assertEqual(from_record(record), CommonCluster(nested_virtualization=True))
 
     def test_a_record_from_before_configurations_is_refused(self):
         record = to_record(CommonCluster())

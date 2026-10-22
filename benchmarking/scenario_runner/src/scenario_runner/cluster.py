@@ -94,9 +94,10 @@ class Cluster:
         return self.outputs.get("benchmark_runner_ksa_name", "benchmark-runner")
 
     @property
-    def sandbox_class(self) -> str:
-        # The variable's default for a state applied before the output existed.
-        return self.outputs.get("sandbox_class", "gvisor")
+    def sandboxed_kvm(self) -> bool:
+        """Whether the sandboxed pool has /dev/kvm, which microvm needs. A
+        state applied before the output existed had it for microvm only."""
+        return self.outputs.get("sandboxed_kvm", self.outputs.get("sandbox_class") == "microvm")
 
     def kubectl_flags(self, namespace: str | None = None) -> list[str]:
         flags = [f"--kubeconfig={self.kubeconfig}"]

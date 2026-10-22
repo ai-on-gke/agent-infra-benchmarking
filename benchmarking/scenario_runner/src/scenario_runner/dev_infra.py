@@ -116,6 +116,7 @@ def apply(record: dict, json_output: bool = False, update: bool = False) -> dict
     # worker would schedule until substrate is installed again.
     if substrate_version(record["name"]) != installed_version:
         record.pop("substrate_installed", None)
+        record.pop("microvm_installed", None)
     record["complete"] = True
     write_record(record)
     return record
@@ -162,14 +163,18 @@ def cluster(name: str) -> Cluster:
     return Cluster(infra.state_outputs(), infra.data / "kubeconfig")
 
 
-def install_substrate(record: dict) -> dict:
+def install_substrate(record: dict, microvm: bool = False) -> dict:
     """Installs substrate on the dev infra's cluster from the images in its
-    repository unless its record says it is installed, and returns its
-    record."""
-    if record.get("substrate_installed"):
+    repository, and with microvm its microvm SandboxConfig, unless its record
+    says they are installed, and returns its record."""
+    if not record.get("substrate_installed"):
+        substrate.install(cluster(record["name"]), microvm)
+        record = {**record, "substrate_installed": True, "microvm_installed": microvm}
+    elif microvm and not record.get("microvm_installed"):
+        substrate.install_microvm(cluster(record["name"]))
+        record = {**record, "microvm_installed": True}
+    else:
         return record
-    substrate.install(cluster(record["name"]))
-    record = {**record, "substrate_installed": True}
     write_record(record)
     return record
 

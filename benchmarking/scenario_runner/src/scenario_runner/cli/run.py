@@ -35,7 +35,6 @@ import signal
 import subprocess
 import sys
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
-from dataclasses import replace
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -487,7 +486,6 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
             "project_id": args.project_id,
             "region": args.region,
             "cluster": to_record(wanted),
-            "sandbox_class": sandbox_class(cases[first]),
             "bare_metal": cases[first][BARE_METAL],
             # The ones to try if the cluster's zone is out of its machine type.
             "placements": args.placements if cases[first][BARE_METAL] else [],
@@ -502,11 +500,10 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
                 f"case {name} runs on configuration {config.CONFIGURATION}, but dev infra {args.dev_infra}"
                 f" is {current.CONFIGURATION}"
             )
-        # The sandboxed pool is tainted for one class, which no other's workers tolerate.
-        if case["type"] != "noop" and record.get("sandbox_class") and sandbox_class(case) != record["sandbox_class"]:
+        if sandbox_class(case) == "microvm" and not current.sandboxed_kvm and not case[BARE_METAL]:
             fail(
-                f"case {name} is {sandbox_class(case)}, but dev infra {args.dev_infra}'s sandboxed pool is"
-                f" {record['sandbox_class']}; use a dev infra of its own"
+                f"case {name} is microvm, but dev infra {args.dev_infra}'s sandboxed pool has no /dev/kvm for its"
+                " guests; use a dev infra of its own"
             )
         # Its records say which it ran on.
         if case[BARE_METAL] != record.get("bare_metal", False):
@@ -514,8 +511,8 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
                 f"case {name} is {'' if case[BARE_METAL] else 'not '}on bare metal, but dev infra {args.dev_infra}'s"
                 f" sandboxed pool is{'' if record.get('bare_metal') else ' not'}; use a dev infra of its own"
             )
-        # Its class is checked above, and a bare-metal one is where it was applied.
-        asked, have = replace(config, sandbox_class=current.sandbox_class), current
+        # A bare-metal one is where it was applied.
+        asked, have = config, current
         if case[BARE_METAL] and record.get("placement"):
             asked, have = asked.placed(record["placement"]), have.placed(record["placement"])
         if asked != have:
@@ -531,8 +528,8 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
 
 
 def sandbox_class(case: dict) -> str | None:
-    """The class of the case's workers, which its cluster's sandboxed pool is
-    applied for; None for a noop."""
+    """The class of the case's workers, which substrate is installed with;
+    None for a noop."""
     return None if case["type"] == "noop" else case.get("sandbox-class", "gvisor")
 
 
@@ -711,7 +708,7 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
         if control_plane(case) == AGENT_SANDBOX:
             record = dev_infra.install_agent_sandbox(record)
         elif control_plane(case) == AGENT_SUBSTRATE:
-            record = dev_infra.install_substrate(record)
+            record = dev_infra.install_substrate(record, sandbox_class(case) == "microvm")
         run_repeats(
             name,
             case,
@@ -794,7 +791,7 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
                 if control_plane(case) == AGENT_SANDBOX:
                     agent_sandbox.install(cluster)
                 elif control_plane(case) == AGENT_SUBSTRATE:
-                    substrate.install(cluster)
+                    substrate.install(cluster, sandbox_class(case) == "microvm")
                 yield cluster
             finally:
                 if pulls:

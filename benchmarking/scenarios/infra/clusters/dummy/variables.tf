@@ -54,10 +54,10 @@ variable "sandboxed_machine_type" {
   default     = ""
 }
 
-variable "sandbox_class" {
+variable "nested_virtualization" {
   description = "Unused; taken as common takes it."
-  type        = string
-  default     = "gvisor"
+  type        = bool
+  default     = false
 }
 
 variable "sandboxed_node_count" {
