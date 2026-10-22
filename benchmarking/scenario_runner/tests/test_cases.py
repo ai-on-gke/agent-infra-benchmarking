@@ -120,7 +120,10 @@ class ShippedCases(unittest.TestCase):
         self.assertEqual(clusters["glutton"], CommonCluster(sandboxed_nodes=1))
         self.assertEqual(clusters["glutton-microvm"], CommonCluster(sandboxed_nodes=1, nested_virtualization=True))
         self.assertEqual(clusters["openclaw-density-baseline"], OpenclawCluster(sandboxed_nodes=10))
-        self.assertEqual(clusters["sandbox-benchmark-e2b"], CommonCluster(sandboxed_nodes=1))
+        self.assertEqual(
+            clusters["sandbox-benchmark-substrate"],
+            CommonCluster(sandboxed_nodes=1, sandboxed_machine_type="n2-standard-16"),
+        )
         self.assertEqual(clusters["dummy"], DummyCluster(sandboxed_nodes=10))
 
 

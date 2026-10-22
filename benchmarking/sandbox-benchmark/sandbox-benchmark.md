@@ -71,8 +71,8 @@ suspends the sandbox, resumes it and checks the workspace survived.
   set explicitly for Modal and Daytona in their providers in
   `dependency-repos/ai-sandbox-benchmark/providers/`, and substrate's
   `actor-cpu` and `actor-memory` in the case.
-- Substrate runs on the case's `c2-standard-16` node, 10 sandboxes at once on
-  10 env workers, and is priced at c2's on-demand rates in us-central1. Its 16
+- Substrate runs on the case's `n2-standard-16` node, 10 sandboxes at once on
+  10 env workers, and is priced at n2's on-demand rates in us-central1. Its 16
   vCPUs are fewer than the sandboxes' 20, so they contend while most are busy
   at once.
 - Anthropic and OpenAI cannot suspend or resume, so their overheads are N/A.

@@ -346,7 +346,7 @@ cases:
         cluster:
           sandboxed-nodes: 1
           # The cost sheet prices substrate at its rates.
-          sandboxed-machine-type: c2-standard-16
+          sandboxed-machine-type: n2-standard-16
       cost-sheet: true
       tests:
       - test_suspend_resume
