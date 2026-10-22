@@ -13,20 +13,32 @@
 # limitations under the License.
 
 """The infra/clusters/ configs, each as what may be asked of it: its inputs,
-which a case's infra.cluster gives in kebab-case, and what the case's type
-sets itself. Only these turn them into the config's Terraform variables, with
-what the execution decides of every cluster it applies."""
+which the `infra.cluster` in a case's type gives in kebab-case, and what the
+type sets itself. Only these turn them into the config's Terraform variables,
+with what the execution decides of every cluster it applies."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+import os
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import ClassVar, Self
 
-from .cases import CLUSTERS_DIR
+from . import SCENARIOS_DIR
 from .deployment import Deployment
 
-# What mock-llm's pods select and tolerate (workloads/manifests/mock-llm.yaml.tmpl).
+CLUSTERS_DIR = SCENARIOS_DIR / "infra" / "clusters"
+# Set by automation-infra's Cloud Run job: the account its clusters' nodes run
+# as, which its deployment created with the project roles nodes need, so the
+# job neither creates one per run nor grants it those.
+NODE_SERVICE_ACCOUNT = os.environ.get("NODE_SERVICE_ACCOUNT")
+# Set by automation-infra's Cloud Run job, which runs inside this network: its
+# clusters go into the subnetwork, with an internal endpoint only.
+CLUSTER_NETWORK = os.environ.get("CLUSTER_NETWORK")
+CLUSTER_SUBNETWORK = os.environ.get("CLUSTER_SUBNETWORK")
+
+# The pool for mock-llm, which its pods select and tolerate
+# (workloads/manifests/mock-llm.yaml.tmpl).
 MOCK_LLM_POOL = {
     "name": "mock-llm",
     "machine_type": "e2-standard-8",
@@ -51,6 +63,12 @@ class Execution:
     # internal endpoint only.
     node_service_account: str | None = None
     network: dict | None = None
+
+
+def execution(named: dict, image_repository: str | None = None, substrate_version: str | None = None) -> Execution:
+    """The Execution of named, with what automation-infra's Cloud Run job sets."""
+    network = {"network": CLUSTER_NETWORK, "subnetwork": CLUSTER_SUBNETWORK} if CLUSTER_SUBNETWORK else None
+    return Execution(named, image_repository, substrate_version, NODE_SERVICE_ACCOUNT, network)
 
 
 @dataclass(frozen=True)
@@ -96,6 +114,11 @@ class ClusterConfig:
             )
         return cls(**{key.replace("-", "_"): value for key, value in given.items()}, **from_type)
 
+    @property
+    def name(self) -> str:
+        """The config's directory in infra/clusters/."""
+        return self.CONFIG.name
+
     def placed(self, placement: dict) -> Self:
         """The cluster with its sandboxed pool at a bare-metal placement."""
         return replace(self, zone=placement["zone"], sandboxed_machine_type=placement["machine-type"])
@@ -125,11 +148,23 @@ class CommonCluster(ClusterConfig):
     sandbox class, and with mock_llm_pool a pool for mock-llm."""
 
     CONFIG: ClassVar[Path] = CLUSTERS_DIR / "common"
+    INPUTS: ClassVar[tuple[str, ...]] = (*ClusterConfig.INPUTS, "default_machine_type")
 
+    # The config's own default, c2-standard-16, unless set.
+    default_machine_type: str | None = None
     mock_llm_pool: bool = False
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.default_machine_type is not None and not (
+            isinstance(self.default_machine_type, str) and self.default_machine_type
+        ):
+            raise ValueError(f"`default-machine-type` must be a non-empty string, got {self.default_machine_type!r}")
 
     def variables(self, execution: Execution) -> dict:
         variables = {**self.sandboxed_pool(), "bucket_force_destroy": True}
+        if self.default_machine_type:
+            variables["default_machine_type"] = self.default_machine_type
         if self.mock_llm_pool:
             variables["additional_node_pools"] = [MOCK_LLM_POOL]
         if execution.image_repository is not None:
@@ -158,3 +193,45 @@ CLUSTER_CONFIGS: dict[str, type[ClusterConfig]] = {"common": CommonCluster, "dum
 
 def kebab(name: str) -> str:
     return name.replace("_", "-")
+
+
+def from_infra(
+    case: str, path: str, infra: object, config: type[ClusterConfig] | None = CommonCluster, **from_type
+) -> ClusterConfig:
+    """The cluster the `infra` at path in the case asks for: its `cluster`'s
+    inputs of config, or with config None of the one its `name` picks, common
+    unless it says. Raises ValueError, its message what is wrong."""
+    where = f"case {case}'s `{path}"
+    infra = {} if infra is None else infra
+    if not isinstance(infra, dict) or infra.keys() - {"cluster"}:
+        raise ValueError(f"{where}` must be a mapping of `cluster`, the inputs of the cluster it runs on")
+    given = infra.get("cluster")
+    if config is None:
+        name = given.get("name", "common") if isinstance(given, dict) else "common"
+        config = CLUSTER_CONFIGS.get(name) if isinstance(name, str) else None
+        if config is None:
+            raise ValueError(f"{where}.cluster.name` must be one of {', '.join(CLUSTER_CONFIGS)}, got {name!r}")
+        if isinstance(given, dict):
+            given = {key: value for key, value in given.items() if key != "name"}
+    try:
+        return config.from_yaml(given, **from_type)
+    except ValueError as exc:
+        raise ValueError(f"{where}.cluster`: {exc}") from None
+
+
+def to_record(config: ClusterConfig) -> dict:
+    """The cluster as a dev infra's record keeps it: the name of its config and its fields."""
+    return {"name": config.name, **{f.name: getattr(config, f.name) for f in fields(config)}}
+
+
+def from_record(record: dict) -> ClusterConfig:
+    """The cluster of to_record's record; raises ValueError for one it did not
+    write, such as a dev infra's from before the clusters were these."""
+    values = dict(record)
+    config = CLUSTER_CONFIGS.get(values.pop("name", None))
+    try:
+        if config is None:
+            raise TypeError
+        return config(**values)
+    except TypeError:
+        raise ValueError(f"not a cluster of {', '.join(CLUSTER_CONFIGS)}: {record}") from None

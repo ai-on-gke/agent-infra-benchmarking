@@ -20,6 +20,7 @@ import argparse
 
 from . import ate_env, images, locust, monitoring, reports, sandbox_benchmark, workloads
 from .cluster import Cluster
+from .cluster_configs import ClusterConfig, from_infra
 from .log import log
 
 RUNNERS = {"locust": locust, "sandbox-benchmark": sandbox_benchmark}
@@ -46,6 +47,14 @@ def types() -> list[str]:
 def check(name: str, case: dict) -> None:
     """Raises ValueError for a case its type can't run."""
     RUNNERS[case["type"]].check_case(name, case, deploy_workloads=True)
+
+
+def cluster_config(name: str, case: dict) -> ClusterConfig:
+    """The cluster the case runs on, as its type asks for it; a noop's on the
+    config its `noop.infra.cluster.name` picks."""
+    if case["type"] == "noop":
+        return from_infra(name, "noop.infra", case["noop"].get("infra"), config=None)
+    return RUNNERS[case["type"]].cluster_config(name, case)
 
 
 def check_run_id(run_id: str) -> str:

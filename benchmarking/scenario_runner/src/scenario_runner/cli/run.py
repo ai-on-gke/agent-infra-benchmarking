@@ -29,13 +29,13 @@ it, checks what the cases need, the images included."""
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import signal
 import subprocess
 import sys
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
+from dataclasses import replace
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -65,15 +65,15 @@ from ..cases import (
     grouped,
     load_bare_metal,
     load_cases,
-    placed,
     record_names,
     shares_cluster,
     warmup_names,
     with_bare_metal,
 )
 from ..cluster import Cluster, gke_stockout, utc_now
+from ..cluster_configs import execution, from_record, to_record
 from ..control_plane import AGENT_SANDBOX, AGENT_SUBSTRATE, CONTROL_PLANE, NO_CONTROL_PLANE, control_plane
-from ..deployment import RUNNER_INFRA_DIR, Deployment, DestroyFailed, GcsDeployment, cluster_deployment
+from ..deployment import RUNNER_INFRA_DIR, Deployment, DestroyFailed, GcsDeployment
 from ..log import ON_CLOUD_RUN, log
 from ..process import failure
 
@@ -457,6 +457,7 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
     new or updated one has the first case's cluster."""
     record = dev_infra.read_record(args.dev_infra)
     first = next(iter(cases))
+    wanted = benchmark.cluster_config(first, cases[first])
     if record is not None:
         if (record["project_id"], record["region"]) != (args.project_id, args.region):
             fail(
@@ -464,11 +465,20 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
                 f" not {args.project_id} and {args.region}"
             )
         # Another config under the same state would replace every resource.
-        if args.dev_infra_update and cases[first]["infra"]["cluster"]["name"] != record["cluster"]["name"]:
+        if args.dev_infra_update and wanted.name != record["cluster"]["name"]:
             fail(
-                f"case {first} runs on infra/clusters/{cases[first]['infra']['cluster']['name']}, but dev infra"
-                f" {args.dev_infra} is infra/clusters/{record['cluster']['name']}; destroy it rather than update it"
+                f"case {first} runs on infra/clusters/{wanted.name}, but dev infra {args.dev_infra} is"
+                f" infra/clusters/{record['cluster']['name']}; destroy it rather than update it"
             )
+        if not args.dev_infra_update:
+            try:
+                from_record(record["cluster"])
+            except ValueError:
+                fail(
+                    f"dev infra {args.dev_infra} records its cluster as it was asked for before cluster configs;"
+                    " run with --dev-infra-update to apply it with the first case's cluster, or destroy it with"
+                    f" python3 -m scenario_runner.cli.dev_infra destroy {args.dev_infra}"
+                )
     if record is None or args.dev_infra_update:
         record = {
             **(record or {}),
@@ -476,19 +486,20 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
             "test_case": first,
             "project_id": args.project_id,
             "region": args.region,
-            "cluster": cases[first]["infra"]["cluster"],
+            "cluster": to_record(wanted),
             "sandbox_class": sandbox_class(cases[first]),
             "bare_metal": cases[first][BARE_METAL],
             # The ones to try if the cluster's zone is out of its machine type.
             "placements": args.placements if cases[first][BARE_METAL] else [],
             dev_infra.SKIP_SUBSTRATE_INSTALL: control_plane(cases[first]) != AGENT_SUBSTRATE,
         }
+    current = from_record(record["cluster"])
     for name, case in cases.items():
-        spec = case["infra"]["cluster"]
-        if spec["name"] != record["cluster"]["name"]:
+        config = benchmark.cluster_config(name, case)
+        if config.name != current.name:
             fail(
-                f"case {name} runs on infra/clusters/{spec['name']}, but dev infra {args.dev_infra}"
-                f" is infra/clusters/{record['cluster']['name']}"
+                f"case {name} runs on infra/clusters/{config.name}, but dev infra {args.dev_infra}"
+                f" is infra/clusters/{current.name}"
             )
         # The sandboxed pool is tainted for one class, which no other's workers tolerate.
         if case["type"] != "noop" and record.get("sandbox_class") and sandbox_class(case) != record["sandbox_class"]:
@@ -502,12 +513,12 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
                 f"case {name} is {'' if case[BARE_METAL] else 'not '}on bare metal, but dev infra {args.dev_infra}'s"
                 f" sandboxed pool is{'' if record.get('bare_metal') else ' not'}; use a dev infra of its own"
             )
-        current = record["cluster"]
-        # A bare-metal one is where it was applied, not at the case's first placement.
+        # Its class is checked above, and a bare-metal one is where it was applied.
+        asked, have = replace(config, sandbox_class=current.sandbox_class), current
         if case[BARE_METAL] and record.get("placement"):
-            spec, current = placed(spec, record["placement"]), placed(current, record["placement"])
-        if spec != current:
-            log(f"run: case {name}'s infra.cluster differs from dev infra {args.dev_infra}'s it runs on", "WARNING")
+            asked, have = asked.placed(record["placement"]), have.placed(record["placement"])
+        if asked != have:
+            log(f"run: case {name}'s cluster differs from dev infra {args.dev_infra}'s it runs on", "WARNING")
     json_output = args.terraform_output == "json"
     if args.dev_infra_update:
         log(f"run: updating dev infra {args.dev_infra} from the source")
@@ -594,11 +605,10 @@ def run_repeats(name: str, case: dict, run: Callable[[str, int, int], None], sha
         raise CaseFailed(f"{len(failed)} of {len(records)} repeats of {name} failed: {', '.join(failed)}")
 
 
-def cluster_setup(case: dict) -> str:
+def cluster_setup(name: str, case: dict) -> tuple:
     """What the case's cluster is applied with and has installed, which a
     case's variants alike in share."""
-    setup = [case.get("infra"), sandbox_class(case), case.get(BARE_METAL, False), control_plane(case)]
-    return json.dumps(setup, sort_keys=True)
+    return benchmark.cluster_config(name, case), case.get(BARE_METAL, False), control_plane(case)
 
 
 def batches(names: list[str], cases: dict[str, dict]) -> list[list[str]]:
@@ -607,7 +617,7 @@ def batches(names: list[str], cases: dict[str, dict]) -> list[list[str]]:
     alone."""
     out = {}
     for name in names:
-        out.setdefault(cluster_setup(cases[name]) if shares_cluster(cases[name]) else name, []).append(name)
+        out.setdefault(cluster_setup(name, cases[name]) if shares_cluster(cases[name]) else name, []).append(name)
     return list(out.values())
 
 
@@ -753,6 +763,7 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
         placements in turn, from the last one applied, until one has the
         machine type."""
         nonlocal current_placement
+        config = benchmark.cluster_config(key, case)
         version = substrate.build_version() if control_plane(case) == AGENT_SUBSTRATE else None
         uncreated = deployment(args, "scenarios", key)
         # A cluster that pulls none of the images is not granted the repository.
@@ -762,8 +773,8 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
 
         def attempt(placement: dict | None, last: bool) -> None:
             nonlocal applied
-            spec = placed(case["infra"]["cluster"], placement) if placement else case["infra"]["cluster"]
-            case_infra = cluster_deployment(spec, uncreated, case_vars[key], version, repository, sandbox_class(case))
+            spec = config.placed(placement) if placement else config
+            case_infra = spec.deployment(uncreated, execution(case_vars[key], repository, version))
             stockout = None
             if placement:
                 log(f"{key}: sandboxed pool on {placement['machine-type']} in {placement['zone']}")

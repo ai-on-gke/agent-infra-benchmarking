@@ -30,6 +30,10 @@ from scenario_runner.cli import run
 from scenario_runner import cluster as cluster_module
 from scenario_runner.cluster import Cluster
 
+# A locust case as far as the series reads it: its type, and the cluster its
+# mapping asks for.
+LOCUST = {"type": "locust", "locust": {}}
+
 
 class Environ(unittest.TestCase):
     def test_none_removes_a_variable(self):
@@ -257,7 +261,7 @@ class Series(unittest.TestCase):
             run.run_repeats("c", per_repeat, stuck, shared_cluster=False)
 
     def test_a_failed_case_does_not_stop_the_series(self):
-        cases = {"a": {"type": "locust"}, "b": {"type": "locust"}}
+        cases = {"a": LOCUST, "b": LOCUST}
         ran = []
 
         def case(name, _case, _cluster):
@@ -273,14 +277,15 @@ class Series(unittest.TestCase):
     def variants(self, *names: str, infra: dict | None = None) -> dict:
         from scenario_runner.reports import VARIANT
 
-        return {f"g-{n}": {"type": "locust", "infra": infra or {}, VARIANT: {"of": "g", "name": n}} for n in names}
+        return {f"g-{n}": {**LOCUST, "locust": {"infra": infra}, VARIANT: {"of": "g", "name": n}} for n in names}
 
     def test_variants_alike_share_a_cluster_then_are_summarized(self):
         from contextlib import contextmanager
 
         from scenario_runner import benchmark
 
-        cases = {**self.variants("a", "b"), **self.variants("c", infra={"other": 1}), "h": {"type": "locust"}}
+        other = {"cluster": {"sandboxed-nodes": 2}}
+        cases = {**self.variants("a", "b"), **self.variants("c", infra=other), "h": LOCUST}
         cases = {name: cases[name] for name in ["g-a", "g-c", "g-b", "h"]}
         applied, ran = [], []
 
@@ -319,7 +324,7 @@ class Series(unittest.TestCase):
             raise deployment.DestroyFailed(Path("/x"), None)
 
         with self.assertRaises(deployment.DestroyFailed):
-            run.run_cases(self.args, {"a": {"type": "locust"}, "b": {"type": "locust"}}, case, shared_cluster=False)
+            run.run_cases(self.args, {"a": LOCUST, "b": LOCUST}, case, shared_cluster=False)
 
 
 class Args(unittest.TestCase):

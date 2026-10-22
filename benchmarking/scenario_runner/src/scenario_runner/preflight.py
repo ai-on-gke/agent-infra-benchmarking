@@ -27,9 +27,10 @@ import tempfile
 from pathlib import Path
 
 from . import agent_sandbox, benchmark, substrate
-from .cases import BARE_METAL, CLUSTERS_DIR, placement_variables
+from .cases import BARE_METAL
+from .cluster_configs import ClusterConfig, execution
 from .control_plane import AGENT_SANDBOX, AGENT_SUBSTRATE, control_plane
-from .deployment import Deployment, cluster_deployment, declared_variables, tf_vars
+from .deployment import Deployment, declared_variables, tf_vars
 from .log import log
 from .process import environ
 from .terraform import data_env
@@ -48,9 +49,6 @@ CLUSTER_SETTINGS = (
     "zone",
     "regional_control_plane",
 )
-# What mock-llm's pods select and tolerate (workloads/manifests/mock-llm.yaml.tmpl).
-MOCK_LLM_LABEL = ("benchmarking-mock-llm", "true")
-WORKLOADS_NEEDING_MOCK_LLM = {"openclaw"}
 GKE_CHANNEL = "REGULAR"
 
 
@@ -109,16 +107,14 @@ def creates_gke_cluster(config: Path) -> bool:
     return any("google_container_cluster" in tf.read_text() for tf in files)
 
 
-def cluster_settings(spec: dict, sandbox_class: str | None, project_id: str, region: str) -> dict:
+def cluster_settings(config: ClusterConfig, project_id: str, region: str) -> dict:
     """The settings of CLUSTER_SETTINGS the case's cluster would be applied
-    with, evaluated by terraform from its config, tfvars and variables, which
-    also runs the config's own variable validations. Raises ValueError with
+    with, evaluated by terraform from its config and variables, which also
+    runs the config's own variable validations. Raises ValueError with
     terraform's message if they fail."""
-    declared = declared_variables(CLUSTERS_DIR / spec["name"]) & set(CLUSTER_SETTINGS)
+    declared = declared_variables(config.CONFIG) & set(CLUSTER_SETTINGS)
     with tempfile.TemporaryDirectory() as tmp:
-        deployment = cluster_deployment(
-            spec, Deployment(Path(tmp)), tf_vars(project_id, region, "preflight"), None, None, sandbox_class
-        )
+        deployment = config.deployment(Deployment(Path(tmp)), execution(tf_vars(project_id, region, "preflight")))
         env = data_env(deployment.data)
         init = ["terraform", f"-chdir={deployment.config}", "init", "-input=false", "-no-color"]
         proc = subprocess.run(init, capture_output=True, text=True, env=environ(env))
@@ -135,9 +131,7 @@ def cluster_settings(spec: dict, sandbox_class: str | None, project_id: str, reg
         # console prints the JSON as an HCL string, after any warnings.
         value = proc.stdout.strip().splitlines()[-1]
         if value == "(known after apply)":
-            raise ValueError(
-                f"a variable of {', '.join(sorted(declared))} has no value; set it in tfvars or tfvars_inline"
-            )
+            raise ValueError(f"a variable of {', '.join(sorted(declared))} has no value")
         return json.loads(json.loads(value))
 
 
@@ -162,7 +156,7 @@ def gke_versions(location: str, project_id: str) -> list[str] | None:
 
 
 def cluster_problems(
-    name: str, case: dict, settings: dict, versions: list[str] | None, gke: bool, location: str
+    name: str, config: ClusterConfig, settings: dict, versions: list[str] | None, gke: bool, location: str
 ) -> list[str]:
     problems = []
     machine_type = settings.get("sandboxed_machine_type")
@@ -171,14 +165,6 @@ def cluster_problems(
             f"case {name} is microvm, which needs nested virtualization, but its sandboxed pool is {machine_type};"
             " use an Intel family such as n2 or c2 (not E2, AMD or Arm)"
         )
-    workload = ((case.get("locust") or {}).get("worker") or {}).get("workload-name")
-    if workload in WORKLOADS_NEEDING_MOCK_LLM and "additional_node_pools" in settings:
-        key, value = MOCK_LLM_LABEL
-        if not any((pool.get("labels") or {}).get(key) == value for pool in settings["additional_node_pools"] or []):
-            problems.append(
-                f"case {name} runs {workload}, whose mock-llm needs a node pool labeled {key}={value};"
-                " use openclaw.tfvars or add one to additional_node_pools"
-            )
     version = settings.get("kubernetes_version")
     if gke and version and versions is not None and not offered(version, versions):
         minor = ".".join(version.split(".")[:2])
@@ -187,7 +173,7 @@ def cluster_problems(
             f"case {name}'s cluster pins GKE {version}, which the {GKE_CHANNEL} channel does not offer in"
             f" {location}, where the cluster goes; of {minor} it offers {same_minor} there, of all"
             f" {', '.join(sorted({'.'.join(v.split('.')[:2]) for v in versions}))}. Set kubernetes_version in"
-            f" infra/clusters/{case['infra']['cluster']['name']}/variables.tf to one it offers"
+            f" infra/clusters/{config.name}/variables.tf to one it offers"
         )
     return problems
 
@@ -308,36 +294,31 @@ def check(
             problems.append("microvm cases need a tar that does --zstd, and zstd, to unpack the kata assets")
 
     offered: dict[str, list[str] | None] = {}
-    evaluated: dict[str, dict | ValueError] = {}
+    evaluated: dict[ClusterConfig, dict | ValueError] = {}
     for name in applied:
         case = cases[name]
-        spec = case["infra"]["cluster"]
-        sandbox_class = case.get("sandbox-class", "gvisor") if case["type"] != "noop" else None
-        # Cases on the same cluster settings are evaluated once.
-        key = json.dumps([spec, sandbox_class], sort_keys=True)
-        if key not in evaluated:
+        config = benchmark.cluster_config(name, case)
+        bare_metal = case.get(BARE_METAL) and placements
+        # Evaluated at the first placement; the others only move its pool.
+        if bare_metal:
+            config = config.placed(placements[0])
+        # Cases on the same cluster are evaluated once.
+        if config not in evaluated:
             try:
-                evaluated[key] = cluster_settings(spec, sandbox_class, project_id, region)
+                evaluated[config] = cluster_settings(config, project_id, region)
             except ValueError as exc:
-                evaluated[key] = exc
-        settings = evaluated[key]
+                evaluated[config] = exc
+        settings = evaluated[config]
         if isinstance(settings, ValueError):
             problems.append(f"case {name}'s cluster config does not evaluate: {settings}")
             continue
-        gke = creates_gke_cluster(CLUSTERS_DIR / spec["name"])
-        if case.get(BARE_METAL):
-            missing = {"zone", "sandboxed_machine_type"} - declared_variables(CLUSTERS_DIR / spec["name"])
-            if missing:
-                problems.append(
-                    f"case {name} runs on bare metal, but infra/clusters/{spec['name']} does not take"
-                    f" {' or '.join(sorted(missing))}, which put its sandboxed pool there"
-                )
-                continue
-            problems += bare_metal_problems(name, settings, placements, project_id, region)
+        gke = creates_gke_cluster(config.CONFIG)
         variants = [settings]
-        # The first placement is in settings already.
-        if case.get(BARE_METAL):
-            variants += [{**settings, **placement_variables(p)} for p in placements[1:]]
+        if bare_metal:
+            problems += bare_metal_problems(name, settings, placements, project_id, region)
+            variants += [
+                {**settings, "zone": p["zone"], "sandboxed_machine_type": p["machine-type"]} for p in placements[1:]
+            ]
         for variant in variants:
             location = cluster_location(variant, region)
             if gke and location not in offered:
@@ -345,6 +326,6 @@ def check(
                 if offered[location] is None:
                     log(f"preflight: cannot read the GKE versions {GKE_CHANNEL} offers in {location}; not checking"
                         " them", "WARNING")  # fmt: skip
-            found = cluster_problems(name, case, variant, offered.get(location), gke, location)
+            found = cluster_problems(name, config, variant, offered.get(location), gke, location)
             problems += [problem for problem in found if problem not in problems]
     return problems

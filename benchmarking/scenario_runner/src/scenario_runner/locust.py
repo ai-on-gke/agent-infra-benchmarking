@@ -30,6 +30,7 @@ from typing import Callable
 from . import RUNNER_DIR, images, jobs, reports, run_info, worker_pool, workloads
 from .control_plane import AGENT_SANDBOX, AGENT_SUBSTRATE, CONTROL_PLANE, control_plane
 from .cluster import Cluster
+from .cluster_configs import CommonCluster, from_infra
 from .log import ON_CLOUD_RUN, log
 from .process import stream
 
@@ -57,7 +58,9 @@ DEFAULT_MAX_FAILURE_RATIO = 0.01
 ACTOR_ATESPACE = "benchmark"
 # The case's mapping of its type, and what it may state.
 TYPE = "locust"
-KEYS = {"worker-count", "locust-workers", "actor-memory", "max-failure-ratio", "lifecycle-mode", "master", "worker"}
+KEYS = {
+    "infra", "worker-count", "locust-workers", "actor-memory", "max-failure-ratio", "lifecycle-mode", "master", "worker"
+}
 
 
 class LocustError(RuntimeError):
@@ -135,6 +138,7 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
         raise ValueError(
             f"case {name}'s `{TYPE}.actor-memory` {memory} is less than {workload} needs on {sandbox_class}, {need}Mi"
         )
+    cluster_config(name, case)
     # spawn-rate defaults to the user count, putting the whole load on at once.
     return {
         "sandbox-class": "gvisor",
@@ -150,6 +154,21 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
             "worker": worker,
         },
     }
+
+
+def cluster_config(name: str, case: dict) -> CommonCluster:
+    """The cluster the case runs on: its `locust.infra.cluster`, for its
+    sandbox class, with a pool for mock-llm if its workload calls it."""
+    options = case[TYPE]
+    worker = options.get("worker") or {}
+    template = worker.get("workload-template") or worker.get("workload-name")
+    return from_infra(
+        name,
+        f"{TYPE}.infra",
+        options.get("infra"),
+        sandbox_class=case.get("sandbox-class", "gvisor"),
+        mock_llm_pool=template in workloads.MOCK_LLM_TEMPLATES,
+    )
 
 
 def master_args(options: dict) -> list[str]:
@@ -402,7 +421,7 @@ roleRef:
 
     # run.json records the worker's flags as run.
     case = {**case, TYPE: options}
-    info = run_info.collect(cluster, case, template_name, template, image_refs, bucket)
+    info = run_info.collect(cluster, case, cluster_config(name, case), template_name, template, image_refs, bucket)
     info["warmup"] = warmup or None
     values = {
         "LOCUST_IMAGE": image_refs["locust-master"],

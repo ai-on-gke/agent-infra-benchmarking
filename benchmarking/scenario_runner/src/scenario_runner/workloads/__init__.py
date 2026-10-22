@@ -41,6 +41,9 @@ NAMESPACE = worker_pool.NAMESPACE
 ATESPACE = "benchmark-workloads"
 # The templates whose image is neither ko:// nor a literal, but one of ours.
 TEMPLATE_IMAGES = {"openclaw": "openclaw-workload"}
+# The templates whose actors call mock-llm rather than a real LLM, which needs
+# a node pool of its own (cluster_configs.MOCK_LLM_POOL).
+MOCK_LLM_TEMPLATES = {"openclaw"}
 # Pinned rather than defaulted, so a stale SandboxConfig fails loudly. The
 # templates take the class as its proto enum.
 SANDBOX_CONFIGS = {
@@ -250,8 +253,7 @@ def deploy(
         f" actor_memory={actor_memory} for {', '.join(sized) or 'none of them'},"
         f" otlp_endpoint={otlp}, bucket=gs://{cluster.bucket}/{ATESPACE}/, substrate={substrate.revision()})"
     )
-    # The openclaw actors call it rather than a real LLM.
-    if "openclaw" in names:
+    if MOCK_LLM_TEMPLATES & set(names):
         openclaw.deploy_mock_llm(cluster, image_repo, timeout)
 
     with kubectl_ate(cluster) as ate:

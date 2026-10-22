@@ -26,9 +26,6 @@ from .control_plane import CONTROL_PLANE, CONTROL_PLANES, control_plane
 from .reports import LABEL_RE, VARIANT
 
 SCENARIOS_FILE = SCENARIOS_DIR / "scenarios.yaml"
-# One Terraform config per directory, which a case's infra.cluster.name picks.
-CLUSTERS_DIR = SCENARIOS_DIR / "infra" / "clusters"
-CLUSTER_KEYS = {"name", "tfvars", "tfvars_inline", "variables"}
 BARE_METAL = "bare-metal"
 # What a case on bare metal is recorded under: its name with this added.
 BARE_METAL_SUFFIX = "-metal"
@@ -47,8 +44,9 @@ REPEAT_CLUSTERS = [SHARED, PER_REPEAT]
 # case's keys with the variant's on top.
 VARIANTS = "variants"
 # A case's own keys; the rest of what it states is in the mapping of its type,
-# named by the type, which only the type's runner reads.
-CASE_KEYS = {"infra", REPEATS, "sandbox-class", BARE_METAL, CONTROL_PLANE, VARIANTS}
+# named by the type, which only the type's runner reads, but for the cluster
+# the type asks for in its `infra`.
+CASE_KEYS = {REPEATS, "sandbox-class", BARE_METAL, CONTROL_PLANE, VARIANTS}
 
 
 def types() -> list[str]:
@@ -76,10 +74,12 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
         if unknown:
             raise ValueError(f"{scenarios_file}: case {name} has unknown {', '.join(sorted(unknown))}")
         case["type"] = given[0]
-        # noop's is empty, and so may be left null.
+        # noop's holds its `infra` at most, and so may be left null.
         options = case[given[0]] if case[given[0]] is not None or given[0] != "noop" else {}
-        if not isinstance(options, dict) or (given[0] == "noop" and options):
-            raise ValueError(f"{scenarios_file}: case {name}'s `{given[0]}` must be a mapping, an empty one for noop")
+        if not isinstance(options, dict) or (given[0] == "noop" and options.keys() - {"infra"}):
+            raise ValueError(
+                f"{scenarios_file}: case {name}'s `{given[0]}` must be a mapping, for noop of its `infra` at most"
+            )
         case[given[0]] = options
         if control_plane(case) not in CONTROL_PLANES:
             raise ValueError(
@@ -92,14 +92,15 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
             case[REPEATS] = check_repeats(case.get(REPEATS, {}))
         except ValueError as exc:
             raise ValueError(f"{scenarios_file}: case {name}'s `{REPEATS}` {exc}") from None
-        check_cluster(f"{scenarios_file}: case {name}", case)
-        if case["type"] != "noop":
-            try:
+        try:
+            if case["type"] == "noop":
+                benchmark.cluster_config(name, case)
+            else:
                 # As each repeat runs under its own name.
                 for record in warmup_names(name, case) + record_names(name, case):
                     benchmark.check(record, case)
-            except ValueError as exc:
-                raise ValueError(f"{scenarios_file}: {exc}") from None
+        except ValueError as exc:
+            raise ValueError(f"{scenarios_file}: {exc}") from None
     return cases
 
 
@@ -175,21 +176,11 @@ def load_bare_metal(scenarios_file: Path) -> dict:
     return {"default": settings.get("default", False), "placements": placements}
 
 
-def placement_variables(placement: dict) -> dict:
-    """The cluster config's variables that put its sandboxed pool there."""
-    return {"zone": placement["zone"], "sandboxed_machine_type": placement["machine-type"]}
-
-
-def placed(cluster: dict, placement: dict) -> dict:
-    """The infra.cluster spec with its sandboxed pool at placement."""
-    return {**cluster, "variables": {**cluster.get("variables", {}), **placement_variables(placement)}}
-
-
 def with_bare_metal(
     cases: dict[str, dict], all_names: set[str], default: bool, override: bool | None, placements: list[dict]
 ) -> dict[str, dict]:
     """The cases, each one that runs on bare metal renamed <name>-metal, as
-    its records and reports are, with its cluster at the first of placements.
+    its records and reports are; its cluster goes on placements when applied.
     A case's own `bare-metal` wins over default, and override, unless None,
     over both. Neither default nor override puts a noop on bare metal, as it
     runs nothing there. A variant on bare metal is one of <case>-metal, so
@@ -207,8 +198,7 @@ def with_bare_metal(
             raise ValueError(f"case {name} on bare metal would be recorded as {renamed}, which is another case")
         if not placements:
             raise ValueError(f"case {name} runs on bare metal, but `{BARE_METAL}.placements` has none in its region")
-        infra = {**case["infra"], "cluster": placed(case["infra"]["cluster"], placements[0])}
-        result[renamed] = {**case, BARE_METAL: True, "infra": infra}
+        result[renamed] = {**case, BARE_METAL: True}
         if VARIANT in case:
             group = case[VARIANT]["of"] + BARE_METAL_SUFFIX
             if group in all_names:
@@ -261,25 +251,3 @@ def warmup_names(name: str, case: dict) -> list[str]:
 
 def shares_cluster(case: dict) -> bool:
     return repeats_of(case)["cluster"] == SHARED
-
-
-def check_cluster(where: str, case: dict) -> None:
-    infra = case.get("infra")
-    cluster = infra.get("cluster") if isinstance(infra, dict) else None
-    if not isinstance(cluster, dict):
-        raise ValueError(f"{where} has no `infra.cluster` mapping")
-    unknown = cluster.keys() - CLUSTER_KEYS
-    if unknown:
-        raise ValueError(f"{where}: `infra.cluster` has unknown {', '.join(sorted(unknown))}")
-
-    clusters = sorted(p.name for p in CLUSTERS_DIR.iterdir() if p.is_dir())
-    if cluster.get("name") not in clusters:
-        raise ValueError(f"{where}: `infra.cluster.name` must be one of {', '.join(clusters)}")
-    tfvars = cluster.get("tfvars")
-    # An absolute path stays as it is; a relative one is in the cluster's config.
-    if tfvars is not None and not (isinstance(tfvars, str) and (CLUSTERS_DIR / cluster["name"] / tfvars).is_file()):
-        raise ValueError(f"{where}: `infra.cluster.tfvars` {tfvars!r} is not a file")
-    if not isinstance(cluster.get("tfvars_inline", ""), str):
-        raise ValueError(f"{where}: `infra.cluster.tfvars_inline` must be a string")
-    if not isinstance(cluster.get("variables", {}), dict):
-        raise ValueError(f"{where}: `infra.cluster.variables` must be a mapping")

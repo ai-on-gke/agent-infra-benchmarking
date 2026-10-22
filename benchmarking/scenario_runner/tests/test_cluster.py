@@ -15,22 +15,20 @@
 """Where a case's cluster goes, and how the runner reaches it."""
 
 import json
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from scenario_runner import cluster, deployment
+from scenario_runner import cluster, cluster_configs
 
-SPEC = {"name": "common", "tfvars": "default.tfvars"}
 NETWORK = "projects/p/global/networks/runs"
 SUBNETWORK = "projects/p/regions/us-central1/subnetworks/runs"
 
 
 def applied_variables(**env: str | None) -> dict:
-    with mock.patch.multiple(deployment, **{"NODE_SERVICE_ACCOUNT": None, **env}):
-        dep = deployment.cluster_deployment(SPEC, deployment.Deployment(Path(tempfile.mkdtemp())), {}, None, None)
-    return json.loads((dep.config / deployment.VARIABLES_FILE).read_text())
+    unset = {"NODE_SERVICE_ACCOUNT": None, "CLUSTER_NETWORK": None, "CLUSTER_SUBNETWORK": None}
+    with mock.patch.multiple(cluster_configs, **{**unset, **env}):
+        return cluster_configs.CommonCluster().variables(cluster_configs.execution({}))
 
 
 class Network(unittest.TestCase):
@@ -38,6 +36,11 @@ class Network(unittest.TestCase):
         variables = applied_variables(CLUSTER_NETWORK=NETWORK, CLUSTER_SUBNETWORK=SUBNETWORK)
         self.assertEqual(variables["existing_network"], {"network": NETWORK, "subnetwork": SUBNETWORK})
         self.assertIs(variables["enable_private_endpoint"], True)
+
+    def test_a_cloud_run_job_s_nodes_run_as_its_account(self):
+        variables = applied_variables(NODE_SERVICE_ACCOUNT="nodes@p.iam.gserviceaccount.com")
+        self.assertEqual(variables["node_service_account"], "nodes@p.iam.gserviceaccount.com")
+        self.assertNotIn("node_service_account", applied_variables())
 
     def test_elsewhere_a_cluster_gets_a_network_of_its_own(self):
         variables = applied_variables(CLUSTER_NETWORK=None, CLUSTER_SUBNETWORK=None)

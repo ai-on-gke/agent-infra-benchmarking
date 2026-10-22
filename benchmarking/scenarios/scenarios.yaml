@@ -37,10 +37,10 @@
 # case's variants' results are combined into one comparison, the first variant
 # the others are compared with, and `cost-sheet: true` adds cost_sheet.csv, the
 # sandbox cost sheet, to it.
-# `noop` is the scenario-runner's alone, and empty: it applies and destroys the
-# case's cluster, and runs nothing on it.
+# `noop` is the scenario-runner's alone, and holds its `infra` at most: it
+# applies and destroys the case's cluster, and runs nothing on it.
 # `sandbox-class`, gvisor by default, is also the class the case's cluster is
-# applied for (its `sandbox_class`), so it is stated here only.
+# applied for, so it is stated here only.
 #
 # `variants` makes a case of each of its entries, <case>-<variant>: the case's
 # keys with the entry's on top, a mapping merged into a mapping. An entry can
@@ -71,10 +71,19 @@
 # locust runs on either of the first two, sandbox-benchmark's substrate
 # provider on agent-substrate, and its others on any.
 #
-# `infra.cluster` is the cluster the case runs on. `name` picks the Terraform
-# config in infra/clusters/<name>/, and the rest is optional: `tfvars` a tfvars
-# file in that config (or an absolute path), `tfvars_inline` tfvars content, and
-# `variables` values passed as TF_VAR_<key>.
+# `infra.cluster`, in the type's mapping, is the cluster the case runs on: the
+# inputs of the infra/clusters/ config its type applies, which
+# scenario_runner/src/scenario_runner/cluster_configs.py turns into the
+# config's Terraform variables, all of them optional:
+#   sandboxed-nodes         the sandboxed pool's nodes, 1 by default, which it
+#                           is pinned at
+#   sandboxed-max-nodes     the most it autoscales up to, if it does
+#   sandboxed-machine-type  its machine type, c2-standard-16 by default
+#   zone                    the zone of every pool, the config's by default
+#   default-machine-type    common's default pool's, c2-standard-16 by default
+# locust and sandbox-benchmark apply infra/clusters/common, locust with a pool
+# for mock-llm if its workload calls it. A noop's `name` picks the config,
+# common or dummy, common by default.
 #
 # Varying the load or the pool means another case, so that every run is
 # reproducible from the name it is recorded under: benchmark-test-case is the
@@ -101,18 +110,13 @@ bare-metal:
 
 cases:
   glutton:
-    infra:
-      cluster:
-        name: common
-        tfvars: default.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 1
-          sandboxed_min_node_count = 1
-          sandboxed_max_node_count = 1
     repeats:
       count: 3
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 1
       worker-count: 10
       master:
         run-time: 5m
@@ -126,18 +130,13 @@ cases:
 
   # glutton on microvm: the same as glutton but the class, so the two compare.
   glutton-microvm:
-    infra:
-      cluster:
-        name: common
-        tfvars: default.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 1
-          sandboxed_min_node_count = 1
-          sandboxed_max_node_count = 1
     repeats:
       count: 3
     sandbox-class: microvm
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 1
       worker-count: 10
       master:
         run-time: 5m
@@ -152,18 +151,13 @@ cases:
   # glutton once rather than three times, with no warm-up, for a quicker check
   # of the path.
   glutton-single:
-    infra:
-      cluster:
-        name: common
-        tfvars: default.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 1
-          sandboxed_min_node_count = 1
-          sandboxed_max_node_count = 1
     repeats:
       warmups: 0
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 1
       worker-count: 10
       master:
         run-time: 5m
@@ -176,16 +170,11 @@ cases:
         resume-mode: explicit
 
   glutton-baseline:
-    infra:
-      cluster:
-        name: common
-        tfvars: default.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 1
-          sandboxed_min_node_count = 1
-          sandboxed_max_node_count = 1
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 1
       worker-count: 100
       master:
         run-time: 3m
@@ -198,16 +187,11 @@ cases:
         suspend-disabled: true
 
   glutton-utilization-10:
-    infra:
-      cluster:
-        name: common
-        tfvars: default.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 10
-          sandboxed_min_node_count = 10
-          sandboxed_max_node_count = 10
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 10
       worker-count: 100
       master:
         run-time: 3m
@@ -222,16 +206,11 @@ cases:
         max-wait: 6000ms
 
   glutton-utilization-25:
-    infra:
-      cluster:
-        name: common
-        tfvars: default.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 10
-          sandboxed_min_node_count = 10
-          sandboxed_max_node_count = 10
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 10
       worker-count: 100
       master:
         run-time: 3m
@@ -246,16 +225,11 @@ cases:
         max-wait: 6000ms
 
   glutton-utilization-50:
-    infra:
-      cluster:
-        name: common
-        tfvars: default.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 10
-          sandboxed_min_node_count = 10
-          sandboxed_max_node_count = 10
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 10
       worker-count: 100
       master:
         run-time: 3m
@@ -270,16 +244,11 @@ cases:
         max-wait: 6000ms
 
   openclaw:
-    infra:
-      cluster:
-        name: common
-        tfvars: openclaw.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 1
-          sandboxed_min_node_count = 1
-          sandboxed_max_node_count = 1
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 1
       worker-count: 10
       master:
         run-time: 2m
@@ -296,16 +265,11 @@ cases:
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
   openclaw-microvm:
-    infra:
-      cluster:
-        name: common
-        tfvars: openclaw.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 1
-          sandboxed_min_node_count = 1
-          sandboxed_max_node_count = 1
     sandbox-class: microvm
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 1
       worker-count: 10
       master:
         run-time: 2m
@@ -320,16 +284,11 @@ cases:
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
   openclaw-baseline:
-    infra:
-      cluster:
-        name: common
-        tfvars: openclaw.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 10
-          sandboxed_min_node_count = 10
-          sandboxed_max_node_count = 10
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 10
       worker-count: 100
       master:
         run-time: 5m
@@ -344,16 +303,11 @@ cases:
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
   openclaw-utilization-10:
-    infra:
-      cluster:
-        name: common
-        tfvars: openclaw.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 10
-          sandboxed_min_node_count = 10
-          sandboxed_max_node_count = 10
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 10
       worker-count: 100
       master:
         run-time: 5m
@@ -370,16 +324,11 @@ cases:
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
   openclaw-utilization-25:
-    infra:
-      cluster:
-        name: common
-        tfvars: openclaw.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 10
-          sandboxed_min_node_count = 10
-          sandboxed_max_node_count = 10
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 10
       worker-count: 100
       master:
         run-time: 12m
@@ -396,16 +345,11 @@ cases:
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
   openclaw-utilization-50:
-    infra:
-      cluster:
-        name: common
-        tfvars: openclaw.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 10
-          sandboxed_min_node_count = 10
-          sandboxed_max_node_count = 10
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 10
       worker-count: 100
       master:
         run-time: 20m
@@ -425,16 +369,11 @@ cases:
   # glutton woken by its instruction, through the router, rather than by a
   # ResumeActor first: TTFI is then the router's wake.
   glutton-implicit:
-    infra:
-      cluster:
-        name: common
-        tfvars: default.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 1
-          sandboxed_min_node_count = 1
-          sandboxed_max_node_count = 1
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 1
       worker-count: 10
       master:
         run-time: 5m
@@ -450,16 +389,11 @@ cases:
   # actor's memory and a 16Mi file before its suspend (WriteRAM and WriteDisk
   # rows).
   glutton-load:
-    infra:
-      cluster:
-        name: common
-        tfvars: default.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 1
-          sandboxed_min_node_count = 1
-          sandboxed_max_node_count = 1
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 1
       worker-count: 10
       actor-memory: 512Mi
       master:
@@ -476,16 +410,11 @@ cases:
 
   # A session of five instructions per wake, rather than one.
   glutton-session:
-    infra:
-      cluster:
-        name: common
-        tfvars: default.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 1
-          sandboxed_min_node_count = 1
-          sandboxed_max_node_count = 1
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 1
       worker-count: 10
       master:
         run-time: 5m
@@ -500,16 +429,11 @@ cases:
 
   # Four instructions at once to each actor at every step.
   glutton-concurrent:
-    infra:
-      cluster:
-        name: common
-        tfvars: default.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 1
-          sandboxed_min_node_count = 1
-          sandboxed_max_node_count = 1
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 1
       worker-count: 10
       master:
         run-time: 5m
@@ -526,18 +450,13 @@ cases:
   # load spread over four boomer pods. Its 26 c2-standard-16 nodes take 416 of
   # a region's default 500 C2 vCPUs, so it runs by hand rather than nightly.
   glutton-large:
-    infra:
-      cluster:
-        name: common
-        tfvars: default.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 25
-          sandboxed_min_node_count = 25
-          sandboxed_max_node_count = 25
     repeats:
       count: 3
     sandbox-class: gvisor
     locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 25
       worker-count: 100
       locust-workers: 4
       master:
@@ -551,22 +470,17 @@ cases:
         resume-mode: explicit
 
   # substrate's sandbox sized as the cloud providers' are, 2 vCPU and 2 GiB, on
-  # a general-purpose node rather than default.tfvars' compute-optimized c2.
+  # a general-purpose node rather than the default compute-optimized c2.
   sandbox-benchmark:
-    infra:
-      cluster:
-        name: common
-        tfvars: default.tfvars
-        tfvars_inline: |
-          sandboxed_machine_type   = "n2-standard-16"
-          sandboxed_node_count     = 1
-          sandboxed_min_node_count = 1
-          sandboxed_max_node_count = 1
     # A warm-up would run every provider, paid ones too; warmup-runs is the
     # cheaper way to warm them up.
     repeats:
       warmups: 0
     sandbox-benchmark:
+      infra:
+        cluster:
+          sandboxed-nodes: 1
+          sandboxed-machine-type: n2-standard-16
       tests:
       - test_suspend_resume
       runs: 3
@@ -595,19 +509,14 @@ cases:
   # The sandbox cost sheet, from the providers' suspend and resume overheads.
   # Cloud providers only, so neither substrate nor env is installed.
   sandbox-benchmark-cost:
-    infra:
-      cluster:
-        name: common
-        tfvars: default.tfvars
-        tfvars_inline: |
-          sandboxed_node_count     = 1
-          sandboxed_min_node_count = 1
-          sandboxed_max_node_count = 1
     control-plane: none
     # Cloud providers only, so a warm-up would only cost them a run.
     repeats:
       warmups: 0
     sandbox-benchmark:
+      infra:
+        cluster:
+          sandboxed-nodes: 1
       cost-sheet: true
       tests:
       - test_suspend_resume
@@ -628,11 +537,8 @@ cases:
       count: 3
       cluster: per-repeat
     control-plane: none
-    infra:
-      cluster:
-        name: dummy
-        tfvars_inline: |
-          sandboxed_node_count     = 10
-          sandboxed_min_node_count = 10
-          sandboxed_max_node_count = 10
-    noop: {}
+    noop:
+      infra:
+        cluster:
+          name: dummy
+          sandboxed-nodes: 10

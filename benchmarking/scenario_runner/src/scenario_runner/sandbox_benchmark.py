@@ -42,6 +42,7 @@ from . import RUNNER_DIR, ate_env, images, jobs, reports, run_info, workloads
 from . import sandbox_benchmark_combine as combine
 from . import sandbox_benchmark_cost_sheet as costs
 from .cluster import Cluster
+from .cluster_configs import CommonCluster, from_infra
 from .control_plane import AGENT_SUBSTRATE, CONTROL_PLANE, control_plane
 from .log import ON_CLOUD_RUN, log
 from .process import stream
@@ -63,7 +64,7 @@ DEFAULT_MAX_FAILURE_RATIO = 0.01
 DEFAULT_ENV_WORKER_COUNT = 5
 # The case's mapping of its type, and what it may state.
 TYPE = "sandbox-benchmark"
-KEYS = {"provider", "tests", "runs", "warmup-runs", "max-failure-ratio", "cost-sheet"}
+KEYS = {"infra", "provider", "tests", "runs", "warmup-runs", "max-failure-ratio", "cost-sheet"}
 PROVIDERS = ("substrate", "local", "e2b", "daytona", "modal", "anthropic", "openai")
 # What a provider's mapping may state besides its name, and their defaults.
 PROVIDER_OPTIONS = {
@@ -186,6 +187,7 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     # env runs on substrate, which the cluster has only with it.
     if provider["name"] == "substrate" and control_plane(case) != AGENT_SUBSTRATE:
         raise ValueError(f"case {name}'s substrate provider needs `{CONTROL_PLANE}: {AGENT_SUBSTRATE}`")
+    cluster_config(name, case)
     return {
         "sandbox-class": "gvisor",
         CONTROL_PLANE: AGENT_SUBSTRATE,
@@ -198,6 +200,12 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
             "provider": provider,
         },
     }
+
+
+def cluster_config(name: str, case: dict) -> CommonCluster:
+    """The cluster the case runs on, its comparator Job whatever its
+    provider: its `sandbox-benchmark.infra.cluster`, for its sandbox class."""
+    return from_infra(name, f"{TYPE}.infra", case[TYPE].get("infra"), sandbox_class=case.get("sandbox-class", "gvisor"))
 
 
 def report_folder(record: str, key: str, case: dict) -> str:
@@ -294,7 +302,7 @@ def run_provider(
             )
 
     info = run_info.collect(
-        cluster, case, ate_env.TEMPLATE if on_env else None, template, {COMPARATOR_IMAGE: comparator_image}, bucket,
+        cluster, case, cluster_config(name, case), ate_env.TEMPLATE if on_env else None, template, {COMPARATOR_IMAGE: comparator_image}, bucket,
         pool=(ate_env.NAMESPACE, ate_env.POOL),
     )  # fmt: skip
     if on_env:

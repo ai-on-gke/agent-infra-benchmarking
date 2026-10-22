@@ -24,7 +24,7 @@ import yaml
 
 from unittest import mock
 
-from scenario_runner import locust, sandbox_benchmark
+from scenario_runner import benchmark, locust, sandbox_benchmark
 from scenario_runner.cases import (
     SCENARIOS_FILE,
     grouped,
@@ -34,10 +34,10 @@ from scenario_runner.cases import (
     warmup_names,
     with_bare_metal,
 )
+from scenario_runner.cluster_configs import CommonCluster, DummyCluster
 from scenario_runner.reports import VARIANT
 
 GLUTTON = {
-    "infra": {"cluster": {"name": "common", "tfvars": "default.tfvars"}},
     "locust": {
         "master": {"run-time": "1m", "users": 10},
         "worker": {"workload-name": "glutton", "workload-template": "glutton"},
@@ -94,10 +94,14 @@ class ShippedCases(unittest.TestCase):
             self.assertEqual(mine.pop("sandbox-class"), "microvm")
             self.assertEqual(mine, pair, f"{name} differs from its gVisor case in more than the class")
 
-    def test_class_is_not_set_twice(self):
-        # The runner sets the cluster's sandbox_class from the case's sandbox-class.
-        for name, case in load_cases(SCENARIOS_FILE).items():
-            self.assertNotIn("sandbox_class", case["infra"]["cluster"].get("tfvars_inline", ""), name)
+    def test_each_case_asks_for_its_cluster(self):
+        cases = load_cases(SCENARIOS_FILE)
+        clusters = {name: benchmark.cluster_config(name, case) for name, case in cases.items()}
+        self.assertEqual(clusters["glutton"], CommonCluster(sandboxed_nodes=1))
+        self.assertEqual(clusters["glutton-microvm"], CommonCluster(sandbox_class="microvm"))
+        self.assertEqual(clusters["openclaw-baseline"], CommonCluster(sandboxed_nodes=10, mock_llm_pool=True))
+        self.assertEqual(clusters["sandbox-benchmark-e2b"].sandboxed_machine_type, "n2-standard-16")
+        self.assertEqual(clusters["dummy"], DummyCluster(sandboxed_nodes=10))
 
 
 class CaseChecks(unittest.TestCase):
@@ -155,7 +159,7 @@ class CaseChecks(unittest.TestCase):
 
     def test_load_fills_in_the_type_from_its_mapping(self):
         self.assertEqual(load({"c": GLUTTON})["c"]["type"], "locust")
-        noop = load({"n": {"infra": GLUTTON["infra"], "noop": None}})["n"]
+        noop = load({"n": {"noop": None}})["n"]
         self.assertEqual((noop["type"], noop["noop"]), ("noop", {}))
 
     def test_load_fills_in_how_a_case_is_sampled(self):
@@ -171,12 +175,17 @@ class CaseChecks(unittest.TestCase):
             {**GLUTTON, "repeats": {"cluster": "fresh"}},
             {**GLUTTON, "repeats": {"warmups": -1}},
             {**GLUTTON, "repeats": {"warmups": 1, "cluster": "per-repeat"}},
-            {**GLUTTON, "infra": {"cluster": {"name": "common", "unknown": 1}}},
-            {**GLUTTON, "infra": {"cluster": {"name": "nowhere"}}},
+            {**GLUTTON, "infra": {"cluster": {}}},
+            glutton({"infra": {"cluster": {"unknown": 1}}}),
+            glutton({"infra": {"cluster": {"name": "dummy"}}}),
+            glutton({"infra": {"cluster": {"sandboxed-nodes": 0}}}),
+            glutton({"infra": {"pool": {}}}),
             {**GLUTTON, "type": "locust"},
-            {"infra": GLUTTON["infra"]},
+            {"repeats": {}},
             {**GLUTTON, "noop": {}},
-            {"infra": GLUTTON["infra"], "noop": {"x": 1}},
+            {"noop": {"x": 1}},
+            {"noop": {"infra": {"cluster": {"name": "nowhere"}}}},
+            {"noop": {"infra": {"cluster": {"name": "dummy", "mock-llm-pool": True}}}},
             {**GLUTTON, "jmeter": {}},
             {**GLUTTON, "worker-count": 10},
             {**GLUTTON, "locust": None},
@@ -186,6 +195,23 @@ class CaseChecks(unittest.TestCase):
                 load({"c": case})
         with self.assertRaises(ValueError):
             load({"c": {**GLUTTON, "bare-metal": "yes"}})
+
+
+class Clusters(unittest.TestCase):
+    def test_locust_asks_for_its_class_and_mock_llm_s_pool(self):
+        case = load({"c": glutton({"infra": {"cluster": {"sandboxed-nodes": 3}}}, **{"sandbox-class": "microvm"})})["c"]
+        self.assertEqual(benchmark.cluster_config("c", case), CommonCluster(3, sandbox_class="microvm"))
+        openclaw = load({"c": glutton({"worker": {"workload-name": "openclaw", "workload-template": "openclaw"}})})
+        self.assertTrue(benchmark.cluster_config("c", openclaw["c"]).mock_llm_pool)
+
+    def test_a_noop_picks_its_config_common_by_default(self):
+        self.assertEqual(benchmark.cluster_config("n", load({"n": {"noop": None}})["n"]), CommonCluster())
+        dummy = load({"n": {"noop": {"infra": {"cluster": {"name": "dummy", "sandboxed-nodes": 2}}}}})["n"]
+        self.assertEqual(benchmark.cluster_config("n", dummy), DummyCluster(2))
+
+    def test_what_is_wrong_is_named_where_it_is(self):
+        with self.assertRaisesRegex(ValueError, r"case c\S*'s `locust.infra.cluster`: has unknown size; it takes"):
+            load({"c": glutton({"infra": {"cluster": {"size": 1}}})})
 
 
 class Variants(unittest.TestCase):
@@ -205,6 +231,7 @@ class Variants(unittest.TestCase):
     def test_a_variant_changes_any_key_and_merges_mappings(self):
         variants = {"micro": {"sandbox-class": "microvm", "locust": {"master": {"users": 3}}}, "plain": None}
         cases = load({"c": {**GLUTTON, "variants": variants}, "d": GLUTTON})
+        self.assertEqual(benchmark.cluster_config("c-micro", cases["c-micro"]).sandbox_class, "microvm")
         self.assertEqual(list(cases), ["c-micro", "c-plain", "d"])
         self.assertEqual(cases["c-micro"]["sandbox-class"], "microvm")
         self.assertEqual(cases["c-micro"]["locust"]["master"], {"run-time": "1m", "users": 3})
@@ -316,11 +343,9 @@ class BareMetal(unittest.TestCase):
             with self.subTest(settings=settings), self.assertRaises(ValueError):
                 load_metal(settings)
 
-    def test_a_case_on_bare_metal_is_renamed_and_placed_first(self):
+    def test_a_case_on_bare_metal_is_renamed(self):
         cases = with_bare_metal({"c": {**LOADED, "bare-metal": True}}, {"c"}, False, None, PLACEMENTS)
-        self.assertEqual(list(cases), ["c-metal"])
-        variables = cases["c-metal"]["infra"]["cluster"]["variables"]
-        self.assertEqual(variables, {"zone": "us-central1-a", "sandboxed_machine_type": "c3-standard-192-metal"})
+        self.assertEqual(cases, {"c-metal": {**LOADED, "bare-metal": True}})
         repeats = {"repeats": {"count": 2, "warmups": 1}}
         self.assertEqual(record_names("c-metal", repeats), ["c-metal-1", "c-metal-2"])
         self.assertEqual(warmup_names("c-metal", repeats), ["c-metal-warmup-1"])
@@ -337,7 +362,7 @@ class BareMetal(unittest.TestCase):
                 self.assertEqual(list(with_bare_metal(cases, set(cases), default, override, PLACEMENTS)), expected)
 
     def test_a_noop_goes_on_bare_metal_only_if_it_says_so(self):
-        noop = {"type": "noop", "infra": {"cluster": {"name": "common"}}}
+        noop = {"type": "noop", "noop": {}}
         self.assertEqual(list(with_bare_metal({"n": noop}, {"n"}, True, True, PLACEMENTS)), ["n"])
         explicit = {"n": {**noop, "bare-metal": True}}
         self.assertEqual(list(with_bare_metal(explicit, {"n"}, False, None, PLACEMENTS)), ["n-metal"])

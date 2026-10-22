@@ -28,8 +28,9 @@ import subprocess
 from collections import defaultdict
 from typing import Callable
 
-from . import SCENARIOS_DIR, agent_sandbox, images, substrate, worker_pool
+from . import agent_sandbox, images, substrate, worker_pool
 from .cluster import Cluster
+from .cluster_configs import ClusterConfig, to_record
 from .control_plane import AGENT_SANDBOX, AGENT_SUBSTRATE, control_plane
 from .log import log
 from .process import output
@@ -223,28 +224,19 @@ def tools() -> dict:
     }
 
 
-def infra(case: dict) -> dict:
-    """The case's cluster spec, with the text of the tfvars file it names, so
-    a published run says what hardware it asked for."""
-    spec = dict(case["infra"]["cluster"])
-    tfvars = spec.get("tfvars")
-    if tfvars:
-        # As cases.CLUSTERS_DIR, which importing would be circular.
-        path = SCENARIOS_DIR / "infra" / "clusters" / spec["name"] / tfvars
-        spec["tfvars_content"] = path.read_text() if path.is_file() else None
-    return spec
-
-
 def collect(
     cluster: Cluster,
     case: dict,
+    infra: ClusterConfig,
     template_name: str | None,
     template: dict | None,
     image_refs: dict,
     bucket: str,
     pool: tuple[str, str] = (worker_pool.NAMESPACE, worker_pool.NAME),
 ) -> dict:
-    """pool is the namespace and name of the WorkerPool the run's actors run on."""
+    """infra is the cluster the case's type asked for, so a published run
+    says what hardware it asked for; pool is the namespace and name of the
+    WorkerPool the run's actors run on."""
     pool_namespace, pool_name = pool
     errors: dict[str, str] = {}
     sandbox_configs = {}
@@ -267,7 +259,7 @@ def collect(
     dirty = _read("repo state", lambda: bool(output(["git", "status", "--porcelain"], cwd=images.ROOT).strip()), errors)
     info = {
         "case": case,
-        "infra": _read("infra", lambda: infra(case), errors),
+        "infra": to_record(infra),
         "cluster": _read("cluster config", lambda: cluster_config(cluster), errors),
         "nodes": _read("nodes", lambda: nodes(cluster), errors),
         "worker_pool": {"spec": pool.get("spec"), "status": pool.get("status")} if pool else None,

@@ -279,7 +279,7 @@ def _case(info: dict) -> str:
     master = locust.get("master") if isinstance(locust.get("master"), dict) else {}
     worker = locust.get("worker") if isinstance(locust.get("worker"), dict) else {}
     keys = [[k, v] for k, v in case.items() if k not in ("locust", "infra")]
-    keys += [[k, v] for k, v in locust.items() if k not in ("master", "worker")]
+    keys += [[k, v] for k, v in locust.items() if k not in ("master", "worker", "infra")]
     users = master.get("users")
     workers = locust.get("worker-count")
     if isinstance(users, (int, float)) and isinstance(workers, (int, float)) and workers > 0:

@@ -37,11 +37,9 @@ gcloud compute regions describe us-central1 --project <project-id> \
   grep -E "^(METRIC|C2_CPUS|N2_CPUS) "
 ```
 
-Short of C2, set `default_machine_type` and `sandboxed_machine_type` in the
-case's `tfvars_inline` to another family, such as `n2-standard-16` (which the
-`microvm` class also runs on). To deploy into a VPC you already have rather
-than a new one per run, set `existing_network`; see its description in
-[`variables.tf`](scenarios/infra/clusters/common/variables.tf).
+Short of C2, set `default-machine-type` and `sandboxed-machine-type` in the
+case's `infra.cluster` to another family, such as `n2-standard-16` (which the
+`microvm` class also runs on).
 
 ## Setup
 

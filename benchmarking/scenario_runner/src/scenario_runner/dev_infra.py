@@ -27,9 +27,9 @@ from functools import partial
 from pathlib import Path
 
 from . import LOCAL_DATA_DIR, agent_sandbox, names, substrate, terraform
-from .cases import placed
 from .cluster import Cluster, gke_stockout, utc_now
-from .deployment import RUNNER_INFRA_DIR, VARIABLES_FILE, Deployment, cluster_deployment
+from .cluster_configs import execution, from_record
+from .deployment import RUNNER_INFRA_DIR, VARIABLES_FILE, Deployment
 from .log import log
 
 DEV_INFRA_DIR = LOCAL_DATA_DIR / "dev-infra" / "terraform"
@@ -79,8 +79,10 @@ def create_deployment(record: dict, infra: str, json_output: bool = False) -> De
     version = None if record.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
     # Applied before the cluster is created.
     repository = runner_outputs(record["name"])["artifact_registry_repository"]
-    spec = placed(record["cluster"], record["placement"]) if record.get("placement") else record["cluster"]
-    return cluster_deployment(spec, uncreated, variables, version, repository, record.get("sandbox_class"))
+    config = from_record(record["cluster"])
+    if record.get("placement"):
+        config = config.placed(record["placement"])
+    return config.deployment(uncreated, execution(variables, repository, version))
 
 
 def runner_outputs(name: str) -> dict:
