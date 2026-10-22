@@ -14,7 +14,8 @@
 
 """Runs terraform in a config's directory and logs its output, as text or as
 -json, each of whose messages is one log entry. A failed command raises
-CalledProcessError, whose cmd[2] is the terraform command."""
+CalledProcessError, whose cmd[2] is the terraform command, or for a plan or
+apply a zone's stockout failed, Stockout."""
 
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import Callable
 
 from . import RUNNER_DIR
 from .log import log
@@ -31,8 +33,35 @@ from .process import environ, stream
 # from here rather than from a download each.
 PLUGIN_CACHE_DIR = Path(os.environ.get("TF_PLUGIN_CACHE_DIR") or RUNNER_DIR / ".terraform-plugin-cache")
 
+# What GCE's refusal of a zone that is out of a machine type says, as GKE and
+# the google provider pass it on.
+STOCKOUT_MARKERS = ("ZONE_RESOURCE_POOL_EXHAUSTED", "GCE_STOCKOUT", "does not have enough resources available")
+
 # terraform -json's @level, as a Cloud Logging severity.
 SEVERITIES = {"trace": "DEBUG", "debug": "DEBUG", "info": "INFO", "warn": "WARNING", "error": "ERROR"}
+
+
+class Stockout(subprocess.CalledProcessError):
+    """A terraform command that failed as a zone had none of a machine type
+    it asked for left."""
+
+
+def watch_stockout(cmd: list[str], log_line: Callable[[str], None], env: dict[str, str] | None) -> None:
+    """Streams cmd as stream does, raising Stockout rather than
+    CalledProcessError if its output told of a stockout."""
+    seen = False
+
+    def line(text: str) -> None:
+        nonlocal seen
+        seen = seen or any(marker in text for marker in STOCKOUT_MARKERS)
+        log_line(text)
+
+    try:
+        stream(cmd, line, env=env)
+    except subprocess.CalledProcessError as exc:
+        if seen:
+            raise Stockout(exc.returncode, exc.cmd) from None
+        raise
 
 
 def format_diagnostic(diag: dict) -> str:
@@ -123,13 +152,13 @@ def output(chdir: Path, env: dict[str, str] | None = None) -> dict:
 def run_text(chdir: Path, command: str, *args: str, env: dict[str, str] | None = None) -> None:
     """Runs a terraform command and logs each line of its output as one entry
     as it comes."""
-    stream(["terraform", f"-chdir={chdir}", command, "-no-color", *args], env=env)
+    watch_stockout(["terraform", f"-chdir={chdir}", command, "-no-color", *args], log, env)
 
 
 def run_json(chdir: Path, command: str, *args: str, env: dict[str, str] | None = None) -> None:
     """Runs a terraform command with -json and logs each of its messages, an
     error with all its detail, as one entry as it comes."""
-    stream(["terraform", f"-chdir={chdir}", command, "-json", *args], log_event, env=env)
+    watch_stockout(["terraform", f"-chdir={chdir}", command, "-json", *args], log_event, env)
 
 
 def deploy(

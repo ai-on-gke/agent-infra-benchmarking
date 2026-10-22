@@ -182,6 +182,16 @@ variable "node_pools" {
   default = {
     default = {}
   }
+
+  # GCE refuses either on a bare-metal (-metal) machine type, and only once
+  # the pool is being created.
+  validation {
+    condition = alltrue([
+      for pool in var.node_pools :
+      !endswith(pool.machine_type, "-metal") || (startswith(pool.disk_type, "hyperdisk-") && !pool.enable_nested_virtualization)
+    ])
+    error_message = "A node pool on a -metal machine type needs a hyperdisk-* disk_type and no enable_nested_virtualization: bare metal boots only from Hyperdisk and has /dev/kvm natively."
+  }
 }
 
 variable "node_service_account" {

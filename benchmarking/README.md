@@ -156,6 +156,7 @@ Useful flags (`--help` lists them all):
 | `--state-backend local\|gcs` | overrides `STATE_BACKEND`, see [Terraform state](#terraform-state) |
 | `--report-deployment DIR` | send the reports to the bucket of that applied reports deployment, such as `automation-infra/dev/reports`, to be queried in its BigQuery dataset |
 | `--image-repo REPO` | overrides `IMAGE_REPO`, the repository the images are pulled from |
+| `--bare-metal`, `--no-bare-metal` | run every case's workers on bare metal, or on VMs, whatever the cases say; see [Running on bare metal](#running-on-bare-metal) |
 | `--scenarios-file PATH` | another scenarios file, e.g. a local copy with a smaller load |
 | `--report-bucket BUCKET` | keep the reports in this bucket, under `--report-prefix` (`reports` by default), rather than in each cluster's own |
 | `--terraform-output json` | log Terraform as JSON |
@@ -408,6 +409,44 @@ cannot drive (`glutton-large`).
 The scheduled runs (`automation-infra/deployments/substrate-bench-auto`) run
 the cases its `main.tf` lists in `args`, so a new case runs there once it is
 added to that list.
+
+### Running on bare metal
+
+A case with `bare-metal: true` runs its `sandboxed` pool on a bare-metal
+machine rather than a VM, so gVisor runs without a hypervisor under it and
+microvm boots its guests on the host's own `/dev/kvm`, without nested
+virtualization. It is recorded as `<case>-metal`, so its results never mix
+with the case's on VMs; `run.json` names the machine type and zone each node
+had. A case that does not say takes `bare-metal.default` at the top of
+`scenarios.yaml`, false as shipped, and `--bare-metal` or `--no-bare-metal`
+overrides both for one run:
+
+```bash
+./benchmarking/tools/run --bare-metal --scenario glutton-microvm
+```
+
+GKE takes only C3's `-metal` machine types (`c3-standard-192-metal`,
+`c3-highcpu-192-metal`, `c3-highmem-192-metal`), which boot from Hyperdisk;
+any `-metal` `sandboxed_machine_type` gets a `hyperdisk-balanced` boot disk.
+Each is a whole host of 192 vCPUs, about ten times a `c2-standard-16` an hour,
+and zones run out of them often. So the pool goes on the first of
+`bare-metal.placements` in the run's `--region`, a zone and a machine type
+each, and the whole cluster with it. If that zone is out of the machine type,
+the run destroys what it applied there and moves on to the next placement,
+wrapping around; the last it tries is retried like any apply. GKE takes about
+35 minutes to give up on a pool it cannot get nodes for, so the cases after it
+start from the placement the last one got rather than the first. The preflight checks that each placement's
+zone offers its machine type and the GKE version, and that the pool fits in
+the region's C3 CPU quota. A 300-vCPU quota, for one, fits a single node:
+
+```bash
+gcloud compute regions describe us-central1 --project <project-id> \
+  --flatten=quotas --format="table(quotas.metric,quotas.usage,quotas.limit)" |
+  grep -E "^(METRIC|C3_CPUS) "
+```
+
+A dev infra keeps the placement it got, and runs only cases on the same kind
+of pool as its first.
 
 ### Comparing sandbox providers' costs
 

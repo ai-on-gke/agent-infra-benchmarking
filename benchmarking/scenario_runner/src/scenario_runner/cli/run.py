@@ -32,8 +32,9 @@ import re
 import signal
 import subprocess
 import sys
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Callable, Iterator, NoReturn
 
@@ -56,16 +57,20 @@ from .. import (
     terraform,
 )
 from ..cases import (
+    BARE_METAL,
     PROVIDER_AGENT_SANDBOX,
     PROVIDERS,
     SCENARIOS_FILE,
     SKIP_SUBSTRATE_INSTALL,
+    load_bare_metal,
     load_cases,
+    placed,
     record_names,
     shares_cluster,
     warmup_names,
+    with_bare_metal,
 )
-from ..cluster import Cluster
+from ..cluster import Cluster, gke_stockout, utc_now
 from ..deployment import RUNNER_INFRA_DIR, Deployment, DestroyFailed, GcsDeployment, cluster_deployment
 from ..log import ON_CLOUD_RUN, log
 from ..process import failure
@@ -119,6 +124,13 @@ def parse_args() -> argparse.Namespace:
         choices=["claim", "snapshot"],
         default="claim",
         help="agent-sandbox lifecycle mode: 'claim' (warm pool claim/release) or 'snapshot' (GKE Pod Snapshot hibernate/resume). Default: %(default)s",
+    )
+    p.add_argument(
+        "--bare-metal",
+        action=argparse.BooleanOptionalAction,
+        help="run every case's sandboxed pool on bare metal, or with --no-bare-metal on VMs, whatever the case or the"
+        " scenarios file's `bare-metal.default` says; noops only if they say so themselves. A case on bare metal is"
+        " recorded as <case>-metal",
     )
     p.add_argument(
         "--test",
@@ -294,6 +306,17 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
                 benchmark.check(name, case)
             except ValueError as exc:
                 fail(str(exc))
+    try:
+        bare_metal = load_bare_metal(args.scenarios_file)
+        # The cluster's zone is in --region.
+        args.placements = [p for p in bare_metal["placements"] if p["zone"].startswith(f"{args.region}-")]
+        selected = with_bare_metal(selected, set(cases), bare_metal["default"], args.bare_metal, args.placements)
+        for name, case in selected.items():
+            if case[BARE_METAL] and case["type"] != "noop":
+                for record in warmup_names(name, case) + record_names(name, case):
+                    benchmark.check(record, case)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        fail(str(exc))
     return selected
 
 
@@ -312,7 +335,7 @@ def applied_clusters(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
 def check_requirements(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     """Fails, naming every problem, before anything is applied."""
     log(f"run: checking what {', '.join(cases)} need before applying anything")
-    problems = preflight.check(cases, args.project_id, args.region, applied_clusters(args, cases))
+    problems = preflight.check(cases, args.project_id, args.region, applied_clusters(args, cases), args.placements)
     if problems:
         fail("cannot run, as:\n" + "\n".join(f"  - {problem}" for problem in problems))
     if not args.dev_infra and not args.image_repo and any(map(pulls_images, cases.values())):
@@ -451,6 +474,9 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
             "region": args.region,
             "cluster": cases[first]["infra"]["cluster"],
             "sandbox_class": sandbox_class(cases[first]),
+            "bare_metal": cases[first][BARE_METAL],
+            # The ones to try if the cluster's zone is out of its machine type.
+            "placements": args.placements if cases[first][BARE_METAL] else [],
             SKIP_SUBSTRATE_INSTALL: cases[first].get(SKIP_SUBSTRATE_INSTALL, False),
         }
     for name, case in cases.items():
@@ -466,7 +492,17 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
                 f"case {name} is {sandbox_class(case)}, but dev infra {args.dev_infra}'s sandboxed pool is"
                 f" {record['sandbox_class']}; use a dev infra of its own"
             )
-        if spec != record["cluster"]:
+        # Its records say which it ran on.
+        if case[BARE_METAL] != record.get("bare_metal", False):
+            fail(
+                f"case {name} is {'' if case[BARE_METAL] else 'not '}on bare metal, but dev infra {args.dev_infra}'s"
+                f" sandboxed pool is{'' if record.get('bare_metal') else ' not'}; use a dev infra of its own"
+            )
+        current = record["cluster"]
+        # A bare-metal one is where it was applied, not at the case's first placement.
+        if case[BARE_METAL] and record.get("placement"):
+            spec, current = placed(spec, record["placement"]), placed(current, record["placement"])
+        if spec != current:
             log(f"run: case {name}'s infra.cluster differs from dev infra {args.dev_infra}'s it runs on", "WARNING")
     json_output = args.terraform_output == "json"
     if args.dev_infra_update:
@@ -607,6 +643,27 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
     return run_cases(args, cases, run, shared_cluster=True)
 
 
+def on_placements(
+    record: str, placements: list, attempt: Callable[[dict | None, bool], None], start: int = 0
+) -> int:
+    """Calls attempt with each of placements in turn from start, wrapping
+    around, and whether it is the last, until one does not end in a stockout,
+    which only the cluster's apply raises: bare metal runs out by zone, so the
+    cluster, destroyed first, moves to the next. Returns the index of the one
+    that did not; the last one's stockout is raised."""
+    order = [*range(start, len(placements)), *range(start)]
+    for n, index in enumerate(order, 1):
+        placement = placements[index]
+        try:
+            attempt(placement, n == len(order))
+            return index
+        except terraform.Stockout:
+            if n == len(order):
+                raise
+            log(f"{record}: {placement['zone']} is out of {placement['machine-type']}; trying the next placement,"
+                f" {n + 1} of {len(order)}", "WARNING")  # fmt: skip
+
+
 def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[str]:
     """A case's warm-ups and repeats run on a cluster applied for it and
     destroyed after them, or with `repeats.cluster: per-repeat` each repeat on
@@ -619,20 +676,42 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
         for name, case in cases.items()
         for key in ([name] if shares_cluster(case) else record_names(name, case))
     }
+    # The placement the last bare-metal cluster was applied at, which the next
+    # starts from, as a zone stays out of a machine type for hours.
+    current_placement = 0
 
     @contextmanager
     def applied_cluster(case: dict, key: str) -> Iterator[Cluster]:
         """The case's cluster, applied as scenarios/<key> with what the case
-        runs on installed, and destroyed after."""
+        runs on installed, and destroyed after. A bare-metal case's goes on its
+        placements in turn, from the last one applied, until one has the
+        machine type."""
+        nonlocal current_placement
         version = None if case.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
         uncreated = deployment(args, "scenarios", key)
-        spec = case["infra"]["cluster"]
         # A cluster that pulls none of the images is not granted the repository.
         pulls = pulls_images(case)
         repository = images.repository_name(args.image_repo) if pulls else None
-        case_infra = cluster_deployment(spec, uncreated, case_vars[key], version, repository, sandbox_class(case))
-        with case_infra.applied():
-            cluster = Cluster(case_infra.outputs(), case_infra.data / "kubeconfig")
+        applied = None
+
+        def attempt(placement: dict | None, last: bool) -> None:
+            nonlocal applied
+            spec = placed(case["infra"]["cluster"], placement) if placement else case["infra"]["cluster"]
+            case_infra = cluster_deployment(spec, uncreated, case_vars[key], version, repository, sandbox_class(case))
+            stockout = None
+            if placement:
+                log(f"{key}: sandboxed pool on {placement['machine-type']} in {placement['zone']}")
+                cluster_name = case_vars[key]["default_resource_name"]
+                stockout = partial(gke_stockout, args.project_id, placement["zone"], cluster_name, utc_now())
+            stack.enter_context(case_infra.applied(retry_stockout=last, stockout=stockout))
+            applied = case_infra
+
+        with ExitStack() as stack:
+            if case[BARE_METAL]:
+                current_placement = on_placements(key, args.placements, attempt, current_placement)
+            else:
+                attempt(None, True)
+            cluster = Cluster(applied.outputs(), applied.data / "kubeconfig")
             try:
                 if case.get("provider") == PROVIDER_AGENT_SANDBOX:
                     agent_sandbox.install(cluster)

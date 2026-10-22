@@ -165,14 +165,20 @@ def failure(exc: subprocess.CalledProcessError) -> str:
     return f"{' '.join(exc.cmd)} failed"
 
 
-def retry(what: str, func: Callable[[], T], attempts: int = ATTEMPTS, delay: float = RETRY_DELAY) -> T:
+def retry(
+    what: str,
+    func: Callable[[], T],
+    attempts: int = ATTEMPTS,
+    delay: float = RETRY_DELAY,
+    give_up: tuple[type[subprocess.CalledProcessError], ...] = (),
+) -> T:
     """Calls func until a call doesn't raise CalledProcessError, at most
-    attempts times, and raises the last one's."""
+    attempts times, and raises the last one's, or at once one of give_up."""
     for attempt in range(1, attempts + 1):
         try:
             return func()
         except subprocess.CalledProcessError as exc:
-            if attempt == attempts:
+            if attempt == attempts or isinstance(exc, give_up):
                 raise
             log(f"{what}: {failure(exc)}, attempt {attempt} of {attempts}; retrying in {delay:g}s", "WARNING")
             time.sleep(delay)

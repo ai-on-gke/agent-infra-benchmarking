@@ -34,11 +34,12 @@ import json
 import os
 import re
 import shutil
+import subprocess
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from typing import Iterator, Self
+from typing import Callable, Iterator, Self
 
 from google.cloud import storage
 
@@ -162,24 +163,34 @@ class Deployment:
         # create may have replaced the backend tf-data/ was initialized with.
         retry(str(self.root), lambda: terraform.run(self.config, "init", "-input=false", "-reconfigure", env=self.env()))
 
-    def deploy(self, *args: str) -> None:
+    def deploy(
+        self, *args: str, retry_stockout: bool = True, stockout: Callable[[], bool] | None = None
+    ) -> None:
         """Plans and applies, with -destroy a destroy, which flags it destroyed
         once it succeeds. A failed plan or apply is planned again from the
-        state it left."""
+        state it left, unless it was a stockout and not retry_stockout. A
+        failure terraform's output does not tell as a stockout is one if
+        stockout says so."""
         destroying = "-destroy" in args
         if not destroying:
             # Unflagged before, as even an apply that fails may create part of it.
             self.destroyed_flag.unlink(missing_ok=True)
-        retry(
-            str(self.root),
-            lambda: terraform.deploy(
-                self.config,
-                *args,
-                json_output=self.json_output,
-                env=self.env(),
-                plan_file=str(self.data / "run.tfplan"),
-            ),
-        )
+
+        def deploy() -> None:
+            try:
+                terraform.deploy(
+                    self.config,
+                    *args,
+                    json_output=self.json_output,
+                    env=self.env(),
+                    plan_file=str(self.data / "run.tfplan"),
+                )
+            except subprocess.CalledProcessError as exc:
+                if not isinstance(exc, terraform.Stockout) and stockout is not None and stockout():
+                    raise terraform.Stockout(exc.returncode, exc.cmd) from None
+                raise
+
+        retry(str(self.root), deploy, give_up=() if retry_stockout else (terraform.Stockout,))
         if destroying:
             self.destroyed_flag.touch()
 
@@ -195,23 +206,23 @@ class Deployment:
         """Its outputs, by name, read off the local backend's state."""
         return {key: out["value"] for key, out in self.state().get("outputs", {}).items()}
 
-    def apply(self) -> None:
+    def apply(self, retry_stockout: bool = True, stockout: Callable[[], bool] | None = None) -> None:
         self.init()
-        self.deploy()
+        self.deploy(retry_stockout=retry_stockout, stockout=stockout)
 
     def destroy(self) -> None:
         self.init()
         self.deploy("-destroy")
 
     @contextmanager
-    def applied(self) -> Iterator[None]:
+    def applied(self, retry_stockout: bool = True, stockout: Callable[[], bool] | None = None) -> Iterator[None]:
         """Applies the config for the with block, and destroys it after, also
         after a failed apply, which may have created part of it. The destroy
         is shielded from a single Ctrl-C. One that fails raises DestroyFailed,
         having logged what failed before it, if anything did."""
         self.init()
         try:
-            self.deploy()
+            self.deploy(retry_stockout=retry_stockout, stockout=stockout)
             yield
         except BaseException as exc:
             self.destroy_after(exc)
@@ -296,14 +307,16 @@ class GcsDeployment(Deployment):
             local[name].unlink()
         log(f"Downloaded {self.url} to {self.root}")
 
-    def deploy(self, *args: str) -> None:
+    def deploy(
+        self, *args: str, retry_stockout: bool = True, stockout: Callable[[], bool] | None = None
+    ) -> None:
         destroying = "-destroy" in args
         if not destroying:
             # The DESTROYED flag leaves the bucket's copy too before anything
             # is created.
             self.destroyed_flag.unlink(missing_ok=True)
             self.upload()
-        super().deploy(*args)
+        super().deploy(*args, retry_stockout=retry_stockout, stockout=stockout)
         if destroying:
             self.upload()
 

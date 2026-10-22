@@ -23,7 +23,14 @@ from pathlib import Path
 import yaml
 
 from scenario_runner import locust
-from scenario_runner.cases import SCENARIOS_FILE, load_cases, record_names, warmup_names
+from scenario_runner.cases import (
+    SCENARIOS_FILE,
+    load_bare_metal,
+    load_cases,
+    record_names,
+    warmup_names,
+    with_bare_metal,
+)
 
 GLUTTON = {
     "type": "locust",
@@ -40,6 +47,21 @@ def load(cases: dict) -> dict:
         return load_cases(Path(f.name))
     finally:
         Path(f.name).unlink()
+
+
+def load_metal(settings) -> dict:
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.safe_dump({"bare-metal": settings, "cases": {"c": GLUTTON}}, f)
+    try:
+        return load_bare_metal(Path(f.name))
+    finally:
+        Path(f.name).unlink()
+
+
+PLACEMENTS = [
+    {"zone": "us-central1-a", "machine-type": "c3-standard-192-metal"},
+    {"zone": "us-central1-c", "machine-type": "c3-highcpu-192-metal"},
+]
 
 
 class ShippedCases(unittest.TestCase):
@@ -131,3 +153,60 @@ class CaseChecks(unittest.TestCase):
         ):
             with self.subTest(case=case), self.assertRaises(ValueError):
                 load({"c": case})
+        with self.assertRaises(ValueError):
+            load({"c": {**GLUTTON, "bare-metal": "yes"}})
+
+
+class BareMetal(unittest.TestCase):
+    def test_shipped_settings_load(self):
+        settings = load_bare_metal(SCENARIOS_FILE)
+        self.assertIsInstance(settings["default"], bool)
+        self.assertTrue(settings["placements"])
+        self.assertTrue(all(p["machine-type"].endswith("-metal") for p in settings["placements"]))
+
+    def test_settings_default_to_none(self):
+        self.assertEqual(load_metal({}), {"default": False, "placements": []})
+
+    def test_bad_settings_are_refused(self):
+        for settings in (
+            {"default": "yes"},
+            {"placements": [{"zone": "us-central1-a"}]},
+            {"placements": [{"zone": "us-central1-a", "machine-type": "c2-standard-16"}]},
+            {"unknown": 1},
+        ):
+            with self.subTest(settings=settings), self.assertRaises(ValueError):
+                load_metal(settings)
+
+    def test_a_case_on_bare_metal_is_renamed_and_placed_first(self):
+        cases = with_bare_metal({"c": {**GLUTTON, "bare-metal": True}}, {"c"}, False, None, PLACEMENTS)
+        self.assertEqual(list(cases), ["c-metal"])
+        variables = cases["c-metal"]["infra"]["cluster"]["variables"]
+        self.assertEqual(variables, {"zone": "us-central1-a", "sandboxed_machine_type": "c3-standard-192-metal"})
+        repeats = {"repeats": {"count": 2, "warmups": 1}}
+        self.assertEqual(record_names("c-metal", repeats), ["c-metal-1", "c-metal-2"])
+        self.assertEqual(warmup_names("c-metal", repeats), ["c-metal-warmup-1"])
+
+    def test_the_case_wins_over_the_default_and_the_override_over_both(self):
+        cases = {"on": {**GLUTTON, "bare-metal": True}, "off": {**GLUTTON, "bare-metal": False}, "unsaid": GLUTTON}
+        for default, override, expected in (
+            (True, None, ["on-metal", "off", "unsaid-metal"]),
+            (False, None, ["on-metal", "off", "unsaid"]),
+            (False, True, ["on-metal", "off-metal", "unsaid-metal"]),
+            (True, False, ["on", "off", "unsaid"]),
+        ):
+            with self.subTest(default=default, override=override):
+                self.assertEqual(list(with_bare_metal(cases, set(cases), default, override, PLACEMENTS)), expected)
+
+    def test_a_noop_goes_on_bare_metal_only_if_it_says_so(self):
+        noop = {"type": "noop", "infra": {"cluster": {"name": "common"}}}
+        self.assertEqual(list(with_bare_metal({"n": noop}, {"n"}, True, True, PLACEMENTS)), ["n"])
+        explicit = {"n": {**noop, "bare-metal": True}}
+        self.assertEqual(list(with_bare_metal(explicit, {"n"}, False, None, PLACEMENTS)), ["n-metal"])
+
+    def test_a_case_on_bare_metal_is_not_recorded_as_another(self):
+        with self.assertRaisesRegex(ValueError, "which is another case"):
+            with_bare_metal({"c": GLUTTON}, {"c", "c-metal"}, True, None, PLACEMENTS)
+
+    def test_bare_metal_needs_a_placement(self):
+        with self.assertRaisesRegex(ValueError, "has none in its region"):
+            with_bare_metal({"c": GLUTTON}, {"c"}, True, None, [])

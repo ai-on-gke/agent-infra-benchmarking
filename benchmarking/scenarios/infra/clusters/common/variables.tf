@@ -80,9 +80,9 @@ variable "services_cidr" {
 # pools where they are until end of support; GKE still patches the control
 # plane.
 variable "kubernetes_version" {
-  description = "GKE version of the control plane (GKE's min_master_version), which the node pools are created at: a minor such as 1.35.8-gke.1439001, for which GKE picks a build the REGULAR channel offers, or an exact build."
+  description = "GKE version of the control plane (GKE's min_master_version), which the node pools are created at: a minor such as 1.35, for which GKE picks a build the REGULAR channel offers, or an exact build."
   type        = string
-  default     = "1.35.8-gke.1439001"
+  default     = "1.35"
 }
 
 variable "zone" {
@@ -134,11 +134,12 @@ variable "default_machine_type" {
   default     = "c2-standard-16"
 }
 
-# microvm guests boot on /dev/kvm, which only nested virtualization exposes,
-# and GCE offers it only on Intel machine families: not E2, AMD (n2d, c2d, ...)
-# or Arm (t2a, c4a, ...).
+# microvm guests boot on /dev/kvm, which a VM exposes only with nested
+# virtualization, and GCE offers it only on Intel machine families: not E2, AMD
+# (n2d, c2d, ...) or Arm (t2a, c4a, ...). A -metal type has it natively; GKE
+# takes only C3's.
 variable "sandboxed_machine_type" {
-  description = "Machine type of the sandboxed node pool, which runs the workers."
+  description = "Machine type of the sandboxed node pool, which runs the workers. A -metal type, such as c3-standard-192-metal, runs them on bare metal."
   type        = string
 
   validation {
