@@ -1,10 +1,11 @@
 name: Publish
 
 # Builds the Cloud Run job's image, automation-infra/image/Dockerfile, from each
-# pushed commit and pushes it as runner:<commit> to the Artifact Registry
-# repository of each deployment in the matrix, with the images the job's runs
-# pull, then tags it runner:<branch>, which the deployment's job runs: the
-# branch with each character a tag can't hold as a hyphen. The repository is
+# commit pushed to main, or the branch dispatched by hand, and pushes it as
+# runner:<commit> to the Artifact Registry repository of each deployment in the
+# matrix, with the images the job's runs pull, then tags it runner:<branch>,
+# which the deployment's job runs: the branch with each character a tag can't
+# hold as a hyphen. The repository is
 # the one the deployment's main.tf names by its project_id, region and
 # default_resource_name. The workflow authenticates through Workload Identity
 # Federation, with the repository variables
@@ -12,9 +13,10 @@ name: Publish
 # that the deployment's apply sets.
 
 on:
+  # The branch the deployments' jobs run.
   push:
-    branches: ['**']
-  # For the runs' images of a branch no deployment tracks.
+    branches: [main]
+  # For the runs' images of any other branch.
   workflow_dispatch:
 
 permissions:
@@ -87,10 +89,9 @@ jobs:
           provenance: false
 
   # The images the deployment's runs pull, built with
-  # benchmarking/tools/build-images for the commits of the branch its job runs,
-  # source_branch in its main.tf, and of any branch dispatched by hand. Each is
-  # built only if the repository lacks it: substrate's and env's once per
-  # submodule version, the benchmark's own once per commit.
+  # benchmarking/tools/build-images. Each is built only if the repository lacks
+  # it: substrate's and env's once per submodule version, the benchmark's own
+  # once per commit.
   benchmark-images:
     runs-on: ubuntu-latest
     permissions:
@@ -118,8 +119,6 @@ jobs:
         id: deployment
         env:
           DEPLOYMENT: ${{ matrix.deployment }}
-          EVENT: ${{ github.event_name }}
-          BRANCH: ${{ github.ref_name }}
         run: |
           source automation-infra/tools/lib.sh
           DEPLOYMENT_DIR="automation-infra/deployments/$DEPLOYMENT"
@@ -128,37 +127,24 @@ jobs:
             echo "$DEPLOYMENT's main.tf does not set project_id, region and default_resource_name." >&2
             exit 1
           }
-          # The module's default.
-          tracked="$(module_arg source_branch)" tracked="${tracked:-main}"
-          if [[ "$EVENT" == workflow_dispatch || "$BRANCH" == "$tracked" ]]; then
-            echo "build=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "$DEPLOYMENT runs $tracked, not $BRANCH; building no images."
-            echo "build=false" >> "$GITHUB_OUTPUT"
-          fi
           echo "repo=$region-docker.pkg.dev/$project/$name" >> "$GITHUB_OUTPUT"
           suffix="$(tr 'a-z-' 'A-Z_' <<<"$DEPLOYMENT")"
           echo "provider_variable=GCP_WORKLOAD_IDENTITY_PROVIDER_$suffix" >> "$GITHUB_OUTPUT"
           echo "account_variable=GCP_SERVICE_ACCOUNT_$suffix" >> "$GITHUB_OUTPUT"
       # substrate's ko build and the Docker builds outgrow what the runner has free.
-      - if: steps.deployment.outputs.build == 'true'
-        name: Free disk space
+      - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
       # The credentials file auth writes into the workspace would make the tree
       # dirty, and so the images' tag another commit's than the runner image's.
-      - if: steps.deployment.outputs.build == 'true'
-        run: echo 'gha-creds-*.json' >> .git/info/exclude
-      - if: steps.deployment.outputs.build == 'true'
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      - run: echo 'gha-creds-*.json' >> .git/info/exclude
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars[steps.deployment.outputs.provider_variable] }}
           service_account: ${{ vars[steps.deployment.outputs.account_variable] }}
-      - if: steps.deployment.outputs.build == 'true'
-        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
-      - if: steps.deployment.outputs.build == 'true'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: dependency-repos/substrate/go.mod
           cache-dependency-path: |
@@ -166,12 +152,9 @@ jobs:
             dependency-repos/env/go.sum
       # The Actions cache for the Docker builds, which takes a docker-container
       # builder and the runtime variables only actions see otherwise.
-      - if: steps.deployment.outputs.build == 'true'
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - if: steps.deployment.outputs.build == 'true'
-        uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
-      - if: steps.deployment.outputs.build == 'true'
-        name: Build
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+      - name: Build
         env:
           REPO: ${{ steps.deployment.outputs.repo }}
         run: |
