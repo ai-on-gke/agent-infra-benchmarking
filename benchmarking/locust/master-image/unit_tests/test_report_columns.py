@@ -71,3 +71,21 @@ class ReportColumns(unittest.TestCase):
         self.assertEqual(len(custom_history.COLUMNS), len(HISTORY) + 1)
         # cluster_vitals writes the same columns, with Pool after them.
         self.assertIs(cluster_vitals.write_history, custom_history.write_history)
+
+    def test_density_in_custom_history(self):
+        import csv
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "custom.csv"
+            users = {1000: "250"}
+            values = {
+                ("gauge", "ActiveActors"): {1000: 50.0},
+                ("gauge", "Density"): {1000: 2.5},
+                ("gauge", "ActiveDensity"): {1000: 0.5},
+            }
+            custom_history.write_history(path, users, values)
+            rows = list(csv.DictReader(path.open()))
+            self.assertEqual(len(rows), 3)
+            by_name = {r["Name"]: r["Value"] for r in rows}
+            self.assertEqual(by_name["ActiveActors"], "50")
+            self.assertEqual(by_name["Density"], "2.5")
+            self.assertEqual(by_name["ActiveDensity"], "0.5")

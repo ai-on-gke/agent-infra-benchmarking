@@ -93,7 +93,7 @@ def pool_metric(
 
 def actors(custom: list[dict[str, str]]) -> dict[str, tuple[list[datetime], list[float]]]:
     """Each ACTORS gauge over time, by Name; a gauge the file lacks is left out."""
-    names = {name for name, _, _ in ACTORS}
+    names = {name for name, _, _ in ACTORS} | {"Density", "ActiveDensity"}
     series: dict[str, tuple[list[datetime], list[float]]] = {}
     for r in custom:
         value = data.number(r["Value"])
@@ -292,11 +292,31 @@ def actors_panel(fig, ax, user_series, actor_series) -> None:
             )
     ax.set_ylabel("actors", color=INK_MUTED)
     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    has_density = bool("Density" in actor_series and user_series and len(user_series) > 1 and user_series[1])
     if actor_series:
-        legend = ax.legend(frameon=False, loc="upper left", bbox_to_anchor=(1, 1))
+        loc_args = {"loc": "upper left"} if has_density else {"loc": "upper left", "bbox_to_anchor": (1, 1)}
+        legend = ax.legend(frameon=False, **loc_args)
         toggle_on_click(fig, ax, legend, lines, bottom=0)
     else:
         ax.set_ylim(bottom=0)
+
+    if has_density:
+        density_vals = actor_series["Density"][1]
+        max_u = max(user_series[1])
+        max_d = max(density_vals) if density_vals else 0
+        if max_d > 0 and max_u > 0:
+            workers = max_u / max_d
+            sec = ax.secondary_yaxis(
+                "right", functions=(lambda x, w=workers: x / w, lambda y, w=workers: y * w)
+            )
+            sec.set_ylabel("density (actors / worker)", color=INK_MUTED)
+            sec.tick_params(colors=INK_MUTED)
+            sec.yaxis.set_major_locator(MaxNLocator(integer=True))
+            sec.spines["right"].set_color(GRIDLINE)
+            sec.spines["right"].set_linewidth(0.8)
+            for side in ("top", "bottom", "left"):
+                if side in sec.spines:
+                    sec.spines[side].set_visible(False)
 
 
 def toggle_on_click(fig, ax, legend, lines, bottom: float | None = None) -> None:
