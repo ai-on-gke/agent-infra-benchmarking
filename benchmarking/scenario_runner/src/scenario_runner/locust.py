@@ -14,8 +14,8 @@
 
 """Runs a case of type locust as the locust master and boomer worker Jobs of
 locust/manifests/, on a worker pool and workload deployed for it, and waits
-for both. Every key of the case's `master` and `worker` becomes `--key=value`
-on that process, or `--key` for true."""
+for both. Every key of the case's `locust.master` and `locust.worker` becomes
+`--key=value` on that process, or `--key` for true."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from string import Template
 from typing import Callable
 
 from . import RUNNER_DIR, images, jobs, reports, run_info, worker_pool, workloads
+from .control_plane import AGENT_SANDBOX, AGENT_SUBSTRATE, CONTROL_PLANE, control_plane
 from .cluster import Cluster
 from .log import ON_CLOUD_RUN, log
 from .process import stream
@@ -54,6 +55,9 @@ DEFAULT_MAX_FAILURE_RATIO = 0.01
 # The worker's --atespace default, which its actors are created in unless the
 # case's `worker` sets `atespace`.
 ACTOR_ATESPACE = "benchmark"
+# The case's mapping of its type, and what it may state.
+TYPE = "locust"
+KEYS = {"worker-count", "locust-workers", "actor-memory", "max-failure-ratio", "lifecycle-mode", "master", "worker"}
 
 
 class LocustError(RuntimeError):
@@ -88,73 +92,86 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     """The case with its defaults filled in."""
     if not reports.LABEL_RE.fullmatch(name):
         raise ValueError(f"case name {name!r} is not a valid label value")
-    master, worker = case.get("master"), case.get("worker")
+    options = case.get(TYPE)
+    if not isinstance(options, dict):
+        raise ValueError(f"case {name} has no `{TYPE}` mapping")
+    unknown = options.keys() - KEYS
+    if unknown:
+        raise ValueError(f"case {name}'s `{TYPE}` has unknown {', '.join(sorted(unknown))}")
+    if control_plane(case) not in (AGENT_SUBSTRATE, AGENT_SANDBOX):
+        raise ValueError(f"case {name}'s `{CONTROL_PLANE}` must be {AGENT_SUBSTRATE} or {AGENT_SANDBOX}, which run it")
+    master, worker = options.get("master"), options.get("worker")
     if worker is None:
         worker = {}
     if not isinstance(master, dict) or not isinstance(worker, dict):
-        raise ValueError(f"case {name}'s `master` and `worker` must be mappings of flags")
+        raise ValueError(f"case {name}'s `{TYPE}.master` and `{TYPE}.worker` must be mappings of flags")
     if "run-time" not in master or "users" not in master:
-        raise ValueError(f"case {name}'s `master` must state `run-time` and `users`")
-    count = case.get("worker-count", 1)
+        raise ValueError(f"case {name}'s `{TYPE}.master` must state `run-time` and `users`")
+    count = options.get("worker-count", 1)
     if not isinstance(count, int) or isinstance(count, bool) or count < 0:
-        raise ValueError(f"case {name}'s `worker-count` must be a whole number, got {count!r}")
-    ratio = case.get("max-failure-ratio", DEFAULT_MAX_FAILURE_RATIO)
+        raise ValueError(f"case {name}'s `{TYPE}.worker-count` must be a whole number, got {count!r}")
+    ratio = options.get("max-failure-ratio", DEFAULT_MAX_FAILURE_RATIO)
     if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 <= ratio <= 1:
-        raise ValueError(f"case {name}'s `max-failure-ratio` must be a number from 0 to 1, got {ratio!r}")
-    pods = case.get("locust-workers", 1)
+        raise ValueError(f"case {name}'s `{TYPE}.max-failure-ratio` must be a number from 0 to 1, got {ratio!r}")
+    pods = options.get("locust-workers", 1)
     if not isinstance(pods, int) or isinstance(pods, bool) or pods < 1:
-        raise ValueError(f"case {name}'s `locust-workers` must be a whole number from 1, got {pods!r}")
+        raise ValueError(f"case {name}'s `{TYPE}.locust-workers` must be a whole number from 1, got {pods!r}")
     sandbox_class = case.get("sandbox-class", "gvisor")
     if sandbox_class not in workloads.SANDBOX_CONFIGS:
         raise ValueError(f"case {name}'s `sandbox-class` must be one of {', '.join(workloads.SANDBOX_CONFIGS)}")
     template = worker.get("workload-template") or worker.get("workload-name")
     if deploy_workloads:
         if not template:
-            raise ValueError(f"case {name}'s `worker` names no `workload-template` or `workload-name` to deploy")
+            raise ValueError(f"case {name}'s `{TYPE}.worker` names no `workload-template` or `workload-name` to deploy")
         workloads.check_templates([template])
     workload = worker.get("workload-name") or template
-    memory = case.get("actor-memory", workloads.default_actor_memory(workload))
+    memory = options.get("actor-memory", workloads.default_actor_memory(workload))
     if not isinstance(memory, str) or workloads.memory_mib(memory) is None:
         raise ValueError(
-            f"case {name}'s `actor-memory` must be a Kubernetes memory quantity such as 512Mi, got {memory!r}"
+            f"case {name}'s `{TYPE}.actor-memory` must be a Kubernetes memory quantity such as 512Mi, got {memory!r}"
         )
     need = workloads.min_actor_memory_mib(workload, sandbox_class)
     if need and workloads.memory_mib(memory) < need:
         raise ValueError(
-            f"case {name}'s `actor-memory` {memory} is less than {workload} needs on {sandbox_class}, {need}Mi"
+            f"case {name}'s `{TYPE}.actor-memory` {memory} is less than {workload} needs on {sandbox_class}, {need}Mi"
         )
     # spawn-rate defaults to the user count, putting the whole load on at once.
     return {
-        "worker-count": 1,
         "sandbox-class": "gvisor",
-        "max-failure-ratio": DEFAULT_MAX_FAILURE_RATIO,
-        "locust-workers": 1,
+        CONTROL_PLANE: AGENT_SUBSTRATE,
         **case,
-        "actor-memory": memory,
-        "master": {**master, "spawn-rate": master.get("spawn-rate", master["users"])},
-        "worker": worker,
+        TYPE: {
+            "worker-count": 1,
+            "max-failure-ratio": DEFAULT_MAX_FAILURE_RATIO,
+            "locust-workers": 1,
+            **options,
+            "actor-memory": memory,
+            "master": {**master, "spawn-rate": master.get("spawn-rate", master["users"])},
+            "worker": worker,
+        },
     }
 
 
-def master_args(case: dict) -> list[str]:
+def master_args(options: dict) -> list[str]:
+    """The master's arguments, of the case's checked `locust`."""
     return [
         "-f",
         f"/app/tests/{USER_CLASS}.py",
         "--headless",
         "--master",
         "--expect-workers",
-        str(case["locust-workers"]),
+        str(options["locust-workers"]),
         "--expect-workers-max-wait",
         str(POD_START_TIMEOUT_SECS),
         # run_master.py judges the run by its max-failure-ratio instead.
         "--exit-code-on-error",
         "0",
-        *flags(case["master"]),
+        *flags(options["master"]),
     ]
 
 
-def worker_args(case: dict) -> list[str]:
-    return [f"--master-host={MASTER_HOST}", f"--user-class={USER_CLASS}", *flags(case["worker"])]
+def worker_args(options: dict) -> list[str]:
+    return [f"--master-host={MASTER_HOST}", f"--user-class={USER_CLASS}", *flags(options["worker"])]
 
 
 def apply(cluster: Cluster, manifest: str) -> None:
@@ -290,22 +307,23 @@ def run(
     delete = ["delete", "job", MASTER_JOB, WORKER_JOB, "--ignore-not-found", "--cascade=foreground", "--wait"]
     stream(cluster.kubectl(*delete, namespace=NAMESPACE))
 
-    provider = case.get("provider", "agent-substrate")
-    template_name = case["worker"].get("workload-template") or case["worker"].get("workload-name")
-    workload = case["worker"].get("workload-name") or template_name
+    provider = control_plane(case)
+    options = case[TYPE]
+    template_name = options["worker"].get("workload-template") or options["worker"].get("workload-name")
+    workload = options["worker"].get("workload-name") or template_name
     template = None
-    if provider == "agent-sandbox":
+    if provider == AGENT_SANDBOX:
         from . import agent_sandbox
         if deploy_workloads:
             agent_sandbox.deploy_workload_and_pool(
-                cluster, workload, case["worker-count"], image_repo, case["sandbox-class"]
+                cluster, workload, options["worker-count"], image_repo, case["sandbox-class"]
             )
         else:
-            agent_sandbox.recreate_warm_pool(cluster, workload, case["worker-count"])
-        case = {
-            **case,
+            agent_sandbox.recreate_warm_pool(cluster, workload, options["worker-count"])
+        options = {
+            **options,
             "worker": {
-                **case["worker"],
+                **options["worker"],
                 "provider": "agent-sandbox",
                 "router-url": "http://sandbox-router-svc.agent-sandbox-system.svc.cluster.local:8080",
                 "warm-pool-name": f"{workload}-warm-pool",
@@ -327,19 +345,19 @@ roleRef:
   name: agent-sandbox-controller-extensions
   apiGroup: rbac.authorization.k8s.io"""
     else:
-        worker_pool.deploy(cluster, case["worker-count"], case["sandbox-class"])
+        worker_pool.deploy(cluster, options["worker-count"], case["sandbox-class"])
         # The golden snapshot is taken on the pool just deployed.
         if deploy_workloads:
-            workloads.deploy(cluster, [template_name], case["sandbox-class"], image_repo, case["actor-memory"])
+            workloads.deploy(cluster, [template_name], case["sandbox-class"], image_repo, options["actor-memory"])
         if template_name:
             template = workloads.deployed_template(cluster, template_name)
-            workloads.check_deployed(template, template_name, case["sandbox-class"], workload, case["actor-memory"])
+            workloads.check_deployed(template, template_name, case["sandbox-class"], workload, options["actor-memory"])
             # A case may state its own allow-lists; otherwise the actors may call
             # what their template is configured to, and nothing else.
             cleartext, tls = workloads.egress_hosts(template)
             allow = {"actor-egress-allow": cleartext, "actor-egress-allow-tls": tls}
-            worker = {**{key: ",".join(hosts) for key, hosts in allow.items() if hosts}, **case["worker"]}
-            case = {**case, "worker": worker}
+            worker = {**{key: ",".join(hosts) for key, hosts in allow.items() if hosts}, **options["worker"]}
+            options = {**options, "worker": worker}
             log(
                 f"locust: actors may connect to {worker.get('actor-egress-allow') or 'nothing'} over cleartext HTTP"
                 f" and to {worker.get('actor-egress-allow-tls') or 'nothing'} over TLS"
@@ -382,6 +400,8 @@ roleRef:
   name: atelet-endpointslices
   apiGroup: rbac.authorization.k8s.io"""
 
+    # run.json records the worker's flags as run.
+    case = {**case, TYPE: options}
     info = run_info.collect(cluster, case, template_name, template, image_refs, bucket)
     info["warmup"] = warmup or None
     values = {
@@ -394,16 +414,16 @@ roleRef:
         "BENCHMARK_PROVIDER": provider,
         "BENCHMARK_REPEAT": str(repeat),
         "BENCHMARK_ONLY_SUMMARY": "false",
-        "MAX_FAILURE_RATIO": str(case["max-failure-ratio"]),
+        "MAX_FAILURE_RATIO": str(options["max-failure-ratio"]),
         # What the master writes into run.json; base64, as it is JSON in YAML.
         "BENCHMARK_RUN_INFO": base64.b64encode(json.dumps(info).encode()).decode(),
         # Where the master uploads its CSVs once it exits.
         "BENCHMARK_REPORT_BUCKET": bucket,
         "BENCHMARK_REPORT_PREFIX": report_prefix,
-        "LOCUST_WORKERS": str(case["locust-workers"]),
+        "LOCUST_WORKERS": str(options["locust-workers"]),
         # JSON is a YAML flow sequence.
-        "LOCUST_MASTER_ARGS": json.dumps(master_args(case)),
-        "BOOMER_WORKER_ARGS": json.dumps(worker_args(case)),
+        "LOCUST_MASTER_ARGS": json.dumps(master_args(options)),
+        "BOOMER_WORKER_ARGS": json.dumps(worker_args(options)),
         "BOOMER_VOLUME_MOUNTS": boomer_volume_mounts,
         "BOOMER_VOLUMES": boomer_volumes,
         "BOOMER_RBAC": boomer_rbac,
@@ -434,12 +454,12 @@ roleRef:
         raise
     finally:
         if not still_running:
-            if provider == "agent-sandbox":
+            if provider == AGENT_SANDBOX:
                 from . import agent_sandbox
                 rec = agent_sandbox.cleanup(cluster, "benchmark-workloads")
                 log(f"locust: agent-sandbox cleanup: {rec['claims_deleted']} claims, {rec['sandboxes_deleted']} sandboxes deleted")
             else:
-                atespace = case["worker"].get("atespace") or ACTOR_ATESPACE
+                atespace = options["worker"].get("atespace") or ACTOR_ATESPACE
                 reports.record_cleanup(cluster, atespace, bucket, report_prefix, run_id, name)
         reports.upload_logs(cluster, NAMESPACE, (MASTER_JOB, WORKER_JOB), bucket, report_prefix, run_id, name)
         # A failed run's reports are kept too. On Cloud Run they'd go with the

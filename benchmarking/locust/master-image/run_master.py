@@ -62,7 +62,7 @@ def write_reports(csv_prefix: Path, started: float) -> None:
     try:
         passed = json.loads(base64.b64decode(os.environ.get("BENCHMARK_RUN_INFO", "")))
         worker_count = (
-            (passed.get("case") or {}).get("worker-count")
+            ((passed.get("case") or {}).get("locust") or {}).get("worker-count")
             or ((passed.get("worker_pool") or {}).get("spec") or {}).get("replicas")
             or ((passed.get("worker_pool") or {}).get("status") or {}).get("readyReplicas")
         )

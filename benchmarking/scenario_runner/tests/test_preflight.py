@@ -20,7 +20,7 @@ from unittest import mock
 
 from scenario_runner import preflight
 
-CASE = {"infra": {"cluster": {"name": "common"}}, "worker": {"workload-name": "glutton"}}
+CASE = {"infra": {"cluster": {"name": "common"}}, "locust": {"worker": {"workload-name": "glutton"}}}
 SETTINGS = {
     "sandbox_class": "gvisor",
     "sandboxed_machine_type": "c2-standard-16",
@@ -47,7 +47,7 @@ class Rules(unittest.TestCase):
         self.assertRegex(problems[0], "needs nested virtualization")
 
     def test_openclaw_without_a_mock_llm_pool(self):
-        case = {**CASE, "worker": {"workload-name": "openclaw"}}
+        case = {**CASE, "locust": {"worker": {"workload-name": "openclaw"}}}
         self.assertRegex(preflight.cluster_problems("c", case, SETTINGS, None, True, "z")[0], "mock-llm")
         pools = [{"name": "mock-llm", "labels": {"benchmarking-mock-llm": "true"}}]
         settings = {**SETTINGS, "additional_node_pools": pools}

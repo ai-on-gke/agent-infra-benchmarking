@@ -14,12 +14,12 @@
 
 """Runs a case of type sandbox-benchmark: ai-sandbox-benchmark's tests on its
 provider, as a run of the comparator Job of
-sandbox-benchmark/manifests/comparator-job.yaml. The case's `comparator` names
-the provider, the tests by function name, how many times each runs and how
-many warmup runs go before. The substrate provider runs them through
+sandbox-benchmark/manifests/comparator-job.yaml. The case's `sandbox-benchmark`
+names the provider, the tests by function name, how many times each runs and
+how many warmup runs go before. The substrate provider runs them through
 agent-substrate/env deployed for them by ate_env, whose pool and environments
-`env-worker-count`, `actor-memory` and `actor-cpu` size; local runs them in the
-comparator's own pod; e2b, daytona, modal, anthropic and openai in their
+its `env-worker-count`, `actor-memory` and `actor-cpu` size; local runs them in
+the comparator's own pod; e2b, daytona, modal, anthropic and openai in their
 clouds, with the PROVIDER_KEYS of the scenario-runner's environment. A case's
 variants, each typically another provider, report side by side, and summarize
 combines their results into those of one comparator run of them all."""
@@ -42,6 +42,7 @@ from . import RUNNER_DIR, ate_env, images, jobs, reports, run_info, workloads
 from . import sandbox_benchmark_combine as combine
 from . import sandbox_benchmark_cost_sheet as costs
 from .cluster import Cluster
+from .control_plane import AGENT_SUBSTRATE, CONTROL_PLANE, control_plane
 from .log import ON_CLOUD_RUN, log
 from .process import stream
 
@@ -60,13 +61,18 @@ STOP_TIMEOUT_SECS = 150
 DEFAULT_MAX_FAILURE_RATIO = 0.01
 # ate-env manifest's own default.
 DEFAULT_ENV_WORKER_COUNT = 5
-CASE_KEYS = {
-    "type", "infra", "repeats", "skip-substrate-install", "sandbox-class", "env-worker-count", "actor-memory",
-    "actor-cpu", "max-failure-ratio", "comparator", "cost-sheet", "provider", "lifecycle-mode",
-    "bare-metal", reports.VARIANT,
-}  # fmt: skip
-COMPARATOR_KEYS = {"provider", "tests", "runs", "warmup-runs"}
+# The case's mapping of its type, and what it may state.
+TYPE = "sandbox-benchmark"
+KEYS = {"provider", "tests", "runs", "warmup-runs", "max-failure-ratio", "cost-sheet"}
 PROVIDERS = ("substrate", "local", "e2b", "daytona", "modal", "anthropic", "openai")
+# What a provider's mapping may state besides its name, and their defaults.
+PROVIDER_OPTIONS = {
+    "substrate": {
+        "env-worker-count": DEFAULT_ENV_WORKER_COUNT,
+        "actor-memory": ate_env.DEFAULT_ACTOR_MEMORY,
+        "actor-cpu": ate_env.DEFAULT_ACTOR_CPU,
+    },
+}
 # The API keys a provider needs, read from the scenario-runner's environment
 # and handed to the comparator in the Secret PROVIDER_SECRET, which the
 # manifest's env reads; have to match it.
@@ -113,60 +119,84 @@ def whole(value: object, least: int) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= least
 
 
+def provider_name(case: dict) -> str:
+    """The case's provider, checked or not."""
+    provider = (case.get(TYPE) or {}).get("provider")
+    return provider.get("name", "substrate") if isinstance(provider, dict) else "substrate"
+
+
+def check_provider(name: str, provider: object) -> dict:
+    """The case's `provider` with its options' defaults filled in."""
+    where = f"case {name}'s `{TYPE}.provider`"
+    if not isinstance(provider, dict):
+        raise ValueError(f"{where} must be a mapping of its `name` and options, such as {{name: e2b}}")
+    if provider.get("name") not in PROVIDERS:
+        raise ValueError(f"{where}.name must be one of {', '.join(PROVIDERS)}")
+    options = PROVIDER_OPTIONS.get(provider["name"], {})
+    unknown = provider.keys() - {"name"} - options.keys()
+    if unknown:
+        takes = f"takes only {', '.join(options)}" if options else "takes no options"
+        raise ValueError(f"{where} has unknown {', '.join(sorted(unknown))}; {provider['name']} {takes}")
+    provider = {**options, **provider}
+    if provider["name"] != "substrate":
+        return provider
+    count = provider["env-worker-count"]
+    if not whole(count, 1):
+        raise ValueError(f"{where}.env-worker-count must be a whole number from 1, got {count!r}")
+    memory = provider["actor-memory"]
+    if not isinstance(memory, str) or workloads.memory_mib(memory) is None:
+        raise ValueError(f"{where}.actor-memory must be a Kubernetes quantity such as 1Gi, got {memory!r}")
+    cpu = provider["actor-cpu"]
+    if not isinstance(cpu, str) or not re.fullmatch(r"[1-9][0-9]*m?|[0-9]*\.[0-9]+", cpu):
+        raise ValueError(f"{where}.actor-cpu must be a quoted cpu quantity such as \"2\" or \"1500m\", got {cpu!r}")
+    return provider
+
+
 def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     """The case with its defaults filled in."""
     if not reports.LABEL_RE.fullmatch(name):
         raise ValueError(f"case name {name!r} is not a valid label value")
-    unknown = case.keys() - CASE_KEYS
-    if unknown:
-        raise ValueError(f"case {name} has unknown {', '.join(sorted(unknown))}")
     if case.get("sandbox-class", "gvisor") not in workloads.SANDBOX_CONFIGS:
         raise ValueError(f"case {name}'s `sandbox-class` must be one of {', '.join(workloads.SANDBOX_CONFIGS)}")
-    count = case.get("env-worker-count", DEFAULT_ENV_WORKER_COUNT)
-    if not whole(count, 1):
-        raise ValueError(f"case {name}'s `env-worker-count` must be a whole number from 1, got {count!r}")
-    memory = case.get("actor-memory", ate_env.DEFAULT_ACTOR_MEMORY)
-    if not isinstance(memory, str) or workloads.memory_mib(memory) is None:
-        raise ValueError(f"case {name}'s `actor-memory` must be a Kubernetes quantity such as 1Gi, got {memory!r}")
-    cpu = case.get("actor-cpu", ate_env.DEFAULT_ACTOR_CPU)
-    if not isinstance(cpu, str) or not re.fullmatch(r"[1-9][0-9]*m?|[0-9]*\.[0-9]+", cpu):
-        raise ValueError(f"case {name}'s `actor-cpu` must be a quoted cpu quantity such as \"2\" or \"1500m\", got {cpu!r}")
-    ratio = case.get("max-failure-ratio", DEFAULT_MAX_FAILURE_RATIO)
-    if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 <= ratio <= 1:
-        raise ValueError(f"case {name}'s `max-failure-ratio` must be a number from 0 to 1, got {ratio!r}")
-    if not isinstance(case.get("cost-sheet", False), bool):
-        raise ValueError(f"case {name}'s `cost-sheet` must be true or false")
-
-    comparator = case.get("comparator")
-    if not isinstance(comparator, dict):
-        raise ValueError(f"case {name} has no `comparator` mapping")
-    unknown = comparator.keys() - COMPARATOR_KEYS
+    options = case.get(TYPE)
+    if not isinstance(options, dict):
+        raise ValueError(f"case {name} has no `{TYPE}` mapping")
+    unknown = options.keys() - KEYS
     if unknown:
-        raise ValueError(f"case {name}'s `comparator` has unknown {', '.join(sorted(unknown))}")
-    tests = comparator.get("tests")
+        raise ValueError(f"case {name}'s `{TYPE}` has unknown {', '.join(sorted(unknown))}")
+    ratio = options.get("max-failure-ratio", DEFAULT_MAX_FAILURE_RATIO)
+    if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 <= ratio <= 1:
+        raise ValueError(f"case {name}'s `{TYPE}.max-failure-ratio` must be a number from 0 to 1, got {ratio!r}")
+    if not isinstance(options.get("cost-sheet", False), bool):
+        raise ValueError(f"case {name}'s `{TYPE}.cost-sheet` must be true or false")
+    tests = options.get("tests")
     if not isinstance(tests, list) or not tests or not all(isinstance(t, str) for t in tests):
-        raise ValueError(f"case {name}'s `comparator.tests` must be a list of test function names")
+        raise ValueError(f"case {name}'s `{TYPE}.tests` must be a list of test function names")
     known = test_names()
     if known is not None and set(tests) - known:
         raise ValueError(
-            f"case {name}'s `comparator.tests` has unknown {', '.join(sorted(set(tests) - known))};"
+            f"case {name}'s `{TYPE}.tests` has unknown {', '.join(sorted(set(tests) - known))};"
             f" there are {', '.join(sorted(known))}"
         )
-    if not whole(comparator.get("runs"), 1):
-        raise ValueError(f"case {name}'s `comparator.runs` must be a whole number from 1")
-    if not whole(comparator.get("warmup-runs", 0), 0):
-        raise ValueError(f"case {name}'s `comparator.warmup-runs` must be a whole number")
-    if comparator.get("provider", "substrate") not in PROVIDERS:
-        raise ValueError(f"case {name}'s `comparator.provider` must be one of {', '.join(PROVIDERS)}")
+    if not whole(options.get("runs"), 1):
+        raise ValueError(f"case {name}'s `{TYPE}.runs` must be a whole number from 1")
+    if not whole(options.get("warmup-runs", 0), 0):
+        raise ValueError(f"case {name}'s `{TYPE}.warmup-runs` must be a whole number")
+    provider = check_provider(name, options.get("provider", {"name": "substrate"}))
+    # env runs on substrate, which the cluster has only with it.
+    if provider["name"] == "substrate" and control_plane(case) != AGENT_SUBSTRATE:
+        raise ValueError(f"case {name}'s substrate provider needs `{CONTROL_PLANE}: {AGENT_SUBSTRATE}`")
     return {
         "sandbox-class": "gvisor",
-        "env-worker-count": DEFAULT_ENV_WORKER_COUNT,
-        "actor-memory": ate_env.DEFAULT_ACTOR_MEMORY,
-        "actor-cpu": ate_env.DEFAULT_ACTOR_CPU,
-        "max-failure-ratio": DEFAULT_MAX_FAILURE_RATIO,
-        "cost-sheet": False,
+        CONTROL_PLANE: AGENT_SUBSTRATE,
         **case,
-        "comparator": {"provider": "substrate", "warmup-runs": 0, **comparator},
+        TYPE: {
+            "warmup-runs": 0,
+            "max-failure-ratio": DEFAULT_MAX_FAILURE_RATIO,
+            "cost-sheet": False,
+            **options,
+            "provider": provider,
+        },
     }
 
 
@@ -176,7 +206,7 @@ def report_folder(record: str, key: str, case: dict) -> str:
     beside the others of its group."""
     if reports.VARIANT in case:
         return f"{reports.group_record(record, key, case)}/{case[reports.VARIANT]['name']}"
-    return f"{record}/{case['comparator'].get('provider', 'substrate')}"
+    return f"{record}/{provider_name(case)}"
 
 
 def commit(path: object) -> str | None:
@@ -239,8 +269,8 @@ def run_provider(
     """Runs the case's tests on its provider, as one comparator Job, whose
     reports go under <run_id>/<folder>/."""
     sandbox_class = case["sandbox-class"]
-    comparator = case["comparator"]
-    provider = comparator["provider"]
+    options = case[TYPE]
+    provider = options["provider"]["name"]
     keys = PROVIDER_KEYS.get(provider, ())
     missing = [key for key in keys if not os.environ.get(key)]
     if missing:
@@ -249,8 +279,9 @@ def run_provider(
     template = None
     if on_env:
         if deploy_workloads:
+            env = options["provider"]
             ate_env.deploy(
-                cluster, image_repo, sandbox_class, case["env-worker-count"], case["actor-memory"], case["actor-cpu"]
+                cluster, image_repo, sandbox_class, env["env-worker-count"], env["actor-memory"], env["actor-cpu"]
             )
         template = workloads.deployed_template(cluster, ate_env.TEMPLATE, ate_env.ENV_ATESPACE)
         # Matters when the template was not deployed by this run (--no-deploy-workloads).
@@ -274,10 +305,10 @@ def run_provider(
         "COMPARATOR_IMAGE": comparator_image,
         "BENCHMARK_RUNNER_KSA": cluster.runner_ksa,
         "BENCHMARK_PROVIDER": provider,
-        "BENCHMARK_TESTS": ",".join(comparator["tests"]),
-        "BENCHMARK_RUNS": str(comparator["runs"]),
-        "BENCHMARK_WARMUP_RUNS": str(comparator["warmup-runs"]),
-        "MAX_FAILURE_RATIO": str(case["max-failure-ratio"]),
+        "BENCHMARK_TESTS": ",".join(options["tests"]),
+        "BENCHMARK_RUNS": str(options["runs"]),
+        "BENCHMARK_WARMUP_RUNS": str(options["warmup-runs"]),
+        "MAX_FAILURE_RATIO": str(options["max-failure-ratio"]),
         "BENCHMARK_RUN_ID": run_id,
         "BENCHMARK_RECORD_NAME": name,
         "BENCHMARK_CASE": test_case or name,
@@ -315,7 +346,7 @@ def run_provider(
     log(
         f"sandbox-benchmark: running {name} on {provider} (run {run_id}):\n"
         f"  comparator: {comparator_image}\n"
-        f"  tests: {values['BENCHMARK_TESTS']} ({comparator['runs']} runs, {comparator['warmup-runs']} warmup)\n"
+        f"  tests: {values['BENCHMARK_TESTS']} ({options['runs']} runs, {options['warmup-runs']} warmup)\n"
         f"  reports: gs://{bucket}/{report_prefix}/{run_id}/{folder}/"
     )
     stream(cluster.kubectl("apply", "-f", "-"), input=Template(MANIFEST.read_text()).substitute(values))
@@ -414,7 +445,7 @@ def summarize(runs: list[tuple[str, str, dict]], run_id: str, bucket: str | None
     folders = {}
     for record, key, case in runs:
         name, label = report_folder(record, key, case).rsplit("/", 1)
-        folder = folders.setdefault(name, {"labels": [], "cost-sheet": case.get("cost-sheet", False)})
+        folder = folders.setdefault(name, {"labels": [], "cost-sheet": (case.get(TYPE) or {}).get("cost-sheet", False)})
         folder["labels"].append(label)
     for name, folder in folders.items():
         combine_reports(bucket, report_prefix, run_id, name, folder["labels"], folder["cost-sheet"])
@@ -447,7 +478,7 @@ def run(
     case = check_case(name, case, deploy_workloads)
     sandbox_class = case["sandbox-class"]
     # env's workers would never schedule past the sandboxed pool's taint.
-    if case["comparator"]["provider"] == "substrate" and sandbox_class != cluster.sandbox_class:
+    if case[TYPE]["provider"]["name"] == "substrate" and sandbox_class != cluster.sandbox_class:
         raise SandboxBenchmarkError(
             f"case {name} is {sandbox_class}, but cluster {cluster.name}'s sandboxed pool is"
             f" {cluster.sandbox_class}; set the cluster's sandbox_class to match"

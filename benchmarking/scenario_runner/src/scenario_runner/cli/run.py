@@ -61,10 +61,7 @@ from .. import (
 )
 from ..cases import (
     BARE_METAL,
-    PROVIDER_AGENT_SANDBOX,
-    PROVIDERS,
     SCENARIOS_FILE,
-    SKIP_SUBSTRATE_INSTALL,
     grouped,
     load_bare_metal,
     load_cases,
@@ -75,6 +72,7 @@ from ..cases import (
     with_bare_metal,
 )
 from ..cluster import Cluster, gke_stockout, utc_now
+from ..control_plane import AGENT_SANDBOX, AGENT_SUBSTRATE, CONTROL_PLANE, NO_CONTROL_PLANE, control_plane
 from ..deployment import RUNNER_INFRA_DIR, Deployment, DestroyFailed, GcsDeployment, cluster_deployment
 from ..log import ON_CLOUD_RUN, log
 from ..process import failure
@@ -125,8 +123,8 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--provider",
-        choices=PROVIDERS,
-        help=f"infrastructure provider to test; one of {', '.join(PROVIDERS)}. Overrides case setting",
+        choices=[AGENT_SUBSTRATE, AGENT_SANDBOX],
+        help=f"the control plane every locust case runs on, in place of its `{CONTROL_PLANE}`",
     )
     p.add_argument(
         "--lifecycle-mode",
@@ -145,8 +143,8 @@ def parse_args() -> argparse.Namespace:
         "--test",
         action="append",
         metavar="NAME",
-        help="an ai-sandbox-benchmark test to run, test_ prefix optional, instead of the case's `comparator.tests`;"
-        " repeat it for more. Only for sandbox-benchmark cases",
+        help="an ai-sandbox-benchmark test to run, test_ prefix optional, instead of the case's"
+        " `sandbox-benchmark.tests`; repeat it for more. Only for sandbox-benchmark cases",
     )
     p.add_argument(
         "--project-id",
@@ -299,20 +297,18 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
     if args.provider:
         for name, case in selected.items():
             if case.get("type") == "locust":
-                case["provider"] = args.provider
-                if args.provider == PROVIDER_AGENT_SANDBOX:
-                    case[SKIP_SUBSTRATE_INSTALL] = True
+                case[CONTROL_PLANE] = args.provider
     if getattr(args, "lifecycle_mode", None):
         for name, case in selected.items():
             if case.get("type") == "locust":
-                case["lifecycle-mode"] = args.lifecycle_mode
+                case["locust"]["lifecycle-mode"] = args.lifecycle_mode
     if args.test:
         others = [name for name, case in selected.items() if case["type"] != "sandbox-benchmark"]
         if others:
             fail(f"--test is only for sandbox-benchmark cases, not {', '.join(others)}")
         tests = list(dict.fromkeys(t if t.startswith("test_") else f"test_{t}" for t in args.test))
         for name, case in selected.items():
-            selected[name] = case = {**case, "comparator": {**case["comparator"], "tests": tests}}
+            selected[name] = case = {**case, "sandbox-benchmark": {**case["sandbox-benchmark"], "tests": tests}}
             try:
                 benchmark.check(name, case)
             except ValueError as exc:
@@ -375,24 +371,21 @@ def check_requirements(args: argparse.Namespace, cases: dict[str, dict]) -> None
 
 def pulls_images(case: dict) -> bool:
     """Whether the case's cluster pulls from the image repository."""
-    return not case.get(SKIP_SUBSTRATE_INSTALL) or case["type"] != "noop"
+    return control_plane(case) != NO_CONTROL_PLANE or case["type"] != "noop"
 
 
 def needed_images(args: argparse.Namespace, cases: dict[str, dict]) -> dict[str, list[str]]:
     """The images the cases pull from args.image_repo, by builder.py's group."""
     needed = {}
-    if any(
-        not case.get(SKIP_SUBSTRATE_INSTALL) and case.get("provider") != PROVIDER_AGENT_SANDBOX
-        for case in cases.values()
-    ):
+    if any(control_plane(case) == AGENT_SUBSTRATE for case in cases.values()):
         needed["substrate"] = substrate.image_refs(args.image_repo)
-    if any(case.get("provider") == PROVIDER_AGENT_SANDBOX for case in cases.values()):
+    if any(control_plane(case) == AGENT_SANDBOX for case in cases.values()):
         needed["agent-sandbox"] = agent_sandbox.image_refs(args.image_repo)
     benchmarks = {name: case for name, case in cases.items() if case["type"] != "noop"}
     # env's images are only read when it is deployed, for the substrate provider.
     if not args.no_deploy_workloads and any(
-        sandbox_benchmark.check_case(name, case, deploy_workloads=True)["comparator"]["provider"] == "substrate"
-        for name, case in benchmarks.items()
+        sandbox_benchmark.provider_name(case) == "substrate"
+        for case in benchmarks.values()
         if case["type"] == "sandbox-benchmark"
     ):
         needed["env"] = ate_env.image_refs(args.image_repo)
@@ -488,7 +481,7 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
             "bare_metal": cases[first][BARE_METAL],
             # The ones to try if the cluster's zone is out of its machine type.
             "placements": args.placements if cases[first][BARE_METAL] else [],
-            SKIP_SUBSTRATE_INSTALL: cases[first].get(SKIP_SUBSTRATE_INSTALL, False),
+            dev_infra.SKIP_SUBSTRATE_INSTALL: control_plane(cases[first]) != AGENT_SUBSTRATE,
         }
     for name, case in cases.items():
         spec = case["infra"]["cluster"]
@@ -604,8 +597,7 @@ def run_repeats(name: str, case: dict, run: Callable[[str, int, int], None], sha
 def cluster_setup(case: dict) -> str:
     """What the case's cluster is applied with and has installed, which a
     case's variants alike in share."""
-    setup = [case.get("infra"), sandbox_class(case), case.get(BARE_METAL, False),
-             bool(case.get(SKIP_SUBSTRATE_INSTALL)), case.get("provider") == PROVIDER_AGENT_SANDBOX]  # fmt: skip
+    setup = [case.get("infra"), sandbox_class(case), case.get(BARE_METAL, False), control_plane(case)]
     return json.dumps(setup, sort_keys=True)
 
 
@@ -705,9 +697,9 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
 
     def run(name: str, case: dict, _: Cluster | None) -> None:
         nonlocal record
-        if case.get("provider") == PROVIDER_AGENT_SANDBOX:
+        if control_plane(case) == AGENT_SANDBOX:
             record = dev_infra.install_agent_sandbox(record)
-        elif not case.get(SKIP_SUBSTRATE_INSTALL):
+        elif control_plane(case) == AGENT_SUBSTRATE:
             record = dev_infra.install_substrate(record)
         run_repeats(
             name,
@@ -761,7 +753,7 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
         placements in turn, from the last one applied, until one has the
         machine type."""
         nonlocal current_placement
-        version = None if case.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
+        version = substrate.build_version() if control_plane(case) == AGENT_SUBSTRATE else None
         uncreated = deployment(args, "scenarios", key)
         # A cluster that pulls none of the images is not granted the repository.
         pulls = pulls_images(case)
@@ -787,9 +779,9 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
                 attempt(None, True)
             cluster = Cluster(applied.outputs(), applied.data / "kubeconfig")
             try:
-                if case.get("provider") == PROVIDER_AGENT_SANDBOX:
+                if control_plane(case) == AGENT_SANDBOX:
                     agent_sandbox.install(cluster)
-                elif not case.get(SKIP_SUBSTRATE_INSTALL):
+                elif control_plane(case) == AGENT_SUBSTRATE:
                     substrate.install(cluster)
                 yield cluster
             finally:

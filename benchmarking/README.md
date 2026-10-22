@@ -186,9 +186,10 @@ set the case's `worker: actor-egress-allow` (cleartext) or
       and a public control-plane endpoint, which IAM guards; from
       automation-infra's Cloud Run job, it goes into the job's network with an
       internal endpoint only.
-   2. Installs substrate, unless the case sets `skip-substrate-install`; on a
-      `microvm` cluster also its kata and cloud-hypervisor assets, checked
-      against the sha256s the SandboxConfig pins before they are uploaded.
+   2. Installs the case's `control-plane`, substrate unless it says
+      `agent-sandbox` or `none`; on a `microvm` cluster also its kata and
+      cloud-hypervisor assets, checked against the sha256s the SandboxConfig
+      pins before they are uploaded.
    3. Deploys Prometheus, the worker pool and the case's workload, then the
       locust master and boomer worker Jobs, and waits for both to end.
    4. Deletes any actors the run left, recording them in `cleanup.json`,
@@ -303,10 +304,10 @@ project.
 
 ### When a run fails or is stopped
 
-A run fails when more than its case's `max-failure-ratio` of its cycles fail
-(0.01 by default), over the whole run. A cycle fails on any of its calls, and
-counts once however many rows that failure shows in; an actor that could not
-be created counts as a failed cycle too. A run also fails when it completes no
+A run fails when more than its case's `locust.max-failure-ratio` of its cycles
+fail (0.01 by default), over the whole run. A cycle fails on any of its calls,
+and counts once however many rows that failure shows in; an actor that could
+not be created counts as a failed cycle too. A run also fails when it completes no
 cycle, or when the load generator raises any exception
 (`locust_exceptions.csv`). A failed case does not stop the ones after it; the
 execution exits non-zero at the end, naming them.
@@ -394,14 +395,14 @@ but for `sandbox-class`.
 
 Besides the load, a case can shape each cycle with the worker's options:
 
-| `worker` key | What each cycle does |
+| `locust.worker` key | What each cycle does |
 |---|---|
 | `resume-mode: implicit` | no `ResumeActor`: the instruction wakes the actor through the router (`glutton-implicit`) |
 | `instructions-per-cycle: N` | N instructions between the resume and the suspend, the first closing TTFI (`glutton-session`) |
 | `concurrent-instructions: N` | N instructions at once at each of those steps (`glutton-concurrent`) |
 | `glutton-write-ram: SIZE`, `glutton-write-disk: BYTES` | rewrites that much of the actor's memory and a file on its disk before the suspend, as `WriteRAM` and `WriteDisk` rows, so the snapshot holds changed state (`glutton-load`, with `actor-memory: 512Mi`) |
 
-At the case's top level, `actor-memory` sets the actors' memory limit, which
+In the case's `locust`, `actor-memory` sets the actors' memory limit, which
 on `microvm` is the guest's RAM, and `locust-workers` runs that many boomer
 worker pods, each with its own connections to substrate, for loads one pod
 cannot drive (`glutton-large`).

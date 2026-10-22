@@ -22,18 +22,13 @@ from pathlib import Path
 import yaml
 
 from . import SCENARIOS_DIR, benchmark
+from .control_plane import CONTROL_PLANE, CONTROL_PLANES, control_plane
 from .reports import LABEL_RE, VARIANT
 
 SCENARIOS_FILE = SCENARIOS_DIR / "scenarios.yaml"
 # One Terraform config per directory, which a case's infra.cluster.name picks.
 CLUSTERS_DIR = SCENARIOS_DIR / "infra" / "clusters"
 CLUSTER_KEYS = {"name", "tfvars", "tfvars_inline", "variables"}
-SKIP_SUBSTRATE_INSTALL = "skip-substrate-install"
-PROVIDER = "provider"
-PROVIDER_SUBSTRATE = "agent-substrate"
-PROVIDER_AGENT_SANDBOX = "agent-sandbox"
-PROVIDERS = [PROVIDER_SUBSTRATE, PROVIDER_AGENT_SANDBOX]
-DEFAULT_PROVIDER = PROVIDER_SUBSTRATE
 BARE_METAL = "bare-metal"
 # What a case on bare metal is recorded under: its name with this added.
 BARE_METAL_SUFFIX = "-metal"
@@ -49,33 +44,47 @@ PER_REPEAT = "per-repeat"
 REPEAT_CLUSTERS = [SHARED, PER_REPEAT]
 
 # A case's variants, each run as a case of its own, <case>-<variant>: the
-# case's keys with the variant's on top. Any but these.
+# case's keys with the variant's on top.
 VARIANTS = "variants"
-NOT_VARIED = {"type", VARIANTS}
+# A case's own keys; the rest of what it states is in the mapping of its type,
+# named by the type, which only the type's runner reads.
+CASE_KEYS = {"infra", REPEATS, "sandbox-class", BARE_METAL, CONTROL_PLANE, VARIANTS}
+
+
+def types() -> list[str]:
+    return ["noop", *benchmark.types()]
 
 
 def load_cases(scenarios_file: Path) -> dict[str, dict]:
-    """The cases, each with variants in their place."""
+    """The cases, each with variants in their place and `type` filled in from
+    the mapping that names it."""
     with scenarios_file.open() as f:
         cases = (yaml.safe_load(f) or {}).get("cases")
     if not isinstance(cases, dict) or not cases:
         raise ValueError(f"{scenarios_file} has no `cases` mapping")
     cases = with_variants(str(scenarios_file), cases)
+    known = types()
     for name, case in cases.items():
-        if not isinstance(case.get("type"), str):
-            raise ValueError(f"{scenarios_file}: case {name} has no `type`")
-        known = ["noop", *benchmark.types()]
-        if case["type"] not in known:
-            raise ValueError(f"{scenarios_file}: case {name}'s `type` must be one of {', '.join(known)}")
-        if not isinstance(case.get(SKIP_SUBSTRATE_INSTALL, False), bool):
-            raise ValueError(f"{scenarios_file}: case {name}'s `{SKIP_SUBSTRATE_INSTALL}` must be true or false")
-        if case.get("type") == "locust":
-            provider = case.get(PROVIDER, DEFAULT_PROVIDER)
-            if provider not in PROVIDERS:
-                raise ValueError(f"{scenarios_file}: case {name}'s `{PROVIDER}` must be one of {', '.join(PROVIDERS)}")
-            case[PROVIDER] = provider
-            if provider == PROVIDER_AGENT_SANDBOX:
-                case[SKIP_SUBSTRATE_INSTALL] = True
+        if "type" in case:
+            raise ValueError(
+                f"{scenarios_file}: case {name}'s type is the key of its mapping, one of {', '.join(known)}"
+            )
+        given = [key for key in known if key in case]
+        if len(given) != 1:
+            raise ValueError(f"{scenarios_file}: case {name} needs a mapping of exactly one type of {', '.join(known)}")
+        unknown = case.keys() - CASE_KEYS - set(given) - {VARIANT}
+        if unknown:
+            raise ValueError(f"{scenarios_file}: case {name} has unknown {', '.join(sorted(unknown))}")
+        case["type"] = given[0]
+        # noop's is empty, and so may be left null.
+        options = case[given[0]] if case[given[0]] is not None or given[0] != "noop" else {}
+        if not isinstance(options, dict) or (given[0] == "noop" and options):
+            raise ValueError(f"{scenarios_file}: case {name}'s `{given[0]}` must be a mapping, an empty one for noop")
+        case[given[0]] = options
+        if control_plane(case) not in CONTROL_PLANES:
+            raise ValueError(
+                f"{scenarios_file}: case {name}'s `{CONTROL_PLANE}` must be one of {', '.join(CONTROL_PLANES)}"
+            )
         if not isinstance(case.get(BARE_METAL, False), bool):
             raise ValueError(f"{scenarios_file}: case {name}'s `{BARE_METAL}` must be true or false")
         try:
@@ -124,7 +133,7 @@ def with_variants(where: str, cases: dict) -> dict[str, dict]:
             keys = keys or {}
             if not isinstance(keys, dict):
                 raise ValueError(f"{where}: case {name}'s variant {variant} is not a mapping")
-            fixed = keys.keys() & (NOT_VARIED | {VARIANT})
+            fixed = keys.keys() & {VARIANTS, VARIANT}
             if fixed:
                 raise ValueError(f"{where}: case {name}'s variant {variant} cannot change {', '.join(sorted(fixed))}")
             renamed = f"{name}-{variant}"

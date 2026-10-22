@@ -27,14 +27,8 @@ import tempfile
 from pathlib import Path
 
 from . import agent_sandbox, benchmark, substrate
-from .cases import (
-    BARE_METAL,
-    CLUSTERS_DIR,
-    PROVIDER,
-    PROVIDER_AGENT_SANDBOX,
-    SKIP_SUBSTRATE_INSTALL,
-    placement_variables,
-)
+from .cases import BARE_METAL, CLUSTERS_DIR, placement_variables
+from .control_plane import AGENT_SANDBOX, AGENT_SUBSTRATE, control_plane
 from .deployment import Deployment, cluster_deployment, declared_variables, tf_vars
 from .log import log
 from .process import environ
@@ -177,7 +171,7 @@ def cluster_problems(
             f"case {name} is microvm, which needs nested virtualization, but its sandboxed pool is {machine_type};"
             " use an Intel family such as n2 or c2 (not E2, AMD or Arm)"
         )
-    workload = (case.get("worker") or {}).get("workload-name")
+    workload = ((case.get("locust") or {}).get("worker") or {}).get("workload-name")
     if workload in WORKLOADS_NEEDING_MOCK_LLM and "additional_node_pools" in settings:
         key, value = MOCK_LLM_LABEL
         if not any((pool.get("labels") or {}).get(key) == value for pool in settings["additional_node_pools"] or []):
@@ -274,7 +268,7 @@ def check(
     problems = []
     if not shutil.which("terraform"):
         return ["terraform is required to apply the infra"]
-    installs = not all(case.get(SKIP_SUBSTRATE_INSTALL) for case in cases.values())
+    installs = any(control_plane(case) == AGENT_SUBSTRATE for case in cases.values())
     benchmarks = {name: case for name, case in cases.items() if case["type"] != "noop"}
     if installs:
         missing = substrate.missing_requirements()
@@ -285,7 +279,7 @@ def check(
             substrate.build_version()
         except (substrate.SubstrateError, subprocess.CalledProcessError) as exc:
             problems.append(str(exc))
-    if any(case.get(PROVIDER) == PROVIDER_AGENT_SANDBOX for case in cases.values()):
+    if any(control_plane(case) == AGENT_SANDBOX for case in cases.values()):
         missing = agent_sandbox.missing_submodule()
         if missing:
             return problems + [f"installing agent-sandbox requires {', '.join(missing)}"]

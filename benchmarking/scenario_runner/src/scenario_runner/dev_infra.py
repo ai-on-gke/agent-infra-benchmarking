@@ -27,7 +27,7 @@ from functools import partial
 from pathlib import Path
 
 from . import LOCAL_DATA_DIR, agent_sandbox, names, substrate, terraform
-from .cases import SKIP_SUBSTRATE_INSTALL, placed
+from .cases import placed
 from .cluster import Cluster, gke_stockout, utc_now
 from .deployment import RUNNER_INFRA_DIR, VARIABLES_FILE, Deployment, cluster_deployment
 from .log import log
@@ -38,6 +38,8 @@ DEV_INFRA_DIR = LOCAL_DATA_DIR / "dev-infra" / "terraform"
 RECORD_FILE = "dev-infra.json"
 # In the order they are applied.
 INFRAS = ("scenario-runner", "cluster")
+# The record's, true unless the first case's control plane is substrate.
+SKIP_SUBSTRATE_INSTALL = "skip-substrate-install"
 
 
 def check_name(name: str) -> str:

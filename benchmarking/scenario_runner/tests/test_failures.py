@@ -384,11 +384,12 @@ class NeededImages(unittest.TestCase):
     def needed(self, cases: dict) -> dict:
         import argparse
 
-        from scenario_runner import ate_env, images, sandbox_benchmark, substrate
+        from scenario_runner import agent_sandbox, ate_env, images, sandbox_benchmark, substrate
 
         args = argparse.Namespace(no_deploy_workloads=False, image_repo="repo")
         with mock.patch.object(images, "tag", return_value="t"), \
              mock.patch.object(substrate, "build_version", return_value="v"), \
+             mock.patch.object(agent_sandbox, "build_version", return_value="s"), \
              mock.patch.object(ate_env, "build_version", return_value="e"), \
              mock.patch.object(sandbox_benchmark, "test_names", return_value=None):  # fmt: skip
             return run.needed_images(args, cases)
@@ -405,21 +406,18 @@ class NeededImages(unittest.TestCase):
         self.assertIn("repo/substrate/envoy-dataplane:v", needed["substrate"])
 
     def test_sandbox_benchmark_needs_env_only_for_substrate(self):
-        from scenario_runner.cases import SKIP_SUBSTRATE_INSTALL
-
-        comparator = {"tests": ["test_x"], "runs": 1}
-        case = {"type": "sandbox-benchmark", "comparator": comparator, SKIP_SUBSTRATE_INSTALL: True}
+        options = {"tests": ["test_x"], "runs": 1}
+        case = {"type": "sandbox-benchmark", "sandbox-benchmark": options}
         needed = self.needed({"a": case})
-        self.assertEqual(set(needed), {"env", "benchmark"})
+        self.assertEqual(set(needed), {"substrate", "env", "benchmark"})
         self.assertEqual(needed["env"], ["repo/env/ate-env-api:e", "repo/env/ate-env-guest:e"])
-        cloud = {**case, "comparator": {**case["comparator"], "provider": "e2b"}}
+        cloud = {**case, "control-plane": "none", "sandbox-benchmark": {**options, "provider": {"name": "e2b"}}}
         self.assertEqual(set(self.needed({"a": cloud})), {"benchmark"})
 
     def test_noop_needs_only_what_its_install_does(self):
-        from scenario_runner.cases import SKIP_SUBSTRATE_INSTALL
-
         self.assertEqual(set(self.needed({"a": {"type": "noop"}})), {"substrate"})
-        self.assertEqual(self.needed({"a": {"type": "noop", SKIP_SUBSTRATE_INSTALL: True}}), {})
+        self.assertEqual(set(self.needed({"a": {"type": "noop", "control-plane": "agent-sandbox"}})), {"agent-sandbox"})
+        self.assertEqual(self.needed({"a": {"type": "noop", "control-plane": "none"}}), {})
 
 
 class BenchmarkRun(unittest.TestCase):

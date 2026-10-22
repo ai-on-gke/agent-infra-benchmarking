@@ -37,11 +37,21 @@ from scenario_runner.cases import (
 from scenario_runner.reports import VARIANT
 
 GLUTTON = {
-    "type": "locust",
     "infra": {"cluster": {"name": "common", "tfvars": "default.tfvars"}},
-    "master": {"run-time": "1m", "users": 10},
-    "worker": {"workload-name": "glutton", "workload-template": "glutton"},
+    "locust": {
+        "master": {"run-time": "1m", "users": 10},
+        "worker": {"workload-name": "glutton", "workload-template": "glutton"},
+    },
 }
+
+
+# As load_cases has it.
+LOADED = {**GLUTTON, "type": "locust"}
+
+
+def glutton(locust: dict = None, **case) -> dict:
+    """GLUTTON with locust's keys on top of its, and the case's on top of it."""
+    return {**GLUTTON, "locust": {**GLUTTON["locust"], **(locust or {})}, **case}
 
 
 def load(cases: dict) -> dict:
@@ -94,18 +104,20 @@ class CaseChecks(unittest.TestCase):
     def test_defaults(self):
         case = locust.check_case("glutton", GLUTTON, deploy_workloads=True)
         self.assertEqual(case["sandbox-class"], "gvisor")
-        self.assertEqual(case["actor-memory"], "256Mi")
-        self.assertEqual(case["locust-workers"], 1)
-        self.assertEqual(case["max-failure-ratio"], locust.DEFAULT_MAX_FAILURE_RATIO)
-        self.assertEqual(case["master"]["spawn-rate"], 10)
+        self.assertEqual(case["control-plane"], "agent-substrate")
+        options = case["locust"]
+        self.assertEqual(options["actor-memory"], "256Mi")
+        self.assertEqual(options["locust-workers"], 1)
+        self.assertEqual(options["max-failure-ratio"], locust.DEFAULT_MAX_FAILURE_RATIO)
+        self.assertEqual(options["master"]["spawn-rate"], 10)
 
     def test_openclaw_gets_its_memory(self):
-        case = {**GLUTTON, "worker": {"workload-name": "openclaw", "workload-template": "openclaw"}}
-        self.assertEqual(locust.check_case("openclaw", case, True)["actor-memory"], "2Gi")
+        case = glutton({"worker": {"workload-name": "openclaw", "workload-template": "openclaw"}})
+        self.assertEqual(locust.check_case("openclaw", case, True)["locust"]["actor-memory"], "2Gi")
 
     def test_openclaw_on_microvm_needs_2gi(self):
         worker = {"workload-name": "openclaw", "workload-template": "openclaw"}
-        case = {**GLUTTON, "worker": worker, "sandbox-class": "microvm", "actor-memory": "1Gi"}
+        case = glutton({"worker": worker, "actor-memory": "1Gi"}, **{"sandbox-class": "microvm"})
         with self.assertRaisesRegex(ValueError, "less than openclaw needs on microvm"):
             locust.check_case("openclaw-microvm", case, True)
         locust.check_case("openclaw", {**case, "sandbox-class": "gvisor"}, True)
@@ -116,14 +128,17 @@ class CaseChecks(unittest.TestCase):
             ("locust-workers", 0),
             ("max-failure-ratio", 2),
             ("worker-count", -1),
-            ("sandbox-class", "kata"),
+            ("users", 10),
         ]:
             with self.subTest(key=key), self.assertRaises(ValueError):
-                locust.check_case("c", {**GLUTTON, key: value}, True)
+                locust.check_case("c", glutton({key: value}), True)
+        for key, value in [("sandbox-class", "kata"), ("control-plane", "none")]:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                locust.check_case("c", glutton(**{key: value}), True)
 
     def test_several_worker_pods_are_expected_by_the_master(self):
-        case = locust.check_case("c", {**GLUTTON, "locust-workers": 3}, True)
-        args = locust.master_args(case)
+        case = locust.check_case("c", glutton({"locust-workers": 3}), True)
+        args = locust.master_args(case["locust"])
         self.assertEqual(args[args.index("--expect-workers") + 1], "3")
 
     def test_flags(self):
@@ -137,6 +152,11 @@ class CaseChecks(unittest.TestCase):
         self.assertEqual(warmup_names("c", {}), ["c-warmup-1"])
         self.assertEqual(warmup_names("c", {"repeats": {"warmups": 0}}), [])
         self.assertEqual(warmup_names("c", {"repeats": {"cluster": "per-repeat"}}), [])
+
+    def test_load_fills_in_the_type_from_its_mapping(self):
+        self.assertEqual(load({"c": GLUTTON})["c"]["type"], "locust")
+        noop = load({"n": {"infra": GLUTTON["infra"], "noop": None}})["n"]
+        self.assertEqual((noop["type"], noop["noop"]), ("noop", {}))
 
     def test_load_fills_in_how_a_case_is_sampled(self):
         self.assertEqual(load({"c": GLUTTON})["c"]["repeats"], {"count": 1, "warmups": 1, "cluster": "shared"})
@@ -153,7 +173,14 @@ class CaseChecks(unittest.TestCase):
             {**GLUTTON, "repeats": {"warmups": 1, "cluster": "per-repeat"}},
             {**GLUTTON, "infra": {"cluster": {"name": "common", "unknown": 1}}},
             {**GLUTTON, "infra": {"cluster": {"name": "nowhere"}}},
-            {**GLUTTON, "type": "jmeter"},
+            {**GLUTTON, "type": "locust"},
+            {"infra": GLUTTON["infra"]},
+            {**GLUTTON, "noop": {}},
+            {"infra": GLUTTON["infra"], "noop": {"x": 1}},
+            {**GLUTTON, "jmeter": {}},
+            {**GLUTTON, "worker-count": 10},
+            {**GLUTTON, "locust": None},
+            {**GLUTTON, "control-plane": "k8s"},
         ):
             with self.subTest(case=case), self.assertRaises(ValueError):
                 load({"c": case})
@@ -168,20 +195,20 @@ class Variants(unittest.TestCase):
         self.assertEqual(members[0], "sandbox-benchmark-substrate")
         self.assertNotIn("sandbox-benchmark", cases)
         for name in members:
-            case = cases[name]
-            self.assertEqual(name, f"sandbox-benchmark-{case['comparator']['provider']}")
-            self.assertEqual(case["comparator"]["tests"], ["test_suspend_resume"])
-            self.assertEqual(case[VARIANT], {"of": "sandbox-benchmark", "name": case["comparator"]["provider"]})
-        self.assertEqual(cases["sandbox-benchmark-substrate"]["env-worker-count"], 3)
-        self.assertNotIn("env-worker-count", cases["sandbox-benchmark-e2b"])
+            options = cases[name]["sandbox-benchmark"]
+            self.assertEqual(name, f"sandbox-benchmark-{options['provider']['name']}")
+            self.assertEqual(options["tests"], ["test_suspend_resume"])
+            self.assertEqual(cases[name][VARIANT], {"of": "sandbox-benchmark", "name": options["provider"]["name"]})
+        self.assertEqual(cases["sandbox-benchmark-substrate"]["sandbox-benchmark"]["provider"]["env-worker-count"], 3)
+        self.assertEqual(cases["sandbox-benchmark-e2b"]["sandbox-benchmark"]["provider"], {"name": "e2b"})
 
     def test_a_variant_changes_any_key_and_merges_mappings(self):
-        variants = {"micro": {"sandbox-class": "microvm", "master": {"users": 3}}, "plain": None}
+        variants = {"micro": {"sandbox-class": "microvm", "locust": {"master": {"users": 3}}}, "plain": None}
         cases = load({"c": {**GLUTTON, "variants": variants}, "d": GLUTTON})
         self.assertEqual(list(cases), ["c-micro", "c-plain", "d"])
         self.assertEqual(cases["c-micro"]["sandbox-class"], "microvm")
-        self.assertEqual(cases["c-micro"]["master"], {"run-time": "1m", "users": 3})
-        self.assertEqual(cases["c-plain"]["master"], GLUTTON["master"])
+        self.assertEqual(cases["c-micro"]["locust"]["master"], {"run-time": "1m", "users": 3})
+        self.assertEqual(cases["c-plain"]["locust"]["master"], GLUTTON["locust"]["master"])
         self.assertEqual(grouped(cases), {"c": ["c-micro", "c-plain"], "d": ["d"]})
 
     def test_bad_variants_are_refused(self):
@@ -191,6 +218,7 @@ class Variants(unittest.TestCase):
             {**GLUTTON, "variants": {"a": 1}},
             {**GLUTTON, "variants": {"a b": {}}},
             {**GLUTTON, "variants": {"a": {"type": "sandbox-benchmark"}}},
+            {**GLUTTON, "variants": {"a": {"sandbox-benchmark": {}}}},
             {**GLUTTON, "variants": {"a": {"variants": {"b": {}}}}},
             {**GLUTTON, "variants": {"a": {VARIANT: {}}}},
             {**GLUTTON, VARIANT: {"of": "x", "name": "y"}},
@@ -206,8 +234,47 @@ class Variants(unittest.TestCase):
         self.assertEqual(grouped(cases), {"c-metal": ["c-a-metal"], "c": ["c-b"]})
 
 
+class SandboxBenchmarkCases(unittest.TestCase):
+    OPTIONS = {"tests": ["test_x"], "runs": 1}
+
+    def check(self, provider: object = None, **case) -> dict:
+        options = {**self.OPTIONS, **({"provider": provider} if provider is not None else {})}
+        with mock.patch.object(sandbox_benchmark, "test_names", return_value=None):
+            return sandbox_benchmark.check_case("c", {"sandbox-benchmark": options, **case}, True)
+
+    def test_substrate_by_default_with_its_options_filled_in(self):
+        def provider(given=None) -> dict:
+            return self.check(given)["sandbox-benchmark"]["provider"]
+
+        self.assertEqual(provider(), {"name": "substrate", **sandbox_benchmark.PROVIDER_OPTIONS["substrate"]})
+        self.assertEqual(provider({"name": "substrate", "actor-cpu": "4"})["actor-cpu"], "4")
+        self.assertEqual(provider({"name": "e2b"}), {"name": "e2b"})
+
+    def test_bad_providers_are_refused(self):
+        for provider in (
+            "e2b",
+            {},
+            {"name": "aws"},
+            {"name": "e2b", "actor-cpu": "2"},
+            {"name": "substrate", "x": 1},
+            {"name": "substrate", "env-worker-count": 0},
+            {"name": "substrate", "actor-cpu": 2},
+        ):
+            with self.subTest(provider=provider), self.assertRaises(ValueError):
+                self.check(provider)
+
+    def test_substrate_needs_its_control_plane(self):
+        with self.assertRaisesRegex(ValueError, "needs `control-plane: agent-substrate`"):
+            self.check(**{"control-plane": "none"})
+        self.check({"name": "e2b"}, **{"control-plane": "none"})
+
+    def test_unknown_keys_are_refused(self):
+        with self.assertRaisesRegex(ValueError, "unknown comparator"):
+            self.check(**{"sandbox-benchmark": {**self.OPTIONS, "comparator": {}}})
+
+
 class SandboxBenchmarkReports(unittest.TestCase):
-    CASE = {"type": "sandbox-benchmark", "comparator": {"provider": "e2b"}}
+    CASE = {"type": "sandbox-benchmark", "sandbox-benchmark": {"provider": {"name": "e2b"}}}
 
     def test_a_variant_reports_beside_the_others_of_its_group(self):
         variant = {**self.CASE, VARIANT: {"of": "sb-metal", "name": "fast"}}
@@ -215,7 +282,7 @@ class SandboxBenchmarkReports(unittest.TestCase):
         self.assertEqual(sandbox_benchmark.report_folder("sb-2", "sb", self.CASE), "sb-2/e2b")
 
     def test_summarize_combines_each_record_s_variants_in_order(self):
-        a = {**self.CASE, VARIANT: {"of": "sb", "name": "a"}, "cost-sheet": True}
+        a = {**self.CASE, VARIANT: {"of": "sb", "name": "a"}, "sandbox-benchmark": {"cost-sheet": True}}
         b = {**self.CASE, VARIANT: {"of": "sb", "name": "b"}}
         runs = [("sb-a-1", "sb-a", a), ("sb-a-2", "sb-a", a), ("sb-b-1", "sb-b", b), ("sb-b-2", "sb-b", b)]
         with mock.patch.object(sandbox_benchmark, "combine_reports") as combine:
@@ -250,7 +317,7 @@ class BareMetal(unittest.TestCase):
                 load_metal(settings)
 
     def test_a_case_on_bare_metal_is_renamed_and_placed_first(self):
-        cases = with_bare_metal({"c": {**GLUTTON, "bare-metal": True}}, {"c"}, False, None, PLACEMENTS)
+        cases = with_bare_metal({"c": {**LOADED, "bare-metal": True}}, {"c"}, False, None, PLACEMENTS)
         self.assertEqual(list(cases), ["c-metal"])
         variables = cases["c-metal"]["infra"]["cluster"]["variables"]
         self.assertEqual(variables, {"zone": "us-central1-a", "sandboxed_machine_type": "c3-standard-192-metal"})
@@ -259,7 +326,7 @@ class BareMetal(unittest.TestCase):
         self.assertEqual(warmup_names("c-metal", repeats), ["c-metal-warmup-1"])
 
     def test_the_case_wins_over_the_default_and_the_override_over_both(self):
-        cases = {"on": {**GLUTTON, "bare-metal": True}, "off": {**GLUTTON, "bare-metal": False}, "unsaid": GLUTTON}
+        cases = {"on": {**LOADED, "bare-metal": True}, "off": {**LOADED, "bare-metal": False}, "unsaid": LOADED}
         for default, override, expected in (
             (True, None, ["on-metal", "off", "unsaid-metal"]),
             (False, None, ["on-metal", "off", "unsaid"]),
@@ -277,8 +344,8 @@ class BareMetal(unittest.TestCase):
 
     def test_a_case_on_bare_metal_is_not_recorded_as_another(self):
         with self.assertRaisesRegex(ValueError, "which is another case"):
-            with_bare_metal({"c": GLUTTON}, {"c", "c-metal"}, True, None, PLACEMENTS)
+            with_bare_metal({"c": LOADED}, {"c", "c-metal"}, True, None, PLACEMENTS)
 
     def test_bare_metal_needs_a_placement(self):
         with self.assertRaisesRegex(ValueError, "has none in its region"):
-            with_bare_metal({"c": GLUTTON}, {"c"}, True, None, [])
+            with_bare_metal({"c": LOADED}, {"c"}, True, None, [])
