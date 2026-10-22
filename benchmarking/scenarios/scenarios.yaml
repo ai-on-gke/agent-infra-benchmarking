@@ -268,7 +268,10 @@ cases:
         workload-timeout: 120s
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
     subcases:
-      "10": {locust: {worker: {min-wait: 106000ms, max-wait: 106000ms}}}
+      "10":
+        locust:
+          master: {spawn-rate: 1}
+          worker: {min-wait: 106000ms, max-wait: 106000ms}
       "25":
         locust:
           master: {run-time: 12m, spawn-rate: 1}
