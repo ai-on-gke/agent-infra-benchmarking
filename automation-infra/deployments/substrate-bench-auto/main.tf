@@ -18,6 +18,12 @@ locals {
   state_bucket = "substrate-bench-auto-tfstate"
 }
 
+variable "create_jobs" {
+  description = "False while the workflow has not pushed the runner image yet, which destroys the jobs and their schedules until the next apply with true."
+  type        = bool
+  default     = true
+}
+
 # Authenticates as gh auth token, or GITHUB_TOKEN, which may set the repository's
 # Actions variables.
 provider "github" {
@@ -30,6 +36,7 @@ module "cloud_run" {
   project_id            = "akvelon-gke-aieco"
   region                = "us-central1"
   default_resource_name = "substrate-bench-auto"
+  create_jobs           = var.create_jobs
 
   state_bucket        = local.state_bucket
   state_bucket_prefix = "terraform"
