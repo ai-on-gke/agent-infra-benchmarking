@@ -45,7 +45,7 @@ module "cloud_run" {
   state_bucket_prefix = "terraform"
   reports_bucket      = local.state_bucket
   reports_prefix      = "data"
-  source_branch       = "fix-publish-main-only"
+  source_branch       = "main"
 
   # dummy, which creates no cluster, and glutton-single, one glutton run.
   args = [
