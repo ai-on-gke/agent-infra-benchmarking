@@ -34,8 +34,10 @@ HOURS_PER_MONTH = 270
 VCPUS = 2
 RAM_GIB = 2
 
-# Per vCPU-second and per GiB-second, in USD.
+# Per vCPU-second and per GiB-second, in USD. substrate's is its share of the
+# case's n2 node, at us-central1's on-demand prices.
 RESOURCE_PRICED = {
+    "substrate": ("Substrate (GKE n2)", 0.031611 / 3600, 0.004237 / 3600),
     "e2b": ("E2B", 0.000014, 0.0000045),
     "modal": ("Modal", 0.00001971, 0.00000672),
     "daytona": ("Daytona", 0.000014, 0.0000045),
@@ -119,41 +121,51 @@ def sheet(results: dict) -> list[list[str]]:
             + ["", anthropic(key), openai(key)]
         )
 
-    blank = [""] * 7
+    width = len(RESOURCE_PRICED) + 4
+    blank = [""] * width
+    pad = blank[1:]
     return [
         blank,
         [
-            "", "Sandbox-as-a-Service - Resource-based Pricing Models", "", "", "",
+            "", "Resource-based Pricing Models", *[""] * len(RESOURCE_PRICED),
             "Agents-as-a-Service - Session-based Pricing", "",
         ],  # fmt: skip
         ["", *(name for name, _, _ in RESOURCE_PRICED.values()), "", "Anthropic Managed Agents", "OpenAI Frontier"],
-        ["Active Time (seconds per hour)", *[str(ACTIVE_SECS_PER_HOUR)] * 3, "", *[str(ACTIVE_SECS_PER_HOUR)] * 2],
+        [
+            "Active Time (seconds per hour)", *[str(ACTIVE_SECS_PER_HOUR)] * len(RESOURCE_PRICED), "",
+            *[str(ACTIVE_SECS_PER_HOUR)] * 2,
+        ],  # fmt: skip
         row("Suspend Overhead (seconds per hour)", "suspend"),
         row("Restore Overhead (seconds per hour)", "resume"),
         row("Billable Time (s)\n(assumes all overhead time is billed)", "billable"),
         blank,
-        ["Pricing"] + [""] * 6,
+        ["Pricing"] + pad,
         row(f"vCPU ({VCPUS} vCPU/s)", "vcpu_price"),
         row("RAM (GiB/s)", "ram_price"),
         row("Session Cost (per second)", "session_price", "N/A"),
         blank,
-        ["Cost"] + [""] * 6,
+        ["Cost"] + pad,
         row("vCPU Cost (per hour)", "vcpu_hour"),
         row("RAM Cost (per hour)", "ram_hour"),
         row("Session Cost (per hour)", "session_hour", "N/A"),
         row("Total Cost (per month)", "month"),
         blank,
         blank,
-        ["Caveats"] + [""] * 6,
-        [f"1) Results assume linear scaling of the samples (n={sample_count(runs)})"] + [""] * 6,
-        ["2) A simple, representative workload is used to provide a similar filesystem state for all tests"] + [""] * 6,
+        ["Caveats"] + pad,
+        [f"1) Results assume linear scaling of the samples (n={sample_count(runs)})"] + pad,
+        ["2) A simple, representative workload is used to provide a similar filesystem state for all tests"] + pad,
         [
             "3) All tests performed on non-premium tiers of product offerings.  Optimizations for high scale,"
             " paying customers are likely and not represented in these results"
         ]
-        + [""] * 6,
-        ["4) Storage costs for snapshots or filesystem persistance are not included"] + [""] * 6,
-        ["5) Anthropic Managed Agents' model token costs are not included"] + [""] * 6,
+        + pad,
+        ["4) Storage costs for snapshots or filesystem persistance are not included"] + pad,
+        ["5) Anthropic Managed Agents' model token costs are not included"] + pad,
+        [
+            "6) Substrate is priced as its sandbox's share of an on-demand GKE n2 node; the node's idle capacity"
+            " and GKE's cluster fee are not included"
+        ]
+        + pad,
     ]
 
 

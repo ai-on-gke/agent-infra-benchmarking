@@ -366,21 +366,35 @@ cases:
       openai: {sandbox-benchmark: {provider: {name: openai}}}
 
   # The sandbox cost sheet, from the providers' suspend and resume overheads.
-  # Cloud providers only, so neither substrate nor env is installed.
+  # substrate is installed for the whole case, so its subcases share a cluster.
   sandbox-benchmark-cost:
-    # Cloud providers only, so a warm-up would only cost them a run.
+    # warmup-runs is the cheaper way to warm the paid providers up.
     repeats:
       warmups: 0
     sandbox-benchmark:
+      install:
+        substrate:
+          sandbox-class: gvisor
       infra:
         cluster:
           sandboxed-nodes: 1
+          # The cost sheet prices substrate at n2's rates.
+          sandboxed-machine-type: n2-standard-32
       cost-sheet: true
       tests:
       - test_suspend_resume
       runs: 10
       warmup-runs: 1
     subcases:
+      substrate:
+        sandbox-benchmark:
+          provider:
+            name: substrate
+            # The comparator starts every run at once, each on a worker of its
+            # own: 10 sandboxes of 2 vCPU on the node's 32.
+            env-worker-count: 10
+            actor-cpu: "2"
+            actor-memory: 2Gi
       e2b: {sandbox-benchmark: {provider: {name: e2b}}}
       modal: {sandbox-benchmark: {provider: {name: modal}}}
       daytona: {sandbox-benchmark: {provider: {name: daytona}}}
