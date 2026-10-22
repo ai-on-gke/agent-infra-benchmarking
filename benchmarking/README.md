@@ -109,9 +109,8 @@ anything, only the ones it lacks being built:
 
 To run more than one case, repeat `--scenario`; they run in the order given.
 `--all` runs every case in `scenarios.yaml`, in the order listed; one or the
-other is required, as every case means a cluster or more. A case with
-`repeats: N` runs N times, recorded as `<case>-1` to `<case>-N`, each on a
-fresh cluster, or all on one with `repeat-cluster: shared` (see
+other is required, as every case means a cluster or more. A case's
+`repeats` say how many times it runs and on how many clusters (see
 [Repeats](#repeats)). A failed repeat doesn't stop the ones after it.
 
 Before it applies anything, the run checks what the cases need, and names
@@ -523,16 +522,24 @@ and check that their CPU stays well below their nodes' in
 
 ### Repeats
 
-One run is one sample. A case's `repeats` runs it that many times, each on its
-own cluster unless `--dev-infra` is given. Compare cases across their repeats,
-not by a single one: `<case>-summary.csv` gives the min, median and max of
-each stat over them, as the example's `glutton-summary.csv` does.
+One run is one sample. Compare cases across their repeats, not by a single
+one: `<case>-summary.csv` gives the min, median and max of each stat over
+them, as the example's `glutton-summary.csv` does. A case's `repeats` says how
+it is sampled:
 
-With `repeat-cluster: shared`, a case's repeats run one after another on one
-cluster applied for the case, after `warmup-repeats` runs (1 by default) that
-take the cold start: image pulls, node scale-up, substrate's first snapshots.
-A warm-up is recorded as `<case>-warmup-<n>`, so BigQuery's `scenario` for it
-is `<case>-warmup`, and is left out of the summary; one that fails only warns.
-Shared repeats are tighter but less independent, as they leave out how one
-cluster differs from the next, so compare a shared case only with another
-shared one. On a `--dev-infra`, a shared case's warm-ups run too.
+```yaml
+repeats:
+  count: 3          # measured runs, recorded as <case>-1 to <case>-3; default 1
+  warmups: 1        # runs before them that are not measured; default 1
+  cluster: shared   # default; or per-repeat
+```
+
+By default a case's runs go one after another on one cluster applied for it,
+the warm-ups first, taking the cold start: image pulls, node scale-up,
+substrate's first snapshots. A warm-up is recorded as `<case>-warmup-<n>`, so
+BigQuery's `scenario` for it is `<case>-warmup`, and is left out of the
+summary; one that fails only warns. With `cluster: per-repeat`, each measured
+run gets a cluster of its own and there are no warm-ups. Repeats on one
+cluster are tighter but less independent, as they leave out how one cluster
+differs from the next, so compare cases sampled the same way. On a
+`--dev-infra`, every run is on its cluster either way.

@@ -47,12 +47,16 @@
 # A run that completes no cycle, or whose load generator raises any exception,
 # fails too. For sandbox-benchmark it is the share of test runs.
 #
-# `repeats` is how many times the case runs, 1 by default, each on its own
-# cluster applied for it, or one after another on a --dev-infra's. Above 1,
-# they are recorded as <case>-1 to <case>-N. With `repeat-cluster: shared`
-# rather than the default `fresh`, they run one after another on one cluster
-# applied for the case, after `warmup-repeats` runs, 1 by default, recorded as
-# <case>-warmup-1 to <case>-warmup-N and left out of the summary.
+# `repeats` is how the case is sampled, all of it optional:
+#   count    the runs that are measured, 1 by default; above 1 recorded as
+#            <case>-1 to <case>-N
+#   warmups  runs before them that are not, 1 by default, recorded as
+#            <case>-warmup-1 to <case>-warmup-N and left out of the summary;
+#            one that fails only warns
+#   cluster  `shared`, the default, for all of them one after another on one
+#            cluster applied for the case, or `per-repeat` for each measured
+#            run on a cluster of its own, with no warm-ups. On a --dev-infra
+#            they all run on its cluster either way.
 #
 # The scenario-runner installs substrate on the case's cluster before running
 # it, unless `skip-substrate-install` is true.
@@ -77,7 +81,8 @@ cases:
           sandboxed_node_count     = 1
           sandboxed_min_node_count = 1
           sandboxed_max_node_count = 1
-    repeats: 3
+    repeats:
+      count: 3
     worker-count: 10
     sandbox-class: gvisor
     master:
@@ -101,7 +106,8 @@ cases:
           sandboxed_node_count     = 1
           sandboxed_min_node_count = 1
           sandboxed_max_node_count = 1
-    repeats: 3
+    repeats:
+      count: 3
     worker-count: 10
     sandbox-class: microvm
     master:
@@ -114,7 +120,8 @@ cases:
       workload-template: glutton
       resume-mode: explicit
 
-  # glutton once rather than three times, for a quicker check of the path.
+  # glutton once rather than three times, with no warm-up, for a quicker check
+  # of the path.
   glutton-single:
     type: locust
     infra:
@@ -125,7 +132,8 @@ cases:
           sandboxed_node_count     = 1
           sandboxed_min_node_count = 1
           sandboxed_max_node_count = 1
-    repeats: 1
+    repeats:
+      warmups: 0
     worker-count: 10
     sandbox-class: gvisor
     master:
@@ -242,7 +250,6 @@ cases:
           sandboxed_node_count     = 1
           sandboxed_min_node_count = 1
           sandboxed_max_node_count = 1
-    repeats: 1
     worker-count: 10
     sandbox-class: gvisor
     master:
@@ -269,7 +276,6 @@ cases:
           sandboxed_node_count     = 1
           sandboxed_min_node_count = 1
           sandboxed_max_node_count = 1
-    repeats: 1
     worker-count: 10
     sandbox-class: microvm
     master:
@@ -500,7 +506,8 @@ cases:
           sandboxed_node_count     = 25
           sandboxed_min_node_count = 25
           sandboxed_max_node_count = 25
-    repeats: 3
+    repeats:
+      count: 3
     worker-count: 100
     locust-workers: 4
     sandbox-class: gvisor
@@ -527,6 +534,10 @@ cases:
           sandboxed_node_count     = 1
           sandboxed_min_node_count = 1
           sandboxed_max_node_count = 1
+    # A warm-up would run every provider, paid ones too; comparator.warmup-runs
+    # is the cheaper way to warm them up.
+    repeats:
+      warmups: 0
     sandbox-class: gvisor
     # The comparator starts every run at once, each in an environment of its
     # own on a worker of its own: 3 sandboxes of 2 vCPU on the node's 16.
@@ -555,6 +566,9 @@ cases:
           sandboxed_min_node_count = 1
           sandboxed_max_node_count = 1
     skip-substrate-install: true
+    # Cloud providers only, so a warm-up would only cost them a run.
+    repeats:
+      warmups: 0
     cost-sheet: true
     comparator:
       providers: [e2b, modal, daytona, anthropic, openai]
@@ -567,7 +581,10 @@ cases:
   # no GCP resources and so has nothing to benchmark on.
   dummy:
     type: noop
-    repeats: 3
+    # A cluster each, so the path is applied and destroyed three times.
+    repeats:
+      count: 3
+      cluster: per-repeat
     skip-substrate-install: true
     infra:
       cluster:

@@ -14,10 +14,10 @@
 
 """Runs the cases in scenarios.yaml one after another (the ones --scenario
 names in the order given, or with --all every case in the order listed), each
-of a case's repeats on its own infra/clusters/ cluster applied for it and
-destroyed after it, or with `repeat-cluster: shared` all of them, after the
-case's warm-ups, on one applied for the case, pulling the images
-benchmarking/tools/build-images built into --image-repo. From a machine rather
+case's warm-ups and repeats on an infra/clusters/ cluster applied for it and
+destroyed after them, or with `repeats.cluster: per-repeat` each repeat on one
+of its own, pulling the images benchmarking/tools/build-images built into
+--image-repo. From a machine rather
 than Cloud Run, it builds the images the repository lacks itself, and without
 --image-repo applies a repository for the execution, scenario_runner/infra,
 destroyed after its clusters. With --dev-infra, uses the cluster of that dev
@@ -608,12 +608,11 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
 
 
 def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[str]:
-    """Each of a case's repeats runs on a cluster of its own, applied for it and
-    destroyed after it, or with `repeat-cluster: shared` all of them, after the
-    case's warm-ups, on one applied for the case. The clusters pull from
-    args.image_repo, or without one from a repository applied for the
-    execution, the images built into it, and destroyed after the clusters.
-    Returns the cases that failed."""
+    """A case's warm-ups and repeats run on a cluster applied for it and
+    destroyed after them, or with `repeats.cluster: per-repeat` each repeat on
+    one of its own. The clusters pull from args.image_repo, or without one from
+    a repository applied for the execution, the images built into it, and
+    destroyed after the clusters. Returns the cases that failed."""
     # Every cluster's, before anything is applied, so a name that can't be fails first.
     case_vars = {
         key: names.infra_vars(args.project_id, args.region, args.name, key)

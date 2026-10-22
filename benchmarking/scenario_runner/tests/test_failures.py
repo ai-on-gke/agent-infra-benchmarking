@@ -122,7 +122,7 @@ class Series(unittest.TestCase):
                 raise locust.LocustError("boom")
 
         with self.assertRaises(run.CaseFailed):
-            run.run_repeats("c", {"repeats": 3}, repeat, shared_cluster=False)
+            run.run_repeats("c", {"repeats": {"count": 3, "cluster": "per-repeat"}}, repeat, shared_cluster=False)
         self.assertEqual(ran, ["c-1", "c-2", "c-3"])
 
     def test_a_failed_warmup_only_warns(self):
@@ -133,7 +133,7 @@ class Series(unittest.TestCase):
             if warmup:
                 raise locust.LocustError("cold")
 
-        case = {"repeats": 2, "repeat-cluster": "shared", "warmup-repeats": 2}
+        case = {"repeats": {"count": 2, "warmups": 2}}
         with mock.patch.object(run, "log") as log:
             run.run_repeats("c", case, repeat, shared_cluster=True)
         self.assertEqual(ran, [("c-warmup-1", 0, 1), ("c-warmup-2", 0, 2), ("c-1", 1, 0), ("c-2", 2, 0)])
@@ -144,11 +144,12 @@ class Series(unittest.TestCase):
             raise locust.LocustTimeout("still going")
 
         with self.assertRaises(locust.LocustStillRunning):
-            run.run_repeats("c", {"repeats": 2}, stuck, shared_cluster=True)
+            run.run_repeats("c", {"repeats": {"count": 2, "warmups": 0}}, stuck, shared_cluster=True)
         with self.assertRaises(locust.LocustStillRunning):
-            run.run_repeats("c", {"repeat-cluster": "shared"}, stuck, shared_cluster=True)
+            run.run_repeats("c", {}, stuck, shared_cluster=True)
         with self.assertRaises(run.CaseFailed):
-            run.run_repeats("c", {"repeats": 2}, stuck, shared_cluster=False)
+            per_repeat = {"repeats": {"count": 2, "cluster": "per-repeat"}}
+            run.run_repeats("c", per_repeat, stuck, shared_cluster=False)
 
     def test_a_failed_case_does_not_stop_the_series(self):
         cases = {"a": {"type": "locust"}, "b": {"type": "locust"}}

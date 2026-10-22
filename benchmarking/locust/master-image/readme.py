@@ -106,7 +106,7 @@ def _summary_header(case: str, jobs) -> str:
     infos = [info for _, info, _ in jobs if info]
     run_id = next((i["run_id"] for i in infos if i.get("run_id")), UNKNOWN)
     used = sum(1 for _, _, reason in jobs if not reason)
-    shared = any(isinstance(i.get("case"), dict) and i["case"].get("repeat-cluster") == "shared" for i in infos)
+    shared = any(_repeats(i).get("cluster") == "shared" for i in infos)
     lines = [f"# {case}, {len(jobs)} repeats{' on one cluster' if shared else ''}, run {run_id}", ""]
     lines.append(f"- **Summarized:** {used} of {len(jobs)} repeats, the ones that passed")
 
@@ -196,13 +196,20 @@ def _summary_files(case: str, jobs) -> str:
     ])
 
 
+def _repeats(info: dict) -> dict:
+    """The case's `repeats` as run.json records it, from a run before it was a
+    mapping the count alone."""
+    case = info.get("case") if isinstance(info.get("case"), dict) else {}
+    repeats = case.get("repeats")
+    return repeats if isinstance(repeats, dict) else {"count": repeats}
+
+
 def _header(info: dict) -> str:
     title = info.get("test_case") or UNKNOWN
     if info.get("warmup"):
         title += f", warm-up {info['warmup']}, not one of its repeats"
     elif info.get("repeat"):
-        case = info.get("case") if isinstance(info.get("case"), dict) else {}
-        title += f", repeat {info['repeat']} of {case.get('repeats') or UNKNOWN}"
+        title += f", repeat {info['repeat']} of {_repeats(info).get('count') or UNKNOWN}"
     lines = [f"# {title}, run {info.get('run_id') or UNKNOWN}", ""]
     lines.append(f"- **Result:** {_status(info.get('status'))}")
     failures = info.get("failures") if isinstance(info.get("failures"), dict) else {}

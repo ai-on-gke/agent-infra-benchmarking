@@ -32,13 +32,14 @@ PROVIDER_SUBSTRATE = "agent-substrate"
 PROVIDER_AGENT_SANDBOX = "agent-sandbox"
 PROVIDERS = [PROVIDER_SUBSTRATE, PROVIDER_AGENT_SANDBOX]
 DEFAULT_PROVIDER = PROVIDER_SUBSTRATE
-# Whether each of a case's repeats gets a cluster of its own, or they all share
-# one, after `warmup-repeats` runs that are not counted.
-REPEAT_CLUSTER = "repeat-cluster"
-REPEAT_CLUSTERS = ["fresh", "shared"]
-WARMUP_REPEATS = "warmup-repeats"
-DEFAULT_WARMUP_REPEATS = 1
-
+# How a case is sampled: `count` runs that are measured, after `warmups` that
+# are not, all on one cluster applied for the case, or with `cluster:
+# per-repeat` each measured run on one of its own and no warm-ups.
+REPEATS = "repeats"
+REPEAT_KEYS = {"count", "warmups", "cluster"}
+SHARED = "shared"
+PER_REPEAT = "per-repeat"
+REPEAT_CLUSTERS = [SHARED, PER_REPEAT]
 
 def load_cases(scenarios_file: Path) -> dict[str, dict]:
     with scenarios_file.open() as f:
@@ -62,23 +63,11 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
             case[PROVIDER] = provider
             if provider == PROVIDER_AGENT_SANDBOX:
                 case[SKIP_SUBSTRATE_INSTALL] = True
-        repeats = case.get("repeats", 1)
-        if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats < 1:
-            raise ValueError(f"{scenarios_file}: case {name}'s `repeats` must be a whole number from 1, got {repeats!r}")
-        if case.get(REPEAT_CLUSTER, "fresh") not in REPEAT_CLUSTERS:
-            raise ValueError(
-                f"{scenarios_file}: case {name}'s `{REPEAT_CLUSTER}` must be one of {', '.join(REPEAT_CLUSTERS)}"
-            )
-        warmups = case.get(WARMUP_REPEATS, 0)
-        if not isinstance(warmups, int) or isinstance(warmups, bool) or warmups < 0:
-            raise ValueError(
-                f"{scenarios_file}: case {name}'s `{WARMUP_REPEATS}` must be a whole number, got {warmups!r}"
-            )
-        # A warm-up on a cluster destroyed after it warms nothing.
-        if WARMUP_REPEATS in case and not shares_cluster(case):
-            raise ValueError(
-                f"{scenarios_file}: case {name}'s `{WARMUP_REPEATS}` is only for `{REPEAT_CLUSTER}: shared`"
-            )
+        try:
+            # Filled in, so run.json records how the case was sampled.
+            case[REPEATS] = check_repeats(case.get(REPEATS, {}))
+        except ValueError as exc:
+            raise ValueError(f"{scenarios_file}: case {name}'s `{REPEATS}` {exc}") from None
         check_cluster(f"{scenarios_file}: case {name}", case)
         if case["type"] != "noop":
             try:
@@ -90,22 +79,50 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
     return cases
 
 
+def check_repeats(given: object) -> dict:
+    """`repeats` with its defaults filled in; raises ValueError, its message
+    what is wrong with it."""
+    if not isinstance(given, dict):
+        raise ValueError(f"must be a mapping of {', '.join(sorted(REPEAT_KEYS))}, got {given!r}")
+    unknown = given.keys() - REPEAT_KEYS
+    if unknown:
+        raise ValueError(f"has unknown {', '.join(sorted(unknown))}")
+    repeats = repeats_of({REPEATS: given})
+    if repeats["cluster"] not in REPEAT_CLUSTERS:
+        raise ValueError(f"`cluster` must be one of {', '.join(REPEAT_CLUSTERS)}, got {repeats['cluster']!r}")
+    for key, least in (("count", 1), ("warmups", 0)):
+        value = repeats[key]
+        if not isinstance(value, int) or isinstance(value, bool) or value < least:
+            raise ValueError(f"`{key}` must be a whole number from {least}, got {value!r}")
+    # A warm-up on a cluster destroyed after it warms nothing.
+    if repeats["cluster"] == PER_REPEAT and repeats["warmups"]:
+        raise ValueError(f"`warmups` is only for `cluster: {SHARED}`")
+    return repeats
+
+
+def repeats_of(case: dict) -> dict:
+    """The case's `repeats`, with the defaults of what it leaves out: one
+    measured run after one warm-up, on a shared cluster."""
+    given = case.get(REPEATS) or {}
+    cluster = given.get("cluster", SHARED)
+    return {"count": given.get("count", 1), "warmups": given.get("warmups", int(cluster == SHARED)), "cluster": cluster}
+
+
 def record_names(name: str, case: dict) -> list[str]:
-    """What each of the case's repeats is recorded under: <name>-1 to <name>-N
-    above 1."""
-    repeats = case.get("repeats", 1)
-    return [f"{name}-{n}" for n in range(1, repeats + 1)] if repeats > 1 else [name]
-
-
-def shares_cluster(case: dict) -> bool:
-    return case.get(REPEAT_CLUSTER) == "shared"
+    """What each of the case's measured runs is recorded under: <name>-1 to
+    <name>-N above 1."""
+    count = repeats_of(case)["count"]
+    return [f"{name}-{n}" for n in range(1, count + 1)] if count > 1 else [name]
 
 
 def warmup_names(name: str, case: dict) -> list[str]:
-    """What each of the case's warm-ups is recorded under, <name>-warmup-1 to
-    <name>-warmup-N; none unless its repeats share a cluster."""
-    warmups = case.get(WARMUP_REPEATS, DEFAULT_WARMUP_REPEATS) if shares_cluster(case) else 0
-    return [f"{name}-warmup-{n}" for n in range(1, warmups + 1)]
+    """What each of the case's warm-ups is recorded under: <name>-warmup-1 to
+    <name>-warmup-N."""
+    return [f"{name}-warmup-{n}" for n in range(1, repeats_of(case)["warmups"] + 1)]
+
+
+def shares_cluster(case: dict) -> bool:
+    return repeats_of(case)["cluster"] == SHARED
 
 
 def check_cluster(where: str, case: dict) -> None:

@@ -60,9 +60,8 @@ DEFAULT_MAX_FAILURE_RATIO = 0.01
 # ate-env manifest's own default.
 DEFAULT_ENV_WORKER_COUNT = 5
 CASE_KEYS = {
-    "type", "infra", "repeats", "repeat-cluster", "warmup-repeats", "skip-substrate-install", "sandbox-class",
-    "env-worker-count", "actor-memory", "actor-cpu", "max-failure-ratio", "comparator", "cost-sheet", "provider",
-    "lifecycle-mode",
+    "type", "infra", "repeats", "skip-substrate-install", "sandbox-class", "env-worker-count", "actor-memory",
+    "actor-cpu", "max-failure-ratio", "comparator", "cost-sheet", "provider", "lifecycle-mode",
 }  # fmt: skip
 COMPARATOR_KEYS = {"providers", "tests", "runs", "warmup-runs"}
 PROVIDERS = ("substrate", "local", "e2b", "daytona", "modal", "anthropic", "openai")
