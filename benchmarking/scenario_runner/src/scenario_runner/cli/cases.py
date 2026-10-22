@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Prints the scenarios file with the templates its cases extend merged into
-them, a file the scenario-runner runs the same; a case's subcases stay in it,
-for the scenario-runner to make cases of. No case named prints every one."""
+"""Prints the scenarios file with a case made of each choice of its cases'
+parameters, a file the scenario-runner runs the same; a case's subcases stay in
+it, the parameters' values in theirs, for the scenario-runner to make cases of.
+No case named prints every one."""
 
 from __future__ import annotations
 

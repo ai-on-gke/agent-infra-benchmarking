@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import copy
+import itertools
+import re
 from pathlib import Path
 
 import yaml
@@ -40,13 +42,16 @@ SHARED = "shared"
 PER_REPEAT = "per-repeat"
 REPEAT_CLUSTERS = [SHARED, PER_REPEAT]
 
-# Named keys of a case that cases and templates take by `extends`, one's name,
-# with their own keys on top.
-TEMPLATES = "templates"
-EXTENDS = "extends"
+# A case's parameters, lists of the values its placeholders take, `{name}` in
+# its name or any of its values: a case is made of each choice of one entry
+# from every list.
+PARAMETERS = "parameters"
+PLACEHOLDER_RE = re.compile(r"\{([A-Za-z0-9_-]+)\}")
+# What a placeholder set to null leaves of the key it is the value of.
+DROPPED = object()
 
 # A case's subcases, each run as a case of its own, <case>-<subcase>: the
-# case's keys with the subcase's on top.
+# case with the subcase's values in its placeholders.
 SUBCASES = "subcases"
 # A case's own keys; the rest of what it states is in the mapping of its type,
 # named by the type, which only the type's runner reads, but for the cluster
@@ -59,23 +64,28 @@ def types() -> list[str]:
 
 
 def resolved(scenarios_file: Path) -> dict:
-    """The scenarios file with its templates merged into the cases that extend
-    them and left out, which the scenario-runner runs the same."""
+    """The scenarios file with a case made of each choice of its cases'
+    parameters, which the scenario-runner runs the same."""
     with scenarios_file.open() as f:
         loaded = yaml.safe_load(f) or {}
     cases = loaded.get("cases")
     if not isinstance(cases, dict) or not cases:
         raise ValueError(f"{scenarios_file} has no `cases` mapping")
-    cases = with_templates(str(scenarios_file), loaded.get(TEMPLATES) or {}, cases)
-    return {**{key: value for key, value in loaded.items() if key != TEMPLATES}, "cases": cases}
+    return {**loaded, "cases": with_parameters(str(scenarios_file), cases)}
 
 
 def load_cases(scenarios_file: Path) -> dict[str, dict]:
-    """The cases, each with its templates merged in, subcases in their place
-    and `type` filled in from the mapping that names it."""
+    """The cases, one made of each choice of their parameters, subcases in
+    their place and `type` filled in from the mapping that names it."""
     cases = with_subcases(str(scenarios_file), resolved(scenarios_file)["cases"])
     known = types()
     for name, case in cases.items():
+        unset = placeholders(name) | placeholders(case)
+        if unset:
+            raise ValueError(
+                f"{scenarios_file}: case {name} has {', '.join('{' + p + '}' for p in sorted(unset))},"
+                " which none of its parameters or subcases set"
+            )
         if "type" in case:
             raise ValueError(
                 f"{scenarios_file}: case {name}'s type is the key of its mapping, one of {', '.join(known)}"
@@ -118,55 +128,112 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
     return cases
 
 
-def merged(base: dict, over: dict) -> dict:
-    """base with over's keys on top, a mapping in both merged in turn, and
-    those over has null dropped."""
-    out = dict(base)
-    for key, value in over.items():
-        if value is None:
-            out.pop(key, None)
-        else:
-            out[key] = merged(out[key], value) if isinstance(value, dict) and isinstance(out.get(key), dict) else value
+def substituted(value: object, values: dict, where: str) -> object:
+    """value with its placeholders that values names replaced, those it does
+    not left: a string that is one placeholder by the value as it is, a key or
+    an item set to null dropped, and a placeholder in a longer string by its
+    text."""
+    out = _substituted(value, values, where)
+    return None if out is DROPPED else out
+
+
+def _substituted(value: object, values: dict, where: str) -> object:
+    if isinstance(value, dict):
+        out = {key: _substituted(item, values, where) for key, item in value.items()}
+        return {key: item for key, item in out.items() if item is not DROPPED}
+    if isinstance(value, list):
+        return [item for item in (_substituted(item, values, where) for item in value) if item is not DROPPED]
+    if not isinstance(value, str):
+        return value
+    whole = PLACEHOLDER_RE.fullmatch(value)
+    if whole and whole[1] in values:
+        given = values[whole[1]]
+        return DROPPED if given is None else copy.deepcopy(given)
+
+    def text(match: re.Match) -> str:
+        if match[1] not in values:
+            return match[0]
+        given = values[match[1]]
+        if isinstance(given, bool) or not isinstance(given, (str, int, float)):
+            raise ValueError(f"{where}: {match[0]} in {value!r} must be a string or a number, got {given!r}")
+        return str(given)
+
+    return PLACEHOLDER_RE.sub(text, value)
+
+
+def placeholders(value: object) -> set[str]:
+    """The names of the placeholders left in value."""
+    if isinstance(value, dict):
+        return set().union(*map(placeholders, value.values()))
+    if isinstance(value, list):
+        return set().union(*map(placeholders, value))
+    return set(PLACEHOLDER_RE.findall(value)) if isinstance(value, str) else set()
+
+
+def with_parameters(where: str, cases: dict) -> dict:
+    """The cases, one with `parameters` replaced by a case of each choice of
+    one entry from every list of them, in their order, with the entries'
+    values in its placeholders. Those its subcases set are left to them, each
+    subcase that does not set one given the parameter's value."""
+    out = {}
+
+    def add(name: object, case: object) -> None:
+        if name in out:
+            raise ValueError(f"{where}: there are two cases {name}")
+        out[name] = case
+
+    for name, case in cases.items():
+        if not isinstance(case, dict) or PARAMETERS not in case:
+            add(name, case)
+            continue
+        parameters = case[PARAMETERS]
+        if (
+            not isinstance(parameters, dict)
+            or not parameters
+            or not all(
+                isinstance(entries, list) and entries and all(isinstance(entry, dict) for entry in entries)
+                for entries in parameters.values()
+            )
+        ):
+            raise ValueError(f"{where}: case {name}'s `{PARAMETERS}` must be a mapping of names to lists of values")
+        subcases = case.get(SUBCASES) if isinstance(case.get(SUBCASES), dict) else {}
+        theirs = set().union(*(keys for keys in subcases.values() if isinstance(keys, dict)))
+        for choice in itertools.product(*parameters.values()):
+            values = {}
+            for entry in choice:
+                twice = values.keys() & entry.keys()
+                if twice:
+                    raise ValueError(f"{where}: case {name} sets {', '.join(sorted(twice))} in more than one parameter")
+                values.update(entry)
+            renamed = substituted(name, values, f"case {name}")
+            if not isinstance(renamed, str):
+                raise ValueError(f"{where}: case {name} is named {renamed!r}, not a string")
+            what = f"case {renamed}"
+            expanded = {
+                key: substituted(keys, {k: v for k, v in values.items() if k not in theirs}, what)
+                for key, keys in case.items()
+                if key != PARAMETERS
+            }
+            if subcases:
+                expanded[SUBCASES] = {
+                    subcase: (
+                        {
+                            **{k: values[k] for k in theirs & values.keys()},
+                            **{k: substituted(v, values, f"{what}'s subcase {subcase}") for k, v in keys.items()},
+                        }
+                        if isinstance(keys, dict)
+                        else keys
+                    )
+                    for subcase, keys in subcases.items()
+                }
+            add(renamed, expanded)
     return out
-
-
-def with_templates(where: str, templates: dict, cases: dict) -> dict[str, dict]:
-    """The cases, each with the template it extends merged in under its own
-    keys. Every template is resolved, so one no case uses is checked too."""
-    if not isinstance(templates, dict):
-        raise ValueError(f"{where}: `{TEMPLATES}` must be a mapping of names to the keys they hold")
-    resolved = {}
-
-    def resolve(what: str, keys: object, chain: tuple[str, ...]) -> dict:
-        if not isinstance(keys, dict):
-            raise ValueError(f"{where}: {what} is not a mapping")
-        own = {key: value for key, value in keys.items() if key != EXTENDS}
-        if EXTENDS not in keys:
-            return own
-        parent = keys[EXTENDS]
-        if not isinstance(parent, str):
-            raise ValueError(f"{where}: {what}'s `{EXTENDS}` must be one template's name")
-        if parent not in templates:
-            raise ValueError(f"{where}: {what} extends {parent}, which is not a template")
-        if parent in chain:
-            raise ValueError(f"{where}: template {parent} extends itself, by {' > '.join([*chain, parent])}")
-        if parent not in resolved:
-            resolved[parent] = resolve(f"template {parent}", templates[parent], (*chain, parent))
-        return merged(resolved[parent], own)
-
-    for name, keys in templates.items():
-        if name not in resolved:
-            resolved[name] = resolve(f"template {name}", keys, (name,))
-    # Copied, as the cases are filled in where they are.
-    return {
-        name: copy.deepcopy(resolve(f"case {name}", case, ())) if isinstance(case, dict) and EXTENDS in case else case
-        for name, case in cases.items()
-    }
 
 
 def with_subcases(where: str, cases: dict) -> dict[str, dict]:
     """The cases, one with `subcases` replaced by a case per subcase, in their
-    order, which SUBCASE says it is a subcase of."""
+    order, with the subcase's values in its placeholders, which SUBCASE says
+    it is a subcase of."""
     out = {}
     for name, case in cases.items():
         if not isinstance(case, dict):
@@ -178,21 +245,19 @@ def with_subcases(where: str, cases: dict) -> dict[str, dict]:
             continue
         subcases = case[SUBCASES]
         if not isinstance(subcases, dict) or not subcases:
-            raise ValueError(f"{where}: case {name}'s `{SUBCASES}` must be a mapping of names to the keys they change")
+            raise ValueError(f"{where}: case {name}'s `{SUBCASES}` must be a mapping of names to the values they set")
         base = {key: value for key, value in case.items() if key != SUBCASES}
-        for subcase, keys in subcases.items():
+        for subcase, values in subcases.items():
             if not isinstance(subcase, str) or not LABEL_RE.fullmatch(subcase):
                 raise ValueError(f"{where}: case {name}'s subcase {subcase!r} is not a valid label value")
-            keys = keys or {}
-            if not isinstance(keys, dict):
+            values = values or {}
+            if not isinstance(values, dict):
                 raise ValueError(f"{where}: case {name}'s subcase {subcase} is not a mapping")
-            fixed = keys.keys() & {SUBCASES, SUBCASE}
-            if fixed:
-                raise ValueError(f"{where}: case {name}'s subcase {subcase} cannot change {', '.join(sorted(fixed))}")
             renamed = f"{name}-{subcase}"
             if renamed in cases or renamed in out:
                 raise ValueError(f"{where}: case {name}'s subcase {subcase} would be {renamed}, which is another case")
-            out[renamed] = {**merged(copy.deepcopy(base), keys), SUBCASE: {"of": name, "name": subcase}}
+            what = f"case {renamed}"
+            out[renamed] = {**substituted(base, values, what), SUBCASE: {"of": name, "name": subcase}}
     return out
 
 

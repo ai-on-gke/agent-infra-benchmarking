@@ -72,9 +72,9 @@ OPENCLAW = {
 }
 
 
-def load(cases: dict, templates: dict | None = None) -> dict:
+def load(cases: dict) -> dict:
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
-        yaml.safe_dump({"cases": cases, **({"templates": templates} if templates is not None else {})}, f)
+        yaml.safe_dump({"cases": cases}, f, sort_keys=False)
     try:
         return load_cases(Path(f.name))
     finally:
@@ -266,9 +266,10 @@ class Subcases(unittest.TestCase):
         openai = cases["sandbox-benchmark-openai"]["sandbox-benchmark"]["provider"]
         self.assertEqual(openai, {"name": "openai", "container-size": "medium"})
 
-    def test_a_subcase_changes_any_key_and_merges_mappings(self):
-        subcases = {"micro": {"locust": {**on("microvm"), "master": {"users": 3}}}, "plain": None}
-        cases = load({"c": {**GLUTTON, "subcases": subcases}, "d": GLUTTON})
+    def test_a_subcase_sets_the_case_s_placeholders(self):
+        case = glutton({**on("{class}"), "master": {"run-time": "1m", "users": "{users}"}})
+        subcases = {"micro": {"class": "microvm", "users": 3}, "plain": {"class": "gvisor", "users": 10}}
+        cases = load({"c": {**case, "subcases": subcases}, "d": GLUTTON})
         self.assertEqual(list(cases), ["c-micro", "c-plain", "d"])
         self.assertEqual(cases["c-micro"]["locust"]["install"], on("microvm")["install"])
         self.assertEqual(cases["c-micro"]["locust"]["master"], {"run-time": "1m", "users": 3})
@@ -281,75 +282,75 @@ class Subcases(unittest.TestCase):
             {**GLUTTON, "subcases": ["a"]},
             {**GLUTTON, "subcases": {"a": 1}},
             {**GLUTTON, "subcases": {"a b": {}}},
-            {**GLUTTON, "subcases": {"a": {"type": "sandbox-benchmark"}}},
-            {**GLUTTON, "subcases": {"a": {"sandbox-benchmark": {}}}},
-            {**GLUTTON, "subcases": {"a": {"subcases": {"b": {}}}}},
-            {**GLUTTON, "subcases": {"a": {SUBCASE: {}}}},
             {**GLUTTON, SUBCASE: {"of": "x", "name": "y"}},
         ):
             with self.subTest(case=case), self.assertRaises(ValueError):
                 load({"c": case})
         with self.assertRaisesRegex(ValueError, "which is another case"):
             load({"c": {**GLUTTON, "subcases": {"a": {}}}, "c-a": GLUTTON})
+        with self.assertRaisesRegex(ValueError, r"case c-b has \{users\}, which none"):
+            case = glutton({"master": {"run-time": "1m", "users": "{users}"}})
+            load({"c": {**case, "subcases": {"a": {"users": 1}, "b": {}}}})
 
     def test_a_subcase_on_bare_metal_is_one_of_the_case_on_it(self):
-        cases = load({"c": {**GLUTTON, "subcases": {"a": {"bare-metal": True}, "b": {}}}})
+        case = {**GLUTTON, "bare-metal": "{metal}", "subcases": {"a": {"metal": True}, "b": {"metal": False}}}
+        cases = load({"c": case})
         cases = with_bare_metal(cases, set(cases), False, None, PLACEMENTS)
         self.assertEqual(grouped(cases), {"c-metal": ["c-a-metal"], "c": ["c-b"]})
 
 
-class Templates(unittest.TestCase):
-    def test_a_case_takes_its_template_s_keys_under_its_own(self):
-        cases = load({"c": {"extends": "g", "locust": {"master": {"users": 3}}}}, {"g": GLUTTON})
+class Parameters(unittest.TestCase):
+    CASE = glutton({**on("{class}"), "master": {"run-time": "1m", "users": "{users}"}}, name="{workload}{suffix}")
+
+    def expand(self, case: dict, parameters: dict) -> dict:
+        name = case.pop("name", "c")
+        return load({name: {**case, "parameters": parameters}})
+
+    def test_a_case_of_each_choice_in_order(self):
+        cases = self.expand(
+            dict(self.CASE),
+            {
+                "load": [{"workload": "glutton", "users": 10}, {"workload": "busy", "users": 99}],
+                "class": [{"suffix": "", "class": "gvisor"}, {"suffix": "-microvm", "class": "microvm"}],
+            },
+        )
+        self.assertEqual(list(cases), ["glutton", "glutton-microvm", "busy", "busy-microvm"])
+        self.assertEqual(cases["busy-microvm"]["locust"]["master"], {"run-time": "1m", "users": 99})
+        self.assertEqual(cases["busy-microvm"]["locust"]["install"], on("microvm")["install"])
+        self.assertNotIn("parameters", cases["glutton"])
+
+    def test_a_value_keeps_its_type_and_null_drops_its_key(self):
+        case = glutton({"master": {"run-time": "{time}", "users": "{users}", "warm-up": "{warm-up}"}})
+        values = {"time": "1m", "users": 3, "count": 2, "warm-up": None}
+        cases = self.expand({**case, "repeats": {"count": "{count}"}}, {"p": [values]})
         self.assertEqual(cases["c"]["locust"]["master"], {"run-time": "1m", "users": 3})
-        self.assertEqual(cases["c"]["locust"]["worker"], GLUTTON["locust"]["worker"])
-        self.assertNotIn("extends", cases["c"])
+        self.assertEqual(cases["c"]["repeats"]["count"], 2)
 
-    def test_a_template_extends_a_template(self):
-        templates = {
-            "g": GLUTTON,
-            "slow": {"extends": "g", "locust": {"master": {"run-time": "9m"}}},
-            "micro": {"extends": "slow", "locust": on("microvm")},
-        }
-        cases = load({"c": {"extends": "micro", "locust": {"master": {"users": 5}}}}, templates)
-        self.assertEqual(cases["c"]["locust"]["master"], {"run-time": "9m", "users": 5})
-        self.assertEqual(cases["c"]["locust"]["install"], on("microvm")["install"])
-        self.assertEqual(cases["c"]["locust"]["worker"], GLUTTON["locust"]["worker"])
-
-    def test_null_drops_a_key(self):
-        cases = load(
-            {"c": {"extends": "g", "locust": {"master": {"warm-up": None}}, "subcases": {"s": {"repeats": None}}}},
-            {"g": {**glutton({"master": {**GLUTTON["locust"]["master"], "warm-up": "10s"}}), "repeats": {"count": 3}}},
+    def test_subcases_win_over_parameters_and_take_theirs(self):
+        case = glutton({"master": {"run-time": "{run-time}", "users": "{users}"}})
+        subcases = {"short": {"users": 1}, "long": {"users": 2, "run-time": "{run-time-long}"}}
+        cases = self.expand(
+            {**case, "subcases": subcases}, {"p": [{"run-time": "1m", "run-time-long": "9m", "users": 5}]}
         )
-        self.assertEqual(cases["c-s"]["locust"]["master"], GLUTTON["locust"]["master"])
-        self.assertEqual(cases["c-s"]["repeats"]["count"], 1)
+        self.assertEqual(cases["c-short"]["locust"]["master"], {"run-time": "1m", "users": 1})
+        self.assertEqual(cases["c-long"]["locust"]["master"], {"run-time": "9m", "users": 2})
 
-    def test_a_template_s_subcases_are_the_case_s(self):
-        cases = load(
-            {"c": {"extends": "g", "subcases": {"b": {"bare-metal": True}}}}, {"g": {**GLUTTON, "subcases": {"a": {}}}}
-        )
-        self.assertEqual(grouped(cases), {"c": ["c-a", "c-b"]})
-
-    def test_cases_do_not_share_what_they_extend(self):
-        cases = load({"a": {"extends": "g"}, "b": {"extends": "g"}}, {"g": GLUTTON})
-        cases["a"]["locust"]["master"]["users"] = 99
-        self.assertEqual(cases["b"]["locust"]["master"]["users"], 10)
-
-    def test_bad_templates_are_refused(self):
-        for templates, case, error in (
-            ({"g": GLUTTON}, {"extends": "x"}, "x, which is not a template"),
-            ({"g": GLUTTON}, {"extends": {"g": 1}}, "must be one template's name"),
-            ({"g": GLUTTON, "h": {}}, {"extends": ["g", "h"]}, "must be one template's name"),
-            ({"g": {"extends": ["h"]}, "h": GLUTTON}, GLUTTON, "template g's `extends` must be one template's name"),
-            ({"g": 1}, {"extends": "g"}, "template g is not a mapping"),
-            ({"g": {"extends": "g"}}, GLUTTON, "template g extends itself, by g > g"),
-            ({"g": {"extends": "h"}, "h": {"extends": "g"}}, GLUTTON, "template g extends itself, by g > h > g"),
-            ({"g": {"extends": "x"}}, GLUTTON, "template g extends x"),
-            (["g"], GLUTTON, "`templates` must be a mapping"),
-            ({"g": {}}, {"extends": "g"}, "needs a mapping of exactly one type"),
+    def test_bad_parameters_are_refused(self):
+        for parameters, error in (
+            ([{"users": 1}], "must be a mapping of names to lists"),
+            ({}, "must be a mapping of names to lists"),
+            ({"p": []}, "must be a mapping of names to lists"),
+            ({"p": [1]}, "must be a mapping of names to lists"),
+            ({"p": [{"users": 1}], "q": [{"users": 2}]}, "sets users in more than one parameter"),
+            ({"p": [{"users": 1}, {"users": 2}]}, "there are two cases c"),
         ):
-            with self.subTest(templates=templates, case=case), self.assertRaisesRegex(ValueError, error):
-                load({"c": case}, templates)
+            case = glutton({"master": {"run-time": "1m", "users": "{users}"}})
+            with self.subTest(parameters=parameters), self.assertRaisesRegex(ValueError, error):
+                self.expand(case, parameters)
+        with self.assertRaisesRegex(ValueError, r"\{workload\} in '\{workload\}-x' must be a string or a number"):
+            load({"{workload}-x": {**GLUTTON, "parameters": {"p": [{"workload": None}]}}})
+        with self.assertRaisesRegex(ValueError, r"case c has \{users\}, which none"):
+            load({"c": glutton({"master": {"run-time": "1m", "users": "{users}"}})})
 
 
 class SandboxBenchmarkCases(unittest.TestCase):
