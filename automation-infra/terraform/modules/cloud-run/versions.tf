@@ -6,9 +6,9 @@ terraform {
       source  = "hashicorp/google"
       version = ">= 7.33.0, < 8.0.0"
     }
-    external = {
-      source  = "hashicorp/external"
-      version = ">= 2.3.0, < 3.0.0"
+    github = {
+      source  = "integrations/github"
+      version = "~> 6.0"
     }
   }
 }

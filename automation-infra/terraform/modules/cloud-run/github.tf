@@ -1,9 +1,8 @@
-# Lets GitHub Actions write under source/ in var.github_actions_bucket. They
-# authenticate as it through Workload Identity Federation, below, with no key;
-# automation-infra/tools/get-gh-actions-gcs-config sets the repository
-# variables the workflow reads.
+# Lets GitHub Actions push the runner image and the runs' images. They
+# authenticate as it through Workload Identity Federation, below, with no key,
+# through the repository variables at the end.
 resource "google_service_account" "github" {
-  count = var.github_actions_bucket == null ? 0 : 1
+  count = var.github_actions ? 1 : 0
 
   project = var.project_id
   # account_id is capped at 30 characters, the same as var.default_resource_name.
@@ -11,31 +10,23 @@ resource "google_service_account" "github" {
   display_name = "GitHub Actions of ${var.default_resource_name}"
 }
 
-# Only under source/: the bucket may also hold Terraform state. objectUser
-# rather than objectCreator, so that a rerun can overwrite its tarball.
-# Listing is checked on the bucket rather than an object, hence its own
-# clause, for prefixes under source/: gcloud storage cp lists its destination.
-resource "google_storage_bucket_iam_member" "github_source" {
-  count = var.github_actions_bucket == null ? 0 : 1
+# .github/workflows/publish.yml's pushes, build cache and tags, of the
+# runner image and of the images the runs pull.
+resource "google_artifact_registry_repository_iam_member" "github_writer" {
+  count = var.github_actions ? 1 : 0
 
-  bucket = var.github_actions_bucket
-  role   = "roles/storage.objectUser"
-  member = "serviceAccount:${google_service_account.github[0].email}"
-
-  condition {
-    title = "source-only"
-    expression = join(" || ", [
-      "resource.name.startsWith(\"projects/_/buckets/${var.github_actions_bucket}/objects/source/\")",
-      "api.getAttribute(\"storage.googleapis.com/objectListPrefix\", \"\").startsWith(\"source/\")",
-    ])
-  }
+  project    = var.project_id
+  location   = google_artifact_registry_repository.images.location
+  repository = google_artifact_registry_repository.images.name
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.github[0].email}"
 }
 
 # GitHub Actions authenticate as the account above with the OIDC token GitHub
 # issues each workflow run, rather than with a key: only runs of
 # var.github_repository can.
 resource "google_iam_workload_identity_pool" "github" {
-  count = var.github_actions_bucket == null ? 0 : 1
+  count = var.github_actions ? 1 : 0
 
   project                   = var.project_id
   workload_identity_pool_id = "${substr(var.default_resource_name, 0, 25)}-gh"
@@ -45,7 +36,7 @@ resource "google_iam_workload_identity_pool" "github" {
 }
 
 resource "google_iam_workload_identity_pool_provider" "github" {
-  count = var.github_actions_bucket == null ? 0 : 1
+  count = var.github_actions ? 1 : 0
 
   project                            = var.project_id
   workload_identity_pool_id          = google_iam_workload_identity_pool.github[0].workload_identity_pool_id
@@ -63,9 +54,31 @@ resource "google_iam_workload_identity_pool_provider" "github" {
 }
 
 resource "google_service_account_iam_member" "github_workload_identity" {
-  count = var.github_actions_bucket == null ? 0 : 1
+  count = var.github_actions ? 1 : 0
 
   service_account_id = google_service_account.github[0].name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github[0].name}/attribute.repository/${var.github_repository}"
+}
+
+# The variables the workflows authenticate with, named after the deployment's
+# folder, which is default_resource_name.
+locals {
+  github_variable_suffix = upper(replace(var.default_resource_name, "-", "_"))
+}
+
+resource "github_actions_variable" "workload_identity_provider" {
+  count = var.github_actions ? 1 : 0
+
+  repository    = split("/", var.github_repository)[1]
+  variable_name = "GCP_WORKLOAD_IDENTITY_PROVIDER_${local.github_variable_suffix}"
+  value         = google_iam_workload_identity_pool_provider.github[0].name
+}
+
+resource "github_actions_variable" "service_account" {
+  count = var.github_actions ? 1 : 0
+
+  repository    = split("/", var.github_repository)[1]
+  variable_name = "GCP_SERVICE_ACCOUNT_${local.github_variable_suffix}"
+  value         = google_service_account.github[0].email
 }

@@ -59,10 +59,6 @@ class Tools(unittest.TestCase):
         self.assertEqual(set(versions), {"terraform", "kubectl", "gcloud", "go", "docker", "ko", "python"})
         self.assertRegex(versions["ko"], r"^v\d")
 
-    def test_builders(self):
-        self.assertEqual(run_info.builders(False), {"where": "local docker"})
-        self.assertEqual(set(run_info.builders(True)), {"where", "docker", "go"})
-
 
 class MissingTool(unittest.TestCase):
     def test_a_missing_tool_has_no_version(self):

@@ -83,7 +83,7 @@ output "atelet_wi_principal" {
 }
 
 output "node_service_account" {
-  description = "Service account the node pools run as. Holds the GKE minimum at project level, and read on this deployment's bucket and on var.image_repository. An image this deployment's pods have to pull belongs in that repository, or this account needs naming on whatever holds it instead."
+  description = "Service account the node pools run as. Holds the GKE minimum at project level, and read on this deployment's bucket, and on var.image_repository when this config created it. An image this deployment's pods have to pull belongs in that repository, or this account needs naming on whatever holds it instead."
   value       = local.node_service_account
 }
 

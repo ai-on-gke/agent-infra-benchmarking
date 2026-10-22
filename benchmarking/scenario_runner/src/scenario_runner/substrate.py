@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Builds the submodule's images once per execution, and installs substrate
-from them on a case's cluster with its hack/install-ate.sh --deploy-ate-system,
-and hack/install-microvm-deps.sh --install on a microvm one, configured from
-the cluster's Terraform outputs. The gVisor SandboxConfig's assets are then
+"""Installs substrate on a case's cluster from the submodule's images, which
+builder.py pushes ahead of the run, with its hack/install-ate.sh
+--deploy-ate-system, and hack/install-microvm-deps.sh --install on a microvm
+one, configured from the cluster's Terraform outputs. The gVisor SandboxConfig's assets are then
 mirrored into the cluster's bucket."""
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -39,8 +38,6 @@ from .process import output, retry, stream
 
 SUBSTRATE_DIR = RUNNER_DIR.parent.parent / "dependency-repos" / "substrate"
 SUBSTRATE_PATH = SUBSTRATE_DIR.relative_to(images.ROOT).as_posix()
-# Of the go.mod's Go version, with git.
-GO_BUILDER = "golang:1.27.2@sha256:007a316059246276cb214df93950be77837545dc78007a73e0291a4963d5d3bf"
 LABEL_VALUE = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?")
 # What a pre-built install takes: images.Components in
 # cmd/ate-setup/internal/images, less the demos.
@@ -58,8 +55,6 @@ SUBSTRATE_PACKAGES = [
 # What workloads/manifests name by ko:// reference that a pre-built install
 # doesn't take.
 WORKLOAD_PACKAGES = ["./cmd/benchmarking/glutton"]
-# Where ko stamps the build version, as ate-setup's ko runner does.
-VERSION_PKG = "github.com/agent-substrate/substrate/internal/version"
 KO_REF = re.compile(r"ko://github\.com/agent-substrate/substrate/([^\s\"',\]}]+)")
 ENVOY_DATAPLANE_DIR = f"{SUBSTRATE_PATH}/cmd/dataplane/envoy"
 ENVOY_DATAPLANE = images.Image(
@@ -113,73 +108,33 @@ def build_version() -> str:
     return version
 
 
-def build_images(repo: str, project_id: str, cloud_build: bool = False, login: bool = True) -> None:
-    """Builds and pushes to repo, tagged build_version(), what install and
-    resolve take: every image of a pre-built install, SUBSTRATE_PACKAGES and
-    envoy-dataplane, and the ones workloads/manifests name. With cloud_build
-    all of them on Cloud Build, else with ko and Docker here, which without
-    login use the registry credentials Docker's configuration already has."""
-    version = build_version()
-    log(f"substrate: building the {version} images into {repo}")
-    # Each image named after the last element of its package, as ate-setup's
-    # ko runner (cmd/ate-setup/internal/ko) names them.
-    ko_build = ["hack/run-tool.sh", "ko", "build", "--base-import-paths", f"--tags={version}",
-                f"--ldflags=-X={VERSION_PKG}.Version={version}", *SUBSTRATE_PACKAGES, *WORKLOAD_PACKAGES]  # fmt: skip
-    env = {"KO_DEFAULTPLATFORMS": images.DEFAULT_PLATFORM, "KO_DOCKER_REPO": repo}
-    if cloud_build:
-        cloud_build_images(ko_build, env, repo, version, project_id)
-        return
-    if login:
-        # ko login, as ko doesn't push with docker.
-        host = repo.split("/", 1)[0]
-        ko = [str(SUBSTRATE_DIR / "hack" / "run-tool.sh"), "ko", "login", host]
-        token = images.access_token(host)
-        stream([*ko, "--username=oauth2accesstoken", "--password-stdin"], cwd=SUBSTRATE_DIR, input=token)
-    stream(ko_build, env=env, cwd=SUBSTRATE_DIR)
-    images.docker_build_and_push([ENVOY_DATAPLANE], repo, version, images.DEFAULT_PLATFORM, login)
-
-
-def cloud_build_images(ko_build: list[str], env: dict, repo: str, version: str, project_id: str) -> None:
-    """Runs the ko build alongside envoy-dataplane's docker build as one Cloud
-    Build, uploading the submodule's files git doesn't ignore. ko pushes as the
-    build's service account, through its Google keychain."""
-    envoy = images.ref(repo, ENVOY_DATAPLANE.name, version)
-    # hack/run-tool.sh finds the tools from the repo's top level, and the
-    # upload has no .git. Its files keep the uploader's owner, not root.
-    git = ["git config --global --add safe.directory '*'", "git init -q"]
-    ko = {
-        "id": "ko",
-        "name": GO_BUILDER,
-        "dir": SUBSTRATE_PATH,
-        "entrypoint": "bash",
-        "args": ["-c", " && ".join([*git, shlex.join(ko_build)])],
-        # VCS stamping fails in a repository without commits.
-        "env": [f"{key}={value}" for key, value in env.items()] + ["GOFLAGS=-buildvcs=false"],
-        "waitFor": ["-"],
-    }
-    files = output(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=SUBSTRATE_DIR)
-    # Not the ones deleted in the working tree.
-    paths = [f"{SUBSTRATE_PATH}/{file}" for file in files.split("\0") if file and os.path.lexists(SUBSTRATE_DIR / file)]
-    log(f"substrate: building on Cloud Build, envoy-dataplane as {envoy}")
-    envoy_step = images.cloud_build_step(ENVOY_DATAPLANE, envoy, images.DEFAULT_PLATFORM)
-    images.cloud_build_submit([ko, envoy_step], [envoy], paths, project_id)
+def image_refs(repo: str) -> list[str]:
+    """What install and resolve take from repo, tagged build_version(): every
+    image of a pre-built install, SUBSTRATE_PACKAGES and envoy-dataplane, and
+    the ones workloads/manifests name. builder.py pushes them, each named
+    after the last element of its package, as ate-setup's ko runner
+    (cmd/ate-setup/internal/ko) names them."""
+    names = [package.rsplit("/", 1)[-1] for package in [*SUBSTRATE_PACKAGES, *WORKLOAD_PACKAGES]]
+    repo = images.group_repo(repo, "substrate")
+    return [images.ref(repo, name, build_version()) for name in [*names, ENVOY_DATAPLANE.name]]
 
 
 def image_repo(cluster: Cluster) -> str:
-    """Where the cluster's substrate images are, which build_images pushed to."""
+    """Where the cluster's substrate images are: the substrate folder of its
+    repository, as image_refs names them."""
     if not cluster.image_docker_repo:
         raise SubstrateError(
             f"cluster {cluster.name} names no repository of substrate images; a dev infra applied before it did"
             " needs --dev-infra-update"
         )
-    return cluster.image_docker_repo
+    return images.group_repo(cluster.image_docker_repo, "substrate")
 
 
 def resolve(cluster: Cluster, manifest: str) -> str:
     """The manifest with each ko:// reference to substrate replaced by the
-    image build_images pushed of it, pinned to its digest."""
+    image of it image_refs names, pinned to its digest."""
     repo = image_repo(cluster)
-    # build_images names an image after the last element of its package.
+    # As image_refs names them.
     return KO_REF.sub(lambda ref: images.pin(f"{repo}/{ref[1].rsplit('/', 1)[-1]}:{build_version()}"), manifest)
 
 
@@ -219,13 +174,14 @@ def check_pinned() -> None:
         log(f"substrate: {SUBSTRATE_PATH} has uncommitted changes; its build version is {build_version()}", "WARNING")
 
 
-def missing_requirements(cloud_build: bool = False) -> list[str]:
+def missing_requirements() -> list[str]:
+    """What installing it takes; builder.py says what building it does."""
     missing = [tool for tool in ("go", "gcloud") if not shutil.which(tool)]
-    return list(dict.fromkeys(missing + images.missing_requirements(cloud_build) + missing_submodule()))
+    return list(dict.fromkeys(missing + images.missing_requirements() + missing_submodule()))
 
 
 def install(cluster: Cluster) -> None:
-    """From the images build_images pushed, so the installer builds nothing.
+    """From the images image_refs names, so the installer builds nothing.
     A failed install runs again from the start."""
     retry(f"substrate on cluster {cluster.name}", lambda: install_once(cluster))
 

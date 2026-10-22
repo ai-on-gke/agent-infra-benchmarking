@@ -1,6 +1,6 @@
 output "job_name" {
-  description = "Name of the Cloud Run job."
-  value       = google_cloud_run_v2_job.job.name
+  description = "Name of the Cloud Run job, or null when create_jobs is false."
+  value       = one(google_cloud_run_v2_job.job[*].name)
 }
 
 output "service_account_email" {
@@ -9,18 +9,23 @@ output "service_account_email" {
 }
 
 output "scheduler_job_name" {
-  description = "Name of the Cloud Scheduler job, or null when var.schedule is null."
+  description = "Name of the Cloud Scheduler job, or null when var.schedule is null or create_jobs false."
   value       = one(google_cloud_scheduler_job.trigger[*].name)
 }
 
 output "execute_command" {
-  description = "Runs the job once, now."
-  value       = "gcloud run jobs execute ${google_cloud_run_v2_job.job.name} --project=${var.project_id} --region=${var.region}"
+  description = "Runs the job once, now, or null when create_jobs is false."
+  value       = var.create_jobs ? "gcloud run jobs execute ${google_cloud_run_v2_job.job[0].name} --project=${var.project_id} --region=${var.region}" : null
+}
+
+output "image_repo" {
+  description = "Image path prefix of the repository the runs pull from, which .github/workflows/publish.yml builds their images into; a local run's --image-repo can name it too."
+  value       = google_artifact_registry_repository.images.registry_uri
 }
 
 output "runner_image" {
-  description = "The runner image the job runs, by digest."
-  value       = data.google_artifact_registry_docker_image.runner.self_link
+  description = "The image the jobs run: unless runner_image, by the tag .github/workflows/publish.yml moves to source_branch's latest commit."
+  value       = local.runner_image
 }
 
 output "reports_dataset" {
@@ -29,12 +34,12 @@ output "reports_dataset" {
 }
 
 output "github_service_account_email" {
-  description = "Service account GitHub Actions write under source/ as, or null when var.github_actions_bucket is null."
+  description = "Service account GitHub Actions push the runner image as, or null when var.github_actions is false."
   value       = one(google_service_account.github[*].email)
 }
 
 output "github_workload_identity_provider" {
-  description = "Workload Identity provider GitHub Actions authenticate through, as the github_service_account_email account, or null when var.github_actions_bucket is null."
+  description = "Workload Identity provider GitHub Actions authenticate through, as the github_service_account_email account, or null when var.github_actions is false."
   value       = one(google_iam_workload_identity_pool_provider.github[*].name)
 }
 

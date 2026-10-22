@@ -176,10 +176,10 @@ variable "substrate_version" {
   default     = null
 }
 
-# The scenario-runner builds substrate's images and the benchmark's once per
-# execution, into its own repository rather than each cluster's.
+# Substrate's images and the benchmark's are built before the cluster pulls
+# them, by benchmarking/tools/build-images or the run itself.
 variable "image_repository" {
-  description = "Full resource name of the Artifact Registry repository the cluster's images come from, projects/P/locations/L/repositories/R: substrate's and the benchmark's. The nodes and atelet are granted to pull from it; null for none."
+  description = "Full resource name of the Artifact Registry repository the cluster's images come from, projects/P/locations/L/repositories/R: substrate's and the benchmark's. A node service account this config creates is granted to pull from it; atelet's read, and an existing var.node_service_account's, are the repository owner's to grant. null for none."
   type        = string
   default     = null
 }
@@ -312,7 +312,7 @@ variable "enable_atelet_bucket_iam" {
 }
 
 variable "enable_atelet_iam" {
-  description = "Grants atelet project-level storage and Artifact Registry roles, reaching every bucket and repository in the project. Off by default and rarely wanted: the grants in main.tf on this deployment's bucket and on var.image_repository cover atelet, and the nodes have their own service account rather than the project's default one. Turn this on only for a deployment that genuinely has to read or write outside what this config created. See cmd/iam.go and tools/setup-gcp/README.md for the authoritative list."
+  description = "Grants atelet project-level storage and Artifact Registry roles, reaching every bucket and repository in the project. Off by default and rarely wanted: the grants in main.tf on this deployment's bucket, and the repository owner's on var.image_repository, cover atelet, and the nodes have their own service account rather than the project's default one. Turn this on only for a deployment that genuinely has to read or write outside what this config created. See cmd/iam.go and tools/setup-gcp/README.md for the authoritative list."
   type        = bool
   default     = false
 }

@@ -320,19 +320,33 @@ moved {
   to   = google_artifact_registry_repository_iam_member.image_reader
 }
 
-# Pulls of substrate's images and the benchmark's, by the nodes for their pods
-# and by atelet for an ActorTemplate's.
-resource "google_artifact_registry_repository_iam_member" "image_reader" {
-  for_each = var.image_repository == null ? {} : {
-    node   = "serviceAccount:${local.node_service_account}"
-    atelet = local.atelet_wi_principal
+moved {
+  from = google_artifact_registry_repository_iam_member.image_reader["node"]
+  to   = google_artifact_registry_repository_iam_member.node_image_reader[0]
+}
+
+# atelet's read on the repository, which the repository's owner grants now:
+# atelet's principal is the same for every cluster in the project, so one
+# cluster's destroy would take it from the others sharing the repository.
+removed {
+  from = google_artifact_registry_repository_iam_member.image_reader
+
+  lifecycle {
+    destroy = false
   }
+}
+
+# Pulls of substrate's images and the benchmark's by the nodes for their pods,
+# for an account of this deployment's own; an existing var.node_service_account
+# is shared with other deployments, so the repository's owner grants it.
+resource "google_artifact_registry_repository_iam_member" "node_image_reader" {
+  count = var.image_repository != null && var.node_service_account == "" ? 1 : 0
 
   project    = local.image_repository[1]
   location   = local.image_repository[3]
   repository = local.image_repository[5]
   role       = "roles/artifactregistry.reader"
-  member     = each.value
+  member     = "serviceAccount:${local.node_service_account}"
 }
 
 resource "google_storage_bucket_iam_member" "benchmark_runner_object_creator" {

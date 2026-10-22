@@ -15,7 +15,7 @@
 """What a run was made of that its reports cannot say themselves: the case,
 the cluster and its nodes, the WorkerPool, the ActorTemplate and its
 SandboxConfig, every image by digest, substrate's control plane included, the
-commits, and the tools and builders the images were made with. The master
+commits, and the tools the run had. The master
 writes it into run.json beside the reports, with how the run went."""
 
 from __future__ import annotations
@@ -196,8 +196,7 @@ def pod_images(cluster: Cluster, namespace: str) -> dict:
 
 
 def _version(cmd: list[str], pattern: str = r"\S+") -> str | None:
-    """The tool's version, or None for a tool this machine does not have, such
-    as Docker where the images build on Cloud Build."""
+    """The tool's version, or None for a tool this machine does not have."""
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError:
@@ -209,8 +208,8 @@ def _version(cmd: list[str], pattern: str = r"\S+") -> str | None:
 @functools.cache
 def tools() -> dict:
     """The versions of the tools on this machine that built and deployed the
-    run: Terraform applied its infra, ko and Docker built its images unless
-    Cloud Build did, kubectl and gcloud deployed it."""
+    run: Terraform applied its infra, ko and Docker built its images, kubectl
+    and gcloud deployed it."""
     ko = re.search(r"github\.com/google/ko (v\S+)", (substrate.SUBSTRATE_DIR / "hack/tools/ko/go.mod").read_text())
     return {
         "terraform": _version(["terraform", "version", "-json"], r'(?<="terraform_version": ")[^"]+'),
@@ -221,13 +220,6 @@ def tools() -> dict:
         "ko": ko[1] if ko else None,
         "python": platform.python_version(),
     }
-
-
-def builders(cloud_build: bool) -> dict:
-    """Where the images were built, and with Cloud Build the builder images."""
-    if not cloud_build:
-        return {"where": "local docker"}
-    return {"where": "cloud build", "docker": images.CLOUD_BUILDER, "go": substrate.GO_BUILDER}
 
 
 def infra(case: dict) -> dict:
@@ -250,10 +242,8 @@ def collect(
     image_refs: dict,
     bucket: str,
     pool: tuple[str, str] = (worker_pool.NAMESPACE, worker_pool.NAME),
-    cloud_build: bool = False,
 ) -> dict:
-    """pool is the namespace and name of the WorkerPool the run's actors run on;
-    cloud_build says where the images were built."""
+    """pool is the namespace and name of the WorkerPool the run's actors run on."""
     pool_namespace, pool_name = pool
     errors: dict[str, str] = {}
     sandbox_configs = {}
@@ -293,7 +283,6 @@ def collect(
         "image_tag": images.tag(),
         "commit_dirty": dirty,
         "tools": _read("tool versions", tools, errors),
-        "builders": builders(cloud_build),
         "provider": case.get("provider", "agent-substrate"),
         "substrate_commit": _read("substrate commit", lambda: output(["git", "rev-parse", "HEAD"], cwd=substrate.SUBSTRATE_DIR).strip(), errors) if case.get("provider", "agent-substrate") == "agent-substrate" else None,
         "substrate_version": _read("substrate version", substrate.build_version, errors) if case.get("provider", "agent-substrate") == "agent-substrate" else None,

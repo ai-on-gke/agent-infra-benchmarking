@@ -221,23 +221,40 @@ class Series(unittest.TestCase):
     def test_a_failed_repeat_does_not_stop_the_others(self):
         ran = []
 
-        def repeat(record, n):
+        def repeat(record, n, warmup):
             ran.append(record)
             if n == 1:
                 raise locust.LocustError("boom")
 
         with self.assertRaises(run.CaseFailed):
-            run.run_repeats("c", {"repeats": 3}, repeat, shared_cluster=False)
+            run.run_repeats("c", {"repeats": {"count": 3, "cluster": "per-repeat"}}, repeat, shared_cluster=False)
         self.assertEqual(ran, ["c-1", "c-2", "c-3"])
 
+    def test_a_failed_warmup_only_warns(self):
+        ran = []
+
+        def repeat(record, n, warmup):
+            ran.append((record, n, warmup))
+            if warmup:
+                raise locust.LocustError("cold")
+
+        case = {"repeats": {"count": 2, "warmups": 2}}
+        with mock.patch.object(run, "log") as log:
+            run.run_repeats("c", case, repeat, shared_cluster=True)
+        self.assertEqual(ran, [("c-warmup-1", 0, 1), ("c-warmup-2", 0, 2), ("c-1", 1, 0), ("c-2", 2, 0)])
+        self.assertTrue(any("only a warm-up" in call.args[0] for call in log.call_args_list))
+
     def test_a_stuck_run_stops_a_shared_cluster_only(self):
-        def stuck(record, n):
+        def stuck(record, n, warmup):
             raise locust.LocustTimeout("still going")
 
         with self.assertRaises(locust.LocustStillRunning):
-            run.run_repeats("c", {"repeats": 2}, stuck, shared_cluster=True)
+            run.run_repeats("c", {"repeats": {"count": 2, "warmups": 0}}, stuck, shared_cluster=True)
+        with self.assertRaises(locust.LocustStillRunning):
+            run.run_repeats("c", {}, stuck, shared_cluster=True)
         with self.assertRaises(run.CaseFailed):
-            run.run_repeats("c", {"repeats": 2}, stuck, shared_cluster=False)
+            per_repeat = {"repeats": {"count": 2, "cluster": "per-repeat"}}
+            run.run_repeats("c", per_repeat, stuck, shared_cluster=False)
 
     def test_a_failed_case_does_not_stop_the_series(self):
         cases = {"a": {"type": "locust"}, "b": {"type": "locust"}}
@@ -262,8 +279,11 @@ class Series(unittest.TestCase):
 
 
 class Args(unittest.TestCase):
-    def parse(self, *argv: str):
-        with mock.patch.object(sys, "argv", ["run", "--project-id=p", "--state-backend=local", *argv]):
+    REPO = "--image-repo=us-central1-docker.pkg.dev/p/r"
+
+    def parse(self, *argv: str, repo: str | None = REPO):
+        flags = ["--project-id=p", "--state-backend=local", *([repo] if repo else [])]
+        with mock.patch.object(sys, "argv", ["run", *flags, *argv]), mock.patch.dict(os.environ, {"IMAGE_REPO": ""}):
             return run.parse_args()
 
     def test_cases_have_to_be_named_or_all(self):
@@ -273,6 +293,13 @@ class Args(unittest.TestCase):
             self.parse("--all", "--scenario=glutton")
         self.assertTrue(self.parse("--all").all)
         self.assertEqual(self.parse("--scenario=glutton").scenario, ["glutton"])
+
+    def test_the_image_repository_is_checked(self):
+        self.assertIsNone(self.parse("--all", repo=None).image_repo)
+        with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            self.parse("--all", repo="--image-repo=gcr.io/p/r")
+        with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            self.parse("--all", "--dev-infra=d")
 
 
 class Jobs(unittest.TestCase):
@@ -307,38 +334,48 @@ class Jobs(unittest.TestCase):
             locust.wait_for_jobs(self.cluster, lambda grace: None)
 
 
-class BuildImages(unittest.TestCase):
-    """What the runner builds once into its repository, by the cases' types."""
+class NeededImages(unittest.TestCase):
+    """What the runner checks its repository has, by the cases' types."""
 
-    def built(self, cases: dict) -> tuple[list, bool]:
+    def needed(self, cases: dict) -> dict:
         import argparse
 
-        from scenario_runner import ate_env, images, sandbox_benchmark
+        from scenario_runner import ate_env, images, sandbox_benchmark, substrate
 
-        args = argparse.Namespace(no_build=False, no_deploy_workloads=False, no_docker_login=False, cloud_build=True,
-                                  project_id="p")  # fmt: skip
-        with mock.patch.object(images, "build_and_push") as build, mock.patch.object(ate_env, "build_images") as env, \
+        args = argparse.Namespace(no_deploy_workloads=False, image_repo="repo")
+        with mock.patch.object(images, "tag", return_value="t"), \
+             mock.patch.object(substrate, "build_version", return_value="v"), \
+             mock.patch.object(ate_env, "build_version", return_value="e"), \
              mock.patch.object(sandbox_benchmark, "test_names", return_value=None):  # fmt: skip
-            run.build_images(args, cases, "repo")
-        return (build.call_args.args[2] if build.called else []), env.called
+            return run.needed_images(args, cases)
 
-    def test_locust_builds_its_and_the_workloads(self):
+    def test_locust_needs_its_the_workloads_and_substrate(self):
         from scenario_runner import images
 
-        files, env = self.built({"a": {"type": "locust"}, "b": {"type": "noop"}})
-        self.assertEqual(files, [images.LOCUST_IMAGES, images.WORKLOADS_IMAGES])
-        self.assertFalse(env)
+        needed = self.needed({"a": {"type": "locust"}, "b": {"type": "noop"}})
+        self.assertEqual(set(needed), {"substrate", "benchmark"})
+        with mock.patch.object(images, "tag", return_value="t"):
+            self.assertEqual(needed["benchmark"], images.refs("repo", [images.LOCUST_IMAGES, images.WORKLOADS_IMAGES]))
+        self.assertIn("repo/substrate/atelet:v", needed["substrate"])
+        self.assertIn("repo/substrate/glutton:v", needed["substrate"])
+        self.assertIn("repo/substrate/envoy-dataplane:v", needed["substrate"])
 
-    def test_sandbox_benchmark_builds_env_only_for_substrate(self):
-        from scenario_runner import images
+    def test_sandbox_benchmark_needs_env_only_for_substrate(self):
+        from scenario_runner.cases import SKIP_SUBSTRATE_INSTALL
 
-        case = {"type": "sandbox-benchmark", "comparator": {"tests": ["test_x"], "runs": 1}}
-        self.assertEqual(self.built({"a": case}), ([images.SANDBOX_BENCHMARK_IMAGES], True))
+        comparator = {"tests": ["test_x"], "runs": 1}
+        case = {"type": "sandbox-benchmark", "comparator": comparator, SKIP_SUBSTRATE_INSTALL: True}
+        needed = self.needed({"a": case})
+        self.assertEqual(set(needed), {"env", "benchmark"})
+        self.assertEqual(needed["env"], ["repo/env/ate-env-api:e", "repo/env/ate-env-guest:e"])
         cloud = {**case, "comparator": {**case["comparator"], "providers": ["e2b"]}}
-        self.assertEqual(self.built({"a": cloud}), ([images.SANDBOX_BENCHMARK_IMAGES], False))
+        self.assertEqual(set(self.needed({"a": cloud})), {"benchmark"})
 
-    def test_noop_builds_nothing(self):
-        self.assertEqual(self.built({"a": {"type": "noop"}}), ([], False))
+    def test_noop_needs_only_what_its_install_does(self):
+        from scenario_runner.cases import SKIP_SUBSTRATE_INSTALL
+
+        self.assertEqual(set(self.needed({"a": {"type": "noop"}})), {"substrate"})
+        self.assertEqual(self.needed({"a": {"type": "noop", SKIP_SUBSTRATE_INSTALL: True}}), {})
 
 
 class BenchmarkRun(unittest.TestCase):
@@ -363,10 +400,10 @@ class BenchmarkRun(unittest.TestCase):
 
         from scenario_runner import benchmark
 
-        args = argparse.Namespace(name="run-1", cloud_build=False, no_deploy_workloads=False, report_bucket=None,
+        args = argparse.Namespace(name="run-1", no_deploy_workloads=False, report_bucket=None,
                                   report_prefix="reports", dev_infra=None)  # fmt: skip
         with mock.patch.object(benchmark, "run") as bench_run:
-            run.run_case(args, "c-1", {"type": "locust"}, mock.Mock(), "c", 1, "repo")
+            run.run_case(args, "c-1", {"type": "locust"}, mock.Mock(), "c", 1, 0, "repo")
         for type_, module in benchmark.RUNNERS.items():
             params = inspect.signature(module.run).parameters
             self.assertLessEqual(set(bench_run.call_args.kwargs), set(params), type_)

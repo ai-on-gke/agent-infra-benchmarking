@@ -1,0 +1,12 @@
+# What a local tree may hold that git ignores, so a build from one matches the
+# workflow's: the image bakes its own venv and microvm assets.
+**/__pycache__
+**/.terraform
+.venv
+benchmark-charts/build
+benchmarking/.env.sh
+benchmarking/tools/venv_run
+benchmarking/scenario_runner/.local-data
+benchmarking/scenario_runner/.terraform-plugin-cache
+dependency-repos/substrate/bin
+reports/*

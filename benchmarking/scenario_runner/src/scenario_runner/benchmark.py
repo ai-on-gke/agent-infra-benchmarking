@@ -57,14 +57,14 @@ def check_run_id(run_id: str) -> str:
     return run_id
 
 
-def missing_requirements(cases: dict[str, dict], cloud_build: bool = False) -> list[str]:
-    missing = [tool for case in cases.values() for tool in RUNNERS[case["type"]].missing_requirements(cloud_build)]
+def missing_requirements(cases: dict[str, dict]) -> list[str]:
+    missing = [tool for case in cases.values() for tool in RUNNERS[case["type"]].missing_requirements()]
     return list(dict.fromkeys(missing))
 
 
 def run(name: str, case: dict, run_id: str, cluster: Cluster, **options: object) -> None:
     """options are those of its type's run, e.g. locust.run's image_repo, and
-    test_case and repeat for one of a case's repeats."""
+    test_case and repeat, or warmup, for one of a case's repeats."""
     cluster.get_credentials()
     log(f"{name}: running as {run_id} on cluster {cluster.name}")
     # First, so it is watching before the run deploys anything to watch.

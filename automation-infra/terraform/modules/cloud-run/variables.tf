@@ -26,7 +26,7 @@ variable "command" {
 }
 
 variable "args" {
-  description = "Arguments passed to the entrypoint after --project-id, --region, --state-backend, --state-bucket, --state-prefix, --cloud-build and, with reports_bucket, --report-bucket and --report-prefix, which the module passes itself."
+  description = "Arguments passed to the entrypoint after --project-id, --region, --state-backend, --state-bucket, --state-prefix, --image-repo and, with reports_bucket, --report-bucket and --report-prefix, which the module passes itself."
   type        = list(string)
   default     = []
 }
@@ -118,16 +118,28 @@ variable "reports_writer_project_ids" {
   default     = []
 }
 
-variable "github_actions_bucket" {
-  description = "Bucket under whose source/ GitHub Actions may write, as the github_service_account_email account, and the job reads its source from. Null creates no account and leaves the job without source, so it fails."
+variable "github_actions" {
+  description = "Whether GitHub Actions of github_repository may push the runner image and the runs' images, as the github_service_account_email account. False creates no account, so no workflow can push the image the job runs."
+  type        = bool
+  default     = true
+}
+
+variable "source_branch" {
+  description = "Branch whose latest commit's runner image the job runs, as .github/workflows/publish.yml tags it."
+  type        = string
+  default     = "main"
+}
+
+variable "runner_image" {
+  description = "Image both jobs run in place of source_branch's runner image, e.g. one commit's <repository>/runner:<commit>. Null runs source_branch's."
   type        = string
   default     = null
 }
 
-variable "source_branch" {
-  description = "Branch whose latest uploaded commit the job fetches from github_actions_bucket."
-  type        = string
-  default     = "main"
+variable "create_jobs" {
+  description = "Whether to create the job, its cleanup job and their schedulers. False for a new deployment's first apply, before the workflow has pushed the runner image they run."
+  type        = bool
+  default     = true
 }
 
 variable "cleanup_schedule" {
@@ -149,7 +161,7 @@ variable "alert_emails" {
 }
 
 variable "github_repository" {
-  description = "GitHub repository, owner/name, whose Actions may upload source as the github_service_account_email account, through Workload Identity Federation rather than a key."
+  description = "GitHub repository, owner/name, whose Actions may push the images as the github_service_account_email account, through Workload Identity Federation rather than a key, and which gets the variables they authenticate with. Its owner must be the github provider's."
   type        = string
   default     = "ai-on-gke/agent-infra-benchmarking"
 }

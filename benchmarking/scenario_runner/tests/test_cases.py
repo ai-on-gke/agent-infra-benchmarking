@@ -23,7 +23,14 @@ from pathlib import Path
 import yaml
 
 from scenario_runner import locust
-from scenario_runner.cases import SCENARIOS_FILE, load_bare_metal, load_cases, record_names, with_bare_metal
+from scenario_runner.cases import (
+    SCENARIOS_FILE,
+    load_bare_metal,
+    load_cases,
+    record_names,
+    warmup_names,
+    with_bare_metal,
+)
 
 GLUTTON = {
     "type": "locust",
@@ -119,12 +126,27 @@ class CaseChecks(unittest.TestCase):
         self.assertEqual(locust.flags({"a": True, "b": 2, "c": "x", "d": False}), ["--a", "--b=2", "--c=x", "--d=false"])
 
     def test_repeats_are_recorded_by_number(self):
-        self.assertEqual(record_names("c", {"repeats": 3}), ["c-1", "c-2", "c-3"])
+        self.assertEqual(record_names("c", {"repeats": {"count": 3}}), ["c-1", "c-2", "c-3"])
         self.assertEqual(record_names("c", {}), ["c"])
+
+    def test_one_warmup_on_a_shared_cluster_by_default(self):
+        self.assertEqual(warmup_names("c", {}), ["c-warmup-1"])
+        self.assertEqual(warmup_names("c", {"repeats": {"warmups": 0}}), [])
+        self.assertEqual(warmup_names("c", {"repeats": {"cluster": "per-repeat"}}), [])
+
+    def test_load_fills_in_how_a_case_is_sampled(self):
+        self.assertEqual(load({"c": GLUTTON})["c"]["repeats"], {"count": 1, "warmups": 1, "cluster": "shared"})
+        case = load({"c": {**GLUTTON, "repeats": {"count": 3, "cluster": "per-repeat"}}})["c"]
+        self.assertEqual(case["repeats"], {"count": 3, "warmups": 0, "cluster": "per-repeat"})
 
     def test_load_refuses_bad_cases(self):
         for case in (
-            {**GLUTTON, "repeats": 0},
+            {**GLUTTON, "repeats": 3},
+            {**GLUTTON, "repeats": {"count": 0}},
+            {**GLUTTON, "repeats": {"times": 3}},
+            {**GLUTTON, "repeats": {"cluster": "fresh"}},
+            {**GLUTTON, "repeats": {"warmups": -1}},
+            {**GLUTTON, "repeats": {"warmups": 1, "cluster": "per-repeat"}},
             {**GLUTTON, "infra": {"cluster": {"name": "common", "unknown": 1}}},
             {**GLUTTON, "infra": {"cluster": {"name": "nowhere"}}},
             {**GLUTTON, "type": "jmeter"},
@@ -160,7 +182,9 @@ class BareMetal(unittest.TestCase):
         self.assertEqual(list(cases), ["c-metal"])
         variables = cases["c-metal"]["infra"]["cluster"]["variables"]
         self.assertEqual(variables, {"zone": "us-central1-a", "sandboxed_machine_type": "c3-standard-192-metal"})
-        self.assertEqual(record_names("c-metal", {"repeats": 2}), ["c-metal-1", "c-metal-2"])
+        repeats = {"repeats": {"count": 2, "warmups": 1}}
+        self.assertEqual(record_names("c-metal", repeats), ["c-metal-1", "c-metal-2"])
+        self.assertEqual(warmup_names("c-metal", repeats), ["c-metal-warmup-1"])
 
     def test_the_case_wins_over_the_default_and_the_override_over_both(self):
         cases = {"on": {**GLUTTON, "bare-metal": True}, "off": {**GLUTTON, "bare-metal": False}, "unsaid": GLUTTON}

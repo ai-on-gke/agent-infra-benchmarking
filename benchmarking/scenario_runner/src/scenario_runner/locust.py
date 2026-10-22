@@ -70,8 +70,8 @@ class LocustTimeout(LocustStillRunning):
     """The run outlived WAIT_TIMEOUT_SECS."""
 
 
-def missing_requirements(cloud_build: bool = False) -> list[str]:
-    missing = images.missing_requirements(cloud_build) + worker_pool.missing_requirements()
+def missing_requirements() -> list[str]:
+    missing = images.missing_requirements() + worker_pool.missing_requirements()
     return list(dict.fromkeys(missing + workloads.missing_requirements()))
 
 
@@ -252,18 +252,18 @@ def run(
     report_prefix: str = reports.REPORT_PREFIX,
     test_case: str | None = None,
     repeat: int = 0,
-    cloud_build: bool = False,
+    warmup: int = 0,
     keeps_bucket: bool = False,
 ) -> None:
     """Runs the case, recorded under name, as part of run_id, by default a UTC
-    timestamp and the commit, with the images build_images pushed to
+    timestamp and the commit, with the images built from this tree into
     image_repo. test_case and repeat say which case it is a repeat of; repeat
-    is 0 for a case run once. Without deploy_workloads, uses the mock-llm and
-    ActorTemplates already deployed. The worker pool is recreated either way.
+    is 0 for a case run once, or a warm-up, which warmup numbers. Without
+    deploy_workloads, uses the mock-llm and ActorTemplates already deployed.
+    The worker pool is recreated either way.
     The reports go under report_prefix in report_bucket, by default the
     cluster's own, which keeps_bucket says outlives the run, as a dev infra's
-    does. cloud_build says, for run.json, where the images were built.
-    Expects the cluster's credentials in its kubeconfig."""
+    does. Expects the cluster's credentials in its kubeconfig."""
     case = check_case(name, case, deploy_workloads)
     # The workers would never schedule past the sandboxed pool's taint.
     if case["sandbox-class"] != cluster.sandbox_class:
@@ -382,7 +382,8 @@ roleRef:
   name: atelet-endpointslices
   apiGroup: rbac.authorization.k8s.io"""
 
-    info = run_info.collect(cluster, case, template_name, template, image_refs, bucket, cloud_build=cloud_build)
+    info = run_info.collect(cluster, case, template_name, template, image_refs, bucket)
+    info["warmup"] = warmup or None
     values = {
         "LOCUST_IMAGE": image_refs["locust-master"],
         "BOOMER_IMAGE": image_refs["boomer-worker"],
