@@ -19,13 +19,40 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .log import log
 from .process import output, stream
+from .terraform import STOCKOUT_MARKERS
 
 # How long a cluster's persistent volumes get to go before it is destroyed.
 VOLUMES_TIMEOUT_SECS = 300
+CREATE_OPERATIONS = {"CREATE_CLUSTER", "CREATE_NODE_POOL"}
+
+
+def utc_now() -> str:
+    """Now, as RFC 3339, which GKE's operation times compare with."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def gke_stockout(project_id: str, location: str, cluster: str, since: str) -> bool:
+    """Whether a create of the cluster or of one of its node pools that GKE
+    started at since (RFC 3339) or later failed on a stockout. GKE says so only
+    on the operation, after waiting about 35 minutes for the nodes; the google
+    provider passes on just that the pool is in the error state."""
+    cmd = ["gcloud", "container", "operations", "list", f"--location={location}", f"--project={project_id}",
+           f'--filter=targetLink~"/clusters/{cluster}(/|$)"', "--format=json"]  # fmt: skip
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode:
+        log(f"cannot read cluster {cluster}'s GKE operations to tell a stockout: {proc.stderr.strip()}", "WARNING")
+        return False
+    return any(
+        op.get("operationType") in CREATE_OPERATIONS
+        and op.get("startTime", "") >= since
+        and any(marker in json.dumps([op.get("error"), op.get("statusMessage")]) for marker in STOCKOUT_MARKERS)
+        for op in json.loads(proc.stdout or "[]")
+    )
 
 
 @dataclass(frozen=True)

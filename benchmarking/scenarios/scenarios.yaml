@@ -57,6 +57,25 @@
 # Varying the load or the pool means another case, so that every run is
 # reproducible from the name it is recorded under: benchmark-test-case is the
 # pod label, and test_case the Prometheus label relabeled from it.
+#
+# `bare-metal: true` runs the case's sandboxed pool on bare metal, recorded as
+# <case>-metal (<case>-metal-1 to -N with repeats). A case that does not say
+# takes `bare-metal.default` below, and the scenario-runner's --bare-metal or
+# --no-bare-metal overrides both; neither puts a noop on bare metal. The pool
+# goes on the first of `bare-metal.placements` in the run's --region, its zone
+# then the whole cluster's; a zone out of that machine type moves it, destroyed
+# first, to the next, and the cases after it start from the one it got. GKE
+# takes only C3's -metal types, each 192 vCPUs, so the region's C3 CPU quota
+# sets how many nodes fit.
+bare-metal:
+  default: false
+  placements:
+  - zone: us-central1-a
+    machine-type: c3-standard-192-metal
+  - zone: us-central1-c
+    machine-type: c3-highcpu-192-metal
+  - zone: us-central1-a
+    machine-type: c3-highmem-192-metal
 
 cases:
   glutton:

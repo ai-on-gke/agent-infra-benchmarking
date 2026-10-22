@@ -16,6 +16,7 @@
 
 import shutil
 import unittest
+from unittest import mock
 
 from scenario_runner import preflight
 
@@ -107,6 +108,40 @@ class AppliedClusters(unittest.TestCase):
         self.assertEqual(self.applied({"complete": True}), [])
 
 
+class BareMetal(unittest.TestCase):
+    PLACEMENT = [{"zone": "us-central1-a", "machine-type": "c3-standard-192-metal"}]
+
+    def problems(self, cpus, quota, nodes=1):
+        settings = {**SETTINGS, "sandboxed_node_count": nodes}
+        with mock.patch.object(preflight, "machine_type_cpus", return_value=cpus), \
+             mock.patch.object(preflight, "cpu_quota", return_value=quota), \
+             mock.patch.object(preflight, "log") as log:
+            return preflight.bare_metal_problems("c", settings, self.PLACEMENT, "p", "us-central1"), log
+
+    def test_a_pool_that_fits_the_quota(self):
+        problems, log = self.problems(192, (0.0, 300.0))
+        self.assertEqual(problems, [])
+        log.assert_not_called()
+
+    def test_a_pool_beyond_the_quota(self):
+        problems, _ = self.problems(192, (0.0, 300.0), nodes=2)
+        self.assertRegex(problems[0], "needs 384 C3 vCPUs, but the quota in us-central1 is 300")
+
+    def test_a_pool_beyond_what_is_free_now_is_only_warned_of(self):
+        problems, log = self.problems(192, (200.0, 300.0))
+        self.assertEqual(problems, [])
+        self.assertIn("100 free now", log.call_args.args[0])
+
+    def test_a_zone_that_does_not_offer_the_machine_type(self):
+        problems, _ = self.problems("us-central1-a does not offer c3-standard-192-metal", None)
+        self.assertRegex(problems[0], "does not offer")
+
+    def test_what_cannot_be_read_is_not_held_against_it(self):
+        problems, log = self.problems(None, None)
+        self.assertEqual(problems, [])
+        self.assertIn("not checking it", log.call_args.args[0])
+
+
 @unittest.skipUnless(shutil.which("terraform"), "needs terraform")
 class ClusterSettings(unittest.TestCase):
     """Evaluated by terraform from the shipped common config, as the run would
@@ -140,6 +175,13 @@ class ClusterSettings(unittest.TestCase):
     def test_a_variable_left_unset_is_named_as_such(self):
         with self.assertRaisesRegex(ValueError, "has no value"):
             preflight.cluster_settings({"name": "common"}, "gvisor", "my-project", "us-central1")
+
+    def test_a_metal_machine_type_runs_microvm(self):
+        spec = {"name": "common", "tfvars": "default.tfvars",
+                "variables": {"zone": "us-central1-c", "sandboxed_machine_type": "c3-highcpu-192-metal"}}  # fmt: skip
+        settings = preflight.cluster_settings(spec, "microvm", "my-project", "us-central1")
+        self.assertEqual(settings["sandboxed_machine_type"], "c3-highcpu-192-metal")
+        self.assertEqual(preflight.cluster_location(settings, "us-central1"), "us-central1-c")
 
     def test_the_config_refuses_microvm_without_nested_virtualization(self):
         spec = {"name": "common", "tfvars_inline": 'sandboxed_machine_type = "e2-standard-8"\n'}

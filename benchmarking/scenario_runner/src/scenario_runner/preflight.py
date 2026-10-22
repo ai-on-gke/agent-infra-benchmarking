@@ -27,7 +27,14 @@ import tempfile
 from pathlib import Path
 
 from . import agent_sandbox, benchmark, substrate
-from .cases import CLUSTERS_DIR, PROVIDER, PROVIDER_AGENT_SANDBOX, SKIP_SUBSTRATE_INSTALL
+from .cases import (
+    BARE_METAL,
+    CLUSTERS_DIR,
+    PROVIDER,
+    PROVIDER_AGENT_SANDBOX,
+    SKIP_SUBSTRATE_INSTALL,
+    placement_variables,
+)
 from .deployment import Deployment, cluster_deployment, declared_variables, tf_vars
 from .log import log
 from .process import environ
@@ -199,16 +206,84 @@ def cluster_problems(
     return problems
 
 
+def machine_type_cpus(machine_type: str, zone: str, project_id: str) -> int | str | None:
+    """The machine type's vCPUs in the zone, a message if the zone does not
+    offer it, or None if that cannot be read."""
+    cmd = ["gcloud", "compute", "machine-types", "describe", machine_type, f"--zone={zone}",
+           f"--project={project_id}", "--format=value(guestCpus)"]  # fmt: skip
+    if not shutil.which("gcloud"):
+        return None
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode:
+        return f"{zone} does not offer {machine_type}" if "was not found" in proc.stderr else None
+    return int(proc.stdout.strip())
+
+
+def cpu_quota(family: str, region: str, project_id: str) -> tuple[float, float] | None:
+    """The region's usage and limit of the machine family's CPU quota, or None
+    if it cannot be read or the region has none of its own for it."""
+    cmd = ["gcloud", "compute", "regions", "describe", region, f"--project={project_id}", "--format=json(quotas)"]
+    if not shutil.which("gcloud"):
+        return None
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode:
+        return None
+    metric = f"{family.upper()}_CPUS"
+    quota = next((q for q in json.loads(proc.stdout).get("quotas", []) if q.get("metric") == metric), None)
+    return (quota["usage"], quota["limit"]) if quota else None
+
+
+def bare_metal_problems(
+    name: str, settings: dict, placements: list[dict], project_id: str, region: str
+) -> list[str]:
+    """What stands in the way of the case's sandboxed pool at each of the
+    placements: a zone that does not offer its machine type, or a CPU quota
+    the pool does not fit in at all. A pool that fits in the quota but not in
+    what is free of it now is only warned of, as other runs may free it."""
+    problems = []
+    nodes = settings.get("sandboxed_max_node_count") or settings.get("sandboxed_node_count") or 1
+    for placement in placements:
+        machine_type, zone = placement["machine-type"], placement["zone"]
+        cpus = machine_type_cpus(machine_type, zone, project_id)
+        if isinstance(cpus, str):
+            problems.append(f"case {name}'s bare-metal placement cannot be used: {cpus}")
+            continue
+        family = machine_type.split("-", 1)[0]
+        quota = cpu_quota(family, region, project_id) if cpus else None
+        if quota is None:
+            log(f"preflight: cannot read the {family} CPU quota for {machine_type} in {region}; not checking it",
+                "WARNING")  # fmt: skip
+            continue
+        usage, limit = quota
+        if cpus * nodes > limit:
+            problems.append(
+                f"case {name}'s sandboxed pool of {nodes} x {machine_type} needs {cpus * nodes} {family.upper()} vCPUs,"
+                f" but the quota in {region} is {limit:g}; ask for more or run fewer nodes"
+            )
+        elif cpus * nodes > limit - usage:
+            log(f"preflight: case {name}'s {nodes} x {machine_type} needs {cpus * nodes} {family.upper()} vCPUs, of"
+                f" which {region} has {limit - usage:g} free now", "WARNING")  # fmt: skip
+    return problems
+
+
 def offered(version: str, versions: list[str]) -> bool:
     """Whether a build in versions is version, or of it, as GKE takes a minor
     such as 1.35 or a patch such as 1.35.8 for its latest build."""
     return any(v == version or v.startswith((f"{version}.", f"{version}-")) for v in versions)
 
 
-def check(cases: dict[str, dict], project_id: str, region: str, cloud_build: bool, applied: list[str]) -> list[str]:
+def check(
+    cases: dict[str, dict],
+    project_id: str,
+    region: str,
+    cloud_build: bool,
+    applied: list[str],
+    placements: list[dict] = (),
+) -> list[str]:
     """Every problem the cases would run into, as messages; none means go.
     Only the clusters of the cases in applied are checked, as the others are
-    not applied: a complete dev infra's, for one."""
+    not applied: a complete dev infra's, for one. A case on bare metal is
+    checked at each of placements, any of which its cluster may end up at."""
     problems = []
     if not shutil.which("terraform"):
         return ["terraform is required to apply the infra"]
@@ -271,11 +346,26 @@ def check(cases: dict[str, dict], project_id: str, region: str, cloud_build: boo
             problems.append(f"case {name}'s cluster config does not evaluate: {settings}")
             continue
         gke = creates_gke_cluster(CLUSTERS_DIR / spec["name"])
-        location = cluster_location(settings, region)
-        if gke and location not in offered:
-            offered[location] = gke_versions(location, project_id)
-            if offered[location] is None:
-                log(f"preflight: cannot read the GKE versions {GKE_CHANNEL} offers in {location}; not checking them",
-                    "WARNING")  # fmt: skip
-        problems += cluster_problems(name, case, settings, offered.get(location), gke, location)
+        if case.get(BARE_METAL):
+            missing = {"zone", "sandboxed_machine_type"} - declared_variables(CLUSTERS_DIR / spec["name"])
+            if missing:
+                problems.append(
+                    f"case {name} runs on bare metal, but infra/clusters/{spec['name']} does not take"
+                    f" {' or '.join(sorted(missing))}, which put its sandboxed pool there"
+                )
+                continue
+            problems += bare_metal_problems(name, settings, placements, project_id, region)
+        variants = [settings]
+        # The first placement is in settings already.
+        if case.get(BARE_METAL):
+            variants += [{**settings, **placement_variables(p)} for p in placements[1:]]
+        for variant in variants:
+            location = cluster_location(variant, region)
+            if gke and location not in offered:
+                offered[location] = gke_versions(location, project_id)
+                if offered[location] is None:
+                    log(f"preflight: cannot read the GKE versions {GKE_CHANNEL} offers in {location}; not checking"
+                        " them", "WARNING")  # fmt: skip
+            found = cluster_problems(name, case, variant, offered.get(location), gke, location)
+            problems += [problem for problem in found if problem not in problems]
     return problems

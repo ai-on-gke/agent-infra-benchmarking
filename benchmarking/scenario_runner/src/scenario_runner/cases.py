@@ -32,6 +32,10 @@ PROVIDER_SUBSTRATE = "agent-substrate"
 PROVIDER_AGENT_SANDBOX = "agent-sandbox"
 PROVIDERS = [PROVIDER_SUBSTRATE, PROVIDER_AGENT_SANDBOX]
 DEFAULT_PROVIDER = PROVIDER_SUBSTRATE
+BARE_METAL = "bare-metal"
+# What a case on bare metal is recorded under: its name with this added.
+BARE_METAL_SUFFIX = "-metal"
+PLACEMENT_KEYS = {"zone", "machine-type"}
 
 
 def load_cases(scenarios_file: Path) -> dict[str, dict]:
@@ -56,6 +60,8 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
             case[PROVIDER] = provider
             if provider == PROVIDER_AGENT_SANDBOX:
                 case[SKIP_SUBSTRATE_INSTALL] = True
+        if not isinstance(case.get(BARE_METAL, False), bool):
+            raise ValueError(f"{scenarios_file}: case {name}'s `{BARE_METAL}` must be true or false")
         repeats = case.get("repeats", 1)
         if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats < 1:
             raise ValueError(f"{scenarios_file}: case {name}'s `repeats` must be a whole number from 1, got {repeats!r}")
@@ -68,6 +74,65 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
             except ValueError as exc:
                 raise ValueError(f"{scenarios_file}: {exc}") from None
     return cases
+
+
+def load_bare_metal(scenarios_file: Path) -> dict:
+    """The scenarios file's `bare-metal`: `default`, whether the cases that do
+    not say run on bare metal, false unless set, and `placements`, the zones
+    and -metal machine types their sandboxed pool is tried in, in order."""
+    with scenarios_file.open() as f:
+        settings = (yaml.safe_load(f) or {}).get(BARE_METAL, {})
+    where = f"{scenarios_file}: `{BARE_METAL}`"
+    if not isinstance(settings, dict) or settings.keys() - {"default", "placements"}:
+        raise ValueError(f"{where} must be a mapping of default and placements")
+    if not isinstance(settings.get("default", False), bool):
+        raise ValueError(f"{where}.default must be true or false")
+    placements = settings.get("placements", [])
+    if not isinstance(placements, list) or not all(
+        isinstance(p, dict) and p.keys() == PLACEMENT_KEYS and all(isinstance(v, str) for v in p.values())
+        for p in placements
+    ):
+        raise ValueError(f"{where}.placements must be a list of zone and machine-type")
+    for p in placements:
+        if not p["machine-type"].endswith("-metal"):
+            raise ValueError(f"{where}.placements: {p['machine-type']} is not a bare-metal (-metal) machine type")
+    return {"default": settings.get("default", False), "placements": placements}
+
+
+def placement_variables(placement: dict) -> dict:
+    """The cluster config's variables that put its sandboxed pool there."""
+    return {"zone": placement["zone"], "sandboxed_machine_type": placement["machine-type"]}
+
+
+def placed(cluster: dict, placement: dict) -> dict:
+    """The infra.cluster spec with its sandboxed pool at placement."""
+    return {**cluster, "variables": {**cluster.get("variables", {}), **placement_variables(placement)}}
+
+
+def with_bare_metal(
+    cases: dict[str, dict], all_names: set[str], default: bool, override: bool | None, placements: list[dict]
+) -> dict[str, dict]:
+    """The cases, each one that runs on bare metal renamed <name>-metal, as
+    its records and reports are, with its cluster at the first of placements.
+    A case's own `bare-metal` wins over default, and override, unless None,
+    over both. Neither default nor override puts a noop on bare metal, as it
+    runs nothing there."""
+    result = {}
+    for name, case in cases.items():
+        metal = case.get(BARE_METAL, default if case["type"] != "noop" else False)
+        if override is not None and case["type"] != "noop":
+            metal = override
+        if not metal:
+            result[name] = {**case, BARE_METAL: False}
+            continue
+        renamed = name + BARE_METAL_SUFFIX
+        if renamed in all_names:
+            raise ValueError(f"case {name} on bare metal would be recorded as {renamed}, which is another case")
+        if not placements:
+            raise ValueError(f"case {name} runs on bare metal, but `{BARE_METAL}.placements` has none in its region")
+        infra = {**case["infra"], "cluster": placed(case["infra"]["cluster"], placements[0])}
+        result[renamed] = {**case, BARE_METAL: True, "infra": infra}
+    return result
 
 
 def record_names(name: str, case: dict) -> list[str]:

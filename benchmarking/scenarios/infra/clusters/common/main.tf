@@ -39,6 +39,10 @@ locals {
   # version is there to describe, so it belongs in the plan rather than out of
   # it. The monitoring pool goes without, so a bump leaves Prometheus running.
   substrate_version_label = var.substrate_version != null && var.substrate_version != "" ? { "ate.dev/substrate-version" = var.substrate_version } : {}
+
+  # A -metal machine type is a bare-metal host, which boots only from
+  # Hyperdisk and has /dev/kvm without nested virtualization.
+  sandboxed_bare_metal = endswith(var.sandboxed_machine_type, "-metal")
 }
 
 module "cluster" {
@@ -88,13 +92,14 @@ module "cluster" {
     }
     sandboxed = {
       machine_type   = var.sandboxed_machine_type
+      disk_type      = local.sandboxed_bare_metal ? "hyperdisk-balanced" : "pd-balanced"
       node_count     = var.sandboxed_node_count
       min_node_count = var.sandboxed_min_node_count
       max_node_count = var.sandboxed_max_node_count
       node_locations = [var.zone]
       labels         = merge(local.substrate_version_label, { "benchmarking-worker" = "true" })
       # The microvm guests boot on /dev/kvm.
-      enable_nested_virtualization = var.sandbox_class == "microvm"
+      enable_nested_virtualization = var.sandbox_class == "microvm" && !local.sandboxed_bare_metal
       # worker-pool.yaml.tmpl's WorkerPool already tolerates this taint; without
       # it actually applied to the nodes, nothing stops substrate's own
       # control-plane pods (and anything else) from also landing here

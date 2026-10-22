@@ -25,8 +25,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scenario_runner import deployment, jobs, locust, process
+from scenario_runner import deployment, jobs, locust, process, terraform
 from scenario_runner.cli import run
+from scenario_runner import cluster as cluster_module
 from scenario_runner.cluster import Cluster
 
 
@@ -65,7 +66,7 @@ class Destroy(unittest.TestCase):
     def deployment(self, destroy_error: BaseException | None) -> deployment.Deployment:
         dep = deployment.Deployment(Path(tempfile.mkdtemp()))
 
-        def deploy(*args):
+        def deploy(*args, **kwargs):
             if "-destroy" in args:
                 self.assertTrue(process._shielding, "the cleanup destroy has to be shielded")
                 if destroy_error:
@@ -103,6 +104,110 @@ class Destroy(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "the run failed"):
             with dep.applied():
                 raise RuntimeError("the run failed")
+
+
+class Stockouts(unittest.TestCase):
+    def test_a_failure_that_tells_of_a_stockout_is_one(self):
+        message = "Error: googleapi: Error 400: The zone us-central1-a does not have enough resources available"
+        with self.assertRaises(terraform.Stockout):
+            terraform.watch_stockout(["sh", "-c", f"echo '{message}'; exit 1"], lambda line: None, None)
+        with self.assertRaises(subprocess.CalledProcessError) as caught:
+            terraform.watch_stockout(["sh", "-c", "echo 'Error: quota'; exit 1"], lambda line: None, None)
+        self.assertNotIsInstance(caught.exception, terraform.Stockout)
+
+    def test_a_stockout_is_retried_unless_given_up_on(self):
+        calls = []
+
+        def apply():
+            calls.append(1)
+            raise terraform.Stockout(1, ["terraform", "-chdir=x", "apply"])
+
+        with mock.patch.object(process, "log"), mock.patch.object(process.time, "sleep"):
+            with self.assertRaises(terraform.Stockout):
+                process.retry("x", apply, give_up=(terraform.Stockout,))
+            self.assertEqual(len(calls), 1)
+            with self.assertRaises(terraform.Stockout):
+                process.retry("x", apply)
+        self.assertEqual(len(calls), 1 + process.ATTEMPTS)
+
+    def test_a_stockout_moves_on_to_the_next_placement(self):
+        placements = [{"zone": z, "machine-type": "c3-standard-192-metal"} for z in ("a", "b", "c")]
+        tried = []
+
+        def attempt(placement, last):
+            tried.append((placement["zone"], last))
+            if placement["zone"] != "c":
+                raise terraform.Stockout(1, ["terraform", "-chdir=x", "apply"])
+
+        with mock.patch.object(run, "log"):
+            self.assertEqual(run.on_placements("r", placements, attempt), 2)
+        self.assertEqual(tried, [("a", False), ("b", False), ("c", True)])
+
+    def test_placements_are_tried_from_the_one_that_last_worked_around(self):
+        placements = [{"zone": z, "machine-type": "m"} for z in ("a", "b", "c")]
+        tried = []
+
+        def attempt(placement, last):
+            tried.append(placement["zone"])
+            if placement["zone"] != "a":
+                raise terraform.Stockout(1, ["terraform", "-chdir=x", "apply"])
+
+        with mock.patch.object(run, "log"):
+            self.assertEqual(run.on_placements("r", placements, attempt, start=1), 0)
+        self.assertEqual(tried, ["b", "c", "a"])
+
+    def test_a_failure_gke_tells_as_a_stockout_is_one(self):
+        dep = deployment.Deployment(Path(tempfile.mkdtemp()))
+        failed = subprocess.CalledProcessError(1, ["terraform", "-chdir=x", "apply"])
+        with mock.patch.object(deployment.terraform, "deploy", side_effect=failed):
+            with self.assertRaises(terraform.Stockout):
+                dep.deploy(retry_stockout=False, stockout=lambda: True)
+            with mock.patch.object(process, "log"), mock.patch.object(process.time, "sleep"), \
+                 self.assertRaises(subprocess.CalledProcessError) as caught:
+                dep.deploy(stockout=lambda: False)
+        self.assertNotIsInstance(caught.exception, terraform.Stockout)
+
+    def test_the_last_placements_stockout_and_any_other_failure_are_raised(self):
+        def stockout(placement, last):
+            raise terraform.Stockout(1, ["terraform", "-chdir=x", "apply"])
+
+        def failure(placement, last):
+            raise locust.LocustError("boom")
+
+        placements = [{"zone": "a", "machine-type": "m"}, {"zone": "b", "machine-type": "m"}]
+        with mock.patch.object(run, "log"):
+            with self.assertRaises(terraform.Stockout):
+                run.on_placements("r", placements, stockout)
+            with self.assertRaises(locust.LocustError):
+                run.on_placements("r", placements, failure)
+        run.on_placements("r", [None], lambda placement, last: self.assertTrue(last))
+
+
+class GkeStockout(unittest.TestCase):
+    OPERATIONS = [
+        {"operationType": "CREATE_NODE_POOL", "startTime": "2026-10-21T13:03:59.2Z",
+         "statusMessage": "Not all instances running in IGM. Current errors: [GCE_STOCKOUT]: ..."},
+        {"operationType": "CREATE_CLUSTER", "startTime": "2026-10-21T12:51:30.9Z", "statusMessage": ""},
+    ]  # fmt: skip
+
+    def stockout(self, since: str, operations=OPERATIONS, returncode=0) -> bool:
+        import json
+
+        proc = subprocess.CompletedProcess([], returncode, stdout=json.dumps(operations), stderr="denied")
+        with mock.patch.object(cluster_module.subprocess, "run", return_value=proc), \
+             mock.patch.object(cluster_module, "log"):
+            return cluster_module.gke_stockout("p", "us-central1-c", "c", since)
+
+    def test_a_create_that_failed_on_a_stockout(self):
+        self.assertTrue(self.stockout("2026-10-21T13:00:00Z"))
+
+    def test_one_from_before_the_apply_is_not_held_against_it(self):
+        self.assertFalse(self.stockout("2026-10-21T13:10:00Z"))
+
+    def test_other_failures_and_unreadable_operations_are_not_stockouts(self):
+        quota = [{**self.OPERATIONS[0], "statusMessage": "Quota 'C3_CPUS' exceeded"}]
+        self.assertFalse(self.stockout("2026-10-21T13:00:00Z", quota))
+        self.assertFalse(self.stockout("2026-10-21T13:00:00Z", returncode=1))
 
 
 class Series(unittest.TestCase):
