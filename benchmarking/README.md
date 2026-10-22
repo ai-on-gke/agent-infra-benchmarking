@@ -87,7 +87,7 @@ without creating a cluster:
 To run a case:
 
 ```bash
-./benchmarking/tools/run --scenario glutton
+./benchmarking/tools/run --scenario glutton-gvisor
 ```
 
 A run pulls its images from a repository and first builds the images of your
@@ -127,7 +127,7 @@ Creating and destroying a cluster takes most of a run's time. While you are
 changing a case or the code it runs, keep one cluster up instead:
 
 ```bash
-./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton
+./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton-gvisor
 ```
 
 See [Keeping a cluster between runs](#keeping-a-cluster-between-runs) for
@@ -139,7 +139,7 @@ creating one is in
 [Keeping your own runs' reports in BigQuery](../automation-infra/README.md#keeping-your-own-runs-reports-in-bigquery):
 
 ```bash
-./benchmarking/tools/run --report-deployment automation-infra/dev/reports --scenario glutton
+./benchmarking/tools/run --report-deployment automation-infra/dev/reports --scenario glutton-gvisor
 ```
 
 Useful flags (`--help` lists them all):
@@ -348,7 +348,7 @@ for. The first run applies it, builds the images into its repository and runs
 the case; later runs reuse both:
 
 ```bash
-./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton
+./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton-gvisor
 ```
 
 After changing the code, the next run builds the images of the changed tree
@@ -357,8 +357,8 @@ cluster config after changing it, reinstalling substrate if its version
 changed:
 
 ```bash
-./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton --no-deploy-workloads
-./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton --dev-infra-update
+./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton-gvisor --no-deploy-workloads
+./benchmarking/tools/run --dev-infra glutton-dev --scenario glutton-gvisor --dev-infra-update
 ```
 
 A dev infra's sandboxed node pool is applied for one sandbox class, so a case
