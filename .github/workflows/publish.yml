@@ -14,7 +14,7 @@ name: Publish
 on:
   # The branch the deployments' jobs run.
   push:
-    branches: [main]
+    branches: [fix-publish-main-only]
   # For the runs' images of any other branch.
   workflow_dispatch:
 
@@ -30,7 +30,8 @@ jobs:
       id-token: write
     strategy:
       matrix:
-        deployment: [substrate-bench-auto, substrate-bench-staging]
+        # substrate-bench-auto is off for now.
+        deployment: [substrate-bench-staging]
     steps:
       # Only what the image holds, so its tree stays clean in git's eyes.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,7 +102,7 @@ jobs:
     strategy:
       matrix:
         # The same as runner-image's.
-        deployment: [substrate-bench-auto, substrate-bench-staging]
+        deployment: [substrate-bench-staging]
     concurrency:
       group: ${{ github.workflow }}-benchmark-images-${{ matrix.deployment }}-${{ github.ref }}
     steps:
@@ -180,7 +181,7 @@ jobs:
     strategy:
       matrix:
         # The same as runner-image's.
-        deployment: [substrate-bench-auto, substrate-bench-staging]
+        deployment: [substrate-bench-staging]
     concurrency:
       group: ${{ github.workflow }}-tag-runner-${{ matrix.deployment }}-${{ github.ref }}
     steps:
