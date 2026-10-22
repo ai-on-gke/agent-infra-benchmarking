@@ -26,13 +26,12 @@
 # `actor-memory` and `actor-cpu` size env's WorkerPool and its environments.
 # `actor-cpu`, "2" by default, caps substrate's sandbox at the 2 vCPU the
 # cloud providers' get; with `actor-memory: 2Gi` the sizes match.
-# `comparator.providers` runs them on each of substrate, local, e2b, daytona,
-# modal, anthropic and openai it lists in turn, [substrate] by default, and
-# combines their results into one comparison, the first provider the others
-# are compared with. The cloud ones need their API keys in the
-# scenario-runner's environment, sandbox_benchmark.PROVIDER_KEYS.
-# `cost-sheet: true` adds cost_sheet.csv, the sandbox cost sheet, to that
-# comparison.
+# `comparator.provider` runs them on substrate, the default, local, e2b,
+# daytona, modal, anthropic or openai. The cloud ones need their API keys in
+# the scenario-runner's environment, sandbox_benchmark.PROVIDER_KEYS. A case's
+# variants' results are combined into one comparison, the first variant the
+# others are compared with, and `cost-sheet: true` adds cost_sheet.csv, the
+# sandbox cost sheet, to it.
 # `sandbox-class`, gvisor by default, is also the class the case's cluster is
 # applied for (its `sandbox_class`), so it is stated here only.
 # `actor-memory` is the actors' memory limit, which on microvm is the guest's
@@ -40,6 +39,12 @@
 # worker pods share the users, 1 by default.
 # `noop` is the scenario-runner's alone: it applies and destroys the case's
 # cluster, and runs nothing on it.
+#
+# `variants` makes a case of each of its entries, <case>-<variant>: the case's
+# keys with the entry's on top, a mapping merged into a mapping. An entry can
+# change any key but `type`. --scenario <case> runs them all one after another,
+# then the type's summary of them all; --scenario <case>-<variant> just that
+# one. Those alike in their cluster share one, applied for them all.
 #
 # `max-failure-ratio` is the share of cycles, 0 to 1, that may fail before a
 # run of the case counts as failed, 0.01 by default. A cycle fails on any of
@@ -557,20 +562,28 @@ cases:
     # is the cheaper way to warm them up.
     repeats:
       warmups: 0
-    sandbox-class: gvisor
-    # The comparator starts every run at once, each in an environment of its
-    # own on a worker of its own: 3 sandboxes of 2 vCPU on the node's 16.
-    env-worker-count: 3
-    actor-cpu: "2"
-    actor-memory: 2Gi
     comparator:
-      # e2b, daytona, modal, anthropic and openai need E2B_API_KEY,
-      # DAYTONA_API_KEY, MODAL_TOKEN_ID/MODAL_TOKEN_SECRET, ANTHROPIC_API_KEY
-      # and OPENAI_API_KEY in the scenario-runner's environment.
-      providers: [substrate, local, e2b, daytona, modal, anthropic, openai]
       tests:
       - test_suspend_resume
       runs: 3
+    variants:
+      substrate:
+        sandbox-class: gvisor
+        # The comparator starts every run at once, each in an environment of
+        # its own on a worker of its own: 3 sandboxes of 2 vCPU on the node's 16.
+        env-worker-count: 3
+        actor-cpu: "2"
+        actor-memory: 2Gi
+        comparator: {provider: substrate}
+      local: {comparator: {provider: local}}
+      # e2b, daytona, modal, anthropic and openai need E2B_API_KEY,
+      # DAYTONA_API_KEY, MODAL_TOKEN_ID/MODAL_TOKEN_SECRET, ANTHROPIC_API_KEY
+      # and OPENAI_API_KEY in the scenario-runner's environment.
+      e2b: {comparator: {provider: e2b}}
+      daytona: {comparator: {provider: daytona}}
+      modal: {comparator: {provider: modal}}
+      anthropic: {comparator: {provider: anthropic}}
+      openai: {comparator: {provider: openai}}
 
   # The sandbox cost sheet, from the providers' suspend and resume overheads.
   # Cloud providers only, so neither substrate nor env is installed.
@@ -590,11 +603,16 @@ cases:
       warmups: 0
     cost-sheet: true
     comparator:
-      providers: [e2b, modal, daytona, anthropic, openai]
       tests:
       - test_suspend_resume
       runs: 10
       warmup-runs: 1
+    variants:
+      e2b: {comparator: {provider: e2b}}
+      modal: {comparator: {provider: modal}}
+      daytona: {comparator: {provider: daytona}}
+      anthropic: {comparator: {provider: anthropic}}
+      openai: {comparator: {provider: openai}}
 
   # The scenario-runner's Terraform path on infra/clusters/dummy, which creates
   # no GCP resources and so has nothing to benchmark on.

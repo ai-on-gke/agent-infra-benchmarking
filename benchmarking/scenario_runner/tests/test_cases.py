@@ -22,15 +22,19 @@ from pathlib import Path
 
 import yaml
 
-from scenario_runner import locust
+from unittest import mock
+
+from scenario_runner import locust, sandbox_benchmark
 from scenario_runner.cases import (
     SCENARIOS_FILE,
+    grouped,
     load_bare_metal,
     load_cases,
     record_names,
     warmup_names,
     with_bare_metal,
 )
+from scenario_runner.reports import VARIANT
 
 GLUTTON = {
     "type": "locust",
@@ -155,6 +159,74 @@ class CaseChecks(unittest.TestCase):
                 load({"c": case})
         with self.assertRaises(ValueError):
             load({"c": {**GLUTTON, "bare-metal": "yes"}})
+
+
+class Variants(unittest.TestCase):
+    def test_shipped_sandbox_benchmark_is_a_case_per_provider(self):
+        cases = load_cases(SCENARIOS_FILE)
+        members = grouped(cases)["sandbox-benchmark"]
+        self.assertEqual(members[0], "sandbox-benchmark-substrate")
+        self.assertNotIn("sandbox-benchmark", cases)
+        for name in members:
+            case = cases[name]
+            self.assertEqual(name, f"sandbox-benchmark-{case['comparator']['provider']}")
+            self.assertEqual(case["comparator"]["tests"], ["test_suspend_resume"])
+            self.assertEqual(case[VARIANT], {"of": "sandbox-benchmark", "name": case["comparator"]["provider"]})
+        self.assertEqual(cases["sandbox-benchmark-substrate"]["env-worker-count"], 3)
+        self.assertNotIn("env-worker-count", cases["sandbox-benchmark-e2b"])
+
+    def test_a_variant_changes_any_key_and_merges_mappings(self):
+        variants = {"micro": {"sandbox-class": "microvm", "master": {"users": 3}}, "plain": None}
+        cases = load({"c": {**GLUTTON, "variants": variants}, "d": GLUTTON})
+        self.assertEqual(list(cases), ["c-micro", "c-plain", "d"])
+        self.assertEqual(cases["c-micro"]["sandbox-class"], "microvm")
+        self.assertEqual(cases["c-micro"]["master"], {"run-time": "1m", "users": 3})
+        self.assertEqual(cases["c-plain"]["master"], GLUTTON["master"])
+        self.assertEqual(grouped(cases), {"c": ["c-micro", "c-plain"], "d": ["d"]})
+
+    def test_bad_variants_are_refused(self):
+        for case in (
+            {**GLUTTON, "variants": {}},
+            {**GLUTTON, "variants": ["a"]},
+            {**GLUTTON, "variants": {"a": 1}},
+            {**GLUTTON, "variants": {"a b": {}}},
+            {**GLUTTON, "variants": {"a": {"type": "sandbox-benchmark"}}},
+            {**GLUTTON, "variants": {"a": {"variants": {"b": {}}}}},
+            {**GLUTTON, "variants": {"a": {VARIANT: {}}}},
+            {**GLUTTON, VARIANT: {"of": "x", "name": "y"}},
+        ):
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                load({"c": case})
+        with self.assertRaisesRegex(ValueError, "which is another case"):
+            load({"c": {**GLUTTON, "variants": {"a": {}}}, "c-a": GLUTTON})
+
+    def test_a_variant_on_bare_metal_is_one_of_the_case_on_it(self):
+        cases = load({"c": {**GLUTTON, "variants": {"a": {"bare-metal": True}, "b": {}}}})
+        cases = with_bare_metal(cases, set(cases), False, None, PLACEMENTS)
+        self.assertEqual(grouped(cases), {"c-metal": ["c-a-metal"], "c": ["c-b"]})
+
+
+class SandboxBenchmarkReports(unittest.TestCase):
+    CASE = {"type": "sandbox-benchmark", "comparator": {"provider": "e2b"}}
+
+    def test_a_variant_reports_beside_the_others_of_its_group(self):
+        variant = {**self.CASE, VARIANT: {"of": "sb-metal", "name": "fast"}}
+        self.assertEqual(sandbox_benchmark.report_folder("sb-fast-metal-2", "sb-fast-metal", variant), "sb-metal-2/fast")
+        self.assertEqual(sandbox_benchmark.report_folder("sb-2", "sb", self.CASE), "sb-2/e2b")
+
+    def test_summarize_combines_each_record_s_variants_in_order(self):
+        a = {**self.CASE, VARIANT: {"of": "sb", "name": "a"}, "cost-sheet": True}
+        b = {**self.CASE, VARIANT: {"of": "sb", "name": "b"}}
+        runs = [("sb-a-1", "sb-a", a), ("sb-a-2", "sb-a", a), ("sb-b-1", "sb-b", b), ("sb-b-2", "sb-b", b)]
+        with mock.patch.object(sandbox_benchmark, "combine_reports") as combine:
+            sandbox_benchmark.summarize(runs, "run-1", "bucket", "reports")
+        self.assertEqual(
+            combine.call_args_list,
+            [
+                mock.call("bucket", "reports", "run-1", "sb-1", ["a", "b"], True),
+                mock.call("bucket", "reports", "run-1", "sb-2", ["a", "b"], True),
+            ],
+        )
 
 
 class BareMetal(unittest.TestCase):

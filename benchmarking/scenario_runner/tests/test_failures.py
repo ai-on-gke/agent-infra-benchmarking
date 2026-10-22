@@ -260,7 +260,7 @@ class Series(unittest.TestCase):
         cases = {"a": {"type": "locust"}, "b": {"type": "locust"}}
         ran = []
 
-        def case(name, _):
+        def case(name, _case, _cluster):
             ran.append(name)
             if name == "a":
                 raise locust.LocustStillRunning("unread")
@@ -270,8 +270,52 @@ class Series(unittest.TestCase):
         with self.assertRaises(locust.LocustStillRunning):
             run.run_cases(self.args, cases, case, shared_cluster=True)
 
+    def variants(self, *names: str, infra: dict | None = None) -> dict:
+        from scenario_runner.reports import VARIANT
+
+        return {f"g-{n}": {"type": "locust", "infra": infra or {}, VARIANT: {"of": "g", "name": n}} for n in names}
+
+    def test_variants_alike_share_a_cluster_then_are_summarized(self):
+        from contextlib import contextmanager
+
+        from scenario_runner import benchmark
+
+        cases = {**self.variants("a", "b"), **self.variants("c", infra={"other": 1}), "h": {"type": "locust"}}
+        cases = {name: cases[name] for name in ["g-a", "g-c", "g-b", "h"]}
+        applied, ran = [], []
+
+        @contextmanager
+        def cluster(key, case):
+            applied.append(key)
+            yield key
+
+        with mock.patch.object(benchmark, "summarize") as summarize:
+            failed = run.run_cases(self.args, cases, lambda name, case, cluster: ran.append((name, cluster)),
+                                   shared_cluster=False, applied=cluster)  # fmt: skip
+        self.assertEqual(failed, [])
+        self.assertEqual(applied, ["g-a", "g-c", "h"])
+        self.assertEqual(ran, [("g-a", "g-a"), ("g-b", "g-a"), ("g-c", "g-c"), ("h", "h")])
+        self.assertEqual(run.cluster_keys(cases), ["g-a", "g-c", "h"])
+        groups = [[record for record, _, _ in call.args[0]] for call in summarize.call_args_list]
+        self.assertEqual(groups, [["g-a-warmup-1", "g-a", "g-c-warmup-1", "g-c", "g-b-warmup-1", "g-b"], ["h-warmup-1", "h"]])
+
+    def test_all_of_a_group_on_one_cluster_is_recorded_as_the_group(self):
+        self.assertEqual(run.cluster_keys(self.variants("a", "b")), ["g"])
+
+    def test_a_stuck_variant_leaves_the_rest_of_its_batch_unrun(self):
+        cases = self.variants("a", "b", "c")
+        ran = []
+
+        def case(name, _case, _cluster):
+            ran.append(name)
+            if name == "g-a":
+                raise locust.LocustStillRunning("unread")
+
+        self.assertEqual(run.run_cases(self.args, cases, case, shared_cluster=False), ["g-a", "g-b", "g-c"])
+        self.assertEqual(ran, ["g-a"])
+
     def test_a_failed_destroy_stops_the_series(self):
-        def case(name, _):
+        def case(name, _case, _cluster):
             raise deployment.DestroyFailed(Path("/x"), None)
 
         with self.assertRaises(deployment.DestroyFailed):
@@ -368,7 +412,7 @@ class NeededImages(unittest.TestCase):
         needed = self.needed({"a": case})
         self.assertEqual(set(needed), {"env", "benchmark"})
         self.assertEqual(needed["env"], ["repo/env/ate-env-api:e", "repo/env/ate-env-guest:e"])
-        cloud = {**case, "comparator": {**case["comparator"], "providers": ["e2b"]}}
+        cloud = {**case, "comparator": {**case["comparator"], "provider": "e2b"}}
         self.assertEqual(set(self.needed({"a": cloud})), {"benchmark"})
 
     def test_noop_needs_only_what_its_install_does(self):

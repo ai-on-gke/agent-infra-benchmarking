@@ -16,11 +16,13 @@
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
 import yaml
 
 from . import SCENARIOS_DIR, benchmark
+from .reports import LABEL_RE, VARIANT
 
 SCENARIOS_FILE = SCENARIOS_DIR / "scenarios.yaml"
 # One Terraform config per directory, which a case's infra.cluster.name picks.
@@ -46,14 +48,20 @@ SHARED = "shared"
 PER_REPEAT = "per-repeat"
 REPEAT_CLUSTERS = [SHARED, PER_REPEAT]
 
+# A case's variants, each run as a case of its own, <case>-<variant>: the
+# case's keys with the variant's on top. Any but these.
+VARIANTS = "variants"
+NOT_VARIED = {"type", VARIANTS}
+
+
 def load_cases(scenarios_file: Path) -> dict[str, dict]:
+    """The cases, each with variants in their place."""
     with scenarios_file.open() as f:
         cases = (yaml.safe_load(f) or {}).get("cases")
     if not isinstance(cases, dict) or not cases:
         raise ValueError(f"{scenarios_file} has no `cases` mapping")
+    cases = with_variants(str(scenarios_file), cases)
     for name, case in cases.items():
-        if not isinstance(case, dict):
-            raise ValueError(f"{scenarios_file}: case {name} is not a mapping")
         if not isinstance(case.get("type"), str):
             raise ValueError(f"{scenarios_file}: case {name} has no `type`")
         known = ["noop", *benchmark.types()]
@@ -84,6 +92,55 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
             except ValueError as exc:
                 raise ValueError(f"{scenarios_file}: {exc}") from None
     return cases
+
+
+def merged(base: dict, over: dict) -> dict:
+    """base with over's keys on top, a mapping in both merged in turn."""
+    out = dict(base)
+    for key, value in over.items():
+        out[key] = merged(out[key], value) if isinstance(value, dict) and isinstance(out.get(key), dict) else value
+    return out
+
+
+def with_variants(where: str, cases: dict) -> dict[str, dict]:
+    """The cases, one with `variants` replaced by a case per variant, in their
+    order, which VARIANT says it is a variant of."""
+    out = {}
+    for name, case in cases.items():
+        if not isinstance(case, dict):
+            raise ValueError(f"{where}: case {name} is not a mapping")
+        if VARIANT in case:
+            raise ValueError(f"{where}: case {name}'s `{VARIANT}` is the scenario-runner's own")
+        if VARIANTS not in case:
+            out[name] = case
+            continue
+        variants = case[VARIANTS]
+        if not isinstance(variants, dict) or not variants:
+            raise ValueError(f"{where}: case {name}'s `{VARIANTS}` must be a mapping of names to the keys they change")
+        base = {key: value for key, value in case.items() if key != VARIANTS}
+        for variant, keys in variants.items():
+            if not isinstance(variant, str) or not LABEL_RE.fullmatch(variant):
+                raise ValueError(f"{where}: case {name}'s variant {variant!r} is not a valid label value")
+            keys = keys or {}
+            if not isinstance(keys, dict):
+                raise ValueError(f"{where}: case {name}'s variant {variant} is not a mapping")
+            fixed = keys.keys() & (NOT_VARIED | {VARIANT})
+            if fixed:
+                raise ValueError(f"{where}: case {name}'s variant {variant} cannot change {', '.join(sorted(fixed))}")
+            renamed = f"{name}-{variant}"
+            if renamed in cases or renamed in out:
+                raise ValueError(f"{where}: case {name}'s variant {variant} would be {renamed}, which is another case")
+            out[renamed] = {**merged(copy.deepcopy(base), keys), VARIANT: {"of": name, "name": variant}}
+    return out
+
+
+def grouped(cases: dict[str, dict]) -> dict[str, list[str]]:
+    """The cases by the one they are variants of, a case of none by its own
+    name, in the order the first of each comes."""
+    groups = {}
+    for name, case in cases.items():
+        groups.setdefault(case[VARIANT]["of"] if VARIANT in case else name, []).append(name)
+    return groups
 
 
 def load_bare_metal(scenarios_file: Path) -> dict:
@@ -126,7 +183,8 @@ def with_bare_metal(
     its records and reports are, with its cluster at the first of placements.
     A case's own `bare-metal` wins over default, and override, unless None,
     over both. Neither default nor override puts a noop on bare metal, as it
-    runs nothing there."""
+    runs nothing there. A variant on bare metal is one of <case>-metal, so
+    variants on and off it are compared apart."""
     result = {}
     for name, case in cases.items():
         metal = case.get(BARE_METAL, default if case["type"] != "noop" else False)
@@ -142,6 +200,11 @@ def with_bare_metal(
             raise ValueError(f"case {name} runs on bare metal, but `{BARE_METAL}.placements` has none in its region")
         infra = {**case["infra"], "cluster": placed(case["infra"]["cluster"], placements[0])}
         result[renamed] = {**case, BARE_METAL: True, "infra": infra}
+        if VARIANT in case:
+            group = case[VARIANT]["of"] + BARE_METAL_SUFFIX
+            if group in all_names:
+                raise ValueError(f"case {name} on bare metal would be a variant of {group}, which is another case")
+            result[renamed][VARIANT] = {**case[VARIANT], "of": group}
     return result
 
 

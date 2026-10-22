@@ -280,8 +280,9 @@ resource "google_bigquery_table" "reports" {
 locals {
   # The sandbox-benchmark comparator's newline-delimited JSON, as
   # benchmarking/sandbox-benchmark/image/run_comparator.py writes it under
-  # <prefix>/<run-id>/<record>/<provider>/. Typed, as the runs' metrics are a
-  # nested list. Each schema as JSON, as their shapes differ.
+  # <prefix>/<run-id>/<record>/<provider>/, a variant's under the record of the
+  # case it is a variant of and the variant's name. Typed, as the runs' metrics
+  # are a nested list. Each schema as JSON, as their shapes differ.
   sandbox_benchmark_files = {
     sandbox_benchmark_runs = jsonencode([
       { name = "provider", type = "STRING" },

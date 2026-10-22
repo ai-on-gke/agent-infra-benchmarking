@@ -14,8 +14,8 @@
 
 """The sandbox cost sheet, as CSV: its suspend and restore overheads from a
 sandbox-benchmark run's combined results, the rest from the prices and usage
-below. sandbox_benchmark.run writes it beside comparison.md for a case with
-`cost-sheet: true`. An overhead is the provider's mean Suspend or Resume of
+below. sandbox_benchmark.summarize writes it beside comparison.md for a case
+with `cost-sheet: true`. An overhead is the provider's mean Suspend or Resume of
 test_suspend_resume, as comparison.md has it, taken once an hour."""
 
 from __future__ import annotations

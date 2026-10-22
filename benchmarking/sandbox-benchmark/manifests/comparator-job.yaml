@@ -72,6 +72,8 @@ spec:
           value: "${BENCHMARK_REPORT_BUCKET}"
         - name: REPORT_PREFIX
           value: "${BENCHMARK_REPORT_PREFIX}"
+        - name: BENCHMARK_REPORT_FOLDER
+          value: "${BENCHMARK_REPORT_FOLDER}"
         # The substrate provider's, see its providers/README.md.
         - name: SUBSTRATE_ENV_API_ADDR
           value: "${SUBSTRATE_ENV_API_ADDR}"

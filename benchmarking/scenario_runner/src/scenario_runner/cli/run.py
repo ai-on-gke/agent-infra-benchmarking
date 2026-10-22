@@ -16,7 +16,9 @@
 names in the order given, or with --all every case in the order listed), each
 case's warm-ups and repeats on an infra/clusters/ cluster applied for it and
 destroyed after them, or with `repeats.cluster: per-repeat` each repeat on one
-of its own, pulling the images benchmarking/tools/build-images built into
+of its own; a case's variants one after another, those alike in their cluster
+on one, then its type's summarize of them all; pulling the images
+benchmarking/tools/build-images built into
 --image-repo. From a machine rather
 than Cloud Run, it builds the images the repository lacks itself, and without
 --image-repo applies a repository for the execution, scenario_runner/infra,
@@ -27,12 +29,13 @@ it, checks what the cases need, the images included."""
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import signal
 import subprocess
 import sys
-from contextlib import ExitStack, contextmanager
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -62,6 +65,7 @@ from ..cases import (
     PROVIDERS,
     SCENARIOS_FILE,
     SKIP_SUBSTRATE_INSTALL,
+    grouped,
     load_bare_metal,
     load_cases,
     placed,
@@ -108,7 +112,12 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="python3 -m scenario_runner.cli.run", description=__doc__)
     p.add_argument("--scenarios-file", type=Path, default=SCENARIOS_FILE, help=f"default: {SCENARIOS_FILE}")
     which = p.add_mutually_exclusive_group(required=True)
-    which.add_argument("--scenario", action="append", metavar="NAME", help="a case to run; repeat it for more")
+    which.add_argument(
+        "--scenario",
+        action="append",
+        metavar="NAME",
+        help="a case to run, all its variants, or one of them as <case>-<variant>; repeat it for more",
+    )
     which.add_argument(
         "--all",
         action="store_true",
@@ -279,12 +288,14 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
         cases = load_cases(args.scenarios_file)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         fail(str(exc))
+    groups = grouped(cases)
     # dict.fromkeys drops repeated names, keeping the first.
     names = list(dict.fromkeys(cases if args.all else args.scenario))
-    unknown = [name for name in names if name not in cases]
+    unknown = [name for name in names if name not in cases and name not in groups]
     if unknown:
-        fail(f"no case {', '.join(unknown)} in {args.scenarios_file}; it has {', '.join(cases)}")
-    selected = {name: cases[name] for name in names}
+        known = ", ".join(dict.fromkeys([*groups, *cases]))
+        fail(f"no case {', '.join(unknown)} in {args.scenarios_file}; it has {known}")
+    selected = {member: cases[member] for name in names for member in groups.get(name, [name])}
     if args.provider:
         for name, case in selected.items():
             if case.get("type") == "locust":
@@ -380,7 +391,7 @@ def needed_images(args: argparse.Namespace, cases: dict[str, dict]) -> dict[str,
     benchmarks = {name: case for name, case in cases.items() if case["type"] != "noop"}
     # env's images are only read when it is deployed, for the substrate provider.
     if not args.no_deploy_workloads and any(
-        "substrate" in sandbox_benchmark.check_case(name, case, deploy_workloads=True)["comparator"]["providers"]
+        sandbox_benchmark.check_case(name, case, deploy_workloads=True)["comparator"]["provider"] == "substrate"
         for name, case in benchmarks.items()
         if case["type"] == "sandbox-benchmark"
     ):
@@ -590,30 +601,95 @@ def run_repeats(name: str, case: dict, run: Callable[[str, int, int], None], sha
         raise CaseFailed(f"{len(failed)} of {len(records)} repeats of {name} failed: {', '.join(failed)}")
 
 
+def cluster_setup(case: dict) -> str:
+    """What the case's cluster is applied with and has installed, which a
+    case's variants alike in share."""
+    setup = [case.get("infra"), sandbox_class(case), case.get(BARE_METAL, False),
+             bool(case.get(SKIP_SUBSTRATE_INSTALL)), case.get("provider") == PROVIDER_AGENT_SANDBOX]  # fmt: skip
+    return json.dumps(setup, sort_keys=True)
+
+
+def batches(names: list[str], cases: dict[str, dict]) -> list[list[str]]:
+    """A case's variants by the cluster they can share, alike in its setup, in
+    the order the first of each comes; one whose repeats have a cluster each
+    alone."""
+    out = {}
+    for name in names:
+        out.setdefault(cluster_setup(cases[name]) if shares_cluster(cases[name]) else name, []).append(name)
+    return list(out.values())
+
+
+def batch_key(group: str, members: list[str], batch: list[str]) -> str:
+    """What the batch's cluster is recorded as: its case's, or its group's
+    for all of the group, or else its first's."""
+    return group if len(batch) > 1 and batch == members else batch[0]
+
+
+def cluster_keys(cases: dict[str, dict]) -> list[str]:
+    """What every cluster the cases run on applied for them is recorded as."""
+    keys = []
+    for group, members in grouped(cases).items():
+        for batch in batches(members, cases):
+            first = cases[batch[0]]
+            keys += [batch_key(group, members, batch)] if shares_cluster(first) else record_names(batch[0], first)
+    return keys
+
+
 def run_cases(
-    args: argparse.Namespace, cases: dict[str, dict], run: Callable[[str, dict], None], shared_cluster: bool
+    args: argparse.Namespace,
+    cases: dict[str, dict],
+    run: Callable[[str, dict, Cluster | None], None],
+    shared_cluster: bool,
+    applied: Callable[[str, dict], AbstractContextManager[Cluster | None]] = lambda key, case: nullcontext(),
+    summary_bucket: str | None = None,
 ) -> list[str]:
-    """Calls run with each case, and returns the ones that failed. A failed case
-    does not stop the ones after it; an interrupt, or a cluster that could not
-    be destroyed, does. So does a run that may still be going on a
-    shared_cluster, which the next case would deploy under it; on a cluster of
-    its own, which is destroyed after it, the next case runs."""
+    """Calls run with each case and the cluster applied gives each batch of
+    them, recorded as its key, and returns the ones that failed. A case's
+    variants run one after another, then its type's summarize, given
+    summary_bucket. A failed case does not stop the ones after it; an
+    interrupt, or a cluster that could not be destroyed, does. So does a run
+    that may still be going on a shared_cluster, which the next case would
+    deploy under it; on a batch's cluster, which is destroyed after it, the
+    rest of the batch does not run, and the next batch does."""
     failed = []
-    for name, case in cases.items():
-        try:
-            run(name, case)
-        except benchmark.STILL_RUNNING as exc:
-            if shared_cluster:
+    for group, members in grouped(cases).items():
+        for batch in batches(members, cases):
+            todo = list(batch)
+            try:
+                with applied(batch_key(group, members, batch), cases[batch[0]]) as cluster:
+                    while todo:
+                        name = todo.pop(0)
+                        case = cases[name]
+                        try:
+                            run(name, case, cluster)
+                        except benchmark.STILL_RUNNING as exc:
+                            if shared_cluster:
+                                raise
+                            log(f"{name}: {exc}", "ERROR")
+                            failed.append(name)
+                            if todo:
+                                log(f"{', '.join(todo)}: not run, on a cluster {name} may still be running on", "ERROR")
+                                failed += todo
+                                todo = []
+                        except (CaseFailed, *RUN_ERRORS) as exc:
+                            log(f"{name}: {describe(exc)}", "ERROR")
+                            failed.append(name)
+                        # From what was downloaded, so not on Cloud Run.
+                        records = record_names(name, case)
+                        if len(records) > 1 and case["type"] in benchmark.SUMMARIZED and not ON_CLOUD_RUN:
+                            summary.write(reports.REPORTS_DIR / args.name, name, records)
+            except benchmark.STILL_RUNNING:
                 raise
-            log(f"{name}: {exc}", "ERROR")
-            failed.append(name)
-        except (CaseFailed, *RUN_ERRORS) as exc:
-            log(f"{name}: {describe(exc)}", "ERROR")
-            failed.append(name)
-        # From what was downloaded, so not on Cloud Run.
-        records = record_names(name, case)
-        if len(records) > 1 and case["type"] in benchmark.SUMMARIZED and not ON_CLOUD_RUN:
-            summary.write(reports.REPORTS_DIR / args.name, name, records)
+            except RUN_ERRORS as exc:
+                # The batch's cluster: its apply, install or cleanup.
+                log(f"{', '.join(todo or batch)}: {describe(exc)}", "ERROR")
+                failed += [name for name in todo or batch if name not in failed]
+        runs = [
+            (record, name, cases[name])
+            for name in members
+            for record in warmup_names(name, cases[name]) + record_names(name, cases[name])
+        ]
+        benchmark.summarize(runs, args.name, summary_bucket, args.report_prefix)
     return failed
 
 
@@ -627,7 +703,7 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
     if not checked:
         check_images(args, cases)
 
-    def run(name: str, case: dict) -> None:
+    def run(name: str, case: dict, _: Cluster | None) -> None:
         nonlocal record
         if case.get("provider") == PROVIDER_AGENT_SANDBOX:
             record = dev_infra.install_agent_sandbox(record)
@@ -640,7 +716,8 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
             shared_cluster=True,
         )
 
-    return run_cases(args, cases, run, shared_cluster=True)
+    return run_cases(args, cases, run, shared_cluster=True, applied=lambda key, case: nullcontext(cluster),
+                     summary_bucket=args.report_bucket or cluster.bucket)  # fmt: skip
 
 
 def on_placements(
@@ -667,15 +744,12 @@ def on_placements(
 def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[str]:
     """A case's warm-ups and repeats run on a cluster applied for it and
     destroyed after them, or with `repeats.cluster: per-repeat` each repeat on
-    one of its own. The clusters pull from args.image_repo, or without one from
+    one of its own; a batch of a case's variants on one applied for them all.
+    The clusters pull from args.image_repo, or without one from
     a repository applied for the execution, the images built into it, and
     destroyed after the clusters. Returns the cases that failed."""
     # Every cluster's, before anything is applied, so a name that can't be fails first.
-    case_vars = {
-        key: names.infra_vars(args.project_id, args.region, args.name, key)
-        for name, case in cases.items()
-        for key in ([name] if shares_cluster(case) else record_names(name, case))
-    }
+    case_vars = {key: names.infra_vars(args.project_id, args.region, args.name, key) for key in cluster_keys(cases)}
     # The placement the last bare-metal cluster was applied at, which the next
     # starts from, as a zone stays out of a machine type for hours.
     current_placement = 0
@@ -722,17 +796,26 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
                 if pulls:
                     cluster.delete_volumes()
 
-    def run_on_clusters(name: str, case: dict) -> None:
-        if shares_cluster(case):
-            with applied_cluster(case, name) as cluster:
-                run_repeats(
-                    name,
-                    case,
-                    lambda record, repeat, warmup: run_case(
-                        args, record, case, cluster, name, repeat, warmup, args.image_repo
-                    ),
-                    shared_cluster=True,
-                )
+    @contextmanager
+    def batch_cluster(key: str, case: dict) -> Iterator[Cluster | None]:
+        """The cluster of a batch whose repeats share one; None for one whose
+        repeats have their own."""
+        if not shares_cluster(case):
+            yield None
+            return
+        with applied_cluster(case, key) as cluster:
+            yield cluster
+
+    def run_on_clusters(name: str, case: dict, cluster: Cluster | None) -> None:
+        if cluster is not None:
+            run_repeats(
+                name,
+                case,
+                lambda record, repeat, warmup: run_case(
+                    args, record, case, cluster, name, repeat, warmup, args.image_repo
+                ),
+                shared_cluster=True,
+            )
             return
 
         def run_on_cluster(record: str, repeat: int, warmup: int) -> None:
@@ -742,7 +825,8 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
         run_repeats(name, case, run_on_cluster, shared_cluster=False)
 
     def run_all() -> list[str]:
-        return run_cases(args, cases, run_on_clusters, shared_cluster=False)
+        return run_cases(args, cases, run_on_clusters, shared_cluster=False, applied=batch_cluster,
+                         summary_bucket=args.report_bucket)  # fmt: skip
 
     if args.image_repo or not any(map(pulls_images, cases.values())):
         return run_all()

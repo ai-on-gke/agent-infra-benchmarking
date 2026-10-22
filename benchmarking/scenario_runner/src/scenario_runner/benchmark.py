@@ -70,3 +70,12 @@ def run(name: str, case: dict, run_id: str, cluster: Cluster, **options: object)
     # First, so it is watching before the run deploys anything to watch.
     monitoring.deploy(cluster)
     RUNNERS[case["type"]].run(cluster, name, case, run_id, **options)
+
+
+def summarize(runs: list[tuple[str, str, dict]], run_id: str, bucket: str | None, report_prefix: str) -> None:
+    """What a case's type does once all of it has run, its variants too, if
+    it does anything: runs are each record of each, its case's name and the
+    case. bucket is the one they all reported to, if it is still there."""
+    summarize = getattr(RUNNERS.get(runs[0][2]["type"]), "summarize", None)
+    if summarize:
+        summarize(runs, run_id, bucket, report_prefix)
