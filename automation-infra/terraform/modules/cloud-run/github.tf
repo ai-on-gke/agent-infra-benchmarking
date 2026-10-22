@@ -82,3 +82,13 @@ resource "github_actions_variable" "service_account" {
   variable_name = "GCP_SERVICE_ACCOUNT_${local.github_variable_suffix}"
   value         = google_service_account.github[0].email
 }
+
+# Where the workflow pushes the images, e.g.
+# us-central1-docker.pkg.dev/my-project/my-repo.
+resource "github_actions_variable" "repository" {
+  count = var.github_actions ? 1 : 0
+
+  repository    = split("/", var.github_repository)[1]
+  variable_name = "GCP_REPOSITORY_${local.github_variable_suffix}"
+  value         = google_artifact_registry_repository.images.registry_uri
+}
