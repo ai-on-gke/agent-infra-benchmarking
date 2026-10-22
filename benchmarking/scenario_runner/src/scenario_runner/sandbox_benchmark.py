@@ -43,7 +43,7 @@ from . import sandbox_benchmark_combine as combine
 from . import sandbox_benchmark_cost_sheet as costs
 from .cluster import Cluster
 from .cluster_configs import CommonCluster, from_infra
-from .control_plane import AGENT_SUBSTRATE, CONTROL_PLANE, control_plane
+from .install import INSTALL, SANDBOX_CLASS, SUBSTRATE, control_plane, sandbox_class
 from .log import ON_CLOUD_RUN, log
 from .process import stream
 
@@ -64,7 +64,7 @@ DEFAULT_MAX_FAILURE_RATIO = 0.01
 DEFAULT_ENV_WORKER_COUNT = 5
 # The case's mapping of its type, and what it may state.
 TYPE = "sandbox-benchmark"
-KEYS = {"infra", "provider", "tests", "runs", "warmup-runs", "max-failure-ratio", "cost-sheet"}
+KEYS = {"infra", INSTALL, "provider", "tests", "runs", "warmup-runs", "max-failure-ratio", "cost-sheet"}
 PROVIDERS = ("substrate", "local", "e2b", "daytona", "modal", "anthropic", "openai")
 # What a provider's mapping may state besides its name, and their defaults.
 PROVIDER_OPTIONS = {
@@ -157,8 +157,6 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     """The case with its defaults filled in."""
     if not reports.LABEL_RE.fullmatch(name):
         raise ValueError(f"case name {name!r} is not a valid label value")
-    if case.get("sandbox-class", "gvisor") not in workloads.SANDBOX_CONFIGS:
-        raise ValueError(f"case {name}'s `sandbox-class` must be one of {', '.join(workloads.SANDBOX_CONFIGS)}")
     options = case.get(TYPE)
     if not isinstance(options, dict):
         raise ValueError(f"case {name} has no `{TYPE}` mapping")
@@ -185,12 +183,10 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
         raise ValueError(f"case {name}'s `{TYPE}.warmup-runs` must be a whole number")
     provider = check_provider(name, options.get("provider", {"name": "substrate"}))
     # env runs on substrate, which the cluster has only with it.
-    if provider["name"] == "substrate" and control_plane(case) != AGENT_SUBSTRATE:
-        raise ValueError(f"case {name}'s substrate provider needs `{CONTROL_PLANE}: {AGENT_SUBSTRATE}`")
+    if provider["name"] == "substrate" and control_plane(case) != SUBSTRATE:
+        raise ValueError(f"case {name}'s substrate provider needs `{TYPE}.{INSTALL}.{SUBSTRATE}.{SANDBOX_CLASS}`")
     cluster_config(name, case)
     return {
-        "sandbox-class": "gvisor",
-        CONTROL_PLANE: AGENT_SUBSTRATE,
         **case,
         TYPE: {
             "warmup-runs": 0,
@@ -276,7 +272,6 @@ def run_provider(
 ) -> None:
     """Runs the case's tests on its provider, as one comparator Job, whose
     reports go under <run_id>/<folder>/."""
-    sandbox_class = case["sandbox-class"]
     options = case[TYPE]
     provider = options["provider"]["name"]
     keys = PROVIDER_KEYS.get(provider, ())
@@ -289,11 +284,11 @@ def run_provider(
         if deploy_workloads:
             env = options["provider"]
             ate_env.deploy(
-                cluster, image_repo, sandbox_class, env["env-worker-count"], env["actor-memory"], env["actor-cpu"]
+                cluster, image_repo, sandbox_class(case), env["env-worker-count"], env["actor-memory"], env["actor-cpu"]
             )
         template = workloads.deployed_template(cluster, ate_env.TEMPLATE, ate_env.ENV_ATESPACE)
         # Matters when the template was not deployed by this run (--no-deploy-workloads).
-        want = workloads.SANDBOX_CONFIGS[sandbox_class][1]
+        want = workloads.SANDBOX_CONFIGS[sandbox_class(case)][1]
         have = (template.get("sandboxConfig") or {}).get("sandboxClass")
         if have != want:
             raise SandboxBenchmarkError(
@@ -484,8 +479,7 @@ def run(
     report_folder. Expects the cluster's credentials in its kubeconfig."""
     folder = report_folder(name, test_case or name, case)
     case = check_case(name, case, deploy_workloads)
-    sandbox_class = case["sandbox-class"]
-    if case[TYPE]["provider"]["name"] == "substrate" and sandbox_class == "microvm" and not cluster.sandboxed_kvm:
+    if case[TYPE]["provider"]["name"] == "substrate" and sandbox_class(case) == "microvm" and not cluster.sandboxed_kvm:
         raise SandboxBenchmarkError(
             f"case {name} is microvm, but cluster {cluster.name}'s sandboxed pool has no /dev/kvm for its guests"
         )

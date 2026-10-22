@@ -71,8 +71,8 @@ from ..cases import (
 )
 from ..cluster import Cluster, gke_stockout, utc_now
 from ..cluster_configs import execution, from_record, to_record
-from ..control_plane import AGENT_SANDBOX, AGENT_SUBSTRATE, CONTROL_PLANE, NO_CONTROL_PLANE, control_plane
 from ..deployment import RUNNER_INFRA_DIR, Deployment, DestroyFailed, GcsDeployment
+from ..install import AGENT_SANDBOX, INSTALL, SANDBOX_CLASS, SUBSTRATE, control_plane, installs, sandbox_class
 from ..log import ON_CLOUD_RUN, log
 from ..process import failure
 
@@ -122,8 +122,8 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--provider",
-        choices=[AGENT_SUBSTRATE, AGENT_SANDBOX],
-        help=f"the control plane every locust case runs on, in place of its `{CONTROL_PLANE}`",
+        choices=[SUBSTRATE, AGENT_SANDBOX],
+        help=f"the control plane every locust case installs, with its {SANDBOX_CLASS}, in place of its `locust.{INSTALL}`'s",
     )
     p.add_argument(
         "--lifecycle-mode",
@@ -296,7 +296,7 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
     if args.provider:
         for name, case in selected.items():
             if case.get("type") == "locust":
-                case[CONTROL_PLANE] = args.provider
+                case["locust"][INSTALL] = {args.provider: installs(case)[control_plane(case)]}
     if getattr(args, "lifecycle_mode", None):
         for name, case in selected.items():
             if case.get("type") == "locust":
@@ -370,13 +370,13 @@ def check_requirements(args: argparse.Namespace, cases: dict[str, dict]) -> None
 
 def pulls_images(case: dict) -> bool:
     """Whether the case's cluster pulls from the image repository."""
-    return control_plane(case) != NO_CONTROL_PLANE or case["type"] != "noop"
+    return control_plane(case) is not None or case["type"] != "noop"
 
 
 def needed_images(args: argparse.Namespace, cases: dict[str, dict]) -> dict[str, list[str]]:
     """The images the cases pull from args.image_repo, by builder.py's group."""
     needed = {}
-    if any(control_plane(case) == AGENT_SUBSTRATE for case in cases.values()):
+    if any(control_plane(case) == SUBSTRATE for case in cases.values()):
         needed["substrate"] = substrate.image_refs(args.image_repo)
     if any(control_plane(case) == AGENT_SANDBOX for case in cases.values()):
         needed["agent-sandbox"] = agent_sandbox.image_refs(args.image_repo)
@@ -489,7 +489,7 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
             "bare_metal": cases[first][BARE_METAL],
             # The ones to try if the cluster's zone is out of its machine type.
             "placements": args.placements if cases[first][BARE_METAL] else [],
-            dev_infra.SKIP_SUBSTRATE_INSTALL: control_plane(cases[first]) != AGENT_SUBSTRATE,
+            dev_infra.SKIP_SUBSTRATE_INSTALL: control_plane(cases[first]) != SUBSTRATE,
         }
     current = from_record(record["cluster"])
     for name, case in cases.items():
@@ -525,12 +525,6 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
         log(f"run: applying dev infra {args.dev_infra}, which is not complete")
         record = dev_infra.apply(record, json_output)
     return record
-
-
-def sandbox_class(case: dict) -> str | None:
-    """The class of the case's workers, which substrate is installed with;
-    None for a noop."""
-    return None if case["type"] == "noop" else case.get("sandbox-class", "gvisor")
 
 
 def run_case(
@@ -606,7 +600,7 @@ def run_repeats(name: str, case: dict, run: Callable[[str, int, int], None], sha
 def cluster_setup(name: str, case: dict) -> tuple:
     """What the case's cluster is applied with and has installed, which a
     case's variants alike in share."""
-    return benchmark.cluster_config(name, case), case.get(BARE_METAL, False), control_plane(case)
+    return benchmark.cluster_config(name, case), case.get(BARE_METAL, False), yaml.safe_dump(installs(case))
 
 
 def batches(names: list[str], cases: dict[str, dict]) -> list[list[str]]:
@@ -707,7 +701,7 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
         nonlocal record
         if control_plane(case) == AGENT_SANDBOX:
             record = dev_infra.install_agent_sandbox(record)
-        elif control_plane(case) == AGENT_SUBSTRATE:
+        elif control_plane(case) == SUBSTRATE:
             record = dev_infra.install_substrate(record, sandbox_class(case) == "microvm")
         run_repeats(
             name,
@@ -762,7 +756,7 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
         machine type."""
         nonlocal current_placement
         config = benchmark.cluster_config(key, case)
-        version = substrate.build_version() if control_plane(case) == AGENT_SUBSTRATE else None
+        version = substrate.build_version() if control_plane(case) == SUBSTRATE else None
         uncreated = deployment(args, "scenarios", key)
         # A cluster that pulls none of the images is not granted the repository.
         pulls = pulls_images(case)
@@ -790,7 +784,7 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
             try:
                 if control_plane(case) == AGENT_SANDBOX:
                     agent_sandbox.install(cluster)
-                elif control_plane(case) == AGENT_SUBSTRATE:
+                elif control_plane(case) == SUBSTRATE:
                     substrate.install(cluster, sandbox_class(case) == "microvm")
                 yield cluster
             finally:

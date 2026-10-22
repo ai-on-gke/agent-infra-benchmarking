@@ -28,9 +28,9 @@ from string import Template
 from typing import Callable
 
 from . import RUNNER_DIR, images, jobs, reports, run_info, worker_pool, workloads
-from .control_plane import AGENT_SANDBOX, AGENT_SUBSTRATE, CONTROL_PLANE, control_plane
 from .cluster import Cluster
 from .cluster_configs import CommonCluster, OpenclawCluster, from_infra
+from .install import AGENT_SANDBOX, INSTALL, SUBSTRATE, control_plane, sandbox_class
 from .log import ON_CLOUD_RUN, log
 from .process import stream
 
@@ -59,7 +59,8 @@ ACTOR_ATESPACE = "benchmark"
 # The case's mapping of its type, and what it may state.
 TYPE = "locust"
 KEYS = {
-    "infra", "worker-count", "locust-workers", "actor-memory", "max-failure-ratio", "lifecycle-mode", "master", "worker"
+    "infra", INSTALL, "worker-count", "locust-workers", "actor-memory", "max-failure-ratio", "lifecycle-mode", "master",
+    "worker",
 }
 
 
@@ -101,8 +102,8 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     unknown = options.keys() - KEYS
     if unknown:
         raise ValueError(f"case {name}'s `{TYPE}` has unknown {', '.join(sorted(unknown))}")
-    if control_plane(case) not in (AGENT_SUBSTRATE, AGENT_SANDBOX):
-        raise ValueError(f"case {name}'s `{CONTROL_PLANE}` must be {AGENT_SUBSTRATE} or {AGENT_SANDBOX}, which run it")
+    if control_plane(case) is None:
+        raise ValueError(f"case {name}'s `{TYPE}.{INSTALL}` must name {SUBSTRATE} or {AGENT_SANDBOX}, which run it")
     master, worker = options.get("master"), options.get("worker")
     if worker is None:
         worker = {}
@@ -119,9 +120,6 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     pods = options.get("locust-workers", 1)
     if not isinstance(pods, int) or isinstance(pods, bool) or pods < 1:
         raise ValueError(f"case {name}'s `{TYPE}.locust-workers` must be a whole number from 1, got {pods!r}")
-    sandbox_class = case.get("sandbox-class", "gvisor")
-    if sandbox_class not in workloads.SANDBOX_CONFIGS:
-        raise ValueError(f"case {name}'s `sandbox-class` must be one of {', '.join(workloads.SANDBOX_CONFIGS)}")
     template = worker.get("workload-template") or worker.get("workload-name")
     if deploy_workloads:
         if not template:
@@ -133,10 +131,11 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
         raise ValueError(
             f"case {name}'s `{TYPE}.actor-memory` must be a Kubernetes memory quantity such as 512Mi, got {memory!r}"
         )
-    need = workloads.min_actor_memory_mib(workload, sandbox_class)
+    on = sandbox_class(case)
+    need = workloads.min_actor_memory_mib(workload, on)
     if need and workloads.memory_mib(memory) < need:
         raise ValueError(
-            f"case {name}'s `{TYPE}.actor-memory` {memory} is less than {workload} needs on {sandbox_class}, {need}Mi"
+            f"case {name}'s `{TYPE}.actor-memory` {memory} is less than {workload} needs on {on}, {need}Mi"
         )
     config = cluster_config(name, case)
     # mock-llm's pods select and tolerate only its pool, and stay pending without it.
@@ -147,8 +146,6 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
         )
     # spawn-rate defaults to the user count, putting the whole load on at once.
     return {
-        "sandbox-class": "gvisor",
-        CONTROL_PLANE: AGENT_SUBSTRATE,
         **case,
         TYPE: {
             "worker-count": 1,
@@ -303,7 +300,7 @@ def run(
     cluster's own, which keeps_bucket says outlives the run, as a dev infra's
     does. Expects the cluster's credentials in its kubeconfig."""
     case = check_case(name, case, deploy_workloads)
-    if case["sandbox-class"] == "microvm" and not cluster.sandboxed_kvm:
+    if sandbox_class(case) == "microvm" and not cluster.sandboxed_kvm:
         raise LocustError(
             f"case {name} is microvm, but cluster {cluster.name}'s sandboxed pool has no /dev/kvm for its guests"
         )
@@ -335,7 +332,7 @@ def run(
         from . import agent_sandbox
         if deploy_workloads:
             agent_sandbox.deploy_workload_and_pool(
-                cluster, workload, options["worker-count"], image_repo, case["sandbox-class"]
+                cluster, workload, options["worker-count"], image_repo, sandbox_class(case)
             )
         else:
             agent_sandbox.recreate_warm_pool(cluster, workload, options["worker-count"])
@@ -364,13 +361,13 @@ roleRef:
   name: agent-sandbox-controller-extensions
   apiGroup: rbac.authorization.k8s.io"""
     else:
-        worker_pool.deploy(cluster, options["worker-count"], case["sandbox-class"])
+        worker_pool.deploy(cluster, options["worker-count"], sandbox_class(case))
         # The golden snapshot is taken on the pool just deployed.
         if deploy_workloads:
-            workloads.deploy(cluster, [template_name], case["sandbox-class"], image_repo, options["actor-memory"])
+            workloads.deploy(cluster, [template_name], sandbox_class(case), image_repo, options["actor-memory"])
         if template_name:
             template = workloads.deployed_template(cluster, template_name)
-            workloads.check_deployed(template, template_name, case["sandbox-class"], workload, options["actor-memory"])
+            workloads.check_deployed(template, template_name, sandbox_class(case), workload, options["actor-memory"])
             # A case may state its own allow-lists; otherwise the actors may call
             # what their template is configured to, and nothing else.
             cleartext, tls = workloads.egress_hosts(template)

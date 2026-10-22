@@ -29,8 +29,8 @@ from pathlib import Path
 from . import agent_sandbox, benchmark, substrate
 from .cases import BARE_METAL
 from .cluster_configs import ClusterConfig, execution
-from .control_plane import AGENT_SANDBOX, AGENT_SUBSTRATE, control_plane
 from .deployment import Deployment, declared_variables, tf_vars
+from .install import AGENT_SANDBOX, SUBSTRATE, control_plane, sandbox_class
 from .log import log
 from .process import environ
 from .terraform import data_env
@@ -254,7 +254,7 @@ def check(
     problems = []
     if not shutil.which("terraform"):
         return ["terraform is required to apply the infra"]
-    installs = any(control_plane(case) == AGENT_SUBSTRATE for case in cases.values())
+    installs = any(control_plane(case) == SUBSTRATE for case in cases.values())
     benchmarks = {name: case for name, case in cases.items() if case["type"] != "noop"}
     if installs:
         missing = substrate.missing_requirements()
@@ -287,7 +287,7 @@ def check(
         elif version is None or version < MIN_KUBECTL:
             have = ".".join(map(str, version)) if version else "unknown"
             problems.append(f"kubectl {have} is too old; the runner needs {'.'.join(map(str, MIN_KUBECTL))} or later")
-    if any(case.get("sandbox-class") == "microvm" for case in benchmarks.values()):
+    if any(sandbox_class(case) == "microvm" for case in cases.values()):
         if not shutil.which("curl"):
             problems.append("microvm cases need curl to download the kata assets")
         if not tar_has_zstd():
@@ -302,7 +302,7 @@ def check(
         # Evaluated at the first placement; the others only move its pool.
         if bare_metal:
             config = config.placed(placements[0])
-        if case.get("sandbox-class") == "microvm" and not (config.sandboxed_kvm or case.get(BARE_METAL)):
+        if sandbox_class(case) == "microvm" and not (config.sandboxed_kvm or case.get(BARE_METAL)):
             problems.append(
                 f"case {name} is microvm, whose guests boot on /dev/kvm, but its sandboxed pool has none; set its"
                 " `infra.cluster.nested-virtualization: true` or run it on bare metal"

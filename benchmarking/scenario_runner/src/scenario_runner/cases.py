@@ -22,7 +22,7 @@ from pathlib import Path
 import yaml
 
 from . import SCENARIOS_DIR, benchmark
-from .control_plane import CONTROL_PLANE, CONTROL_PLANES, control_plane
+from .install import INSTALL, check_install
 from .reports import LABEL_RE, VARIANT
 
 SCENARIOS_FILE = SCENARIOS_DIR / "scenarios.yaml"
@@ -46,7 +46,7 @@ VARIANTS = "variants"
 # A case's own keys; the rest of what it states is in the mapping of its type,
 # named by the type, which only the type's runner reads, but for the cluster
 # the type asks for in its `infra`.
-CASE_KEYS = {REPEATS, "sandbox-class", BARE_METAL, CONTROL_PLANE, VARIANTS}
+CASE_KEYS = {REPEATS, BARE_METAL, VARIANTS}
 
 
 def types() -> list[str]:
@@ -74,17 +74,18 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
         if unknown:
             raise ValueError(f"{scenarios_file}: case {name} has unknown {', '.join(sorted(unknown))}")
         case["type"] = given[0]
-        # noop's holds its `infra` at most, and so may be left null.
+        # noop's holds its `infra` and `install` at most, and so may be left null.
         options = case[given[0]] if case[given[0]] is not None or given[0] != "noop" else {}
-        if not isinstance(options, dict) or (given[0] == "noop" and options.keys() - {"infra"}):
+        if not isinstance(options, dict) or (given[0] == "noop" and options.keys() - {"infra", INSTALL}):
             raise ValueError(
-                f"{scenarios_file}: case {name}'s `{given[0]}` must be a mapping, for noop of its `infra` at most"
+                f"{scenarios_file}: case {name}'s `{given[0]}` must be a mapping,"
+                f" for noop of its `infra` and `{INSTALL}` at most"
             )
         case[given[0]] = options
-        if control_plane(case) not in CONTROL_PLANES:
-            raise ValueError(
-                f"{scenarios_file}: case {name}'s `{CONTROL_PLANE}` must be one of {', '.join(CONTROL_PLANES)}"
-            )
+        try:
+            check_install(options.get(INSTALL, {}))
+        except ValueError as exc:
+            raise ValueError(f"{scenarios_file}: case {name}'s `{given[0]}.{INSTALL}` {exc}") from None
         if not isinstance(case.get(BARE_METAL, False), bool):
             raise ValueError(f"{scenarios_file}: case {name}'s `{BARE_METAL}` must be true or false")
         try:

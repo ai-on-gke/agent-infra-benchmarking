@@ -200,12 +200,13 @@ def write_run_json(started: float, ended: float, status: int, failures: dict | N
     (REPORT_DIR / "run.json").write_text(json.dumps(info, indent=2) + "\n")
     case = info.get("case") or {}
     provider = (case.get("sandbox-benchmark") or {}).get("provider") or {}
+    substrate = (((case.get("sandbox-benchmark") or {}).get("install") or {}).get("substrate")) or {}
     row = {
         "provider": PROVIDER,
         **{key: info.get(key) for key in RUN_JSONL_KEYS},
         "total_runs": (failures or {}).get("runs"),
         "failed_runs": (failures or {}).get("failed"),
-        "sandbox_class": case.get("sandbox-class") if PROVIDER == "substrate" else None,
+        "sandbox_class": substrate.get("sandbox-class") if PROVIDER == "substrate" else None,
         "actor_memory": provider.get("actor-memory") if PROVIDER == "substrate" else None,
         "comparator_image": next(iter((info.get("images") or {}).values()), None),
     }

@@ -402,7 +402,8 @@ class NeededImages(unittest.TestCase):
     def test_locust_needs_its_the_workloads_and_substrate(self):
         from scenario_runner import images
 
-        needed = self.needed({"a": {"type": "locust"}, "b": {"type": "noop"}})
+        substrate = {"install": {"substrate": {"sandbox-class": "gvisor"}}}
+        needed = self.needed({"a": {"type": "locust", "locust": substrate}, "b": {"type": "noop"}})
         self.assertEqual(set(needed), {"substrate", "benchmark"})
         with mock.patch.object(images, "tag", return_value="t"):
             self.assertEqual(needed["benchmark"], images.refs("repo", [images.LOCUST_IMAGES, images.WORKLOADS_IMAGES]))
@@ -412,17 +413,22 @@ class NeededImages(unittest.TestCase):
 
     def test_sandbox_benchmark_needs_env_only_for_substrate(self):
         options = {"tests": ["test_x"], "runs": 1}
-        case = {"type": "sandbox-benchmark", "sandbox-benchmark": options}
+        substrate = {"install": {"substrate": {"sandbox-class": "gvisor"}}}
+        case = {"type": "sandbox-benchmark", "sandbox-benchmark": {**options, **substrate}}
         needed = self.needed({"a": case})
         self.assertEqual(set(needed), {"substrate", "env", "benchmark"})
         self.assertEqual(needed["env"], ["repo/env/ate-env-api:e", "repo/env/ate-env-guest:e"])
-        cloud = {**case, "control-plane": "none", "sandbox-benchmark": {**options, "provider": {"name": "e2b"}}}
+        cloud = {**case, "sandbox-benchmark": {**options, "provider": {"name": "e2b"}}}
         self.assertEqual(set(self.needed({"a": cloud})), {"benchmark"})
 
     def test_noop_needs_only_what_its_install_does(self):
-        self.assertEqual(set(self.needed({"a": {"type": "noop"}})), {"substrate"})
-        self.assertEqual(set(self.needed({"a": {"type": "noop", "control-plane": "agent-sandbox"}})), {"agent-sandbox"})
-        self.assertEqual(self.needed({"a": {"type": "noop", "control-plane": "none"}}), {})
+        def noop(install: dict) -> dict:
+            return {"type": "noop", "noop": {"install": install}}
+
+        gvisor = {"sandbox-class": "gvisor"}
+        self.assertEqual(set(self.needed({"a": noop({"substrate": gvisor})})), {"substrate"})
+        self.assertEqual(set(self.needed({"a": noop({"agent-sandbox": gvisor})})), {"agent-sandbox"})
+        self.assertEqual(self.needed({"a": {"type": "noop", "noop": {}}}), {})
 
 
 class BenchmarkRun(unittest.TestCase):

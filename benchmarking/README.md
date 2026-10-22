@@ -18,7 +18,8 @@ against it and destroys it afterwards.
   gke-gcloud-auth-plugin`), which kubectl reaches the clusters through
 - Docker with Buildx, for building the images, by `tools/build-images` or a
   run: the image builds use `--build-context`
-- curl and a `tar` with zstd support, for `sandbox-class: microvm` cases
+- curl and a `tar` with zstd support, for cases that install substrate with
+  `sandbox-class: microvm`
 
 ### Cost and quota
 
@@ -184,10 +185,10 @@ set the case's `worker: actor-egress-allow` (cleartext) or
       and a public control-plane endpoint, which IAM guards; from
       automation-infra's Cloud Run job, it goes into the job's network with an
       internal endpoint only.
-   2. Installs the case's `control-plane`, substrate unless it says
-      `agent-sandbox` or `none`; on a `microvm` cluster also its kata and
-      cloud-hypervisor assets, checked against the sha256s the SandboxConfig
-      pins before they are uploaded.
+   2. Installs what the `install` in the case's type's mapping names,
+      substrate or agent-sandbox, if either; substrate with `sandbox-class:
+      microvm` also its kata and cloud-hypervisor assets, checked against the
+      sha256s the SandboxConfig pins before they are uploaded.
    3. Deploys Prometheus, the worker pool and the case's workload, then the
       locust master and boomer worker Jobs, and waits for both to end.
    4. Deletes any actors the run left, recording them in `cleanup.json`,
@@ -389,7 +390,7 @@ Add an entry under `cases:` in `scenarios.yaml`. The comments at the top of that
 file describe each key. To change the load or the worker pool, add a new case
 rather than editing an existing one, so results stay tied to the case name
 they were recorded under. To compare gVisor and microvm, add both, the same
-but for `sandbox-class` and the microvm one's
+but for `locust.install.substrate.sandbox-class` and the microvm one's
 `infra.cluster.nested-virtualization: true`, which off bare metal gives its
 guests `/dev/kvm`.
 

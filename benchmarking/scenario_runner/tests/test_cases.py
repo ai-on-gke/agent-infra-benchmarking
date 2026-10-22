@@ -39,6 +39,7 @@ from scenario_runner.reports import VARIANT
 
 GLUTTON = {
     "locust": {
+        "install": {"substrate": {"sandbox-class": "gvisor"}},
         "master": {"run-time": "1m", "users": 10},
         "worker": {"workload-name": "glutton", "workload-template": "glutton"},
     },
@@ -52,6 +53,16 @@ LOADED = {**GLUTTON, "type": "locust"}
 def glutton(locust: dict = None, **case) -> dict:
     """GLUTTON with locust's keys on top of its, and the case's on top of it."""
     return {**GLUTTON, "locust": {**GLUTTON["locust"], **(locust or {})}, **case}
+
+
+def on(sandbox_class: str) -> dict:
+    """locust's keys for a case that installs substrate with sandbox_class."""
+    return {"install": {"substrate": {"sandbox-class": sandbox_class}}}
+
+
+def check(name: str, case: dict) -> dict:
+    """locust.check_case's case, typed as load_cases has it."""
+    return locust.check_case(name, {**case, "type": "locust"}, True)
 
 
 # An openclaw case on the cluster it needs.
@@ -97,9 +108,9 @@ class ShippedCases(unittest.TestCase):
             if not name.endswith("-microvm"):
                 continue
             pair = copy.deepcopy(cases[name.removesuffix("-microvm")])
-            self.assertEqual(pair.pop("sandbox-class"), "gvisor")
+            self.assertEqual(pair["locust"].pop("install"), on("gvisor")["install"])
             mine = copy.deepcopy(case)
-            self.assertEqual(mine.pop("sandbox-class"), "microvm")
+            self.assertEqual(mine["locust"].pop("install"), on("microvm")["install"])
             self.assertIs(mine["locust"]["infra"]["cluster"].pop("nested-virtualization"), True)
             self.assertEqual(mine, pair, f"{name} differs from its gVisor case in more than the class")
 
@@ -115,9 +126,7 @@ class ShippedCases(unittest.TestCase):
 
 class CaseChecks(unittest.TestCase):
     def test_defaults(self):
-        case = locust.check_case("glutton", GLUTTON, deploy_workloads=True)
-        self.assertEqual(case["sandbox-class"], "gvisor")
-        self.assertEqual(case["control-plane"], "agent-substrate")
+        case = locust.check_case("glutton", LOADED, deploy_workloads=True)
         options = case["locust"]
         self.assertEqual(options["actor-memory"], "256Mi")
         self.assertEqual(options["locust-workers"], 1)
@@ -126,13 +135,13 @@ class CaseChecks(unittest.TestCase):
 
     def test_openclaw_gets_its_memory(self):
         case = glutton(OPENCLAW)
-        self.assertEqual(locust.check_case("openclaw", case, True)["locust"]["actor-memory"], "2Gi")
+        self.assertEqual(check("openclaw", case)["locust"]["actor-memory"], "2Gi")
 
     def test_openclaw_on_microvm_needs_2gi(self):
-        case = glutton({**OPENCLAW, "actor-memory": "1Gi"}, **{"sandbox-class": "microvm"})
+        case = glutton({**OPENCLAW, "actor-memory": "1Gi", **on("microvm")})
         with self.assertRaisesRegex(ValueError, "less than openclaw needs on microvm"):
-            locust.check_case("openclaw-microvm", case, True)
-        locust.check_case("openclaw", {**case, "sandbox-class": "gvisor"}, True)
+            check("openclaw-microvm", case)
+        check("openclaw", glutton({**OPENCLAW, "actor-memory": "1Gi"}))
 
     def test_bad_values_are_refused(self):
         for key, value in [
@@ -143,13 +152,12 @@ class CaseChecks(unittest.TestCase):
             ("users", 10),
         ]:
             with self.subTest(key=key), self.assertRaises(ValueError):
-                locust.check_case("c", glutton({key: value}), True)
-        for key, value in [("sandbox-class", "kata"), ("control-plane", "none")]:
-            with self.subTest(key=key), self.assertRaises(ValueError):
-                locust.check_case("c", glutton(**{key: value}), True)
+                check("c", glutton({key: value}))
+        with self.assertRaisesRegex(ValueError, "must name substrate or agent-sandbox"):
+            check("c", glutton({"install": {}}))
 
     def test_several_worker_pods_are_expected_by_the_master(self):
-        case = locust.check_case("c", glutton({"locust-workers": 3}), True)
+        case = check("c", glutton({"locust-workers": 3}))
         args = locust.master_args(case["locust"])
         self.assertEqual(args[args.index("--expect-workers") + 1], "3")
 
@@ -198,7 +206,15 @@ class CaseChecks(unittest.TestCase):
             {**GLUTTON, "jmeter": {}},
             {**GLUTTON, "worker-count": 10},
             {**GLUTTON, "locust": None},
-            {**GLUTTON, "control-plane": "k8s"},
+            {**GLUTTON, "install": {"substrate": {"sandbox-class": "gvisor"}}},
+            glutton({"install": []}),
+            glutton({"install": {"k8s": {}}}),
+            glutton({"install": {"substrate": None}}),
+            glutton({"install": {"substrate": {}}}),
+            glutton({"install": {"substrate": {"sandbox-class": "kata"}}}),
+            glutton({"install": {"substrate": {"sandbox-class": "gvisor", "x": 1}}}),
+            glutton({"install": {**on("gvisor")["install"], "agent-sandbox": {"sandbox-class": "gvisor"}}}),
+            {"noop": {"install": {"substrate": {}}}},
         ):
             with self.subTest(case=case), self.assertRaises(ValueError):
                 load({"c": case})
@@ -209,7 +225,7 @@ class CaseChecks(unittest.TestCase):
 class Clusters(unittest.TestCase):
     def test_locust_asks_for_its_configuration(self):
         cluster = {"sandboxed-nodes": 3, "nested-virtualization": True}
-        case = load({"c": glutton({"infra": {"cluster": cluster}}, **{"sandbox-class": "microvm"})})["c"]
+        case = load({"c": glutton({"infra": {"cluster": cluster}, **on("microvm")})})["c"]
         self.assertEqual(benchmark.cluster_config("c", case), CommonCluster(3, nested_virtualization=True))
         openclaw = load({"c": glutton({"infra": {"cluster": {"configuration": "openclaw"}}})})["c"]
         self.assertEqual(benchmark.cluster_config("c", openclaw), OpenclawCluster())
@@ -244,10 +260,10 @@ class Variants(unittest.TestCase):
         self.assertEqual(cases["sandbox-benchmark-e2b"]["sandbox-benchmark"]["provider"], {"name": "e2b"})
 
     def test_a_variant_changes_any_key_and_merges_mappings(self):
-        variants = {"micro": {"sandbox-class": "microvm", "locust": {"master": {"users": 3}}}, "plain": None}
+        variants = {"micro": {"locust": {**on("microvm"), "master": {"users": 3}}}, "plain": None}
         cases = load({"c": {**GLUTTON, "variants": variants}, "d": GLUTTON})
         self.assertEqual(list(cases), ["c-micro", "c-plain", "d"])
-        self.assertEqual(cases["c-micro"]["sandbox-class"], "microvm")
+        self.assertEqual(cases["c-micro"]["locust"]["install"], on("microvm")["install"])
         self.assertEqual(cases["c-micro"]["locust"]["master"], {"run-time": "1m", "users": 3})
         self.assertEqual(cases["c-plain"]["locust"]["master"], GLUTTON["locust"]["master"])
         self.assertEqual(grouped(cases), {"c": ["c-micro", "c-plain"], "d": ["d"]})
@@ -278,10 +294,13 @@ class Variants(unittest.TestCase):
 class SandboxBenchmarkCases(unittest.TestCase):
     OPTIONS = {"tests": ["test_x"], "runs": 1}
 
-    def check(self, provider: object = None, **case) -> dict:
+    def check(self, provider: object = None, install: dict | None = on("gvisor")["install"], **case) -> dict:
         options = {**self.OPTIONS, **({"provider": provider} if provider is not None else {})}
+        if install is not None:
+            options["install"] = install
         with mock.patch.object(sandbox_benchmark, "test_names", return_value=None):
-            return sandbox_benchmark.check_case("c", {"sandbox-benchmark": options, **case}, True)
+            case = {"type": "sandbox-benchmark", "sandbox-benchmark": options, **case}
+            return sandbox_benchmark.check_case("c", case, True)
 
     def test_substrate_by_default_with_its_options_filled_in(self):
         def provider(given=None) -> dict:
@@ -305,9 +324,9 @@ class SandboxBenchmarkCases(unittest.TestCase):
                 self.check(provider)
 
     def test_substrate_needs_its_control_plane(self):
-        with self.assertRaisesRegex(ValueError, "needs `control-plane: agent-substrate`"):
-            self.check(**{"control-plane": "none"})
-        self.check({"name": "e2b"}, **{"control-plane": "none"})
+        with self.assertRaisesRegex(ValueError, "needs `sandbox-benchmark.install.substrate.sandbox-class`"):
+            self.check(install=None)
+        self.check({"name": "e2b"}, install=None)
 
     def test_unknown_keys_are_refused(self):
         with self.assertRaisesRegex(ValueError, "unknown comparator"):
