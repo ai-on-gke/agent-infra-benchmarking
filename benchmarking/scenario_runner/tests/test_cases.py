@@ -257,7 +257,11 @@ class Subcases(unittest.TestCase):
             self.assertEqual(options["tests"], ["test_suspend_resume"])
             self.assertEqual(cases[name][SUBCASE], {"of": "sandbox-benchmark", "name": options["provider"]["name"]})
         self.assertEqual(cases["sandbox-benchmark-substrate"]["sandbox-benchmark"]["provider"]["env-worker-count"], 10)
-        self.assertEqual(cases["sandbox-benchmark-e2b"]["sandbox-benchmark"]["provider"], {"name": "e2b"})
+        for name in ("e2b", "modal", "daytona"):
+            provider = cases[f"sandbox-benchmark-{name}"]["sandbox-benchmark"]["provider"]
+            self.assertEqual(provider, {"name": name, "cpu": "2", "memory": "2Gi"})
+        openai = cases["sandbox-benchmark-openai"]["sandbox-benchmark"]["provider"]
+        self.assertEqual(openai, {"name": "openai", "container-size": "medium"})
 
     def test_a_subcase_changes_any_key_and_merges_mappings(self):
         subcases = {"micro": {"locust": {**on("microvm"), "master": {"users": 3}}}, "plain": None}
@@ -362,7 +366,12 @@ class SandboxBenchmarkCases(unittest.TestCase):
 
         self.assertEqual(provider(), {"name": "substrate", **sandbox_benchmark.PROVIDER_OPTIONS["substrate"]})
         self.assertEqual(provider({"name": "substrate", "actor-cpu": "4"})["actor-cpu"], "4")
-        self.assertEqual(provider({"name": "e2b"}), {"name": "e2b"})
+        self.assertEqual(provider({"name": "local"}), {"name": "local"})
+        self.assertEqual(provider({"name": "modal"}), {"name": "modal", "cpu": None, "memory": None})
+        self.assertEqual(provider({"name": "modal", "cpu": "1500m", "memory": "1.5Gi"})["cpu"], "1500m")
+        self.assertEqual(provider({"name": "daytona", "cpu": "2", "memory": "2Gi"})["memory"], "2Gi")
+        self.assertEqual(provider({"name": "openai"}), {"name": "openai", "container-size": None})
+        self.assertEqual(provider({"name": "openai", "container-size": "large"})["container-size"], "large")
 
     def test_bad_providers_are_refused(self):
         for provider in (
@@ -373,6 +382,14 @@ class SandboxBenchmarkCases(unittest.TestCase):
             {"name": "substrate", "x": 1},
             {"name": "substrate", "env-worker-count": 0},
             {"name": "substrate", "actor-cpu": 2},
+            {"name": "local", "cpu": "2"},
+            {"name": "e2b", "cpu": "1500m"},
+            {"name": "modal", "cpu": 2},
+            {"name": "modal", "memory": "1G"},
+            {"name": "daytona", "cpu": "1500m"},
+            {"name": "daytona", "memory": "1536Mi"},
+            {"name": "openai", "container-size": "huge"},
+            {"name": "openai", "cpu": "2"},
         ):
             with self.subTest(provider=provider), self.assertRaises(ValueError):
                 self.check(provider)

@@ -32,8 +32,11 @@
 # their API keys in the scenario-runner's environment,
 # sandbox_benchmark.PROVIDER_KEYS. substrate's `env-worker-count`,
 # `actor-memory` and `actor-cpu`, beside its name, size env's WorkerPool and its
-# environments; `actor-cpu`, "2" by default, caps substrate's sandbox at the 2
-# vCPU the cloud providers' get, and with `actor-memory: 2Gi` the sizes match. A
+# environments; `actor-cpu` is "2" by default. e2b's, modal's and daytona's
+# `cpu` and `memory` size their sandboxes, theirs by default; e2b's in whole
+# vCPUs, through a template of that size it builds once, daytona's in whole vCPUs
+# and GiB; openai's `container-size` picks its tier, small, medium or large. The
+# cost sheet prices each sandbox at its size. A
 # case's subcases' results are combined into one comparison, the first subcase
 # the others are compared with: perf_results.csv, and with `cost-sheet: true`
 # cost_sheet.csv, the sandbox cost sheet.
@@ -327,9 +330,9 @@ cases:
         users: 100
 
   # substrate against the cloud providers, and the sandbox cost sheet from
-  # their suspend and resume overheads. substrate's sandbox is sized as the
-  # cloud providers' are, 2 vCPU and 2 GiB. local, no sandbox at all, is the
-  # harness's own floor.
+  # their suspend and resume overheads. The sandboxes that can be sized are
+  # alike, 2 vCPU and 2 GiB; those that cannot say so. local, no sandbox at
+  # all, is the harness's own floor.
   sandbox-benchmark:
     # A warm-up would run every provider, paid ones too; warmup-runs is the
     # cheaper way to warm them up.
@@ -363,12 +366,20 @@ cases:
       # e2b, modal, daytona, anthropic and openai need E2B_API_KEY,
       # MODAL_TOKEN_ID/MODAL_TOKEN_SECRET, DAYTONA_API_KEY, ANTHROPIC_API_KEY
       # and OPENAI_API_KEY in the scenario-runner's environment.
+      # Not sized: no sandbox, the tests run in the comparator's own pod.
       local: {sandbox-benchmark: {provider: {name: local}}}
-      e2b: {sandbox-benchmark: {provider: {name: e2b}}}
-      modal: {sandbox-benchmark: {provider: {name: modal}}}
-      daytona: {sandbox-benchmark: {provider: {name: daytona}}}
+      e2b: {sandbox-benchmark: {provider: {name: e2b, cpu: "2", memory: 2Gi}}}
+      modal: {sandbox-benchmark: {provider: {name: modal, cpu: "2", memory: 2Gi}}}
+      daytona: {sandbox-benchmark: {provider: {name: daytona, cpu: "2", memory: 2Gi}}}
+      # Cannot be sized: Managed Agents' cloud environments take no cpu or
+      # memory, and give every session a sandbox of 2 vCPU and 4 GB.
       anthropic: {sandbox-benchmark: {provider: {name: anthropic}}}
-      openai: {sandbox-benchmark: {provider: {name: openai}}}
+      # Cannot be sized to match: OpenAI's hosted environments take only a
+      # container-size tier, none of them 2 vCPU and 2 GiB: small is 1 vCPU and
+      # 1 GB, medium, OpenAI's default and the nearest, 2 vCPU and 4 GB, and
+      # large 4 vCPU and 16 GB. See
+      # https://developers.openai.com/api/docs/guides/agents-api/environments/openai-hosted
+      openai: {sandbox-benchmark: {provider: {name: openai, container-size: medium}}}
 
   # The scenario-runner's Terraform path on infra/clusters/dummy, which creates
   # no GCP resources and so has nothing to benchmark on.

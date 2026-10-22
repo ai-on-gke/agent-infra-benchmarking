@@ -17,12 +17,13 @@ sandbox-benchmark comparison combines, the rest from the prices and usage
 below. sandbox_benchmark.summarize writes it as CSV beside perf_results.csv for
 a case with `cost-sheet: true`. An overhead is the provider's mean Suspend or
 Resume of test_suspend_resume, as perf_results.csv has it, taken once an
-hour."""
+hour. A sandbox is priced at its size, as its run.json's case states it."""
 
 from __future__ import annotations
 
 import statistics
 
+from . import workloads
 from .log import log
 
 COST_SHEET_CSV = "cost_sheet.csv"
@@ -30,8 +31,6 @@ COST_SHEET_CSV = "cost_sheet.csv"
 TEST = "test_suspend_resume"
 ACTIVE_SECS_PER_HOUR = 360
 HOURS_PER_MONTH = 270
-VCPUS = 2
-RAM_GIB = 2
 
 # Per vCPU-second and per GiB-second, in USD. substrate's is its share of the
 # case's c2 node, at us-central1's on-demand prices.
@@ -55,6 +54,23 @@ def overhead(runs: list[dict], provider: str, metric: str) -> float | None:
     return statistics.fmean(means) / 1000 if means else None
 
 
+def provider_options(source: dict) -> dict:
+    """The source's provider as its run.json's case states it."""
+    return ((source["info"].get("case") or {}).get("sandbox-benchmark") or {}).get("provider") or {}
+
+
+def size(source: dict) -> tuple[float, float] | None:
+    """The source's sandbox's vCPUs and GiB, as its case states them, or None
+    for a provider's own size."""
+    provider = provider_options(source)
+    prefix = "actor-" if source["provider"] == "substrate" else ""
+    cpu, memory = provider.get(f"{prefix}cpu"), provider.get(f"{prefix}memory")
+    mib = workloads.memory_mib(memory) if isinstance(memory, str) else None
+    if not isinstance(cpu, str) or mib is None:
+        return None
+    return workloads.cpu_cores(cpu), mib / 1024
+
+
 def sample_count(runs: list[dict]) -> int:
     counts = {}
     for r in runs:
@@ -68,9 +84,12 @@ def sheet(sources: list[dict]) -> list[list[str]]:
     its provider."""
     runs = [{**r, "provider": s["provider"]} for s in sources for r in s["runs"]]
     providers = {s["provider"] for s in sources}
+    sizes = {s["provider"]: size(s) for s in sources}
     for p in [*RESOURCE_PRICED, "anthropic", "openai"]:
         if p not in providers:
             log(f"sandbox-benchmark: no {p} runs in the results; its cost sheet column is left empty", "WARNING")
+        elif p in RESOURCE_PRICED and sizes[p] is None:
+            log(f"sandbox-benchmark: {p}'s case states no sandbox size; the cost sheet leaves it unpriced", "WARNING")
         failed = sum(1 for r in runs if r["provider"] == p and r["test"] == TEST and r["errors"])
         if failed:
             log(f"sandbox-benchmark: {failed} of {p}'s runs failed; the cost sheet still counts them", "WARNING")
@@ -81,13 +100,19 @@ def sheet(sources: list[dict]) -> list[list[str]]:
         if suspend is None or resume is None:
             continue
         billable = ACTIVE_SECS_PER_HOUR + suspend + resume
-        vcpu_hour = billable * vcpu_price * VCPUS
-        ram_hour = billable * ram_price * RAM_GIB
         cols[p] = {
             "suspend": f"{suspend:.5f}",
             "resume": f"{resume:.5f}",
             "billable": f"{billable:.5f}",
-            "vcpu_price": f"${vcpu_price * VCPUS:.8f}",
+        }
+        if sizes[p] is None:
+            continue
+        vcpus, ram_gib = sizes[p]
+        vcpu_hour = billable * vcpu_price * vcpus
+        ram_hour = billable * ram_price * ram_gib
+        cols[p] |= {
+            "size": f"{vcpus:g} vCPU, {ram_gib:g} GiB",
+            "vcpu_price": f"${vcpu_price * vcpus:.8f}",
             "ram_price": f"${ram_price:.8f}",
             "vcpu_hour": f"${vcpu_hour:.7f}",
             "ram_hour": f"${ram_hour:.7f}",
@@ -101,6 +126,7 @@ def sheet(sources: list[dict]) -> list[list[str]]:
         return {
             "suspend": "N/A",
             "resume": "N/A",
+            "size": "N/A",
             "vcpu_price": "N/A",
             "ram_price": "N/A",
             "session_price": f"${ANTHROPIC_SESSION_HOUR / 3600:.8f}",
@@ -113,7 +139,13 @@ def sheet(sources: list[dict]) -> list[list[str]]:
     def openai(key: str) -> str:
         if "openai" not in providers:
             return ""
-        return {"suspend": "N/A", "resume": "N/A", "month": "No Public Pricing Available"}.get(key, "")
+        tier = next(provider_options(s).get("container-size") for s in sources if s["provider"] == "openai")
+        return {
+            "suspend": "N/A",
+            "resume": "N/A",
+            "size": f"{tier or 'default'} tier",
+            "month": "No Public Pricing Available",
+        }.get(key, "")
 
     def row(label: str, key: str, resource_default: str = "") -> list[str]:
         return (
@@ -141,7 +173,8 @@ def sheet(sources: list[dict]) -> list[list[str]]:
         row("Billable Time (s)\n(assumes all overhead time is billed)", "billable"),
         blank,
         ["Pricing"] + pad,
-        row(f"vCPU ({VCPUS} vCPU/s)", "vcpu_price"),
+        row("Sandbox Size", "size"),
+        row("vCPU (the sandbox's vCPUs/s)", "vcpu_price"),
         row("RAM (GiB/s)", "ram_price"),
         row("Session Cost (per second)", "session_price", "N/A"),
         blank,

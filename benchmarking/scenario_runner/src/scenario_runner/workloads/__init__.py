@@ -305,6 +305,11 @@ def memory_mib(quantity: str) -> float | None:
     return float(match[1]) * QUANTITY_UNITS[match[2]] / 2**20
 
 
+def cpu_cores(quantity: str) -> float:
+    """A Kubernetes cpu quantity, such as "2" or "1500m", in cores."""
+    return int(quantity[:-1]) / 1000 if quantity.endswith("m") else float(quantity)
+
+
 def check_deployed(template: dict, name: str, sandbox_class: str, workload: str, actor_memory: str) -> None:
     """Refuses a deployed template the case cannot run on: one of another
     sandbox class, whose actors never schedule on the case's pool, or with

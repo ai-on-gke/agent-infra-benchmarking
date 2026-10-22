@@ -20,7 +20,9 @@ how many warmup runs go before. The substrate provider runs them through
 agent-substrate/env deployed for them by ate_env, whose pool and environments
 its `env-worker-count`, `actor-memory` and `actor-cpu` size; local runs them in
 the comparator's own pod; e2b, daytona, modal, anthropic and openai in their
-clouds, with the PROVIDER_KEYS of the scenario-runner's environment. A case's
+clouds, with the PROVIDER_KEYS of the scenario-runner's environment, e2b's,
+modal's and daytona's sandboxes sized by their `cpu` and `memory`, openai's by
+its `container-size` tier. A case's
 subcases, each typically another provider, report side by side, and summarize
 combines their results into those of one comparator run of them all."""
 
@@ -73,7 +75,17 @@ PROVIDER_OPTIONS = {
         "actor-memory": ate_env.DEFAULT_ACTOR_MEMORY,
         "actor-cpu": ate_env.DEFAULT_ACTOR_CPU,
     },
+    # The sandbox's size, the provider's own when unset; e2b's in whole vCPUs,
+    # daytona's in whole vCPUs and GiB.
+    "e2b": {"cpu": None, "memory": None},
+    "modal": {"cpu": None, "memory": None},
+    "daytona": {"cpu": None, "memory": None},
+    # One of CONTAINER_SIZES, OpenAI's default when unset; see
+    # https://developers.openai.com/api/docs/guides/agents-api/environments/openai-hosted
+    "openai": {"container-size": None},
 }
+CONTAINER_SIZES = ("small", "medium", "large")
+CPU_RE = re.compile(r"[1-9][0-9]*m?|[0-9]*\.[0-9]+")
 # The API keys a provider needs, read from the scenario-runner's environment
 # and handed to the comparator in the Secret PROVIDER_SECRET, which the
 # manifest's env reads; have to match it.
@@ -126,6 +138,22 @@ def provider_name(case: dict) -> str:
     return provider.get("name", "substrate") if isinstance(provider, dict) else "substrate"
 
 
+def check_size(where: str, provider: dict) -> dict:
+    """e2b's, modal's or daytona's provider with its `cpu` and `memory` checked."""
+    cpu, memory = provider["cpu"], provider["memory"]
+    daytona = provider["name"] == "daytona"
+    if cpu is not None and (not isinstance(cpu, str) or not CPU_RE.fullmatch(cpu)):
+        raise ValueError(f"{where}.cpu must be a quoted cpu quantity such as \"2\" or \"1500m\", got {cpu!r}")
+    if cpu is not None and provider["name"] != "modal" and not workloads.cpu_cores(cpu).is_integer():
+        raise ValueError(f"{where}.cpu must be whole vCPUs on {provider['name']}, got {cpu!r}")
+    if memory is not None:
+        mib = workloads.memory_mib(memory) if isinstance(memory, str) else None
+        unit, step = ("GiB", 1024) if daytona else ("MiB", 1)
+        if mib is None or mib % step:
+            raise ValueError(f"{where}.memory must be a quantity of whole {unit} such as 2Gi, got {memory!r}")
+    return provider
+
+
 def check_provider(name: str, provider: object) -> dict:
     """The case's `provider` with its options' defaults filled in."""
     where = f"case {name}'s `{TYPE}.provider`"
@@ -139,6 +167,10 @@ def check_provider(name: str, provider: object) -> dict:
         takes = f"takes only {', '.join(options)}" if options else "takes no options"
         raise ValueError(f"{where} has unknown {', '.join(sorted(unknown))}; {provider['name']} {takes}")
     provider = {**options, **provider}
+    if provider["name"] in ("e2b", "modal", "daytona"):
+        return check_size(where, provider)
+    if provider["name"] == "openai" and provider["container-size"] not in (None, *CONTAINER_SIZES):
+        raise ValueError(f"{where}.container-size must be one of {', '.join(CONTAINER_SIZES)}")
     if provider["name"] != "substrate":
         return provider
     count = provider["env-worker-count"]
@@ -148,7 +180,7 @@ def check_provider(name: str, provider: object) -> dict:
     if not isinstance(memory, str) or workloads.memory_mib(memory) is None:
         raise ValueError(f"{where}.actor-memory must be a Kubernetes quantity such as 1Gi, got {memory!r}")
     cpu = provider["actor-cpu"]
-    if not isinstance(cpu, str) or not re.fullmatch(r"[1-9][0-9]*m?|[0-9]*\.[0-9]+", cpu):
+    if not isinstance(cpu, str) or not CPU_RE.fullmatch(cpu):
         raise ValueError(f"{where}.actor-cpu must be a quoted cpu quantity such as \"2\" or \"1500m\", got {cpu!r}")
     return provider
 
@@ -274,6 +306,7 @@ def run_provider(
     reports go under <run_id>/<folder>/."""
     options = case[TYPE]
     provider = options["provider"]["name"]
+    cpu, memory = options["provider"].get("cpu"), options["provider"].get("memory")
     keys = PROVIDER_KEYS.get(provider, ())
     missing = [key for key in keys if not os.environ.get(key)]
     if missing:
@@ -324,6 +357,9 @@ def run_provider(
         "SUBSTRATE_ENV_API_ADDR": ate_env.API_ADDR,
         "SUBSTRATE_ATESPACE": ate_env.ENV_ATESPACE,
         "SUBSTRATE_TEMPLATE": f"{ate_env.ENV_ATESPACE}/{ate_env.TEMPLATE}",
+        "SANDBOX_CPU": str(workloads.cpu_cores(cpu)) if cpu else "",
+        "SANDBOX_MEMORY_MIB": str(int(workloads.memory_mib(memory))) if memory else "",
+        "OPENAI_CONTAINER_SIZE": options["provider"].get("container-size") or "",
     }
 
     stream(

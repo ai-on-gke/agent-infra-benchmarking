@@ -81,6 +81,14 @@ spec:
           value: "${SUBSTRATE_ATESPACE}"
         - name: SUBSTRATE_TEMPLATE
           value: "${SUBSTRATE_TEMPLATE}"
+        # The e2b, modal and daytona providers' sandbox size; empty for their own.
+        - name: SANDBOX_CPU
+          value: "${SANDBOX_CPU}"
+        - name: SANDBOX_MEMORY_MIB
+          value: "${SANDBOX_MEMORY_MIB}"
+        # The openai provider's container size tier; empty for its default.
+        - name: OPENAI_CONTAINER_SIZE
+          value: "${OPENAI_CONTAINER_SIZE}"
         # The keys of a provider that needs them, in the Secret the scenario-runner
         # creates for its run; sandbox_benchmark.PROVIDER_KEYS.
         - name: E2B_API_KEY
