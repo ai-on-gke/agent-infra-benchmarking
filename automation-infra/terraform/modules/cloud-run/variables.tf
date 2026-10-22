@@ -125,7 +125,7 @@ variable "github_actions" {
 }
 
 variable "source_branch" {
-  description = "Branch whose latest commit's runner image the job runs, as .github/workflows/runner-image.yml tags it."
+  description = "Branch whose latest commit's runner image the job runs, as .github/workflows/publish.yml tags it."
   type        = string
   default     = "main"
 }

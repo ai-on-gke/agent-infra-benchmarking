@@ -114,7 +114,7 @@ data "google_project" "this" {
   project_id = var.project_id
 }
 
-# The runs' pulls of the images .github/workflows/runner-image.yml builds into
+# The runs' pulls of the images .github/workflows/publish.yml builds into
 # the deployment's repository: by their nodes, which run as the shared account
 # above, and by atelet for an ActorTemplate's, whose principal is the same for
 # every cluster in the project. Granted here rather than by each run's
@@ -137,7 +137,7 @@ resource "google_artifact_registry_repository_iam_member" "image_readers" {
 locals {
   # The scenario-runner's infra goes in this deployment's project and region,
   # with its state in the deployment's state bucket, and pulls the images
-  # .github/workflows/runner-image.yml builds into the deployment's repository.
+  # .github/workflows/publish.yml builds into the deployment's repository.
   module_args = concat([
     "--project-id=${var.project_id}",
     "--region=${var.region}",

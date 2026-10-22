@@ -1,4 +1,4 @@
-name: Runner image
+name: Publish
 
 # Builds the Cloud Run job's image, automation-infra/image/Dockerfile, from each
 # pushed commit and pushes it as test-runner:<commit> to the Artifact Registry
@@ -21,7 +21,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  test-runner-image:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -93,20 +93,20 @@ jobs:
   # source_branch in its main.tf, and of any branch dispatched by hand. Each is
   # built only if the repository lacks it: substrate's and env's once per
   # submodule version, the benchmark's own once per commit.
-  images:
+  benchmark-images:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
     strategy:
       matrix:
-        # The same as build's.
+        # The same as test-runner-image's.
         deployment: [substrate-bench-staging]
     concurrency:
-      group: ${{ github.workflow }}-images-${{ matrix.deployment }}-${{ github.ref }}
+      group: ${{ github.workflow }}-benchmark-images-${{ matrix.deployment }}-${{ github.ref }}
     steps:
-      # As build's, so git describe gives the submodules the versions the
-      # runner image does.
+      # As test-runner-image's, so git describe gives the submodules the
+      # versions the runner image does.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -178,18 +178,18 @@ jobs:
   # the tag has its own job, which waits for this one and so tags last. A newer
   # push's job replaces one still waiting. And only once the images its runs
   # pull are there, so the job never runs a commit whose images are missing.
-  tag:
-    needs: [build, images]
+  tag-test-runner:
+    needs: [test-runner-image, benchmark-images]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
     strategy:
       matrix:
-        # The same as build's.
+        # The same as test-runner-image's.
         deployment: [substrate-bench-staging]
     concurrency:
-      group: ${{ github.workflow }}-tag-${{ matrix.deployment }}-${{ github.ref }}
+      group: ${{ github.workflow }}-tag-test-runner-${{ matrix.deployment }}-${{ github.ref }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

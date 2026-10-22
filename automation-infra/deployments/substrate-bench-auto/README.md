@@ -36,7 +36,7 @@ names to differ:
 | Cloud Scheduler job that starts it, daily at 03:00 UTC | `substrate-bench-auto` |
 | Cloud Run job, and its scheduler, that destroys what a killed execution left (`tools/destroy-leftovers`), daily at 15:00 UTC | `substrate-bench-auto-cleanup` |
 | Alert policy on a failed execution of either job | `substrate-bench-auto: failed execution` |
-| Artifact Registry repository of the job's image and the images its runs pull, which the Runner image workflow pushes to | `substrate-bench-auto` |
+| Artifact Registry repository of the job's image and the images its runs pull, which the Publish workflow pushes to | `substrate-bench-auto` |
 | Service account the job, and so the scenario-runner, runs as | `substrate-bench-auto` |
 | Service accounts of the scheduler, the runs' cluster nodes and GitHub Actions | `substrate-bench-auto-sched`, `-nodes`, `-gh` |
 | Workload Identity pool and provider GitHub Actions authenticate through | `substrate-bench-auto-gh`, `github` |
@@ -257,7 +257,7 @@ written its file.
 ## Changing it
 
 The job runs whatever is on `main`, so a change to the scenarios, the
-scenario-runner or the job's image only needs a push. Wait for the Runner image
+scenario-runner or the job's image only needs a push. Wait for the Publish
 workflow to finish before the next execution starts.
 
 A change to the deployment itself, such as the schedule, the branch, the cases
@@ -305,5 +305,5 @@ serverless-ipv4-cloudrun-...": Cloud Run keeps the job's addresses in it for up
 to a couple of hours after the job is deleted. Run it again once they are gone.
 
 Then take `substrate-bench-auto` out of the `deployment` matrix of every job in
-[`runner-image.yml`](../../../.github/workflows/runner-image.yml), or every
+[`publish.yml`](../../../.github/workflows/publish.yml), or every
 push fails to push.

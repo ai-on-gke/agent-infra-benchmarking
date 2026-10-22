@@ -10,7 +10,7 @@ resource "google_service_account" "github" {
   display_name = "GitHub Actions of ${var.default_resource_name}"
 }
 
-# .github/workflows/runner-image.yml's pushes, build cache and tags, of the
+# .github/workflows/publish.yml's pushes, build cache and tags, of the
 # runner image and of the images the runs pull.
 resource "google_artifact_registry_repository_iam_member" "github_writer" {
   count = var.github_actions ? 1 : 0

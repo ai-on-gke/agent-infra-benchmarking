@@ -3,7 +3,7 @@
 A Cloud Run job that runs the scenario-runner (`benchmarking/tools/run`), on a
 schedule or by hand. Each run uses the image of the latest commit of one
 branch, which
-[`.github/workflows/runner-image.yml`](../.github/workflows/runner-image.yml)
+[`.github/workflows/publish.yml`](../.github/workflows/publish.yml)
 builds from [`image/Dockerfile`](image/Dockerfile) on every push.
 
 A deployment is a folder under [`deployments/`](deployments) that calls the
@@ -149,15 +149,15 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
    ```
 
 4. Add the deployment to the `deployment` matrix of every job in
-   `runner-image.yml`:
+   `publish.yml`:
 
    ```bash
-   sed -i "s/deployment: \[\(.*\)\]/deployment: [\1, $DEPLOYMENT]/" .github/workflows/runner-image.yml
+   sed -i "s/deployment: \[\(.*\)\]/deployment: [\1, $DEPLOYMENT]/" .github/workflows/publish.yml
    ```
 
 5. Commit the deployment's folder (`main.tf`, `.gitignore` and
    `.terraform.lock.hcl`) and the workflow, then push to `$SOURCE_BRANCH`. The
-   push builds the job's image. Wait for the Runner image workflow to finish.
+   push builds the job's image. Wait for the Publish workflow to finish.
 
 6. Apply again, which creates the jobs, running the image the workflow pushed:
 

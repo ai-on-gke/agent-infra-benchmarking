@@ -1,5 +1,5 @@
 locals {
-  # Unless var.runner_image, the image .github/workflows/runner-image.yml
+  # Unless var.runner_image, the image .github/workflows/publish.yml
   # pushes for var.source_branch's latest commit, by tag, which Cloud Run
   # resolves as each execution starts: the branch with each character a tag
   # can't hold as a hyphen, as the workflow tags it.
@@ -28,7 +28,7 @@ resource "google_artifact_registry_repository" "images" {
   format        = "DOCKER"
 
   # A month of commits' runner images, their build cache included, and of the
-  # images .github/workflows/runner-image.yml builds for the runs with
+  # images .github/workflows/publish.yml builds for the runs with
   # benchmarking/tools/build-images, but always each one's latest few and the
   # runner image the job runs.
   cleanup_policies {

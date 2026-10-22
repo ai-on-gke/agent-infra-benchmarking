@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.19@sha256:b6afd42430b15f2d2a4c5a02b919e98a525b785b1aaff16747d2f623364e39b6
 
 # The job's image: the repo at one commit, built from its top level by
-# .github/workflows/runner-image.yml, with what an execution would otherwise
+# .github/workflows/publish.yml, with what an execution would otherwise
 # fetch or compile baked in. benchmarking/scenario_runner/requirements.txt is
 # compiled for this Python.
 FROM hashicorp/terraform:1.15.6@sha256:adae45661e45d3c88beef071ee1277b4621cea73517aae7f0844657c8e85f641 AS terraform

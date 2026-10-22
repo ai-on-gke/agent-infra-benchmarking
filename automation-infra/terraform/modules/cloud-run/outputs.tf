@@ -19,12 +19,12 @@ output "execute_command" {
 }
 
 output "image_repo" {
-  description = "Image path prefix of the repository the runs pull from, which .github/workflows/runner-image.yml builds their images into; a local run's --image-repo can name it too."
+  description = "Image path prefix of the repository the runs pull from, which .github/workflows/publish.yml builds their images into; a local run's --image-repo can name it too."
   value       = google_artifact_registry_repository.images.registry_uri
 }
 
 output "runner_image" {
-  description = "The image the jobs run: unless runner_image, by the tag .github/workflows/runner-image.yml moves to source_branch's latest commit."
+  description = "The image the jobs run: unless runner_image, by the tag .github/workflows/publish.yml moves to source_branch's latest commit."
   value       = local.runner_image
 }
 
