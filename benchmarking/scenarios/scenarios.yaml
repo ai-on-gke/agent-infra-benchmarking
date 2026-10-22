@@ -236,7 +236,6 @@ cases:
         workload-name: glutton
         workload-template: glutton
     subcases:
-      baseline: {locust: {infra: {cluster: {sandboxed-nodes: 1}}}}
       "10": {locust: {worker: {min-wait: 6000ms, max-wait: 6000ms}}}
       "25": {locust: {worker: {min-wait: 6000ms, max-wait: 6000ms}}}
       "50": {locust: {worker: {min-wait: 6000ms, max-wait: 6000ms}}}
