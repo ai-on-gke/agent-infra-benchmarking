@@ -34,16 +34,16 @@
 # `actor-memory` and `actor-cpu`, beside its name, size env's WorkerPool and its
 # environments; `actor-cpu`, "2" by default, caps substrate's sandbox at the 2
 # vCPU the cloud providers' get, and with `actor-memory: 2Gi` the sizes match. A
-# case's variants' results are combined into one comparison, the first variant
+# case's subcases' results are combined into one comparison, the first subcase
 # the others are compared with, and `cost-sheet: true` adds cost_sheet.csv, the
 # sandbox cost sheet, to it.
 # `noop` is the scenario-runner's alone, and holds its `infra` and `install` at
 # most: it applies and destroys the case's cluster, and runs nothing on it.
 #
-# `variants` makes a case of each of its entries, <case>-<variant>: the case's
+# `subcases` makes a case of each of its entries, <case>-<subcase>: the case's
 # keys with the entry's on top, a mapping merged into a mapping. An entry can
 # change any key, but not the type. --scenario <case> runs them all one after
-# another, then the type's summary of them all; --scenario <case>-<variant>
+# another, then the type's summary of them all; --scenario <case>-<subcase>
 # just that one. Those alike in their cluster share one, applied for them all.
 #
 # `max-failure-ratio`, in the type's mapping, is the share of cycles, 0 to 1,
@@ -544,7 +544,7 @@ cases:
       tests:
       - test_suspend_resume
       runs: 3
-    variants:
+    subcases:
       substrate:
         sandbox-benchmark:
           provider:
@@ -580,7 +580,7 @@ cases:
       - test_suspend_resume
       runs: 10
       warmup-runs: 1
-    variants:
+    subcases:
       e2b: {sandbox-benchmark: {provider: {name: e2b}}}
       modal: {sandbox-benchmark: {provider: {name: modal}}}
       daytona: {sandbox-benchmark: {provider: {name: daytona}}}

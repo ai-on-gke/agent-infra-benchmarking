@@ -15,7 +15,7 @@
 """Several sandbox-benchmark runs, each of one provider, combined into the
 comparison ai-sandbox-benchmark's comparator prints for a run of them all:
 results.json, every run of every provider, and comparison.md, the
-comparator's tables. sandbox_benchmark.summarize combines a case's variants'
+comparator's tables. sandbox_benchmark.summarize combines a case's subcases'
 runs; combine, runs already downloaded.
 
 The comparator runs every provider's tests at once and reports only each

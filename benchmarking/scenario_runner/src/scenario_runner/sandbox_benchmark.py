@@ -21,7 +21,7 @@ agent-substrate/env deployed for them by ate_env, whose pool and environments
 its `env-worker-count`, `actor-memory` and `actor-cpu` size; local runs them in
 the comparator's own pod; e2b, daytona, modal, anthropic and openai in their
 clouds, with the PROVIDER_KEYS of the scenario-runner's environment. A case's
-variants, each typically another provider, report side by side, and summarize
+subcases, each typically another provider, report side by side, and summarize
 combines their results into those of one comparator run of them all."""
 
 from __future__ import annotations
@@ -206,10 +206,10 @@ def cluster_config(name: str, case: dict) -> CommonCluster:
 
 def report_folder(record: str, key: str, case: dict) -> str:
     """Where under the run id the run of case key recorded as record reports:
-    in <record>/<provider>/, or a variant's in <group record>/<variant>/,
+    in <record>/<provider>/, or a subcase's in <group record>/<subcase>/,
     beside the others of its group."""
-    if reports.VARIANT in case:
-        return f"{reports.group_record(record, key, case)}/{case[reports.VARIANT]['name']}"
+    if reports.SUBCASE in case:
+        return f"{reports.group_record(record, key, case)}/{case[reports.SUBCASE]['name']}"
     return f"{record}/{provider_name(case)}"
 
 
@@ -443,7 +443,7 @@ def combine_reports(
 
 def summarize(runs: list[tuple[str, str, dict]], run_id: str, bucket: str | None, report_prefix: str) -> None:
     """Combines the runs' results, each of one provider, by the folder they
-    report beside one another in: a variant's with the others of its group, the
+    report beside one another in: a subcase's with the others of its group, the
     first the one the others are compared with, under the group's record."""
     folders = {}
     for record, key, case in runs:

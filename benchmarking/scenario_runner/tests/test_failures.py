@@ -274,18 +274,18 @@ class Series(unittest.TestCase):
         with self.assertRaises(locust.LocustStillRunning):
             run.run_cases(self.args, cases, case, shared_cluster=True)
 
-    def variants(self, *names: str, infra: dict | None = None) -> dict:
-        from scenario_runner.reports import VARIANT
+    def subcases(self, *names: str, infra: dict | None = None) -> dict:
+        from scenario_runner.reports import SUBCASE
 
-        return {f"g-{n}": {**LOCUST, "locust": {"infra": infra}, VARIANT: {"of": "g", "name": n}} for n in names}
+        return {f"g-{n}": {**LOCUST, "locust": {"infra": infra}, SUBCASE: {"of": "g", "name": n}} for n in names}
 
-    def test_variants_alike_share_a_cluster_then_are_summarized(self):
+    def test_subcases_alike_share_a_cluster_then_are_summarized(self):
         from contextlib import contextmanager
 
         from scenario_runner import benchmark
 
         other = {"cluster": {"sandboxed-nodes": 2}}
-        cases = {**self.variants("a", "b"), **self.variants("c", infra=other), "h": LOCUST}
+        cases = {**self.subcases("a", "b"), **self.subcases("c", infra=other), "h": LOCUST}
         cases = {name: cases[name] for name in ["g-a", "g-c", "g-b", "h"]}
         applied, ran = [], []
 
@@ -305,10 +305,10 @@ class Series(unittest.TestCase):
         self.assertEqual(groups, [["g-a-warmup-1", "g-a", "g-c-warmup-1", "g-c", "g-b-warmup-1", "g-b"], ["h-warmup-1", "h"]])
 
     def test_all_of_a_group_on_one_cluster_is_recorded_as_the_group(self):
-        self.assertEqual(run.cluster_keys(self.variants("a", "b")), ["g"])
+        self.assertEqual(run.cluster_keys(self.subcases("a", "b")), ["g"])
 
-    def test_a_stuck_variant_leaves_the_rest_of_its_batch_unrun(self):
-        cases = self.variants("a", "b", "c")
+    def test_a_stuck_subcase_leaves_the_rest_of_its_batch_unrun(self):
+        cases = self.subcases("a", "b", "c")
         ran = []
 
         def case(name, _case, _cluster):

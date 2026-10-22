@@ -23,7 +23,7 @@ import yaml
 
 from . import SCENARIOS_DIR, benchmark
 from .install import INSTALL, check_install
-from .reports import LABEL_RE, VARIANT
+from .reports import LABEL_RE, SUBCASE
 
 SCENARIOS_FILE = SCENARIOS_DIR / "scenarios.yaml"
 BARE_METAL = "bare-metal"
@@ -40,13 +40,13 @@ SHARED = "shared"
 PER_REPEAT = "per-repeat"
 REPEAT_CLUSTERS = [SHARED, PER_REPEAT]
 
-# A case's variants, each run as a case of its own, <case>-<variant>: the
-# case's keys with the variant's on top.
-VARIANTS = "variants"
+# A case's subcases, each run as a case of its own, <case>-<subcase>: the
+# case's keys with the subcase's on top.
+SUBCASES = "subcases"
 # A case's own keys; the rest of what it states is in the mapping of its type,
 # named by the type, which only the type's runner reads, but for the cluster
 # the type asks for in its `infra`.
-CASE_KEYS = {REPEATS, BARE_METAL, VARIANTS}
+CASE_KEYS = {REPEATS, BARE_METAL, SUBCASES}
 
 
 def types() -> list[str]:
@@ -54,13 +54,13 @@ def types() -> list[str]:
 
 
 def load_cases(scenarios_file: Path) -> dict[str, dict]:
-    """The cases, each with variants in their place and `type` filled in from
+    """The cases, each with subcases in their place and `type` filled in from
     the mapping that names it."""
     with scenarios_file.open() as f:
         cases = (yaml.safe_load(f) or {}).get("cases")
     if not isinstance(cases, dict) or not cases:
         raise ValueError(f"{scenarios_file} has no `cases` mapping")
-    cases = with_variants(str(scenarios_file), cases)
+    cases = with_subcases(str(scenarios_file), cases)
     known = types()
     for name, case in cases.items():
         if "type" in case:
@@ -70,7 +70,7 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
         given = [key for key in known if key in case]
         if len(given) != 1:
             raise ValueError(f"{scenarios_file}: case {name} needs a mapping of exactly one type of {', '.join(known)}")
-        unknown = case.keys() - CASE_KEYS - set(given) - {VARIANT}
+        unknown = case.keys() - CASE_KEYS - set(given) - {SUBCASE}
         if unknown:
             raise ValueError(f"{scenarios_file}: case {name} has unknown {', '.join(sorted(unknown))}")
         case["type"] = given[0]
@@ -113,44 +113,44 @@ def merged(base: dict, over: dict) -> dict:
     return out
 
 
-def with_variants(where: str, cases: dict) -> dict[str, dict]:
-    """The cases, one with `variants` replaced by a case per variant, in their
-    order, which VARIANT says it is a variant of."""
+def with_subcases(where: str, cases: dict) -> dict[str, dict]:
+    """The cases, one with `subcases` replaced by a case per subcase, in their
+    order, which SUBCASE says it is a subcase of."""
     out = {}
     for name, case in cases.items():
         if not isinstance(case, dict):
             raise ValueError(f"{where}: case {name} is not a mapping")
-        if VARIANT in case:
-            raise ValueError(f"{where}: case {name}'s `{VARIANT}` is the scenario-runner's own")
-        if VARIANTS not in case:
+        if SUBCASE in case:
+            raise ValueError(f"{where}: case {name}'s `{SUBCASE}` is the scenario-runner's own")
+        if SUBCASES not in case:
             out[name] = case
             continue
-        variants = case[VARIANTS]
-        if not isinstance(variants, dict) or not variants:
-            raise ValueError(f"{where}: case {name}'s `{VARIANTS}` must be a mapping of names to the keys they change")
-        base = {key: value for key, value in case.items() if key != VARIANTS}
-        for variant, keys in variants.items():
-            if not isinstance(variant, str) or not LABEL_RE.fullmatch(variant):
-                raise ValueError(f"{where}: case {name}'s variant {variant!r} is not a valid label value")
+        subcases = case[SUBCASES]
+        if not isinstance(subcases, dict) or not subcases:
+            raise ValueError(f"{where}: case {name}'s `{SUBCASES}` must be a mapping of names to the keys they change")
+        base = {key: value for key, value in case.items() if key != SUBCASES}
+        for subcase, keys in subcases.items():
+            if not isinstance(subcase, str) or not LABEL_RE.fullmatch(subcase):
+                raise ValueError(f"{where}: case {name}'s subcase {subcase!r} is not a valid label value")
             keys = keys or {}
             if not isinstance(keys, dict):
-                raise ValueError(f"{where}: case {name}'s variant {variant} is not a mapping")
-            fixed = keys.keys() & {VARIANTS, VARIANT}
+                raise ValueError(f"{where}: case {name}'s subcase {subcase} is not a mapping")
+            fixed = keys.keys() & {SUBCASES, SUBCASE}
             if fixed:
-                raise ValueError(f"{where}: case {name}'s variant {variant} cannot change {', '.join(sorted(fixed))}")
-            renamed = f"{name}-{variant}"
+                raise ValueError(f"{where}: case {name}'s subcase {subcase} cannot change {', '.join(sorted(fixed))}")
+            renamed = f"{name}-{subcase}"
             if renamed in cases or renamed in out:
-                raise ValueError(f"{where}: case {name}'s variant {variant} would be {renamed}, which is another case")
-            out[renamed] = {**merged(copy.deepcopy(base), keys), VARIANT: {"of": name, "name": variant}}
+                raise ValueError(f"{where}: case {name}'s subcase {subcase} would be {renamed}, which is another case")
+            out[renamed] = {**merged(copy.deepcopy(base), keys), SUBCASE: {"of": name, "name": subcase}}
     return out
 
 
 def grouped(cases: dict[str, dict]) -> dict[str, list[str]]:
-    """The cases by the one they are variants of, a case of none by its own
+    """The cases by the one they are subcases of, a case of none by its own
     name, in the order the first of each comes."""
     groups = {}
     for name, case in cases.items():
-        groups.setdefault(case[VARIANT]["of"] if VARIANT in case else name, []).append(name)
+        groups.setdefault(case[SUBCASE]["of"] if SUBCASE in case else name, []).append(name)
     return groups
 
 
@@ -184,8 +184,8 @@ def with_bare_metal(
     its records and reports are; its cluster goes on placements when applied.
     A case's own `bare-metal` wins over default, and override, unless None,
     over both. Neither default nor override puts a noop on bare metal, as it
-    runs nothing there. A variant on bare metal is one of <case>-metal, so
-    variants on and off it are compared apart."""
+    runs nothing there. A subcase on bare metal is one of <case>-metal, so
+    subcases on and off it are compared apart."""
     result = {}
     for name, case in cases.items():
         metal = case.get(BARE_METAL, default if case["type"] != "noop" else False)
@@ -200,11 +200,11 @@ def with_bare_metal(
         if not placements:
             raise ValueError(f"case {name} runs on bare metal, but `{BARE_METAL}.placements` has none in its region")
         result[renamed] = {**case, BARE_METAL: True}
-        if VARIANT in case:
-            group = case[VARIANT]["of"] + BARE_METAL_SUFFIX
+        if SUBCASE in case:
+            group = case[SUBCASE]["of"] + BARE_METAL_SUFFIX
             if group in all_names:
-                raise ValueError(f"case {name} on bare metal would be a variant of {group}, which is another case")
-            result[renamed][VARIANT] = {**case[VARIANT], "of": group}
+                raise ValueError(f"case {name} on bare metal would be a subcase of {group}, which is another case")
+            result[renamed][SUBCASE] = {**case[SUBCASE], "of": group}
     return result
 
 
