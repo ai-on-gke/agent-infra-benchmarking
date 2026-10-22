@@ -426,10 +426,6 @@ def _versions(info: dict) -> str:
     tools = info.get("tools") if isinstance(info.get("tools"), dict) else {}
     if any(tools.values()):
         rows.append(["Tools", ", ".join(f"{tool} {version}" for tool, version in tools.items() if version)])
-    builders = info.get("builders") if isinstance(info.get("builders"), dict) else {}
-    if builders.get("where"):
-        used = [f"`{image}`" for key, image in builders.items() if key != "where" and image]
-        rows.append(["Images built with", ", ".join([builders["where"], *used])])
 
     if not rows:
         return ""
