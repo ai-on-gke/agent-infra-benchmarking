@@ -175,6 +175,31 @@ templates:
         # Without an egress policy the actors can't reach mock-llm.
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
+  # 100 workers on 10 nodes, suspended between instructions, at 100, 250 and
+  # 500 VUs against a baseline of 100 that never suspend. A case of it names
+  # its workload, as that workload's template does, and sets its run-time and
+  # its subcases' waits.
+  density:
+    extends: locust
+    locust:
+      infra:
+        cluster:
+          sandboxed-nodes: 10
+      worker-count: 100
+      master:
+        users: null
+        warm-up: null
+      worker:
+        suspend-disabled: false
+    subcases:
+      baseline:
+        locust:
+          master: {users: 100}
+          worker: {suspend-disabled: true}
+      "10": {locust: {master: {users: 100}}}
+      "25": {locust: {master: {users: 250}}}
+      "50": {locust: {master: {users: 500}}}
+
 cases:
   glutton:
     extends: glutton
@@ -203,37 +228,18 @@ cases:
       warmups: 0
 
   glutton-density:
-    extends: glutton
+    extends: density
     locust:
-      infra:
-        cluster:
-          sandboxed-nodes: 10
-      worker-count: 100
       master:
         run-time: 3m
-        # Set by each subcase.
-        users: null
-        warm-up: null
       worker:
-        suspend-disabled: false
+        workload-name: glutton
+        workload-template: glutton
     subcases:
-      baseline:
-        locust:
-          infra: {cluster: {sandboxed-nodes: 1}}
-          master: {users: 100}
-          worker: {suspend-disabled: true}
-      "10":
-        locust:
-          master: {users: 100}
-          worker: {min-wait: 6000ms, max-wait: 6000ms}
-      "25":
-        locust:
-          master: {users: 250}
-          worker: {min-wait: 6000ms, max-wait: 6000ms}
-      "50":
-        locust:
-          master: {users: 500}
-          worker: {min-wait: 6000ms, max-wait: 6000ms}
+      baseline: {locust: {infra: {cluster: {sandboxed-nodes: 1}}}}
+      "10": {locust: {worker: {min-wait: 6000ms, max-wait: 6000ms}}}
+      "25": {locust: {worker: {min-wait: 6000ms, max-wait: 6000ms}}}
+      "50": {locust: {worker: {min-wait: 6000ms, max-wait: 6000ms}}}
 
   openclaw:
     extends: openclaw
@@ -249,35 +255,28 @@ cases:
           nested-virtualization: true
 
   openclaw-density:
-    extends: openclaw
+    extends: density
     locust:
       infra:
         cluster:
-          sandboxed-nodes: 10
-      worker-count: 100
+          configuration: openclaw
       master:
         run-time: 5m
-        # Set by each subcase.
-        users: null
-        warm-up: null
+      # The openclaw template's, for the same reasons.
       worker:
-        suspend-disabled: false
+        workload-name: openclaw
+        workload-template: openclaw
+        workload-timeout: 120s
+        actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
     subcases:
-      baseline:
-        locust:
-          master: {users: 100}
-          worker: {suspend-disabled: true}
-      "10":
-        locust:
-          master: {users: 100}
-          worker: {min-wait: 106000ms, max-wait: 106000ms}
+      "10": {locust: {worker: {min-wait: 106000ms, max-wait: 106000ms}}}
       "25":
         locust:
-          master: {run-time: 12m, users: 250, spawn-rate: 1}
+          master: {run-time: 12m, spawn-rate: 1}
           worker: {min-wait: 212000ms, max-wait: 212000ms}
       "50":
         locust:
-          master: {run-time: 20m, users: 500, spawn-rate: 1}
+          master: {run-time: 20m, spawn-rate: 1}
           worker: {min-wait: 424000ms, max-wait: 424000ms}
 
   # glutton woken by its instruction, through the router, rather than by a
