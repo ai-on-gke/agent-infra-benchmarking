@@ -29,9 +29,7 @@ jobs:
       id-token: write
     strategy:
       matrix:
-        # substrate-bench-auto back once it is applied with this module, which lets
-        # its GitHub account push without a key.
-        deployment: [substrate-bench-staging]
+        deployment: [substrate-bench-auto, substrate-bench-staging]
     steps:
       # Only what the image holds, so its tree stays clean in git's eyes.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,7 +99,7 @@ jobs:
     strategy:
       matrix:
         # The same as test-runner-image's.
-        deployment: [substrate-bench-staging]
+        deployment: [substrate-bench-auto, substrate-bench-staging]
     concurrency:
       group: ${{ github.workflow }}-benchmark-images-${{ matrix.deployment }}-${{ github.ref }}
     steps:
@@ -195,7 +193,7 @@ jobs:
     strategy:
       matrix:
         # The same as test-runner-image's.
-        deployment: [substrate-bench-staging]
+        deployment: [substrate-bench-auto, substrate-bench-staging]
     concurrency:
       group: ${{ github.workflow }}-tag-test-runner-${{ matrix.deployment }}-${{ github.ref }}
     steps:
