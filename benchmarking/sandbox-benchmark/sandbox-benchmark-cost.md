@@ -47,9 +47,8 @@ cluster's bucket under the same path:
 | File | What it holds |
 |---|---|
 | `cost_sheet.csv` | The cost sheet |
-| `comparison.md` | Every metric per provider: creation, suspend, resume, execution, cleanup |
-| `results.json` | Every run of every provider, the raw timings |
-| `<provider>/` | Each provider's own reports, its comparator log and `run.json` |
+| `perf_results.csv` | Every metric's mean, P90 and std dev per provider: creation, suspend, resume, execution, cleanup, ready to import into Sheets |
+| `<provider>/` | Each provider's own reports: `results.json` with its raw timings, its comparator log and `run.json` |
 
 ## How the numbers are made
 

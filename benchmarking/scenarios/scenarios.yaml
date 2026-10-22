@@ -35,8 +35,8 @@
 # environments; `actor-cpu`, "2" by default, caps substrate's sandbox at the 2
 # vCPU the cloud providers' get, and with `actor-memory: 2Gi` the sizes match. A
 # case's subcases' results are combined into one comparison, the first subcase
-# the others are compared with, and `cost-sheet: true` adds cost_sheet.csv, the
-# sandbox cost sheet, to it.
+# the others are compared with: perf_results.csv, and with `cost-sheet: true`
+# cost_sheet.csv, the sandbox cost sheet.
 # `noop` is the scenario-runner's alone, and holds its `infra` and `install` at
 # most: it applies and destroys the case's cluster, and runs nothing on it.
 #

@@ -384,9 +384,9 @@ def run_provider(
 def combine_reports(
     bucket: str | None, report_prefix: str, run_id: str, name: str, labels: list[str], cost_sheet: bool = False
 ) -> None:
-    """Combines the reports in name's folders labels into results.json and
-    comparison.md beside them, as one comparator run of them all would have
-    them, and with cost_sheet cost_sheet.csv: read from and written to bucket,
+    """Combines the reports in name's folders labels into perf_results.csv
+    beside them, as one comparator run of them all would have them, and with
+    cost_sheet cost_sheet.csv: read from and written to bucket,
     or without one the downloaded reports, and written to those too unless on
     Cloud Run. Best-effort: each run's own reports are the record either way."""
     prefix = f"{report_prefix}/{run_id}/{name}"
@@ -421,16 +421,12 @@ def combine_reports(
             log(f"sandbox-benchmark: nothing in {name} recorded results to combine", "WARNING")
             return
         combine.check(sources)
-        combined = combine.combined_results(sources)
-        files = {
-            combine.RESULTS_JSON: (json.dumps(combined, indent=2) + "\n", "application/json"),
-            combine.COMPARISON_MD: (combine.render(sources), "text/markdown"),
-        }
+        files = {combine.PERF_RESULTS_CSV: combine.csv_text(combine.perf_results(sources))}
         if cost_sheet:
-            files[costs.COST_SHEET_CSV] = (costs.csv_text(combined), "text/csv")
-        for file, (text, content_type) in files.items():
+            files[costs.COST_SHEET_CSV] = combine.csv_text(costs.sheet(sources))
+        for file, text in files.items():
             if bucket_:
-                bucket_.blob(f"{prefix}/{file}").upload_from_string(text, content_type=content_type)
+                bucket_.blob(f"{prefix}/{file}").upload_from_string(text, content_type="text/csv")
             if not ON_CLOUD_RUN:
                 local.mkdir(parents=True, exist_ok=True)
                 (local / file).write_text(text)
@@ -438,7 +434,7 @@ def combine_reports(
         log(f"sandbox-benchmark: could not combine {name}'s results: {type(exc).__name__}: {exc}", "WARNING")
         return
     where = f"gs://{bucket}/{prefix}" if bucket else str(local)
-    log(f"sandbox-benchmark: {', '.join(s['name'] for s in sources)} combined in {where}/{combine.COMPARISON_MD}")
+    log(f"sandbox-benchmark: {', '.join(s['name'] for s in sources)} combined in {where}/{combine.PERF_RESULTS_CSV}")
 
 
 def summarize(runs: list[tuple[str, str, dict]], run_id: str, bucket: str | None, report_prefix: str) -> None:

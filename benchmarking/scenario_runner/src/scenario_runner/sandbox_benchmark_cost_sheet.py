@@ -12,16 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The sandbox cost sheet, as CSV: its suspend and restore overheads from a
-sandbox-benchmark run's combined results, the rest from the prices and usage
-below. sandbox_benchmark.summarize writes it beside comparison.md for a case
-with `cost-sheet: true`. An overhead is the provider's mean Suspend or Resume of
-test_suspend_resume, as comparison.md has it, taken once an hour."""
+"""The sandbox cost sheet: its suspend and restore overheads from the runs a
+sandbox-benchmark comparison combines, the rest from the prices and usage
+below. sandbox_benchmark.summarize writes it as CSV beside perf_results.csv for
+a case with `cost-sheet: true`. An overhead is the provider's mean Suspend or
+Resume of test_suspend_resume, as perf_results.csv has it, taken once an
+hour."""
 
 from __future__ import annotations
 
-import csv
-import io
 import statistics
 
 from .log import log
@@ -64,11 +63,13 @@ def sample_count(runs: list[dict]) -> int:
     return max(counts.values(), default=0)
 
 
-def sheet(results: dict) -> list[list[str]]:
-    """The sheet's rows, of results as results.json has them."""
-    runs = results["runs"]
+def sheet(sources: list[dict]) -> list[list[str]]:
+    """The sheet's rows, of the combined sources, each column of the source of
+    its provider."""
+    runs = [{**r, "provider": s["provider"]} for s in sources for r in s["runs"]]
+    providers = {s["provider"] for s in sources}
     for p in [*RESOURCE_PRICED, "anthropic", "openai"]:
-        if p not in results["providers"]:
+        if p not in providers:
             log(f"sandbox-benchmark: no {p} runs in the results; its cost sheet column is left empty", "WARNING")
         failed = sum(1 for r in runs if r["provider"] == p and r["test"] == TEST and r["errors"])
         if failed:
@@ -94,7 +95,7 @@ def sheet(results: dict) -> list[list[str]]:
         }
 
     def anthropic(key: str) -> str:
-        if "anthropic" not in results["providers"]:
+        if "anthropic" not in providers:
             return ""
         session_hour = ACTIVE_SECS_PER_HOUR * ANTHROPIC_SESSION_HOUR / 3600
         return {
@@ -110,7 +111,7 @@ def sheet(results: dict) -> list[list[str]]:
         }.get(key, "")
 
     def openai(key: str) -> str:
-        if "openai" not in results["providers"]:
+        if "openai" not in providers:
             return ""
         return {"suspend": "N/A", "resume": "N/A", "month": "No Public Pricing Available"}.get(key, "")
 
@@ -167,9 +168,3 @@ def sheet(results: dict) -> list[list[str]]:
         ]
         + pad,
     ]
-
-
-def csv_text(results: dict) -> str:
-    out = io.StringIO()
-    csv.writer(out).writerows(sheet(results))
-    return out.getvalue()
