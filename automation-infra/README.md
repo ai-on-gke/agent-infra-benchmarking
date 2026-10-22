@@ -1,15 +1,17 @@
 # Automation
 
 A Cloud Run job that runs the scenario-runner (`benchmarking/tools/run`), on a
-schedule or by hand. Each run uses the latest commit of one branch, which
-[`.github/workflows/upload-source.yml`](../.github/workflows/upload-source.yml)
-uploads to a bucket on every push.
+schedule or by hand. Each run uses the image of the latest commit of one
+branch, which
+[`.github/workflows/publish.yml`](../.github/workflows/publish.yml)
+builds from [`image/Dockerfile`](image/Dockerfile) on every push.
 
 A deployment is a folder under [`deployments/`](deployments) that calls the
 [`terraform/modules/cloud-run`](terraform/modules/cloud-run) module. The module
-deploys the job and builds its image. It also creates the network the runs'
-clusters go into, which the job joins: their control planes have an internal
-endpoint only, and their nodes reach out through its Cloud NAT. See
+deploys the job and the repository its image goes to. It also creates the
+network the runs' clusters go into, which the job joins: their control planes
+have an internal endpoint only, and their nodes reach out through its Cloud
+NAT. See
 [`deployments/substrate-bench-auto`](deployments/substrate-bench-auto) for an
 example.
 
@@ -17,7 +19,7 @@ example.
 
 - Terraform 1.5+
 - gcloud, git, jq
-- gh, logged in with permission to set this repo's Actions variables and secrets
+- gh, logged in with permission to set this repo's Actions variables
 - A GCP project with billing, and an account with `Owner` on it. `Editor` is
   not enough, because it cannot set IAM.
 
@@ -54,8 +56,7 @@ example.
    gcloud services enable serviceusage.googleapis.com iam.googleapis.com --project="$PROJECT_ID"
    ```
 
-5. Create the bucket that holds the deployment's Terraform state and the
-   uploaded source:
+5. Create the bucket that holds the deployment's Terraform state:
 
    ```bash
    gcloud storage buckets create "gs://$STATE_BUCKET" --project="$PROJECT_ID" --location="$REGION" --uniform-bucket-level-access
@@ -83,6 +84,12 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
    terraform {
      required_version = ">= 1.5"
 
+     required_providers {
+       github = {
+         source = "integrations/github"
+       }
+     }
+
      backend "gcs" {
        bucket = "$STATE_BUCKET"
        prefix = "automation/cloud-run/$DEPLOYMENT"
@@ -90,9 +97,18 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
    }
 
    locals {
-     # The backend's bucket, which the backend block cannot take from here. Also
-     # read by .github/workflows/upload-source.yml.
+     # The backend's bucket, which the backend block cannot take from here.
      state_bucket = "$STATE_BUCKET"
+   }
+
+   variable "create_jobs" {
+     description = "False for the first apply, before the workflow has pushed the runner image."
+     type        = bool
+     default     = true
+   }
+
+   provider "github" {
+     owner = "ai-on-gke"
    }
 
    module "cloud_run" {
@@ -101,11 +117,11 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
      project_id            = "$PROJECT_ID"
      region                = "$REGION"
      default_resource_name = "$DEPLOYMENT"
+     create_jobs           = var.create_jobs
 
-     state_bucket          = local.state_bucket
-     state_bucket_prefix   = "terraform"
-     github_actions_bucket = local.state_bucket
-     source_branch         = "$SOURCE_BRANCH"
+     state_bucket        = local.state_bucket
+     state_bucket_prefix = "terraform"
+     source_branch       = "$SOURCE_BRANCH"
    }
 
    output "cloud_run" {
@@ -122,38 +138,32 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
    terraform -chdir="automation-infra/deployments/$DEPLOYMENT" init
    ```
 
-3. Apply. This also builds the job's image on Cloud Build, which takes a few
-   minutes. The image is rebuilt whenever the commit or the image's files change.
-   The build is started from this machine, with `gcloud builds submit`, as the
-   module's build account; building it from a Cloud Build trigger instead would
-   need the repo connected to Cloud Build, which an organization admin has to
-   set up:
+3. Apply everything but the jobs, which need the image the workflow can only
+   push once this apply has let it. This also sets the repo variables
+   `GCP_WORKLOAD_IDENTITY_PROVIDER_<DEPLOYMENT>` and
+   `GCP_SERVICE_ACCOUNT_<DEPLOYMENT>`, which the workflows authenticate with
+   through Workload Identity Federation, as your `gh` login:
+
+   ```bash
+   terraform -chdir="automation-infra/deployments/$DEPLOYMENT" apply -var=create_jobs=false
+   ```
+
+4. Add the deployment to the `deployment` matrix of every job in
+   `publish.yml`:
+
+   ```bash
+   sed -i "s/deployment: \[\(.*\)\]/deployment: [\1, $DEPLOYMENT]/" .github/workflows/publish.yml
+   ```
+
+5. Commit the deployment's folder (`main.tf`, `.gitignore` and
+   `.terraform.lock.hcl`) and the workflow, then push to `$SOURCE_BRANCH`. The
+   push builds the job's image. Wait for the Publish workflow to finish.
+
+6. Apply again, which creates the jobs, running the image the workflow pushed:
 
    ```bash
    terraform -chdir="automation-infra/deployments/$DEPLOYMENT" apply
    ```
-
-4. Let GitHub Actions upload the source without a key: this sets the repo
-   variables `GCP_WORKLOAD_IDENTITY_PROVIDER_<DEPLOYMENT>` and
-   `GCP_SERVICE_ACCOUNT_<DEPLOYMENT>`, which the workflow authenticates with
-   through Workload Identity Federation, and deletes any key of that account
-   and the old `GCP_CREDENTIALS_<DEPLOYMENT>` secret:
-
-   ```bash
-   automation-infra/tools/get-gh-actions-gcs-config --deployment="$DEPLOYMENT" --set
-   ```
-
-5. Add the deployment to the `deployment` matrix of both jobs in
-   `upload-source.yml`:
-
-   ```bash
-   sed -i "s/deployment: \[\(.*\)\]/deployment: [\1, $DEPLOYMENT]/" .github/workflows/upload-source.yml
-   ```
-
-6. Commit the deployment's folder (`main.tf`, `.gitignore` and
-   `.terraform.lock.hcl`) and the workflow, then push to `$SOURCE_BRANCH`. The
-   push uploads the source that the job runs. Wait for the Upload source
-   workflow to finish.
 
 7. Run the `dummy` case to check the deployment. It creates no cluster:
 

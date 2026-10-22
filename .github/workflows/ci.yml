@@ -96,7 +96,7 @@ jobs:
         run: |
           for config in benchmarking/scenarios/infra/clusters/common benchmarking/scenarios/infra/clusters/dummy \
               benchmarking/scenario_runner/infra automation-infra/terraform/modules/cloud-run \
-              automation-infra/deployments/substrate-bench-auto; do
+              automation-infra/deployments/substrate-bench-auto automation-infra/deployments/substrate-bench-staging; do
             terraform -chdir="$config" init -backend=false -input=false
             terraform -chdir="$config" validate
           done

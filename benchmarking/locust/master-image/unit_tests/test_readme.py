@@ -52,6 +52,15 @@ class Render(unittest.TestCase):
         self.assertIn("# -, run -", text)
         self.assertNotIn("## Results", text)
 
+    def test_a_warmup_is_not_titled_as_a_repeat(self):
+        text = readme.render({**self.info(), "repeat": None, "warmup": 1})
+        self.assertIn("# c, warm-up 1, not one of its repeats, run r", text)
+
+    def test_a_repeat_is_titled_with_the_count_now_and_before_repeats_was_a_mapping(self):
+        for repeats in ({"count": 3, "warmups": 1, "cluster": "shared"}, 3):
+            info = {**self.info(), "repeat": 2, "case": {"repeats": repeats}}
+            self.assertIn("# c, repeat 2 of 3, run r", readme.render(info))
+
     def test_versions_name_what_ran_and_built_it(self):
         info = {
             "control_plane_images": {
@@ -115,3 +124,11 @@ class Summary(unittest.TestCase):
         text = readme.render_summary("c", jobs, [])
         self.assertIn("Not the same in every repeat.", text)
         self.assertIn("GKE cluster `b`", text)
+
+    def test_repeats_on_one_cluster_say_so(self):
+        jobs = []
+        for name in ("c-1", "c-2"):
+            info = self.repeat("a", "t")
+            info["case"] = {"repeats": {"count": 2, "warmups": 1, "cluster": "shared"}}
+            jobs.append((name, info, None))
+        self.assertIn("# c, 2 repeats on one cluster, run r", readme.render_summary("c", jobs, []))

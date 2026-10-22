@@ -12,13 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Applies scenario_runner/infra/, builds the benchmark's images into it once,
-runs the cases in scenarios.yaml one after another (the ones --scenario names
-in the order given, or with --all every case in the order listed), each of a
-case's repeats on its own infra/clusters/ cluster applied for it and destroyed
-after it, and destroys the infra again. With --dev-infra, uses the
-scenario_runner/infra and the cluster of that dev infra instead, which outlive
-the execution. Before any of it, checks what the cases need."""
+"""Runs the cases in scenarios.yaml one after another (the ones --scenario
+names in the order given, or with --all every case in the order listed), each
+case's warm-ups and repeats on an infra/clusters/ cluster applied for it and
+destroyed after them, or with `repeats.cluster: per-repeat` each repeat on one
+of its own, pulling the images benchmarking/tools/build-images built into
+--image-repo. From a machine rather
+than Cloud Run, it builds the images the repository lacks itself, and without
+--image-repo applies a repository for the execution, scenario_runner/infra,
+destroyed after its clusters. With --dev-infra, uses the cluster of that dev
+infra instead, and its repository, which outlive the execution. Before any of
+it, checks what the cases need, the images included."""
 
 from __future__ import annotations
 
@@ -28,9 +32,10 @@ import re
 import signal
 import subprocess
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, NoReturn
+from typing import Callable, Iterator, NoReturn
 
 import yaml
 
@@ -39,6 +44,7 @@ from .. import (
     agent_sandbox,
     ate_env,
     benchmark,
+    builder,
     dev_infra,
     images,
     names,
@@ -49,7 +55,16 @@ from .. import (
     summary,
     terraform,
 )
-from ..cases import PROVIDER_AGENT_SANDBOX, PROVIDERS, SKIP_SUBSTRATE_INSTALL, SCENARIOS_FILE, load_cases, record_names
+from ..cases import (
+    PROVIDER_AGENT_SANDBOX,
+    PROVIDERS,
+    SCENARIOS_FILE,
+    SKIP_SUBSTRATE_INSTALL,
+    load_cases,
+    record_names,
+    shares_cluster,
+    warmup_names,
+)
 from ..cluster import Cluster
 from ..deployment import RUNNER_INFRA_DIR, Deployment, DestroyFailed, GcsDeployment, cluster_deployment
 from ..log import ON_CLOUD_RUN, log
@@ -57,8 +72,10 @@ from ..process import failure
 
 # The executions' Deployments, kept after they are destroyed, and with gcs in
 # the state bucket under <state prefix>/ too. An execution's are in <name>/:
-# scenario-runner/ for scenario_runner/infra, and scenarios/<record>/ for each
-# repeat's cluster, <record> being what the repeat is recorded under.
+# scenarios/<record>/ for each repeat's cluster, <record> being what the repeat
+# is recorded under, or scenarios/<case>/ for a case whose repeats share one.
+# One from a machine without --image-repo, or from before the image repository
+# outlived it, also has scenario-runner/, for scenario_runner/infra.
 LOCAL_TERRAFORM_DIR = LOCAL_DATA_DIR / "runs" / "terraform"
 
 STATE_BACKENDS = ["local", "gcs"]
@@ -181,21 +198,12 @@ def parse_args() -> argparse.Namespace:
         " if it is complete, reinstalling substrate if its version changed; only with --dev-infra",
     )
     p.add_argument(
-        "--cloud-build",
-        action="store_true",
-        help="build the benchmark images on Cloud Build rather than with local Docker",
-    )
-    p.add_argument(
-        "--no-docker-login",
-        action="store_true",
-        help="leave a local build's registry credentials to Docker's own configuration, rather than logging in"
-        " with gcloud's access token",
-    )
-    p.add_argument(
-        "--no-build",
-        action="store_true",
-        help="use the benchmark images already pushed for this tree, uncommitted changes included, rather than"
-        " building them; only with --dev-infra",
+        "--image-repo",
+        metavar="REPO",
+        help="the repository every case's cluster pulls this tree's images from,"
+        " <location>-docker.pkg.dev/<project>/<name>; from a machine, the ones it lacks are built into it first."
+        " Not with --dev-infra,"
+        " which uses its own. Default: $IMAGE_REPO, else from a machine one applied for the execution",
     )
     p.add_argument(
         "--no-deploy-workloads",
@@ -213,8 +221,20 @@ def parse_args() -> argparse.Namespace:
         args.state_bucket = args.state_bucket or os.environ.get("STATE_BUCKET")
         args.state_prefix = args.state_prefix or os.environ.get("STATE_PREFIX")
     # A cluster applied for the execution has neither yet.
-    if not args.dev_infra and (args.no_build or args.no_deploy_workloads or args.dev_infra_update):
-        p.error("--no-build, --no-deploy-workloads and --dev-infra-update are only for --dev-infra")
+    if not args.dev_infra and (args.no_deploy_workloads or args.dev_infra_update):
+        p.error("--no-deploy-workloads and --dev-infra-update are only for --dev-infra")
+    if args.dev_infra:
+        if args.image_repo:
+            p.error("--image-repo is not for --dev-infra, whose clusters pull from its own repository")
+        # None until the dev infra is applied.
+        args.image_repo = dev_infra.runner_outputs(args.dev_infra).get("docker_repo")
+    else:
+        args.image_repo = args.image_repo or os.environ.get("IMAGE_REPO") or None
+        try:
+            if args.image_repo:
+                images.repository_name(args.image_repo)
+        except ValueError as exc:
+            p.error(f"--image-repo: {exc}")
     if args.report_deployment:
         if args.report_bucket or args.report_prefix:
             p.error("--report-deployment is instead of --report-bucket and --report-prefix")
@@ -292,9 +312,18 @@ def applied_clusters(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
 def check_requirements(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     """Fails, naming every problem, before anything is applied."""
     log(f"run: checking what {', '.join(cases)} need before applying anything")
-    problems = preflight.check(cases, args.project_id, args.region, args.cloud_build, applied_clusters(args, cases))
+    problems = preflight.check(cases, args.project_id, args.region, applied_clusters(args, cases))
     if problems:
         fail("cannot run, as:\n" + "\n".join(f"  - {problem}" for problem in problems))
+    if not args.dev_infra and not args.image_repo and any(map(pulls_images, cases.values())):
+        if ON_CLOUD_RUN:
+            fail("--image-repo, or IMAGE_REPO, is required: the repository the images were built into")
+        log("run: no --image-repo, so the execution applies a repository of its own, builds the images into it and"
+            " destroys it after its clusters")  # fmt: skip
+    # A dev infra not applied yet, or the execution's own repository, has none
+    # to check until it is.
+    if args.image_repo:
+        check_images(args, cases)
     if args.report_bucket or all(case["type"] == "noop" for case in cases.values()):
         return
     if args.dev_infra:
@@ -310,27 +339,77 @@ def check_requirements(args: argparse.Namespace, cases: dict[str, dict]) -> None
     )
 
 
-def build_images(args: argparse.Namespace, cases: dict[str, dict], repo: str) -> None:
-    """Builds the benchmark's images the cases run into the runner infra's
-    repository once, for every case and repeat to pull from."""
+def pulls_images(case: dict) -> bool:
+    """Whether the case's cluster pulls from the image repository."""
+    return not case.get(SKIP_SUBSTRATE_INSTALL) or case["type"] != "noop"
+
+
+def needed_images(args: argparse.Namespace, cases: dict[str, dict]) -> dict[str, list[str]]:
+    """The images the cases pull from args.image_repo, by builder.py's group."""
+    needed = {}
+    if any(
+        not case.get(SKIP_SUBSTRATE_INSTALL) and case.get("provider") != PROVIDER_AGENT_SANDBOX
+        for case in cases.values()
+    ):
+        needed["substrate"] = substrate.image_refs(args.image_repo)
+    if any(case.get("provider") == PROVIDER_AGENT_SANDBOX for case in cases.values()):
+        needed["agent-sandbox"] = agent_sandbox.image_refs(args.image_repo)
     benchmarks = {name: case for name, case in cases.items() if case["type"] != "noop"}
-    files = list(dict.fromkeys(file for case in benchmarks.values() for file in IMAGE_FILES[case["type"]]))
-    if not files:
-        return
     # env's images are only read when it is deployed, for the substrate provider.
-    env = not args.no_deploy_workloads and any(
+    if not args.no_deploy_workloads and any(
         "substrate" in sandbox_benchmark.check_case(name, case, deploy_workloads=True)["comparator"]["providers"]
         for name, case in benchmarks.items()
         if case["type"] == "sandbox-benchmark"
-    )
-    if args.no_build:
-        images.check_pushed(repo, files)
-        log(f"run: using the images already in {repo} for {images.tag()}")
-        return
-    login = not args.no_docker_login
-    images.build_and_push(repo, args.project_id, files, cloud_build=args.cloud_build, login=login)
-    if env:
-        ate_env.build_images(repo, args.project_id, cloud_build=args.cloud_build, login=login)
+    ):
+        needed["env"] = ate_env.image_refs(args.image_repo)
+    files = list(dict.fromkeys(file for case in benchmarks.values() for file in IMAGE_FILES[case["type"]]))
+    if files:
+        needed["benchmark"] = images.refs(args.image_repo, files)
+    return needed
+
+
+def check_images(args: argparse.Namespace, cases: dict[str, dict]) -> None:
+    """Fails unless args.image_repo has every image the cases pull, naming
+    the ones it lacks and the build-images that builds them; from a machine
+    rather than Cloud Run, builds them instead."""
+    needed = needed_images(args, cases)
+    log(f"run: checking {args.image_repo} has the images of this tree that {', '.join(cases)} pull")
+    absent = {group: images.missing(refs) for group, refs in needed.items()}
+    absent = {group: refs for group, refs in absent.items() if refs}
+    if absent and not ON_CLOUD_RUN:
+        build_images(args, absent)
+    elif absent:
+        where = f"--dev-infra={args.dev_infra}" if args.dev_infra else f"--repo={args.image_repo}"
+        fail(
+            f"{args.image_repo} lacks these images of this tree, or gcloud's account cannot read them:\n"
+            + "\n".join(f"  {ref}" for refs in absent.values() for ref in refs)
+            + f"\nBuild them with: benchmarking/tools/build-images {where} --images={','.join(absent)}"
+        )
+    for group in needed:
+        if builder.dirty(group):
+            log(
+                f"run: {group}'s images are of a -dirty version, which build-images builds again every time but"
+                " which does not say which uncommitted changes they are of; build them after the last change",
+                "WARNING",
+            )
+
+
+def build_images(args: argparse.Namespace, absent: dict[str, list[str]]) -> None:
+    """Builds the images args.image_repo lacks, by builder.py's group, as
+    build-images does."""
+    missing = builder.missing_requirements(list(absent))
+    if missing:
+        fail(f"building the images {args.image_repo} lacks requires {', '.join(missing)}")
+    try:
+        if "substrate" in absent:
+            substrate.check_pinned()
+        for group, refs in absent.items():
+            log(f"run: {group}: building\n" + "\n".join(f"  {ref}" for ref in refs))
+            builder.build(group, args.image_repo, refs, login=True)
+    except subprocess.CalledProcessError as exc:
+        fail(failure(exc))
+    except (images.ImageError, substrate.SubstrateError) as exc:
+        fail(str(exc))
 
 
 def deployment(args: argparse.Namespace, *key: str) -> Deployment:
@@ -390,13 +469,12 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
         if spec != record["cluster"]:
             log(f"run: case {name}'s infra.cluster differs from dev infra {args.dev_infra}'s it runs on", "WARNING")
     json_output = args.terraform_output == "json"
-    login = not args.no_docker_login
     if args.dev_infra_update:
         log(f"run: updating dev infra {args.dev_infra} from the source")
-        record = dev_infra.apply(record, json_output, update=True, cloud_build=args.cloud_build, login=login)
+        record = dev_infra.apply(record, json_output, update=True)
     elif not record.get("complete"):
         log(f"run: applying dev infra {args.dev_infra}, which is not complete")
-        record = dev_infra.apply(record, json_output, cloud_build=args.cloud_build, login=login)
+        record = dev_infra.apply(record, json_output)
     return record
 
 
@@ -407,7 +485,14 @@ def sandbox_class(case: dict) -> str | None:
 
 
 def run_case(
-    args: argparse.Namespace, record: str, case: dict, cluster: Cluster, name: str, repeat: int, image_repo: str
+    args: argparse.Namespace,
+    record: str,
+    case: dict,
+    cluster: Cluster,
+    name: str,
+    repeat: int,
+    warmup: int,
+    image_repo: str,
 ) -> None:
     if case["type"] == "noop":
         log(f"{record}: noop, nothing to run")
@@ -418,10 +503,10 @@ def run_case(
         args.name,
         cluster,
         image_repo=image_repo,
-        cloud_build=args.cloud_build,
         deploy_workloads=not args.no_deploy_workloads,
         test_case=name,
         repeat=repeat,
+        warmup=warmup,
         report_bucket=args.report_bucket,
         report_prefix=args.report_prefix,
         keeps_bucket=bool(args.dev_infra),
@@ -432,20 +517,31 @@ def describe(exc: BaseException) -> str:
     return failure(exc) if isinstance(exc, subprocess.CalledProcessError) else str(exc)
 
 
-def run_repeats(name: str, case: dict, run: Callable[[str, int], None], shared_cluster: bool) -> None:
-    """Calls run with each of the case's record names and repeat numbers, 0 for
-    a case run once. A failed repeat does not stop the ones after it; the case
-    fails once they have run. A cluster that could not be destroyed does, and
-    on a shared_cluster a run that may still be going, as run_cases says."""
+def run_repeats(name: str, case: dict, run: Callable[[str, int, int], None], shared_cluster: bool) -> None:
+    """Calls run with each of the case's warm-ups and then its repeats: the
+    record name, the repeat number, 0 for a warm-up or a case run once, and the
+    warm-up number, 0 for a repeat. A failed repeat does not stop the ones after
+    it; the case fails once they have run. A failed warm-up only warns. A
+    cluster that could not be destroyed stops them, and on a shared_cluster a
+    run that may still be going, as run_cases says."""
+    warmups = warmup_names(name, case)
+    for n, record in enumerate(warmups, 1):
+        log(f"{name}: warm-up {n} of {len(warmups)}, as {record}")
+        try:
+            run(record, 0, n)
+        except RUN_ERRORS as exc:
+            if shared_cluster and isinstance(exc, benchmark.STILL_RUNNING):
+                raise
+            log(f"{record}: {describe(exc)}; only a warm-up, so {name} goes on", "WARNING")
     records = record_names(name, case)
     if len(records) == 1:
-        run(name, 0)
+        run(name, 0, 0)
         return
     failed = []
     for n, record in enumerate(records, 1):
         log(f"{name}: repeat {n} of {len(records)}, as {record}")
         try:
-            run(record, n)
+            run(record, n, 0)
         except benchmark.STILL_RUNNING as exc:
             if shared_cluster:
                 raise
@@ -488,21 +584,23 @@ def run_cases(
 def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[str]:
     """A case's repeats run one after another on the dev infra's cluster.
     Returns the cases that failed."""
+    checked = bool(args.image_repo)
     record = prepare_dev_infra(args, cases)
     cluster = dev_infra.cluster(args.dev_infra)
-    image_repo = dev_infra.runner_outputs(args.dev_infra)["docker_repo"]
-    build_images(args, cases, image_repo)
+    image_repo = args.image_repo = dev_infra.runner_outputs(args.dev_infra)["docker_repo"]
+    if not checked:
+        check_images(args, cases)
 
     def run(name: str, case: dict) -> None:
         nonlocal record
         if case.get("provider") == PROVIDER_AGENT_SANDBOX:
-            record = dev_infra.install_agent_sandbox(record, args.cloud_build, not args.no_docker_login)
+            record = dev_infra.install_agent_sandbox(record)
         elif not case.get(SKIP_SUBSTRATE_INSTALL):
-            record = dev_infra.install_substrate(record, args.cloud_build, not args.no_docker_login)
+            record = dev_infra.install_substrate(record)
         run_repeats(
             name,
             case,
-            lambda run_name, repeat: run_case(args, run_name, case, cluster, name, repeat, image_repo),
+            lambda record, repeat, warmup: run_case(args, record, case, cluster, name, repeat, warmup, image_repo),
             shared_cluster=True,
         )
 
@@ -510,25 +608,29 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
 
 
 def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[str]:
-    """Each of a case's repeats runs on a cluster of its own, applied for it and
-    destroyed after it. Returns the cases that failed."""
-    # Every repeat's, before anything is applied, so a name that can't be fails first.
+    """A case's warm-ups and repeats run on a cluster applied for it and
+    destroyed after them, or with `repeats.cluster: per-repeat` each repeat on
+    one of its own. The clusters pull from args.image_repo, or without one from
+    a repository applied for the execution, the images built into it, and
+    destroyed after the clusters. Returns the cases that failed."""
+    # Every cluster's, before anything is applied, so a name that can't be fails first.
     case_vars = {
-        record: names.infra_vars(args.project_id, args.region, args.name, record)
+        key: names.infra_vars(args.project_id, args.region, args.name, key)
         for name, case in cases.items()
-        for record in record_names(name, case)
+        for key in ([name] if shares_cluster(case) else record_names(name, case))
     }
-    variables = {**names.infra_vars(args.project_id, args.region, args.name), "image_writers": images.writers()}
-    runner_infra = deployment(args, "scenario-runner").create(RUNNER_INFRA_DIR, variables)
 
-    def run_on_cluster(name: str, case: dict, record: str, repeat: int, outputs: dict) -> None:
+    @contextmanager
+    def applied_cluster(case: dict, key: str) -> Iterator[Cluster]:
+        """The case's cluster, applied as scenarios/<key> with what the case
+        runs on installed, and destroyed after."""
         version = None if case.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
-        uncreated = deployment(args, "scenarios", record)
+        uncreated = deployment(args, "scenarios", key)
         spec = case["infra"]["cluster"]
-        # A cluster that pulls none of the runner infra's images is not granted it.
-        pulls = version is not None or case["type"] != "noop"
-        repository = outputs["artifact_registry_repository"] if pulls else None
-        case_infra = cluster_deployment(spec, uncreated, case_vars[record], version, repository, sandbox_class(case))
+        # A cluster that pulls none of the images is not granted the repository.
+        pulls = pulls_images(case)
+        repository = images.repository_name(args.image_repo) if pulls else None
+        case_infra = cluster_deployment(spec, uncreated, case_vars[key], version, repository, sandbox_class(case))
         with case_infra.applied():
             cluster = Cluster(case_infra.outputs(), case_infra.data / "kubeconfig")
             try:
@@ -536,32 +638,41 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
                     agent_sandbox.install(cluster)
                 elif not case.get(SKIP_SUBSTRATE_INSTALL):
                     substrate.install(cluster)
-                run_case(args, record, case, cluster, name, repeat, outputs["docker_repo"])
+                yield cluster
             finally:
                 if pulls:
                     cluster.delete_volumes()
 
+    def run_on_clusters(name: str, case: dict) -> None:
+        if shares_cluster(case):
+            with applied_cluster(case, name) as cluster:
+                run_repeats(
+                    name,
+                    case,
+                    lambda record, repeat, warmup: run_case(
+                        args, record, case, cluster, name, repeat, warmup, args.image_repo
+                    ),
+                    shared_cluster=True,
+                )
+            return
+
+        def run_on_cluster(record: str, repeat: int, warmup: int) -> None:
+            with applied_cluster(case, record) as cluster:
+                run_case(args, record, case, cluster, name, repeat, warmup, args.image_repo)
+
+        run_repeats(name, case, run_on_cluster, shared_cluster=False)
+
+    def run_all() -> list[str]:
+        return run_cases(args, cases, run_on_clusters, shared_cluster=False)
+
+    if args.image_repo or not any(map(pulls_images, cases.values())):
+        return run_all()
+    variables = names.infra_vars(args.project_id, args.region, args.name)
+    runner_infra = deployment(args, "scenario-runner").create(RUNNER_INFRA_DIR, variables)
     with runner_infra.applied():
-        outputs = runner_infra.outputs()
-        # Once, into the runner infra's repository, which every case's cluster
-        # installs substrate or agent-sandbox from and pulls the benchmark's images from.
-        login = not args.no_docker_login
-        if not all(case.get(SKIP_SUBSTRATE_INSTALL) for case in cases.values()):
-            substrate.build_images(outputs["docker_repo"], args.project_id, args.cloud_build, login)
-        if any(case.get("provider") == PROVIDER_AGENT_SANDBOX for case in cases.values()):
-            agent_sandbox.build_images(outputs["docker_repo"], args.project_id, args.cloud_build, login)
-        build_images(args, cases, outputs["docker_repo"])
-        return run_cases(
-            args,
-            cases,
-            lambda name, case: run_repeats(
-                name,
-                case,
-                lambda record, repeat: run_on_cluster(name, case, record, repeat, outputs),
-                shared_cluster=False,
-            ),
-            shared_cluster=False,
-        )
+        args.image_repo = runner_infra.outputs()["docker_repo"]
+        check_images(args, cases)
+        return run_all()
 
 
 def main() -> None:

@@ -34,7 +34,7 @@ DEFAULT_TIMEOUT_SECS = 300
 
 
 def missing_requirements() -> list[str]:
-    # gcloud pins the pool's workerImage to the digest substrate.build_images pushed.
+    # gcloud pins the pool's workerImage to the digest of substrate's image in the repository.
     return [tool for tool in ("kubectl", "gcloud") if not shutil.which(tool)]
 
 

@@ -96,22 +96,25 @@ class Refs(unittest.TestCase):
         with described({}), self.assertRaises(images.ImageError):
             images.pin("us-docker.pkg.dev/p/r/img:tag")
 
-    def test_no_build_names_the_images_this_tree_has_not_pushed(self):
+    def test_missing_names_the_images_this_tree_has_not_pushed(self):
         repo = "us-docker.pkg.dev/p/r"
         files = [images.LOCUST_IMAGES, images.WORKLOADS_IMAGES]
         names = [image.name for image in images.read_images(*files)]
         with mock.patch.object(images, "tag", return_value="t"):
-            pushed = {f"{repo}/{name}:t": "sha256:abc" for name in names}
-            with described(pushed):
-                images.check_pushed(repo, files)
-            del pushed[f"{repo}/{names[0]}:t"]
-            with described(pushed), self.assertRaises(images.ImageError) as raised:
-                images.check_pushed(repo, files)
-        self.assertIn(f"{repo}/{names[0]}:t", str(raised.exception))
-        self.assertNotIn(f"{repo}/{names[1]}:t", str(raised.exception))
+            refs = images.refs(repo, files)
+        self.assertEqual(refs, [f"{repo}/benchmark/{name}:t" for name in names])
+        pushed = {ref: "sha256:abc" for ref in refs}
+        with described(pushed):
+            self.assertEqual(images.missing(refs), [])
+        del pushed[refs[0]]
+        with described(pushed):
+            self.assertEqual(images.missing(refs), [refs[0]])
 
-    def test_builders_are_pinned_by_digest(self):
-        from scenario_runner import substrate
-
-        for builder in (images.CLOUD_BUILDER, substrate.GO_BUILDER):
-            self.assertRegex(builder, r"@sha256:[0-9a-f]{64}$")
+    def test_repository_name(self):
+        self.assertEqual(
+            images.repository_name("us-central1-docker.pkg.dev/my-project/my-repo"),
+            "projects/my-project/locations/us-central1/repositories/my-repo",
+        )
+        for bad in ("us-central1-docker.pkg.dev/my-project", "gcr.io/my-project/my-repo", "x-docker.pkg.dev/p/r/extra"):
+            with self.assertRaises(ValueError):
+                images.repository_name(bad)

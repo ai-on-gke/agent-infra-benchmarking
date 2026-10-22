@@ -19,7 +19,7 @@ into those of one comparator run of them all. The case's `comparator` names
 the providers, the tests by function name, how many times each runs and how
 many warmup runs go before. The substrate provider runs them through
 agent-substrate/env deployed for them by ate_env, whose pool and environments
-`env-worker-count` and `actor-memory` size; local runs them in the
+`env-worker-count`, `actor-memory` and `actor-cpu` size; local runs them in the
 comparator's own pod; e2b, daytona, modal, anthropic and openai in their
 clouds, with the PROVIDER_KEYS of the scenario-runner's environment."""
 
@@ -61,7 +61,7 @@ DEFAULT_MAX_FAILURE_RATIO = 0.01
 DEFAULT_ENV_WORKER_COUNT = 5
 CASE_KEYS = {
     "type", "infra", "repeats", "skip-substrate-install", "sandbox-class", "env-worker-count", "actor-memory",
-    "max-failure-ratio", "comparator", "cost-sheet", "provider", "lifecycle-mode",
+    "actor-cpu", "max-failure-ratio", "comparator", "cost-sheet", "provider", "lifecycle-mode",
 }  # fmt: skip
 COMPARATOR_KEYS = {"providers", "tests", "runs", "warmup-runs"}
 PROVIDERS = ("substrate", "local", "e2b", "daytona", "modal", "anthropic", "openai")
@@ -87,8 +87,8 @@ class SandboxBenchmarkTimeout(SandboxBenchmarkError):
     the next run would recreate env's pool under it, so a series stops here."""
 
 
-def missing_requirements(cloud_build: bool = False) -> list[str]:
-    missing = images.missing_requirements(cloud_build) + ate_env.missing_requirements()
+def missing_requirements() -> list[str]:
+    missing = images.missing_requirements() + ate_env.missing_requirements()
     if not (AI_SANDBOX_BENCHMARK_DIR / "comparator.py").is_file():
         missing.append(f"the ai-sandbox-benchmark submodule in {AI_SANDBOX_BENCHMARK_DIR}")
     return list(dict.fromkeys(missing))
@@ -126,6 +126,9 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     memory = case.get("actor-memory", ate_env.DEFAULT_ACTOR_MEMORY)
     if not isinstance(memory, str) or workloads.memory_mib(memory) is None:
         raise ValueError(f"case {name}'s `actor-memory` must be a Kubernetes quantity such as 1Gi, got {memory!r}")
+    cpu = case.get("actor-cpu", ate_env.DEFAULT_ACTOR_CPU)
+    if not isinstance(cpu, str) or not re.fullmatch(r"[1-9][0-9]*m?|[0-9]*\.[0-9]+", cpu):
+        raise ValueError(f"case {name}'s `actor-cpu` must be a quoted cpu quantity such as \"2\" or \"1500m\", got {cpu!r}")
     ratio = case.get("max-failure-ratio", DEFAULT_MAX_FAILURE_RATIO)
     if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 <= ratio <= 1:
         raise ValueError(f"case {name}'s `max-failure-ratio` must be a number from 0 to 1, got {ratio!r}")
@@ -163,6 +166,7 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
         "sandbox-class": "gvisor",
         "env-worker-count": DEFAULT_ENV_WORKER_COUNT,
         "actor-memory": ate_env.DEFAULT_ACTOR_MEMORY,
+        "actor-cpu": ate_env.DEFAULT_ACTOR_CPU,
         "max-failure-ratio": DEFAULT_MAX_FAILURE_RATIO,
         "cost-sheet": False,
         **case,
@@ -225,7 +229,7 @@ def run_provider(
     report_prefix: str,
     test_case: str | None,
     repeat: int,
-    cloud_build: bool,
+    warmup: int,
 ) -> None:
     """Runs the case's tests on provider, as one comparator Job, whose reports
     go under <run_id>/<name>/<provider>/."""
@@ -239,7 +243,9 @@ def run_provider(
     template = None
     if on_env:
         if deploy_workloads:
-            ate_env.deploy(cluster, image_repo, sandbox_class, case["env-worker-count"], case["actor-memory"])
+            ate_env.deploy(
+                cluster, image_repo, sandbox_class, case["env-worker-count"], case["actor-memory"], case["actor-cpu"]
+            )
         template = workloads.deployed_template(cluster, ate_env.TEMPLATE, ate_env.ENV_ATESPACE)
         # Matters when the template was not deployed by this run (--no-deploy-workloads).
         want = workloads.SANDBOX_CONFIGS[sandbox_class][1]
@@ -252,11 +258,12 @@ def run_provider(
 
     info = run_info.collect(
         cluster, case, ate_env.TEMPLATE if on_env else None, template, {COMPARATOR_IMAGE: comparator_image}, bucket,
-        pool=(ate_env.NAMESPACE, ate_env.POOL), cloud_build=cloud_build,
+        pool=(ate_env.NAMESPACE, ate_env.POOL),
     )  # fmt: skip
     if on_env:
         info["env_commit"] = commit(ate_env.ENV_DIR)
     info["ai_sandbox_benchmark_commit"] = commit(AI_SANDBOX_BENCHMARK_DIR)
+    info["warmup"] = warmup or None
     values = {
         "COMPARATOR_IMAGE": comparator_image,
         "BENCHMARK_RUNNER_KSA": cluster.runner_ksa,
@@ -395,20 +402,19 @@ def run(
     report_prefix: str = reports.REPORT_PREFIX,
     test_case: str | None = None,
     repeat: int = 0,
-    cloud_build: bool = False,
+    warmup: int = 0,
     keeps_bucket: bool = False,
 ) -> None:
     """Runs the case, recorded under name, as part of run_id, by default a UTC
     timestamp and the commit: on each of its providers in turn, then combines
-    their results, with the images build_images and ate_env.build_images
-    pushed to image_repo. A provider whose run fails does not stop the ones
-    after it; the run fails once they have run. test_case and repeat say which
-    case it is a repeat of; repeat is 0 for a case run once. Without
+    their results, with the images built from this tree into image_repo. A
+    provider whose run fails does not stop the ones after it; the run fails
+    once they have run. test_case and repeat say which case it is a repeat of;
+    repeat is 0 for a case run once, or a warm-up, which warmup numbers. Without
     deploy_workloads, uses the env and template already deployed. The reports
     go under report_prefix in report_bucket, by default the cluster's own,
-    which keeps_bucket says outlives the run, as a dev infra's does.
-    cloud_build says, for run.json, where the images were built. Expects the
-    cluster's credentials in its kubeconfig."""
+    which keeps_bucket says outlives the run, as a dev infra's does. Expects
+    the cluster's credentials in its kubeconfig."""
     case = check_case(name, case, deploy_workloads)
     sandbox_class = case["sandbox-class"]
     providers = case["comparator"]["providers"]
@@ -434,7 +440,7 @@ def run(
             try:
                 run_provider(
                     cluster, name, case, provider, run_id, comparator_image, image_repo, deploy_workloads, bucket,
-                    report_prefix, test_case, repeat, cloud_build,
+                    report_prefix, test_case, repeat, warmup,
                 )  # fmt: skip
             except SandboxBenchmarkTimeout:
                 raise

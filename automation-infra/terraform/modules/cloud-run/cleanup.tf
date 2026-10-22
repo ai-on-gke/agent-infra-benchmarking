@@ -2,7 +2,7 @@
 # destroys what an execution of the job left when it was killed before its own
 # destroy, once that execution has ended.
 resource "google_cloud_run_v2_job" "cleanup" {
-  count = var.schedule == null || var.cleanup_schedule == null ? 0 : 1
+  count = local.scheduled && var.cleanup_schedule != null ? 1 : 0
 
   project             = var.project_id
   name                = "${var.default_resource_name}-cleanup"
@@ -19,26 +19,15 @@ resource "google_cloud_run_v2_job" "cleanup" {
       max_retries     = 0
 
       containers {
-        image = data.google_artifact_registry_docker_image.runner.self_link
+        image = local.runner_image
         args = [
           "destroy-leftovers",
           "--project-id=${var.project_id}",
           "--region=${var.region}",
-          "--job=${google_cloud_run_v2_job.job.name}",
+          "--job=${google_cloud_run_v2_job.job[0].name}",
           "--state-bucket=${var.state_bucket}",
           "--state-prefix=${var.state_bucket_prefix}",
         ]
-
-        dynamic "env" {
-          for_each = var.github_actions_bucket == null ? {} : {
-            SOURCE_BUCKET = var.github_actions_bucket
-            SOURCE_BRANCH = var.source_branch
-          }
-          content {
-            name  = env.key
-            value = env.value
-          }
-        }
 
         resources {
           limits = {

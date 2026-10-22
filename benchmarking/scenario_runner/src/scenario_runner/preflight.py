@@ -102,14 +102,6 @@ def credential_problems() -> list[str]:
     return problems
 
 
-def docker_problems() -> list[str]:
-    if subprocess.run(["docker", "info"], capture_output=True).returncode:
-        return ["the Docker daemon is not running; start it, or pass --cloud-build"]
-    if subprocess.run(["docker", "buildx", "version"], capture_output=True).returncode:
-        return ["docker buildx is missing; the image builds use --build-context"]
-    return []
-
-
 def creates_gke_cluster(config: Path) -> bool:
     """Whether the config, in the .tf files terraform reads, creates a GKE cluster."""
     files = [tf for tf in config.rglob("*.tf") if not tf.name.startswith(".")]
@@ -205,7 +197,7 @@ def offered(version: str, versions: list[str]) -> bool:
     return any(v == version or v.startswith((f"{version}.", f"{version}-")) for v in versions)
 
 
-def check(cases: dict[str, dict], project_id: str, region: str, cloud_build: bool, applied: list[str]) -> list[str]:
+def check(cases: dict[str, dict], project_id: str, region: str, applied: list[str]) -> list[str]:
     """Every problem the cases would run into, as messages; none means go.
     Only the clusters of the cases in applied are checked, as the others are
     not applied: a complete dev infra's, for one."""
@@ -215,7 +207,7 @@ def check(cases: dict[str, dict], project_id: str, region: str, cloud_build: boo
     installs = not all(case.get(SKIP_SUBSTRATE_INSTALL) for case in cases.values())
     benchmarks = {name: case for name, case in cases.items() if case["type"] != "noop"}
     if installs:
-        missing = substrate.missing_requirements(cloud_build)
+        missing = substrate.missing_requirements()
         if missing:
             return [f"installing substrate requires {', '.join(missing)}"]
         try:
@@ -224,20 +216,18 @@ def check(cases: dict[str, dict], project_id: str, region: str, cloud_build: boo
         except (substrate.SubstrateError, subprocess.CalledProcessError) as exc:
             problems.append(str(exc))
     if any(case.get(PROVIDER) == PROVIDER_AGENT_SANDBOX for case in cases.values()):
-        missing = agent_sandbox.missing_requirements(cloud_build)
+        missing = agent_sandbox.missing_submodule()
         if missing:
             return problems + [f"installing agent-sandbox requires {', '.join(missing)}"]
         try:
             agent_sandbox.build_version()
         except agent_sandbox.AgentSandboxError as exc:
             problems.append(str(exc))
-    missing = benchmark.missing_requirements(benchmarks, cloud_build)
+    missing = benchmark.missing_requirements(benchmarks)
     if missing:
         return problems + [f"running the benchmark requires {', '.join(missing)}"]
 
     problems += credential_problems()
-    if (installs or benchmarks) and not cloud_build:
-        problems += docker_problems()
     if installs or benchmarks:
         if not shutil.which("gke-gcloud-auth-plugin"):
             problems.append("gke-gcloud-auth-plugin is missing: gcloud components install gke-gcloud-auth-plugin")

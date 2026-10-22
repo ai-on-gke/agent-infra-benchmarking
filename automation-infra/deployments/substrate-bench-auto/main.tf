@@ -1,6 +1,12 @@
 terraform {
   required_version = ">= 1.5"
 
+  required_providers {
+    github = {
+      source = "integrations/github"
+    }
+  }
+
   backend "gcs" {
     bucket = "substrate-bench-auto-tfstate"
     prefix = "automation/cloud-run/substrate-bench-auto"
@@ -8,9 +14,20 @@ terraform {
 }
 
 locals {
-  # The backend's bucket, which the backend block cannot take from here. Also
-  # read by .github/workflows/upload-source.yml.
+  # The backend's bucket, which the backend block cannot take from here.
   state_bucket = "substrate-bench-auto-tfstate"
+}
+
+variable "create_jobs" {
+  description = "False while the workflow has not pushed the runner image yet, which destroys the jobs and their schedules until the next apply with true."
+  type        = bool
+  default     = true
+}
+
+# Authenticates as gh auth token, or GITHUB_TOKEN, which may set the repository's
+# Actions variables.
+provider "github" {
+  owner = "ai-on-gke"
 }
 
 module "cloud_run" {
@@ -19,13 +36,13 @@ module "cloud_run" {
   project_id            = "akvelon-gke-aieco"
   region                = "us-central1"
   default_resource_name = "substrate-bench-auto"
+  create_jobs           = var.create_jobs
 
-  state_bucket          = local.state_bucket
-  state_bucket_prefix   = "terraform"
-  github_actions_bucket = local.state_bucket
-  reports_bucket        = local.state_bucket
-  reports_prefix        = "data"
-  source_branch         = "main"
+  state_bucket        = local.state_bucket
+  state_bucket_prefix = "terraform"
+  reports_bucket      = local.state_bucket
+  reports_prefix      = "data"
+  source_branch       = "main"
 
   # The cases the nightly tracks, each repeat on a cluster of its own; named
   # rather than --all, so a case added to scenarios.yaml runs here only once it

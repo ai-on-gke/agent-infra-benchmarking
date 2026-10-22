@@ -23,7 +23,7 @@ from pathlib import Path
 import yaml
 
 from scenario_runner import locust
-from scenario_runner.cases import SCENARIOS_FILE, load_cases, record_names
+from scenario_runner.cases import SCENARIOS_FILE, load_cases, record_names, warmup_names
 
 GLUTTON = {
     "type": "locust",
@@ -104,12 +104,27 @@ class CaseChecks(unittest.TestCase):
         self.assertEqual(locust.flags({"a": True, "b": 2, "c": "x", "d": False}), ["--a", "--b=2", "--c=x", "--d=false"])
 
     def test_repeats_are_recorded_by_number(self):
-        self.assertEqual(record_names("c", {"repeats": 3}), ["c-1", "c-2", "c-3"])
+        self.assertEqual(record_names("c", {"repeats": {"count": 3}}), ["c-1", "c-2", "c-3"])
         self.assertEqual(record_names("c", {}), ["c"])
+
+    def test_one_warmup_on_a_shared_cluster_by_default(self):
+        self.assertEqual(warmup_names("c", {}), ["c-warmup-1"])
+        self.assertEqual(warmup_names("c", {"repeats": {"warmups": 0}}), [])
+        self.assertEqual(warmup_names("c", {"repeats": {"cluster": "per-repeat"}}), [])
+
+    def test_load_fills_in_how_a_case_is_sampled(self):
+        self.assertEqual(load({"c": GLUTTON})["c"]["repeats"], {"count": 1, "warmups": 1, "cluster": "shared"})
+        case = load({"c": {**GLUTTON, "repeats": {"count": 3, "cluster": "per-repeat"}}})["c"]
+        self.assertEqual(case["repeats"], {"count": 3, "warmups": 0, "cluster": "per-repeat"})
 
     def test_load_refuses_bad_cases(self):
         for case in (
-            {**GLUTTON, "repeats": 0},
+            {**GLUTTON, "repeats": 3},
+            {**GLUTTON, "repeats": {"count": 0}},
+            {**GLUTTON, "repeats": {"times": 3}},
+            {**GLUTTON, "repeats": {"cluster": "fresh"}},
+            {**GLUTTON, "repeats": {"warmups": -1}},
+            {**GLUTTON, "repeats": {"warmups": 1, "cluster": "per-repeat"}},
             {**GLUTTON, "infra": {"cluster": {"name": "common", "unknown": 1}}},
             {**GLUTTON, "infra": {"cluster": {"name": "nowhere"}}},
             {**GLUTTON, "type": "jmeter"},
