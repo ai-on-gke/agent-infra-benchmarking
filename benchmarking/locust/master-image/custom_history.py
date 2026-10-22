@@ -113,7 +113,7 @@ def resolve_worker_count(worker_count: float | None = None) -> float | None:
         import base64
         passed = json.loads(base64.b64decode(os.environ.get("BENCHMARK_RUN_INFO", "")))
         count = (
-            (passed.get("case") or {}).get("worker-count")
+            ((passed.get("case") or {}).get("locust") or {}).get("worker-count")
             or ((passed.get("worker_pool") or {}).get("spec") or {}).get("replicas")
             or ((passed.get("worker_pool") or {}).get("status") or {}).get("readyReplicas")
         )

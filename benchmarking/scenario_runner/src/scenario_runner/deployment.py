@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A deployment of a Terraform config, scenario_runner/infra or the
-infra/clusters/ one a case's infra.cluster names, kept whole in a root folder:
+"""A deployment of a Terraform config, scenario_runner/infra or one of
+infra/clusters/, kept whole in a root folder:
 
     config/    a copy of the config, with its backend and variables in it
     tf-data/   its TF_DATA_DIR
@@ -31,7 +31,6 @@ A GcsDeployment keeps the same layout in a GCS bucket, its state included.
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -44,7 +43,6 @@ from typing import Callable, Iterator, Self
 from google.cloud import storage
 
 from . import RUNNER_DIR, terraform
-from .cases import CLUSTERS_DIR
 from .log import log
 from .process import retry, shielded
 
@@ -64,9 +62,6 @@ FOREIGN_FILES = (
     "*.tfstate",
     "*.tfstate.*",
 )
-# terraform reads them in this order, later ones winning.
-TFVARS_FILE = "00-tfvars.auto.tfvars"
-TFVARS_INLINE_FILE = "10-inline.auto.tfvars"
 VARIABLES_FILE = "20-variables.auto.tfvars.json"
 STATES_DIR = "tfstates"
 # The gcs backend's name for the default workspace's state, which the local
@@ -132,26 +127,13 @@ class Deployment:
         # Relative to config/, where terraform runs.
         return "local", {"path": f"../{STATES_DIR}/{STATE_FILE}"}
 
-    def create(
-        self,
-        source: Path,
-        variables: dict,
-        *,
-        tfvars_file: Path | None = None,
-        tfvars_inline: str | None = None,
-    ) -> Self:
+    def create(self, source: Path, variables: dict) -> Self:
         """Copies source into config/, replacing any copy already there, with
-        the backend and the variables it is applied with: tfvars_file's, then
-        tfvars_inline's, then variables, later ones winning. Any tf-data/ and
+        the backend and the variables it is applied with. Any tf-data/ and
         tfstates/ already in root are kept."""
         shutil.rmtree(self.config, ignore_errors=True)
         shutil.copytree(source, self.config, ignore=shutil.ignore_patterns(*FOREIGN_FILES))
         (self.config / "backend_override.tf").write_text(terraform.backend_block(*self.backend))
-        if tfvars_file is not None:
-            name = TFVARS_FILE + (".json" if tfvars_file.suffix == ".json" else "")
-            shutil.copyfile(tfvars_file, self.config / name)
-        if tfvars_inline is not None:
-            (self.config / TFVARS_INLINE_FILE).write_text(tfvars_inline)
         (self.config / VARIABLES_FILE).write_text(json.dumps(variables, indent=2) + "\n")
         self.data.mkdir(parents=True, exist_ok=True)
         return self
@@ -325,16 +307,6 @@ class GcsDeployment(Deployment):
         super().destroy()
 
 
-# Set by automation-infra's Cloud Run job: the account its clusters' nodes run
-# as, which its deployment created with the project roles nodes need, so the
-# job neither creates one per run nor grants it those.
-NODE_SERVICE_ACCOUNT = os.environ.get("NODE_SERVICE_ACCOUNT")
-# Set by automation-infra's Cloud Run job, which runs inside this network: its
-# clusters go into the subnetwork, with an internal endpoint only.
-CLUSTER_NETWORK = os.environ.get("CLUSTER_NETWORK")
-CLUSTER_SUBNETWORK = os.environ.get("CLUSTER_SUBNETWORK")
-
-
 def declared_variables(config: Path) -> set[str]:
     """The variables a config declares, in the .tf files terraform reads,
     which skips hidden ones (such as the ._ files macOS tar adds)."""
@@ -343,40 +315,3 @@ def declared_variables(config: Path) -> set[str]:
         if not tf.name.startswith("."):
             names.update(re.findall(r'^variable\s+"([^"]+)"', tf.read_text(), re.MULTILINE))
     return names
-
-
-def cluster_deployment(
-    spec: dict,
-    deployment: Deployment,
-    tf_vars: dict,
-    substrate_version: str | None,
-    image_repository: str | None,
-    sandbox_class: str | None = None,
-) -> Deployment:
-    """Creates deployment of the config a case's infra.cluster names, with its
-    tfvars, tfvars_inline and variables, then substrate_version unless None,
-    the image_repository its images are pulled from unless None, the case's
-    sandbox_class unless None, and tf_vars, later ones winning. The class
-    comes from the case, so its cluster cannot be set to another."""
-    cluster_dir = CLUSTERS_DIR / spec["name"]
-    variables = dict(spec.get("variables", {}))
-    if substrate_version is not None:
-        variables["substrate_version"] = substrate_version
-    if image_repository is not None:
-        variables["image_repository"] = image_repository
-    if sandbox_class is not None:
-        variables["sandbox_class"] = sandbox_class
-    declared = declared_variables(cluster_dir)
-    if NODE_SERVICE_ACCOUNT and "node_service_account" in declared:
-        variables["node_service_account"] = NODE_SERVICE_ACCOUNT
-    if CLUSTER_SUBNETWORK and {"existing_network", "enable_private_endpoint"} <= declared:
-        variables["existing_network"] = {"network": CLUSTER_NETWORK, "subnetwork": CLUSTER_SUBNETWORK}
-        variables["enable_private_endpoint"] = True
-    variables.update(tf_vars)
-    return deployment.create(
-        cluster_dir,
-        variables,
-        # An absolute path stays as it is.
-        tfvars_file=cluster_dir / spec["tfvars"] if "tfvars" in spec else None,
-        tfvars_inline=spec.get("tfvars_inline"),
-    )

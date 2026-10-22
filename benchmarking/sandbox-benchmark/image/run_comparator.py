@@ -16,7 +16,7 @@
 of its providers, writes each run of each test to results.json and how the
 whole went to run.json, the same as BigQuery reads them in RUNS_JSONL and
 RUN_JSONL, and uploads them to
-gs://<REPORT_BUCKET>/<REPORT_PREFIX>/<BENCHMARK_RUN_ID>/<BENCHMARK_RECORD_NAME>/<provider>/.
+gs://<REPORT_BUCKET>/<REPORT_PREFIX>/<BENCHMARK_RUN_ID>/<BENCHMARK_REPORT_FOLDER>/.
 
 It drives comparator.py's SandboxExecutor rather than its command line, which
 numbers the tests in directory order and whose history.json leaves out the
@@ -24,7 +24,9 @@ errors a provider returns rather than raises: every error of the provider's.
 
 Read from the environment, besides the provider's own settings, such as
 substrate's SUBSTRATE_*, e2b's E2B_API_KEY, daytona's DAYTONA_*, modal's
-MODAL_TOKEN_*, anthropic's ANTHROPIC_API_KEY and openai's OPENAI_API_KEY:
+MODAL_TOKEN_*, anthropic's ANTHROPIC_API_KEY and openai's OPENAI_API_KEY, and
+e2b's, modal's and daytona's SANDBOX_CPU and SANDBOX_MEMORY_MIB, and openai's
+OPENAI_CONTAINER_SIZE:
 
     BENCHMARK_PROVIDER     the provider, substrate by default
     BENCHMARK_TESTS        the tests' function names, comma-separated
@@ -36,6 +38,8 @@ MODAL_TOKEN_*, anthropic's ANTHROPIC_API_KEY and openai's OPENAI_API_KEY:
     BENCHMARK_RUN_INFO     base64 JSON the scenario-runner adds to run.json
     REPORT_BUCKET          empty leaves the files on the pod
     REPORT_PREFIX          reports when unset or empty
+    BENCHMARK_REPORT_FOLDER
+                           where under the run id, <record>/<provider> by default
 
 Exits 0; FAILED_EXIT for a run more than MAX_FAILURE_RATIO of whose runs
 failed, or none ran; 128 plus the signal for one stopped; UPLOAD_FAILED_EXIT
@@ -197,13 +201,15 @@ def write_run_json(started: float, ended: float, status: int, failures: dict | N
     }
     (REPORT_DIR / "run.json").write_text(json.dumps(info, indent=2) + "\n")
     case = info.get("case") or {}
+    provider = (case.get("sandbox-benchmark") or {}).get("provider") or {}
+    substrate = (((case.get("sandbox-benchmark") or {}).get("install") or {}).get("substrate")) or {}
     row = {
         "provider": PROVIDER,
         **{key: info.get(key) for key in RUN_JSONL_KEYS},
         "total_runs": (failures or {}).get("runs"),
         "failed_runs": (failures or {}).get("failed"),
-        "sandbox_class": case.get("sandbox-class") if PROVIDER == "substrate" else None,
-        "actor_memory": case.get("actor-memory") if PROVIDER == "substrate" else None,
+        "sandbox_class": substrate.get("sandbox-class") if PROVIDER == "substrate" else None,
+        "actor_memory": provider.get("actor-memory") if PROVIDER == "substrate" else None,
         "comparator_image": next(iter((info.get("images") or {}).values()), None),
     }
     (REPORT_DIR / RUN_JSONL).write_text(json.dumps(row) + "\n")
@@ -251,7 +257,10 @@ def main() -> int:
     bucket = os.environ.get("REPORT_BUCKET", "")
     prefix = os.environ.get("REPORT_PREFIX") or DEFAULT_PREFIX
     # Read before the run, so a missing one fails it before it starts.
-    folder = f"{os.environ['BENCHMARK_RUN_ID']}/{os.environ['BENCHMARK_RECORD_NAME']}/{PROVIDER}" if bucket else ""
+    folder = ""
+    if bucket:
+        folder = os.environ.get("BENCHMARK_REPORT_FOLDER") or f"{os.environ['BENCHMARK_RECORD_NAME']}/{PROVIDER}"
+        folder = f"{os.environ['BENCHMARK_RUN_ID']}/{folder}"
     max_ratio = float(os.environ.get("MAX_FAILURE_RATIO", "0"))
     names = [name.strip() for name in os.environ["BENCHMARK_TESTS"].split(",") if name.strip()]
     runs = int(os.environ["BENCHMARK_RUNS"])

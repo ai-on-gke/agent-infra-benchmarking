@@ -90,7 +90,7 @@ class RunJson(unittest.TestCase):
         Path(f"{prefix}_steady_window.json").write_text(
             json.dumps({"warm_up_secs": 10, "start": "2026-10-13T00:00:10+00:00", "end": "2026-10-13T00:01:00+00:00"})
         )
-        passed = {"case": {"worker": {"workload-name": "glutton"}}, "commit": "abc"}
+        passed = {"case": {"locust": {"worker": {"workload-name": "glutton"}}}, "commit": "abc"}
         env = {
             "BENCHMARK_RUN_INFO": base64.b64encode(json.dumps(passed).encode()).decode(),
             "BENCHMARK_RUN_ID": "r",

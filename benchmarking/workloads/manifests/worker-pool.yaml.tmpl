@@ -42,6 +42,5 @@ spec:
       benchmarking-worker: "true"
     tolerations:
     - key: ate.dev/sandboxClass
-      operator: Equal
-      value: ${SANDBOX_CLASS}
+      operator: Exists
       effect: NoSchedule

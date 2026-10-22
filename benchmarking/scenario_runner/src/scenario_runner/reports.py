@@ -42,10 +42,20 @@ LABEL_RE = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?")
 # How long after the run its actors get to be gone before the ones left are
 # recorded in cleanup.json.
 ACTOR_DELETE_WAIT_SECS = 60
+# The scenario-runner's own key in a case made from another's subcase:
+# {"of": that case's name, "name": the subcase's}.
+SUBCASE = "subcase"
 
 
 class ReportError(RuntimeError):
     pass
+
+
+def group_record(record: str, key: str, case: dict) -> str:
+    """What a record of the subcase named key is in its group: the name
+    of the case it is a subcase of, with the record's repeat or warm-up
+    suffix."""
+    return case[SUBCASE]["of"] + record.removeprefix(key)
 
 
 def refuse_reused(bucket: str, report_prefix: str, run_id: str, name: str) -> None:

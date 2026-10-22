@@ -134,34 +134,29 @@ variable "default_machine_type" {
   default     = "c2-standard-16"
 }
 
-# microvm guests boot on /dev/kvm, which a VM exposes only with nested
-# virtualization, and GCE offers it only on Intel machine families: not E2, AMD
-# (n2d, c2d, ...) or Arm (t2a, c4a, ...). A -metal type has it natively; GKE
-# takes only C3's.
+# Nested virtualization is offered only on Intel machine families: not E2, AMD
+# (n2d, c2d, ...) or Arm (t2a, c4a, ...). A -metal type has /dev/kvm natively;
+# GKE takes only C3's.
 variable "sandboxed_machine_type" {
   description = "Machine type of the sandboxed node pool, which runs the workers. A -metal type, such as c3-standard-192-metal, runs them on bare metal."
   type        = string
 
   validation {
-    condition = var.sandbox_class != "microvm" || !(
+    condition = !var.nested_virtualization || !(
       split("-", var.sandboxed_machine_type)[0] == "e2"
       || endswith(split("-", var.sandboxed_machine_type)[0], "d")
       || endswith(split("-", var.sandboxed_machine_type)[0], "a")
     )
-    error_message = "sandbox_class microvm needs nested virtualization, which GCE offers only on Intel machine families such as n2 or c2, not E2, AMD or Arm."
+    error_message = "Nested virtualization is offered only on Intel machine families such as n2 or c2, not E2, AMD or Arm."
   }
 }
 
-# The scenario-runner sets it from the case's sandbox-class.
-variable "sandbox_class" {
-  description = "Sandbox class of the sandboxed node pool's workers: its ate.dev/sandboxClass taint, and nested virtualization for microvm."
-  type        = string
-  default     = "gvisor"
-
-  validation {
-    condition     = contains(["gvisor", "microvm"], var.sandbox_class)
-    error_message = "sandbox_class must be gvisor or microvm."
-  }
+# A case's infra.cluster.nested-virtualization: for /dev/kvm, which microvm's
+# guests boot on.
+variable "nested_virtualization" {
+  description = "Whether the sandboxed node pool has nested virtualization, for /dev/kvm; a -metal type has it natively."
+  type        = bool
+  default     = false
 }
 
 # Every node pool's ate.dev/substrate-version label, which has to be the

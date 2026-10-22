@@ -29,7 +29,7 @@ class Render(unittest.TestCase):
     def info(self, workload: str = "glutton") -> dict:
         return {
             "run_id": "r", "test_case": "c", "status": 0, "failures": FAILURES, "max_failure_ratio": 0.01,
-            "case": {"worker": {"workload-name": workload}},
+            "case": {"locust": {"worker": {"workload-name": workload}}},
         }  # fmt: skip
 
     def test_failed_cycles_as_the_gate_counts_them(self):
@@ -61,7 +61,7 @@ class Render(unittest.TestCase):
             info = {**self.info(), "repeat": 2, "case": {"repeats": repeats}}
             self.assertIn("# c, repeat 2 of 3, run r", readme.render(info))
 
-    def test_versions_name_what_ran_and_built_it(self):
+    def test_versions_name_what_ran(self):
         info = {
             "control_plane_images": {
                 "Deployment/ate-api-server": {
@@ -70,7 +70,6 @@ class Render(unittest.TestCase):
                 "DaemonSet/atelet": {"atelet": {"image": "sha256:9", "digests": ["sha256:2"]}},
             },
             "tools": {"terraform": "1.15.6", "docker": None},
-            "builders": {"where": "cloud build", "docker": "d@sha256:3"},
         }  # fmt: skip
         text = readme.render(info)
         self.assertIn(
@@ -78,12 +77,11 @@ class Render(unittest.TestCase):
         )
         self.assertIn("| Control plane `DaemonSet/atelet` / atelet | `sha256:2` |", text)
         self.assertIn("| Tools | terraform 1.15.6 |", text)
-        self.assertIn("| Images built with | cloud build, `d@sha256:3` |", text)
 
     def test_density_renders_in_case_and_workers(self):
         info = self.info()
-        info["case"]["worker-count"] = 100
-        info["case"]["master"] = {"users": 500, "spawn-rate": 1}
+        info["case"]["locust"]["worker-count"] = 100
+        info["case"]["locust"]["master"] = {"users": 500, "spawn-rate": 1}
         info["worker_pool"] = {"spec": {"replicas": 100}, "status": {"readyReplicas": 100}}
         info["nodes"] = {"sandboxed": {"count": 10, "ready": 10}}
         text = readme.render(info)
