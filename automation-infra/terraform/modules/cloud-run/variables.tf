@@ -131,7 +131,7 @@ variable "source_branch" {
 }
 
 variable "runner_image" {
-  description = "Image both jobs run in place of source_branch's runner image, e.g. one commit's <repository>/test-runner:<commit>. Null runs source_branch's."
+  description = "Image both jobs run in place of source_branch's runner image, e.g. one commit's <repository>/runner:<commit>. Null runs source_branch's."
   type        = string
   default     = null
 }

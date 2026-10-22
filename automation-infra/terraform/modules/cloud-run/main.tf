@@ -4,7 +4,7 @@ locals {
   # resolves as each execution starts: the branch with each character a tag
   # can't hold as a hyphen, as the workflow tags it.
   runner_tag   = replace(var.source_branch, "/[^A-Za-z0-9_.-]/", "-")
-  runner_image = coalesce(var.runner_image, "${google_artifact_registry_repository.images.registry_uri}/test-runner:${local.runner_tag}")
+  runner_image = coalesce(var.runner_image, "${google_artifact_registry_repository.images.registry_uri}/runner:${local.runner_tag}")
 }
 
 resource "google_project_service" "services" {
@@ -51,7 +51,7 @@ resource "google_artifact_registry_repository" "images" {
     action = "KEEP"
     condition {
       tag_state             = "TAGGED"
-      package_name_prefixes = ["test-runner"]
+      package_name_prefixes = ["runner"]
       tag_prefixes          = [local.runner_tag]
     }
   }
