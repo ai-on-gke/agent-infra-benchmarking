@@ -80,6 +80,19 @@ class ShippedCases(unittest.TestCase):
             self.assertEqual(mine.pop("sandbox-class"), "microvm")
             self.assertEqual(mine, pair, f"{name} differs from its gVisor case in more than the class")
 
+    def test_each_agent_sandbox_case_pairs_with_its_substrate_case(self):
+        cases = load_cases(SCENARIOS_FILE)
+        paired = [name for name in cases if name.endswith("-agent-sandbox")]
+        self.assertTrue(paired)
+        for name in paired:
+            pair = copy.deepcopy(cases[name.removesuffix("-agent-sandbox")])
+            self.assertEqual(pair.pop("provider"), "agent-substrate")
+            self.assertFalse(pair.pop("skip-substrate-install", False))
+            mine = copy.deepcopy(cases[name])
+            self.assertEqual(mine.pop("provider"), "agent-sandbox")
+            self.assertTrue(mine.pop("skip-substrate-install"))
+            self.assertEqual(mine, pair, f"{name} differs from its substrate case in more than the provider")
+
     def test_class_is_not_set_twice(self):
         # The runner sets the cluster's sandbox_class from the case's sandbox-class.
         for name, case in load_cases(SCENARIOS_FILE).items():
@@ -139,6 +152,12 @@ class CaseChecks(unittest.TestCase):
         case = load({"c": {**GLUTTON, "repeats": {"count": 3, "cluster": "per-repeat"}}})["c"]
         self.assertEqual(case["repeats"], {"count": 3, "warmups": 0, "cluster": "per-repeat"})
 
+    def test_load_fills_in_the_provider(self):
+        self.assertEqual(load({"c": GLUTTON})["c"]["provider"], "agent-substrate")
+        case = load({"c": {**GLUTTON, "provider": "agent-sandbox"}})["c"]
+        self.assertEqual(case["provider"], "agent-sandbox")
+        self.assertTrue(case["skip-substrate-install"])
+
     def test_load_refuses_bad_cases(self):
         for case in (
             {**GLUTTON, "repeats": 3},
@@ -150,6 +169,9 @@ class CaseChecks(unittest.TestCase):
             {**GLUTTON, "infra": {"cluster": {"name": "common", "unknown": 1}}},
             {**GLUTTON, "infra": {"cluster": {"name": "nowhere"}}},
             {**GLUTTON, "type": "jmeter"},
+            {**GLUTTON, "provider": "e2b"},
+            {**GLUTTON, "provider": "agent-sandbox", "sandbox-class": "microvm"},
+            {"type": "noop", "infra": GLUTTON["infra"], "provider": "agent-sandbox"},
         ):
             with self.subTest(case=case), self.assertRaises(ValueError):
                 load({"c": case})

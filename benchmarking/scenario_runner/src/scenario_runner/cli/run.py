@@ -59,7 +59,6 @@ from .. import (
 from ..cases import (
     BARE_METAL,
     PROVIDER_AGENT_SANDBOX,
-    PROVIDERS,
     SCENARIOS_FILE,
     SKIP_SUBSTRATE_INSTALL,
     load_bare_metal,
@@ -113,17 +112,6 @@ def parse_args() -> argparse.Namespace:
         "--all",
         action="store_true",
         help="run every case in the scenarios file, in the order listed, each on clusters of its own",
-    )
-    p.add_argument(
-        "--provider",
-        choices=PROVIDERS,
-        help=f"infrastructure provider to test; one of {', '.join(PROVIDERS)}. Overrides case setting",
-    )
-    p.add_argument(
-        "--lifecycle-mode",
-        choices=["claim", "snapshot"],
-        default="claim",
-        help="agent-sandbox lifecycle mode: 'claim' (warm pool claim/release) or 'snapshot' (GKE Pod Snapshot hibernate/resume). Default: %(default)s",
     )
     p.add_argument(
         "--bare-metal",
@@ -285,16 +273,6 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
     if unknown:
         fail(f"no case {', '.join(unknown)} in {args.scenarios_file}; it has {', '.join(cases)}")
     selected = {name: cases[name] for name in names}
-    if args.provider:
-        for name, case in selected.items():
-            if case.get("type") == "locust":
-                case["provider"] = args.provider
-                if args.provider == PROVIDER_AGENT_SANDBOX:
-                    case[SKIP_SUBSTRATE_INSTALL] = True
-    if getattr(args, "lifecycle_mode", None):
-        for name, case in selected.items():
-            if case.get("type") == "locust":
-                case["lifecycle-mode"] = args.lifecycle_mode
     if args.test:
         others = [name for name, case in selected.items() if case["type"] != "sandbox-benchmark"]
         if others:

@@ -61,12 +61,20 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
             raise ValueError(f"{scenarios_file}: case {name}'s `type` must be one of {', '.join(known)}")
         if not isinstance(case.get(SKIP_SUBSTRATE_INSTALL, False), bool):
             raise ValueError(f"{scenarios_file}: case {name}'s `{SKIP_SUBSTRATE_INSTALL}` must be true or false")
-        if case.get("type") == "locust":
+        if case["type"] != "locust" and PROVIDER in case:
+            raise ValueError(f"{scenarios_file}: case {name}'s `{PROVIDER}` is only for locust cases")
+        if case["type"] == "locust":
             provider = case.get(PROVIDER, DEFAULT_PROVIDER)
             if provider not in PROVIDERS:
                 raise ValueError(f"{scenarios_file}: case {name}'s `{PROVIDER}` must be one of {', '.join(PROVIDERS)}")
             case[PROVIDER] = provider
             if provider == PROVIDER_AGENT_SANDBOX:
+                # Nothing installs a microvm runtime without substrate.
+                if case.get("sandbox-class", "gvisor") != "gvisor":
+                    raise ValueError(
+                        f"{scenarios_file}: case {name}'s `sandbox-class` must be gvisor for `{PROVIDER}`"
+                        f" {PROVIDER_AGENT_SANDBOX}"
+                    )
                 case[SKIP_SUBSTRATE_INSTALL] = True
         if not isinstance(case.get(BARE_METAL, False), bool):
             raise ValueError(f"{scenarios_file}: case {name}'s `{BARE_METAL}` must be true or false")

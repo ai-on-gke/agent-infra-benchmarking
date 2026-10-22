@@ -38,6 +38,11 @@
 # `actor-memory` is the actors' memory limit, which on microvm is the guest's
 # RAM: 256Mi by default, 2Gi for openclaw. `locust-workers` is how many boomer
 # worker pods share the users, 1 by default.
+# `provider`, for locust, is what runs the workload: agent-substrate, the
+# default, as substrate actors, or agent-sandbox as agent-sandbox sandboxes
+# claimed from a SandboxWarmPool of `worker-count`, with no substrate installed.
+# agent-sandbox takes only `sandbox-class: gvisor`, which there picks just the
+# sandboxed pool's taint, as its SandboxTemplate sets no runtimeClassName.
 # `noop` is the scenario-runner's alone: it applies and destroys the case's
 # cluster, and runs nothing on it.
 #
@@ -129,6 +134,33 @@ cases:
       count: 3
     worker-count: 10
     sandbox-class: microvm
+    master:
+      run-time: 5m
+      users: 10
+      spawn-rate: 10
+      warm-up: 10s
+    worker:
+      workload-name: glutton
+      workload-template: glutton
+      resume-mode: explicit
+
+  # glutton on agent-sandbox: the same as glutton but the provider, so the two
+  # compare.
+  glutton-agent-sandbox:
+    type: locust
+    provider: agent-sandbox
+    infra:
+      cluster:
+        name: common
+        tfvars: default.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 1
+          sandboxed_min_node_count = 1
+          sandboxed_max_node_count = 1
+    repeats:
+      count: 3
+    worker-count: 10
+    sandbox-class: gvisor
     master:
       run-time: 5m
       users: 10
@@ -297,6 +329,31 @@ cases:
           sandboxed_max_node_count = 1
     worker-count: 10
     sandbox-class: microvm
+    master:
+      run-time: 2m
+      users: 3
+      spawn-rate: 10
+      warm-up: 10s
+    worker:
+      workload-name: openclaw
+      workload-template: openclaw
+      workload-timeout: 120s
+      resume-mode: explicit
+      actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
+
+  openclaw-agent-sandbox:
+    type: locust
+    provider: agent-sandbox
+    infra:
+      cluster:
+        name: common
+        tfvars: openclaw.tfvars
+        tfvars_inline: |
+          sandboxed_node_count     = 1
+          sandboxed_min_node_count = 1
+          sandboxed_max_node_count = 1
+    worker-count: 10
+    sandbox-class: gvisor
     master:
       run-time: 2m
       users: 3
