@@ -156,8 +156,15 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
    ```
 
 5. Commit the deployment's folder (`main.tf`, `.gitignore` and
-   `.terraform.lock.hcl`) and the workflow, then push to `$SOURCE_BRANCH`. The
-   push builds the job's image. Wait for the Publish workflow to finish.
+   `.terraform.lock.hcl`) and the workflow, then push to `$SOURCE_BRANCH`. A
+   push to `main` builds the job's image. For any other branch, run the Publish
+   workflow on it by hand, after this push and each later one:
+
+   ```bash
+   gh workflow run Publish --ref "$SOURCE_BRANCH"
+   ```
+
+   Wait for the Publish workflow to finish.
 
 6. Apply again, which creates the jobs, running the image the workflow pushed:
 

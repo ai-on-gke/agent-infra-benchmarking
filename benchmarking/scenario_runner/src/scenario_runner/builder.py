@@ -126,7 +126,8 @@ def docker_build_and_push(
         log(f"images: building and pushing {image_ref} (platform: {image.platform or platform})")
         cache = [arg.replace("{image}", image.name) for arg in cache_args]
         build = image.docker_build_args(image_ref, platform)
-        stream(["docker", *build[:-1], "--push", "--provenance=false", *cache, build[-1]], cwd=images.ROOT)
+        # buildx, as docker build ignores the builder docker buildx use selects.
+        stream(["docker", "buildx", *build[:-1], "--push", "--provenance=false", *cache, build[-1]], cwd=images.ROOT)
 
 
 def build_substrate(repo: str, login: bool, cache_args: Sequence[str] = ()) -> None:
