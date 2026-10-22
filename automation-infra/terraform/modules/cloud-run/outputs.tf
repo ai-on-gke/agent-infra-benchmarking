@@ -34,12 +34,12 @@ output "reports_dataset" {
 }
 
 output "github_service_account_email" {
-  description = "Service account GitHub Actions push the runner image and write under source/ as, or null when var.github_actions_bucket is null."
+  description = "Service account GitHub Actions push the runner image as, or null when var.github_actions is false."
   value       = one(google_service_account.github[*].email)
 }
 
 output "github_workload_identity_provider" {
-  description = "Workload Identity provider GitHub Actions authenticate through, as the github_service_account_email account, or null when var.github_actions_bucket is null."
+  description = "Workload Identity provider GitHub Actions authenticate through, as the github_service_account_email account, or null when var.github_actions is false."
   value       = one(google_iam_workload_identity_pool_provider.github[*].name)
 }
 

@@ -118,10 +118,10 @@ variable "reports_writer_project_ids" {
   default     = []
 }
 
-variable "github_actions_bucket" {
-  description = "Bucket under whose source/ GitHub Actions may write, as the github_service_account_email account, which also pushes the runner image. Null creates no account, so no workflow can push the image the job runs."
-  type        = string
-  default     = null
+variable "github_actions" {
+  description = "Whether GitHub Actions of github_repository may push the runner image and the runs' images, as the github_service_account_email account. False creates no account, so no workflow can push the image the job runs."
+  type        = bool
+  default     = true
 }
 
 variable "source_branch" {
@@ -161,7 +161,7 @@ variable "alert_emails" {
 }
 
 variable "github_repository" {
-  description = "GitHub repository, owner/name, whose Actions may upload source as the github_service_account_email account, through Workload Identity Federation rather than a key, and which gets the variables they authenticate with. Its owner must be the github provider's."
+  description = "GitHub repository, owner/name, whose Actions may push the images as the github_service_account_email account, through Workload Identity Federation rather than a key, and which gets the variables they authenticate with. Its owner must be the github provider's."
   type        = string
   default     = "ai-on-gke/agent-infra-benchmarking"
 }

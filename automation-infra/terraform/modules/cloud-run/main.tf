@@ -12,7 +12,7 @@ resource "google_project_service" "services" {
     ["run.googleapis.com", "storage.googleapis.com", "artifactregistry.googleapis.com", "monitoring.googleapis.com",
     "compute.googleapis.com"],
     var.schedule == null ? [] : ["cloudscheduler.googleapis.com"],
-    var.github_actions_bucket == null ? [] : ["iam.googleapis.com", "iamcredentials.googleapis.com", "sts.googleapis.com"],
+    var.github_actions ? ["iam.googleapis.com", "iamcredentials.googleapis.com", "sts.googleapis.com"] : [],
   ))
 
   project = var.project_id

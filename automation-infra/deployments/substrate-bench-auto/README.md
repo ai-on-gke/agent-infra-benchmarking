@@ -49,7 +49,6 @@ deployment. It holds:
 | Prefix | What |
 |---|---|
 | `automation/cloud-run/substrate-bench-auto/` | This deployment's Terraform state |
-| `source/main/` | The commits the job runs, uploaded by the Upload source workflow on every push |
 | `terraform/<run-id>/` | Each execution's scenario-runner state, for its runner infra and every repeat's cluster |
 | `data/<run-id>/<record>/` | Each repeat's reports: locust's CSVs, the custom and cluster-vitals histories, and the Jobs' logs |
 
@@ -305,7 +304,6 @@ The destroy stops at the subnetwork, as "already being used by ...
 serverless-ipv4-cloudrun-...": Cloud Run keeps the job's addresses in it for up
 to a couple of hours after the job is deleted. Run it again once they are gone.
 
-Then take `substrate-bench-auto` out of the `deployment` matrix of both jobs in
-[`runner-image.yml`](../../../.github/workflows/runner-image.yml) and
-[`upload-source.yml`](../../../.github/workflows/upload-source.yml), or every
-push fails to push and upload.
+Then take `substrate-bench-auto` out of the `deployment` matrix of every job in
+[`runner-image.yml`](../../../.github/workflows/runner-image.yml), or every
+push fails to push.

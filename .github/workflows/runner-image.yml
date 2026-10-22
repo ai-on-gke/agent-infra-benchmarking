@@ -6,8 +6,11 @@ name: Runner image
 # pull, then tags it test-runner:<branch>, which the deployment's job runs: the
 # branch with each character a tag can't hold as a hyphen. The repository is
 # the one the deployment's main.tf names by its project_id, region and
-# default_resource_name. The workflow authenticates as
-# .github/workflows/upload-source.yml does.
+# default_resource_name. The workflow authenticates through Workload Identity
+# Federation, with the repository variables
+# GCP_WORKLOAD_IDENTITY_PROVIDER_<DEPLOYMENT> and GCP_SERVICE_ACCOUNT_<DEPLOYMENT>
+# that the deployment's apply sets; a deployment without them yet falls back to
+# the key in the secret GCP_CREDENTIALS_<DEPLOYMENT>.
 
 on:
   push:
@@ -184,8 +187,11 @@ jobs:
           REPO: ${{ steps.deployment.outputs.repo }}
         run: benchmarking/tools/build-images --repo="$REPO"
 
-  # Only while the commit is the branch's tip, as upload-source.yml's
-  # upload-latest, and for the same reasons; and only once the images its runs
+  # Only while the commit is the branch's tip, so that neither a run finishing
+  # after a newer push's nor a rerun of an old one takes the tag back. The group
+  # runs one at a time per deployment and branch: a push between the check and
+  # the tag has its own job, which waits for this one and so tags last. A newer
+  # push's job replaces one still waiting. And only once the images its runs
   # pull are there, so the job never runs a commit whose images are missing.
   tag:
     needs: [build, images]

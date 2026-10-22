@@ -19,7 +19,7 @@ example.
 
 - Terraform 1.5+
 - gcloud, git, jq
-- gh, logged in with permission to set this repo's Actions variables and secrets
+- gh, logged in with permission to set this repo's Actions variables
 - A GCP project with billing, and an account with `Owner` on it. `Editor` is
   not enough, because it cannot set IAM.
 
@@ -56,8 +56,7 @@ example.
    gcloud services enable serviceusage.googleapis.com iam.googleapis.com --project="$PROJECT_ID"
    ```
 
-5. Create the bucket that holds the deployment's Terraform state and the
-   uploaded source:
+5. Create the bucket that holds the deployment's Terraform state:
 
    ```bash
    gcloud storage buckets create "gs://$STATE_BUCKET" --project="$PROJECT_ID" --location="$REGION" --uniform-bucket-level-access
@@ -98,8 +97,7 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
    }
 
    locals {
-     # The backend's bucket, which the backend block cannot take from here. Also
-     # read by .github/workflows/upload-source.yml.
+     # The backend's bucket, which the backend block cannot take from here.
      state_bucket = "$STATE_BUCKET"
    }
 
@@ -121,10 +119,9 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
      default_resource_name = "$DEPLOYMENT"
      create_jobs           = var.create_jobs
 
-     state_bucket          = local.state_bucket
-     state_bucket_prefix   = "terraform"
-     github_actions_bucket = local.state_bucket
-     source_branch         = "$SOURCE_BRANCH"
+     state_bucket        = local.state_bucket
+     state_bucket_prefix = "terraform"
+     source_branch       = "$SOURCE_BRANCH"
    }
 
    output "cloud_run" {
@@ -151,15 +148,15 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
    terraform -chdir="automation-infra/deployments/$DEPLOYMENT" apply -var=create_jobs=false
    ```
 
-4. Add the deployment to the `deployment` matrix of both jobs in
-   `runner-image.yml` and `upload-source.yml`:
+4. Add the deployment to the `deployment` matrix of every job in
+   `runner-image.yml`:
 
    ```bash
-   sed -i "s/deployment: \[\(.*\)\]/deployment: [\1, $DEPLOYMENT]/" .github/workflows/runner-image.yml .github/workflows/upload-source.yml
+   sed -i "s/deployment: \[\(.*\)\]/deployment: [\1, $DEPLOYMENT]/" .github/workflows/runner-image.yml
    ```
 
 5. Commit the deployment's folder (`main.tf`, `.gitignore` and
-   `.terraform.lock.hcl`) and the workflows, then push to `$SOURCE_BRANCH`. The
+   `.terraform.lock.hcl`) and the workflow, then push to `$SOURCE_BRANCH`. The
    push builds the job's image. Wait for the Runner image workflow to finish.
 
 6. Apply again, which creates the jobs, running the image the workflow pushed:

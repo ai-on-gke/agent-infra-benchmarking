@@ -14,8 +14,7 @@ terraform {
 }
 
 locals {
-  # The backend's bucket, which the backend block cannot take from here. Also
-  # read by .github/workflows/upload-source.yml.
+  # The backend's bucket, which the backend block cannot take from here.
   state_bucket = "substrate-bench-auto-tfstate"
 }
 
@@ -32,12 +31,11 @@ module "cloud_run" {
   region                = "us-central1"
   default_resource_name = "substrate-bench-auto"
 
-  state_bucket          = local.state_bucket
-  state_bucket_prefix   = "terraform"
-  github_actions_bucket = local.state_bucket
-  reports_bucket        = local.state_bucket
-  reports_prefix        = "data"
-  source_branch         = "main"
+  state_bucket        = local.state_bucket
+  state_bucket_prefix = "terraform"
+  reports_bucket      = local.state_bucket
+  reports_prefix      = "data"
+  source_branch       = "main"
 
   # The cases the nightly tracks, each repeat on a cluster of its own; named
   # rather than --all, so a case added to scenarios.yaml runs here only once it
