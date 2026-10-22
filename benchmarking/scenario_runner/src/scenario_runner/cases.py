@@ -32,6 +32,7 @@ BARE_METAL = "bare-metal"
 # What a case on bare metal is recorded under: its name with this added.
 BARE_METAL_SUFFIX = "-metal"
 PLACEMENT_KEYS = {"zone", "machine-type"}
+SUITES = "suites"
 
 # How a case is sampled: `count` runs that are measured, after `warmups` that
 # are not, all on one cluster applied for the case, or with `cluster:
@@ -320,6 +321,18 @@ def load_bare_metal(scenarios_file: Path) -> dict:
         if not p["machine-type"].endswith("-metal"):
             raise ValueError(f"{where}.placements: {p['machine-type']} is not a bare-metal (-metal) machine type")
     return {"default": settings.get("default", False), "placements": placements}
+
+
+def load_suites(scenarios_file: Path) -> dict[str, list[str]]:
+    """The scenarios file's `suites`: lists of cases by name, each as
+    --scenario takes them, which --suite runs."""
+    with scenarios_file.open() as f:
+        suites = (yaml.safe_load(f) or {}).get(SUITES, {})
+    if not isinstance(suites, dict) or not all(
+        isinstance(names, list) and names and all(isinstance(n, str) for n in names) for names in suites.values()
+    ):
+        raise ValueError(f"{scenarios_file}: `{SUITES}` must be a mapping of non-empty lists of case names")
+    return suites
 
 
 def with_bare_metal(

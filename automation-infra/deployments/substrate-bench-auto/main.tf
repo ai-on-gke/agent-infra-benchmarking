@@ -44,16 +44,9 @@ module "cloud_run" {
   reports_prefix      = "data"
   source_branch       = "main"
 
-  # The cases the nightly tracks, each repeat on a cluster of its own; named
-  # rather than --all, so a case added to scenarios.yaml runs here only once it
-  # is listed.
-  args = [
-    "--scenario=glutton-gvisor",
-    "--scenario=glutton-microvm",
-    "--scenario=openclaw-gvisor",
-    "--scenario=openclaw-microvm",
-    "--scenario=dummy",
-  ]
+  # The cases scenarios.yaml's nightly suite lists, so they change with the
+  # runner image rather than with an apply here.
+  args = ["--suite=nightly"]
 
   # Daily, so an execution ends before the next starts rather than running
   # beside it.

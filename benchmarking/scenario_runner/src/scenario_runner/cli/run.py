@@ -13,7 +13,8 @@
 # limitations under the License.
 
 """Runs the cases in scenarios.yaml one after another (the ones --scenario
-names in the order given, or with --all every case in the order listed), each
+names in the order given, the ones a --suite lists, or with --all every case in
+the order listed), each
 case's warm-ups and repeats on an infra/clusters/ cluster applied for it and
 destroyed after them, or with `repeats.cluster: per-repeat` each repeat on one
 of its own; a case's subcases one after another, those alike in their cluster
@@ -64,6 +65,7 @@ from ..cases import (
     grouped,
     load_bare_metal,
     load_cases,
+    load_suites,
     record_names,
     shares_cluster,
     warmup_names,
@@ -119,6 +121,11 @@ def parse_args() -> argparse.Namespace:
         "--all",
         action="store_true",
         help="run every case in the scenarios file, in the order listed, each on clusters of its own",
+    )
+    which.add_argument(
+        "--suite",
+        metavar="NAME",
+        help="run the cases the scenarios file's `suites` lists under this name, in the order listed",
     )
     p.add_argument(
         "--provider",
@@ -283,15 +290,19 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
     """The cases to run, by name, in the order they run."""
     try:
         cases = load_cases(args.scenarios_file)
+        suites = load_suites(args.scenarios_file)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         fail(str(exc))
     groups = grouped(cases)
+    if args.suite and args.suite not in suites:
+        fail(f"no suite {args.suite} in {args.scenarios_file}; it has {', '.join(suites) or 'none'}")
     # dict.fromkeys drops repeated names, keeping the first.
-    names = list(dict.fromkeys(cases if args.all else args.scenario))
+    names = list(dict.fromkeys(cases if args.all else suites[args.suite] if args.suite else args.scenario))
     unknown = [name for name in names if name not in cases and name not in groups]
     if unknown:
         known = ", ".join(dict.fromkeys([*groups, *cases]))
-        fail(f"no case {', '.join(unknown)} in {args.scenarios_file}; it has {known}")
+        from_suite = f" (from suite {args.suite})" if args.suite else ""
+        fail(f"no case {', '.join(unknown)}{from_suite} in {args.scenarios_file}; it has {known}")
     selected = {member: cases[member] for name in names for member in groups.get(name, [name])}
     if args.provider:
         for name, case in selected.items():

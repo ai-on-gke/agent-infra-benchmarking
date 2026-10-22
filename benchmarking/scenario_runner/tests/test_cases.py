@@ -15,6 +15,7 @@
 """scenarios.yaml as the scenario-runner reads it: the shipped cases and the
 checks a case has to pass."""
 
+import argparse
 import copy
 import tempfile
 import unittest
@@ -30,6 +31,7 @@ from scenario_runner.cases import (
     grouped,
     load_bare_metal,
     load_cases,
+    load_suites,
     record_names,
     warmup_names,
     with_bare_metal,
@@ -445,6 +447,45 @@ class SandboxBenchmarkReports(unittest.TestCase):
                 mock.call("bucket", "reports", "run-1", "sb-2", ["a", "b"], True),
             ],
         )
+
+
+def load_suites_of(suites) -> dict:
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.safe_dump({"suites": suites, "cases": {"c": GLUTTON}}, f)
+    try:
+        return load_suites(Path(f.name))
+    finally:
+        Path(f.name).unlink()
+
+
+class Suites(unittest.TestCase):
+    def test_shipped_suites_name_shipped_cases(self):
+        cases = load_cases(SCENARIOS_FILE)
+        known = set(cases) | set(grouped(cases))
+        suites = load_suites(SCENARIOS_FILE)
+        self.assertTrue({"nightly", "staging"} <= suites.keys())
+        for name, members in suites.items():
+            with self.subTest(suite=name):
+                self.assertEqual([m for m in members if m not in known], [])
+
+    def test_suites_default_to_none(self):
+        self.assertEqual(load_suites_of({}), {})
+
+    def test_bad_suites_are_refused(self):
+        for suites in (["c"], {"s": "c"}, {"s": []}, {"s": [1]}):
+            with self.subTest(suites=suites), self.assertRaises(ValueError):
+                load_suites_of(suites)
+
+    def test_a_suite_selects_its_cases_in_order(self):
+        from scenario_runner.cli import run
+
+        args = argparse.Namespace(
+            scenarios_file=SCENARIOS_FILE, all=False, scenario=None, suite="staging",
+            provider=None, lifecycle_mode=None, test=None, bare_metal=None, region="us-central1",
+        )  # fmt: skip
+        self.assertEqual(list(run.selected_cases(args)), load_suites(SCENARIOS_FILE)["staging"])
+        with mock.patch.object(run, "log"), self.assertRaises(SystemExit):
+            run.selected_cases(argparse.Namespace(**{**vars(args), "suite": "unknown"}))
 
 
 class BareMetal(unittest.TestCase):

@@ -55,8 +55,10 @@ deployment. It holds:
 ## Running it by hand
 
 [`tools/trigger`](../../tools/trigger) starts an execution and prints its log
-until it ends. Without arguments it runs the cases `args` in [`main.tf`](main.tf)
-names, like the schedule. Any argument goes to the scenario-runner instead, so
+until it ends. Without arguments it runs the suite `args` in [`main.tf`](main.tf)
+names, `nightly` in
+[`scenarios.yaml`](../../../benchmarking/scenarios/scenarios.yaml), like the
+schedule. Any argument goes to the scenario-runner instead, so
 `--scenario` picks the cases:
 
 ```bash

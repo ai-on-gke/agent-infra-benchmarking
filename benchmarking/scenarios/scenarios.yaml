@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Named benchmark runs, each picked by the scenario-runner's --scenario, or
-# all of them with --all:
+# Named benchmark runs, each picked by the scenario-runner's --scenario, those
+# of a suite below with --suite, or all of them with --all:
 #
 #   python3 -m scenario_runner.cli.run --scenario glutton-gvisor ...
 #
@@ -135,6 +135,23 @@ bare-metal:
     machine-type: c3-highcpu-192-metal
   - zone: us-central1-a
     machine-type: c3-highmem-192-metal
+
+# `suites` lists cases by name, as --scenario takes them, for --suite to run in
+# that order. The automation-infra deployments run one each, so a case is added
+# to or dropped from their scheduled runs here, without applying them again.
+suites:
+  # substrate-bench-auto's nightly.
+  nightly:
+  - glutton-gvisor
+  - glutton-microvm
+  - openclaw-gvisor
+  - openclaw-microvm
+  - dummy
+  # substrate-bench-staging's: dummy, which creates no cluster, and
+  # glutton-single, one glutton run.
+  staging:
+  - dummy
+  - glutton-single
 
 cases:
   # Each workload on 10 workers on one node, its VUs (virtual users) started
