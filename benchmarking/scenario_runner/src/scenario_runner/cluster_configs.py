@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The infra/clusters/ configs, each as what may be asked of it: its inputs,
-which the `infra.cluster` in a case's type gives in kebab-case, and what the
-type sets itself. Only these turn them into the config's Terraform variables,
-with what the execution decides of every cluster it applies."""
+"""The configurations of the infra/clusters/ configs, each as what may be
+asked of it: its inputs, which the `infra.cluster` in a case's type gives in
+kebab-case, and what the type sets itself. Only these turn them into the
+config's Terraform variables, with what the execution decides of every cluster
+it applies. A configuration's subclass is the cluster of its parent's and
+more, so a case of the parent's runs on it too."""
 
 from __future__ import annotations
 
@@ -76,6 +78,8 @@ class ClusterConfig:
     """A cluster of one of the configs, with its sandboxed pool: pinned at
     sandboxed_nodes, or autoscaling up to sandboxed_max_nodes."""
 
+    # What infra.cluster.configuration names it by.
+    CONFIGURATION: ClassVar[str]
     CONFIG: ClassVar[Path]
     # The fields a case's infra.cluster may give; the rest its type sets.
     INPUTS: ClassVar[tuple[str, ...]] = ("sandboxed_nodes", "sandboxed_max_nodes", "sandboxed_machine_type", "zone")
@@ -144,15 +148,15 @@ class ClusterConfig:
 
 @dataclass(frozen=True)
 class CommonCluster(ClusterConfig):
-    """infra/clusters/common: a GKE cluster, its sandboxed pool for one
-    sandbox class, and with mock_llm_pool a pool for mock-llm."""
+    """infra/clusters/common: a GKE cluster and its sandboxed pool for one
+    sandbox class."""
 
+    CONFIGURATION: ClassVar[str] = "common"
     CONFIG: ClassVar[Path] = CLUSTERS_DIR / "common"
     INPUTS: ClassVar[tuple[str, ...]] = (*ClusterConfig.INPUTS, "default_machine_type")
 
     # The config's own default, c2-standard-16, unless set.
     default_machine_type: str | None = None
-    mock_llm_pool: bool = False
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -165,8 +169,6 @@ class CommonCluster(ClusterConfig):
         variables = {**self.sandboxed_pool(), "bucket_force_destroy": True}
         if self.default_machine_type:
             variables["default_machine_type"] = self.default_machine_type
-        if self.mock_llm_pool:
-            variables["additional_node_pools"] = [MOCK_LLM_POOL]
         if execution.image_repository is not None:
             variables["image_repository"] = execution.image_repository
         if execution.substrate_version is not None:
@@ -180,15 +182,29 @@ class CommonCluster(ClusterConfig):
 
 
 @dataclass(frozen=True)
+class OpenclawCluster(CommonCluster):
+    """common's cluster with a pool for mock-llm, which the openclaw actors
+    call, so it shares no node with the control plane."""
+
+    CONFIGURATION: ClassVar[str] = "openclaw"
+
+    def variables(self, execution: Execution) -> dict:
+        return {**super().variables(execution), "additional_node_pools": [MOCK_LLM_POOL]}
+
+
+@dataclass(frozen=True)
 class DummyCluster(ClusterConfig):
     """infra/clusters/dummy: the scenario-runner's Terraform path, which
     creates nothing in GCP."""
 
+    CONFIGURATION: ClassVar[str] = "dummy"
     CONFIG: ClassVar[Path] = CLUSTERS_DIR / "dummy"
 
 
-# What a noop's infra.cluster.name picks.
-CLUSTER_CONFIGS: dict[str, type[ClusterConfig]] = {"common": CommonCluster, "dummy": DummyCluster}
+# What infra.cluster.configuration picks, common by default.
+CLUSTER_CONFIGS: dict[str, type[ClusterConfig]] = {
+    config.CONFIGURATION: config for config in (CommonCluster, OpenclawCluster, DummyCluster)
+}
 
 
 def kebab(name: str) -> str:
@@ -196,23 +212,27 @@ def kebab(name: str) -> str:
 
 
 def from_infra(
-    case: str, path: str, infra: object, config: type[ClusterConfig] | None = CommonCluster, **from_type
+    case: str,
+    path: str,
+    infra: object,
+    configs: tuple[type[ClusterConfig], ...] = (CommonCluster,),
+    **from_type,
 ) -> ClusterConfig:
     """The cluster the `infra` at path in the case asks for: its `cluster`'s
-    inputs of config, or with config None of the one its `name` picks, common
-    unless it says. Raises ValueError, its message what is wrong."""
+    inputs of the one of configs its `configuration` picks, common unless it
+    says. Raises ValueError, its message what is wrong."""
     where = f"case {case}'s `{path}"
     infra = {} if infra is None else infra
     if not isinstance(infra, dict) or infra.keys() - {"cluster"}:
         raise ValueError(f"{where}` must be a mapping of `cluster`, the inputs of the cluster it runs on")
     given = infra.get("cluster")
+    allowed = {config.CONFIGURATION: config for config in configs}
+    name = given.get("configuration", "common") if isinstance(given, dict) else "common"
+    config = allowed.get(name) if isinstance(name, str) else None
     if config is None:
-        name = given.get("name", "common") if isinstance(given, dict) else "common"
-        config = CLUSTER_CONFIGS.get(name) if isinstance(name, str) else None
-        if config is None:
-            raise ValueError(f"{where}.cluster.name` must be one of {', '.join(CLUSTER_CONFIGS)}, got {name!r}")
-        if isinstance(given, dict):
-            given = {key: value for key, value in given.items() if key != "name"}
+        raise ValueError(f"{where}.cluster.configuration` must be one of {', '.join(allowed)}, got {name!r}")
+    if isinstance(given, dict):
+        given = {key: value for key, value in given.items() if key != "configuration"}
     try:
         return config.from_yaml(given, **from_type)
     except ValueError as exc:
@@ -220,15 +240,21 @@ def from_infra(
 
 
 def to_record(config: ClusterConfig) -> dict:
-    """The cluster as a dev infra's record keeps it: the name of its config and its fields."""
-    return {"name": config.name, **{f.name: getattr(config, f.name) for f in fields(config)}}
+    """The cluster as a dev infra's record keeps it: the name of its config,
+    its configuration and its fields."""
+    return {
+        "name": config.name,
+        "configuration": config.CONFIGURATION,
+        **{f.name: getattr(config, f.name) for f in fields(config)},
+    }
 
 
 def from_record(record: dict) -> ClusterConfig:
     """The cluster of to_record's record; raises ValueError for one it did not
     write, such as a dev infra's from before the clusters were these."""
     values = dict(record)
-    config = CLUSTER_CONFIGS.get(values.pop("name", None))
+    values.pop("name", None)
+    config = CLUSTER_CONFIGS.get(values.pop("configuration", None))
     try:
         if config is None:
             raise TypeError

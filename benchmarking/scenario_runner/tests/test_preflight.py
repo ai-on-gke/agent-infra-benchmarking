@@ -102,6 +102,46 @@ class AppliedClusters(unittest.TestCase):
         self.assertEqual(self.applied({"complete": True}), [])
 
 
+class DevInfraConfiguration(unittest.TestCase):
+    def prepare(self, applied: str, asked: str) -> str | None:
+        """What a case asking for configuration asked fails with on a complete
+        dev infra applied as applied; None if it runs on it."""
+        from argparse import Namespace
+
+        from scenario_runner.cli import run
+        from scenario_runner.cluster_configs import CLUSTER_CONFIGS, to_record
+
+        args = Namespace(dev_infra="dev", dev_infra_update=False, project_id="p", region="r", terraform_output="text")
+        record = {
+            "project_id": "p",
+            "region": "r",
+            "cluster": to_record(CLUSTER_CONFIGS[applied]()),
+            "sandbox_class": None,
+            "bare_metal": False,
+            "complete": True,
+        }
+        case = {"type": "noop", "bare-metal": False, "noop": {"infra": {"cluster": {"configuration": asked}}}}
+        with mock.patch.object(run.dev_infra, "read_record", return_value=record), \
+             mock.patch.object(run, "log") as log:  # fmt: skip
+            try:
+                run.prepare_dev_infra(args, {"c": case})
+            except SystemExit:
+                return log.call_args.args[0]
+        return None
+
+    def test_a_case_runs_on_its_configuration_or_one_that_has_more(self):
+        self.assertIsNone(self.prepare("common", "common"))
+        self.assertIsNone(self.prepare("openclaw", "openclaw"))
+        self.assertIsNone(self.prepare("openclaw", "common"))
+
+    def test_a_case_is_refused_one_without_what_it_asks_for(self):
+        for applied, asked in (("common", "openclaw"), ("common", "dummy"), ("dummy", "common")):
+            with self.subTest(applied=applied, asked=asked):
+                self.assertIn(
+                    f"case c runs on configuration {asked}, but dev infra dev is {applied}", self.prepare(applied, asked)
+                )
+
+
 class BareMetal(unittest.TestCase):
     PLACEMENT = [{"zone": "us-central1-a", "machine-type": "c3-standard-192-metal"}]
 

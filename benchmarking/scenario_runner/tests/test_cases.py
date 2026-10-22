@@ -34,7 +34,7 @@ from scenario_runner.cases import (
     warmup_names,
     with_bare_metal,
 )
-from scenario_runner.cluster_configs import CommonCluster, DummyCluster
+from scenario_runner.cluster_configs import CommonCluster, DummyCluster, OpenclawCluster
 from scenario_runner.reports import VARIANT
 
 GLUTTON = {
@@ -52,6 +52,13 @@ LOADED = {**GLUTTON, "type": "locust"}
 def glutton(locust: dict = None, **case) -> dict:
     """GLUTTON with locust's keys on top of its, and the case's on top of it."""
     return {**GLUTTON, "locust": {**GLUTTON["locust"], **(locust or {})}, **case}
+
+
+# An openclaw case on the cluster it needs.
+OPENCLAW = {
+    "worker": {"workload-name": "openclaw", "workload-template": "openclaw"},
+    "infra": {"cluster": {"configuration": "openclaw"}},
+}
 
 
 def load(cases: dict) -> dict:
@@ -99,7 +106,7 @@ class ShippedCases(unittest.TestCase):
         clusters = {name: benchmark.cluster_config(name, case) for name, case in cases.items()}
         self.assertEqual(clusters["glutton"], CommonCluster(sandboxed_nodes=1))
         self.assertEqual(clusters["glutton-microvm"], CommonCluster(sandbox_class="microvm"))
-        self.assertEqual(clusters["openclaw-baseline"], CommonCluster(sandboxed_nodes=10, mock_llm_pool=True))
+        self.assertEqual(clusters["openclaw-baseline"], OpenclawCluster(sandboxed_nodes=10))
         self.assertEqual(clusters["sandbox-benchmark-e2b"].sandboxed_machine_type, "n2-standard-16")
         self.assertEqual(clusters["dummy"], DummyCluster(sandboxed_nodes=10))
 
@@ -116,12 +123,11 @@ class CaseChecks(unittest.TestCase):
         self.assertEqual(options["master"]["spawn-rate"], 10)
 
     def test_openclaw_gets_its_memory(self):
-        case = glutton({"worker": {"workload-name": "openclaw", "workload-template": "openclaw"}})
+        case = glutton(OPENCLAW)
         self.assertEqual(locust.check_case("openclaw", case, True)["locust"]["actor-memory"], "2Gi")
 
     def test_openclaw_on_microvm_needs_2gi(self):
-        worker = {"workload-name": "openclaw", "workload-template": "openclaw"}
-        case = glutton({"worker": worker, "actor-memory": "1Gi"}, **{"sandbox-class": "microvm"})
+        case = glutton({**OPENCLAW, "actor-memory": "1Gi"}, **{"sandbox-class": "microvm"})
         with self.assertRaisesRegex(ValueError, "less than openclaw needs on microvm"):
             locust.check_case("openclaw-microvm", case, True)
         locust.check_case("openclaw", {**case, "sandbox-class": "gvisor"}, True)
@@ -177,15 +183,16 @@ class CaseChecks(unittest.TestCase):
             {**GLUTTON, "repeats": {"warmups": 1, "cluster": "per-repeat"}},
             {**GLUTTON, "infra": {"cluster": {}}},
             glutton({"infra": {"cluster": {"unknown": 1}}}),
-            glutton({"infra": {"cluster": {"name": "dummy"}}}),
+            glutton({"infra": {"cluster": {"name": "common"}}}),
+            glutton({"infra": {"cluster": {"configuration": "dummy"}}}),
             glutton({"infra": {"cluster": {"sandboxed-nodes": 0}}}),
             glutton({"infra": {"pool": {}}}),
             {**GLUTTON, "type": "locust"},
             {"repeats": {}},
             {**GLUTTON, "noop": {}},
             {"noop": {"x": 1}},
-            {"noop": {"infra": {"cluster": {"name": "nowhere"}}}},
-            {"noop": {"infra": {"cluster": {"name": "dummy", "mock-llm-pool": True}}}},
+            {"noop": {"infra": {"cluster": {"configuration": "nowhere"}}}},
+            {"noop": {"infra": {"cluster": {"configuration": "dummy", "default-machine-type": "n2-standard-16"}}}},
             {**GLUTTON, "jmeter": {}},
             {**GLUTTON, "worker-count": 10},
             {**GLUTTON, "locust": None},
@@ -198,15 +205,20 @@ class CaseChecks(unittest.TestCase):
 
 
 class Clusters(unittest.TestCase):
-    def test_locust_asks_for_its_class_and_mock_llm_s_pool(self):
+    def test_locust_asks_for_its_class_and_configuration(self):
         case = load({"c": glutton({"infra": {"cluster": {"sandboxed-nodes": 3}}}, **{"sandbox-class": "microvm"})})["c"]
         self.assertEqual(benchmark.cluster_config("c", case), CommonCluster(3, sandbox_class="microvm"))
-        openclaw = load({"c": glutton({"worker": {"workload-name": "openclaw", "workload-template": "openclaw"}})})
-        self.assertTrue(benchmark.cluster_config("c", openclaw["c"]).mock_llm_pool)
+        openclaw = load({"c": glutton({"infra": {"cluster": {"configuration": "openclaw"}}})})["c"]
+        self.assertEqual(benchmark.cluster_config("c", openclaw), OpenclawCluster())
 
-    def test_a_noop_picks_its_config_common_by_default(self):
+    def test_a_workload_that_calls_mock_llm_needs_openclaw(self):
+        with self.assertRaisesRegex(ValueError, "set `locust.infra.cluster.configuration: openclaw`"):
+            load({"c": glutton({"worker": OPENCLAW["worker"]})})
+        load({"c": glutton(OPENCLAW)})
+
+    def test_a_noop_picks_its_configuration_common_by_default(self):
         self.assertEqual(benchmark.cluster_config("n", load({"n": {"noop": None}})["n"]), CommonCluster())
-        dummy = load({"n": {"noop": {"infra": {"cluster": {"name": "dummy", "sandboxed-nodes": 2}}}}})["n"]
+        dummy = load({"n": {"noop": {"infra": {"cluster": {"configuration": "dummy", "sandboxed-nodes": 2}}}}})["n"]
         self.assertEqual(benchmark.cluster_config("n", dummy), DummyCluster(2))
 
     def test_what_is_wrong_is_named_where_it_is(self):

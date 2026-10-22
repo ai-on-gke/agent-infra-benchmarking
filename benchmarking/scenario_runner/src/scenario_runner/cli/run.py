@@ -496,10 +496,11 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
     current = from_record(record["cluster"])
     for name, case in cases.items():
         config = benchmark.cluster_config(name, case)
-        if config.name != current.name:
+        # A configuration's subclass is its cluster and more, such as openclaw's common's.
+        if not isinstance(current, type(config)):
             fail(
-                f"case {name} runs on infra/clusters/{config.name}, but dev infra {args.dev_infra}"
-                f" is infra/clusters/{current.name}"
+                f"case {name} runs on configuration {config.CONFIGURATION}, but dev infra {args.dev_infra}"
+                f" is {current.CONFIGURATION}"
             )
         # The sandboxed pool is tainted for one class, which no other's workers tolerate.
         if case["type"] != "noop" and record.get("sandbox_class") and sandbox_class(case) != record["sandbox_class"]:

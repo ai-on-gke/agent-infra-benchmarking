@@ -30,7 +30,7 @@ from typing import Callable
 from . import RUNNER_DIR, images, jobs, reports, run_info, worker_pool, workloads
 from .control_plane import AGENT_SANDBOX, AGENT_SUBSTRATE, CONTROL_PLANE, control_plane
 from .cluster import Cluster
-from .cluster_configs import CommonCluster, from_infra
+from .cluster_configs import CommonCluster, OpenclawCluster, from_infra
 from .log import ON_CLOUD_RUN, log
 from .process import stream
 
@@ -138,7 +138,13 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
         raise ValueError(
             f"case {name}'s `{TYPE}.actor-memory` {memory} is less than {workload} needs on {sandbox_class}, {need}Mi"
         )
-    cluster_config(name, case)
+    config = cluster_config(name, case)
+    # mock-llm's pods select and tolerate only its pool, and stay pending without it.
+    if template in workloads.MOCK_LLM_TEMPLATES and not isinstance(config, OpenclawCluster):
+        raise ValueError(
+            f"case {name}'s workload {template} calls mock-llm, which runs on a pool of its own:"
+            f" set `{TYPE}.infra.cluster.configuration: {OpenclawCluster.CONFIGURATION}`"
+        )
     # spawn-rate defaults to the user count, putting the whole load on at once.
     return {
         "sandbox-class": "gvisor",
@@ -157,17 +163,14 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
 
 
 def cluster_config(name: str, case: dict) -> CommonCluster:
-    """The cluster the case runs on: its `locust.infra.cluster`, for its
-    sandbox class, with a pool for mock-llm if its workload calls it."""
-    options = case[TYPE]
-    worker = options.get("worker") or {}
-    template = worker.get("workload-template") or worker.get("workload-name")
+    """The cluster the case runs on: its `locust.infra.cluster`, common or
+    openclaw, for its sandbox class."""
     return from_infra(
         name,
         f"{TYPE}.infra",
-        options.get("infra"),
+        case[TYPE].get("infra"),
+        (CommonCluster, OpenclawCluster),
         sandbox_class=case.get("sandbox-class", "gvisor"),
-        mock_llm_pool=template in workloads.MOCK_LLM_TEMPLATES,
     )
 
 

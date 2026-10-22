@@ -71,19 +71,24 @@
 # locust runs on either of the first two, sandbox-benchmark's substrate
 # provider on agent-substrate, and its others on any.
 #
-# `infra.cluster`, in the type's mapping, is the cluster the case runs on: the
-# inputs of the infra/clusters/ config its type applies, which
+# `infra.cluster`, in the type's mapping, is the cluster the case runs on: its
+# `configuration` and that configuration's inputs, which
 # scenario_runner/src/scenario_runner/cluster_configs.py turns into the
-# config's Terraform variables, all of them optional:
+# Terraform variables of the infra/clusters/ config it applies, all of them
+# optional:
+#   configuration           common, the default, a GKE cluster from
+#                           infra/clusters/common; openclaw, common's with a
+#                           pool for mock-llm, which openclaw's workload needs;
+#                           or dummy, infra/clusters/dummy, for a noop only
 #   sandboxed-nodes         the sandboxed pool's nodes, 1 by default, which it
 #                           is pinned at
 #   sandboxed-max-nodes     the most it autoscales up to, if it does
 #   sandboxed-machine-type  its machine type, c2-standard-16 by default
 #   zone                    the zone of every pool, the config's by default
-#   default-machine-type    common's default pool's, c2-standard-16 by default
-# locust and sandbox-benchmark apply infra/clusters/common, locust with a pool
-# for mock-llm if its workload calls it. A noop's `name` picks the config,
-# common or dummy, common by default.
+#   default-machine-type    common's and openclaw's default pool's,
+#                           c2-standard-16 by default
+# locust runs on common or openclaw, sandbox-benchmark on common, and a noop on
+# any of them.
 #
 # Varying the load or the pool means another case, so that every run is
 # reproducible from the name it is recorded under: benchmark-test-case is the
@@ -248,6 +253,7 @@ cases:
     locust:
       infra:
         cluster:
+          configuration: openclaw
           sandboxed-nodes: 1
       worker-count: 10
       master:
@@ -269,6 +275,7 @@ cases:
     locust:
       infra:
         cluster:
+          configuration: openclaw
           sandboxed-nodes: 1
       worker-count: 10
       master:
@@ -288,6 +295,7 @@ cases:
     locust:
       infra:
         cluster:
+          configuration: openclaw
           sandboxed-nodes: 10
       worker-count: 100
       master:
@@ -307,6 +315,7 @@ cases:
     locust:
       infra:
         cluster:
+          configuration: openclaw
           sandboxed-nodes: 10
       worker-count: 100
       master:
@@ -328,6 +337,7 @@ cases:
     locust:
       infra:
         cluster:
+          configuration: openclaw
           sandboxed-nodes: 10
       worker-count: 100
       master:
@@ -349,6 +359,7 @@ cases:
     locust:
       infra:
         cluster:
+          configuration: openclaw
           sandboxed-nodes: 10
       worker-count: 100
       master:
@@ -540,5 +551,5 @@ cases:
     noop:
       infra:
         cluster:
-          name: dummy
+          configuration: dummy
           sandboxed-nodes: 10

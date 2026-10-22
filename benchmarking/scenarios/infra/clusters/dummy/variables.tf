@@ -1,5 +1,5 @@
 # The inputs of common that the scenario-runner and scenarios.yaml's cases pass,
-# so a case can switch infra.cluster.name between the two. Nothing here
+# so a case can switch infra.cluster.configuration between the two. Nothing here
 # reaches GCP.
 
 variable "project_id" {

@@ -20,7 +20,7 @@ import argparse
 
 from . import ate_env, images, locust, monitoring, reports, sandbox_benchmark, workloads
 from .cluster import Cluster
-from .cluster_configs import ClusterConfig, from_infra
+from .cluster_configs import CLUSTER_CONFIGS, ClusterConfig, from_infra
 from .log import log
 
 RUNNERS = {"locust": locust, "sandbox-benchmark": sandbox_benchmark}
@@ -50,10 +50,10 @@ def check(name: str, case: dict) -> None:
 
 
 def cluster_config(name: str, case: dict) -> ClusterConfig:
-    """The cluster the case runs on, as its type asks for it; a noop's on the
-    config its `noop.infra.cluster.name` picks."""
+    """The cluster the case runs on, as its type asks for it; a noop's on any
+    configuration its `noop.infra.cluster.configuration` picks."""
     if case["type"] == "noop":
-        return from_infra(name, "noop.infra", case["noop"].get("infra"), config=None)
+        return from_infra(name, "noop.infra", case["noop"].get("infra"), tuple(CLUSTER_CONFIGS.values()))
     return RUNNERS[case["type"]].cluster_config(name, case)
 
 
