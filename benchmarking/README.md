@@ -26,11 +26,10 @@ against it and destroys it afterwards.
 Each run of a case applies a cluster of its own in one zone (`us-central1-a`)
 and destroys it afterwards. It has a `default` node, `c2-standard-16`
 (`default_machine_type`); the `sandboxed` workers, `sandboxed_node_count` of
-`sandboxed_machine_type` (one `c2-standard-16` in the shipped cases, an
-`n2-standard-16` in `sandbox-benchmark`); and an `e2-standard-4` for
-Prometheus. The openclaw case adds an `e2-standard-8` for its mock LLM. So a
-run needs at least 32 vCPUs of C2 quota in the region, or 16 of C2 and 16 of
-N2 for `sandbox-benchmark`, all billed while it is up. Check it with:
+`sandboxed_machine_type` (one `c2-standard-16` in the shipped cases); and an
+`e2-standard-4` for Prometheus. The openclaw case adds an `e2-standard-8` for
+its mock LLM. So a run needs at least 32 vCPUs of C2 quota in the region, all
+billed while it is up. Check it with:
 
 ```bash
 gcloud compute regions describe us-central1 --project <project-id> \
@@ -452,13 +451,13 @@ of pool as its first.
 
 ### Comparing sandbox providers' costs
 
-The `sandbox-benchmark-cost` case measures E2B's, Modal's and Daytona's
-suspend and resume overheads and writes a monthly cost sheet next to Anthropic
-Managed Agents and OpenAI. It needs the providers' API keys; see
-[sandbox-benchmark-cost.md](sandbox-benchmark/sandbox-benchmark-cost.md):
+The `sandbox-benchmark` case measures substrate's, E2B's, Modal's and
+Daytona's suspend and resume overheads and writes a monthly cost sheet next to
+Anthropic Managed Agents and OpenAI. It needs the providers' API keys; see
+[sandbox-benchmark.md](sandbox-benchmark/sandbox-benchmark.md):
 
 ```bash
-./benchmarking/tools/run --dev-infra cost-dev --scenario sandbox-benchmark-cost
+./benchmarking/tools/run --dev-infra cost-dev --scenario sandbox-benchmark
 ```
 
 ## Reading the results

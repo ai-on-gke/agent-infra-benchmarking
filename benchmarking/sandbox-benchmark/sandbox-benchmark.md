@@ -1,16 +1,17 @@
-# Sandbox cost sheet
+# Sandbox benchmark and cost sheet
 
-The `sandbox-benchmark-cost` case measures how long E2B, Modal and Daytona
-sandboxes take to suspend and resume, and turns that into a monthly cost sheet
-next to Anthropic Managed Agents and OpenAI. To produce one, from the repo root:
+The `sandbox-benchmark` case measures how long substrate, E2B, Modal and
+Daytona sandboxes take to suspend and resume, and turns that into a monthly
+cost sheet next to Anthropic Managed Agents and OpenAI. To produce one, from
+the repo root:
 
 ```bash
-./benchmarking/tools/run --dev-infra cost-dev --scenario sandbox-benchmark-cost
+./benchmarking/tools/run --dev-infra cost-dev --scenario sandbox-benchmark
 ```
 
-The sheet is then at `reports/<run-id>/sandbox-benchmark-cost/cost_sheet.csv`,
-in the same layout as the original cost spreadsheet, ready to import into
-Sheets.
+The sheet is then at `reports/<run-id>/sandbox-benchmark/cost_sheet.csv`, and
+the timings at `perf_results.csv` beside it, in the same layout as the original
+spreadsheet's two tabs, ready to import into Sheets.
 
 ## Before the first run
 
@@ -37,12 +38,17 @@ Without `--dev-infra`, the runner applies a cluster for the run and destroys it
 afterwards.
 
 On an existing dev infra a run takes about 15 minutes. The sandboxes cost
-cents; most of the cost is Anthropic's and OpenAI's model tokens.
+cents; most of the cost is Anthropic's and OpenAI's model tokens. To run one
+provider alone, such as substrate without paying the others, name its subcase:
+
+```bash
+./benchmarking/tools/run --dev-infra cost-dev --scenario sandbox-benchmark-substrate
+```
 
 ## What a run produces
 
-Everything lands in `reports/<run-id>/sandbox-benchmark-cost/`, and in the
-cluster's bucket under the same path:
+Everything lands in `reports/<run-id>/sandbox-benchmark/`, and in the cluster's
+bucket under the same path:
 
 | File | What it holds |
 |---|---|
@@ -57,14 +63,21 @@ one warmup run. The test sets up a small agent workspace in the sandbox (a git
 repository, 50 Python modules, a venv with pydantic, fastapi and pytest),
 suspends the sandbox, resumes it and checks the workspace survived.
 
-- Suspend is timed until the provider's call returns: E2B's pause, Modal's
-  snapshot and terminate, Daytona's stop.
+- Suspend is timed until the provider's call returns: substrate's suspend,
+  E2B's pause, Modal's snapshot and terminate, Daytona's stop.
 - Resume is timed until the resumed sandbox has run a command, since E2B's and
   Modal's calls return before it is usable.
-- All three sandbox providers run 2 vCPU and 2 GiB: E2B's default sandbox, and
-  sizes set explicitly for Modal and Daytona in their providers in
-  `dependency-repos/ai-sandbox-benchmark/providers/`.
+- All four sandbox providers run 2 vCPU and 2 GiB: E2B's default sandbox, sizes
+  set explicitly for Modal and Daytona in their providers in
+  `dependency-repos/ai-sandbox-benchmark/providers/`, and substrate's
+  `actor-cpu` and `actor-memory` in the case.
+- Substrate runs on the case's `c2-standard-16` node, 10 sandboxes at once on
+  10 env workers, and is priced at c2's on-demand rates in us-central1. Its 16
+  vCPUs are fewer than the sandboxes' 20, so they contend while most are busy
+  at once.
 - Anthropic and OpenAI cannot suspend or resume, so their overheads are N/A.
+- `local` runs the test in the comparator's own pod, with no sandbox: the
+  harness's floor, in `perf_results.csv` only.
 
 The sheet takes each provider's mean suspend and resume time as the overhead
 of one suspend and resume per hour, adds it to 360 active seconds an hour,
@@ -76,7 +89,8 @@ The prices and usage assumptions are constants at the top of
 [`sandbox_benchmark_cost_sheet.py`](../scenario_runner/src/scenario_runner/sandbox_benchmark_cost_sheet.py):
 `RESOURCE_PRICED` and `ANTHROPIC_SESSION_HOUR` for prices,
 `ACTIVE_SECS_PER_HOUR`, `HOURS_PER_MONTH`, `VCPUS` and `RAM_GIB` for usage. They
-are copied from the original sheet, not fetched live.
+are copied from the original sheet, and substrate's from GCP's billing catalog,
+not fetched live.
 
 The providers, number of runs and warmups are the case's, in
 [`scenarios.yaml`](../scenarios/scenarios.yaml). Any case of type
@@ -103,3 +117,5 @@ runs; the monthly totals stay within a cent.
   core; if it counts a core as 2 vCPU, its vCPU cost in the sheet is half of
   what the sandbox is billed.
 - Storage for snapshots and suspended sandboxes is not included.
+- Substrate's cost is its sandbox's share of the node; the node's idle capacity
+  and GKE's cluster fee are not included.

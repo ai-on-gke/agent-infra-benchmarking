@@ -34,9 +34,9 @@ VCPUS = 2
 RAM_GIB = 2
 
 # Per vCPU-second and per GiB-second, in USD. substrate's is its share of the
-# case's n2 node, at us-central1's on-demand prices.
+# case's c2 node, at us-central1's on-demand prices.
 RESOURCE_PRICED = {
-    "substrate": ("Substrate (GKE n2)", 0.031611 / 3600, 0.004237 / 3600),
+    "substrate": ("Substrate (GKE c2)", 0.033982 / 3600, 0.004555 / 3600),
     "e2b": ("E2B", 0.000014, 0.0000045),
     "modal": ("Modal", 0.00001971, 0.00000672),
     "daytona": ("Daytona", 0.000014, 0.0000045),
@@ -163,7 +163,7 @@ def sheet(sources: list[dict]) -> list[list[str]]:
         ["4) Storage costs for snapshots or filesystem persistance are not included"] + pad,
         ["5) Anthropic Managed Agents' model token costs are not included"] + pad,
         [
-            "6) Substrate is priced as its sandbox's share of an on-demand GKE n2 node; the node's idle capacity"
+            "6) Substrate is priced as its sandbox's share of an on-demand GKE c2 node; the node's idle capacity"
             " and GKE's cluster fee are not included"
         ]
         + pad,

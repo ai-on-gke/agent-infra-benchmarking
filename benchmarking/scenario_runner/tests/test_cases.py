@@ -120,7 +120,7 @@ class ShippedCases(unittest.TestCase):
         self.assertEqual(clusters["glutton"], CommonCluster(sandboxed_nodes=1))
         self.assertEqual(clusters["glutton-microvm"], CommonCluster(sandboxed_nodes=1, nested_virtualization=True))
         self.assertEqual(clusters["openclaw-density-baseline"], OpenclawCluster(sandboxed_nodes=10))
-        self.assertEqual(clusters["sandbox-benchmark-e2b"].sandboxed_machine_type, "n2-standard-16")
+        self.assertEqual(clusters["sandbox-benchmark-e2b"], CommonCluster(sandboxed_nodes=1))
         self.assertEqual(clusters["dummy"], DummyCluster(sandboxed_nodes=10))
 
 
@@ -256,7 +256,7 @@ class Subcases(unittest.TestCase):
             self.assertEqual(name, f"sandbox-benchmark-{options['provider']['name']}")
             self.assertEqual(options["tests"], ["test_suspend_resume"])
             self.assertEqual(cases[name][SUBCASE], {"of": "sandbox-benchmark", "name": options["provider"]["name"]})
-        self.assertEqual(cases["sandbox-benchmark-substrate"]["sandbox-benchmark"]["provider"]["env-worker-count"], 3)
+        self.assertEqual(cases["sandbox-benchmark-substrate"]["sandbox-benchmark"]["provider"]["env-worker-count"], 10)
         self.assertEqual(cases["sandbox-benchmark-e2b"]["sandbox-benchmark"]["provider"], {"name": "e2b"})
 
     def test_a_subcase_changes_any_key_and_merges_mappings(self):

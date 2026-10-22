@@ -326,8 +326,10 @@ cases:
       master:
         users: 100
 
-  # substrate's sandbox sized as the cloud providers' are, 2 vCPU and 2 GiB, on
-  # a general-purpose node rather than the default compute-optimized c2.
+  # substrate against the cloud providers, and the sandbox cost sheet from
+  # their suspend and resume overheads. substrate's sandbox is sized as the
+  # cloud providers' are, 2 vCPU and 2 GiB. local, no sandbox at all, is the
+  # harness's own floor.
   sandbox-benchmark:
     # A warm-up would run every provider, paid ones too; warmup-runs is the
     # cheaper way to warm them up.
@@ -340,46 +342,8 @@ cases:
       infra:
         cluster:
           sandboxed-nodes: 1
-          sandboxed-machine-type: n2-standard-16
-      tests:
-      - test_suspend_resume
-      runs: 3
-    subcases:
-      substrate:
-        sandbox-benchmark:
-          provider:
-            name: substrate
-            # The comparator starts every run at once, each in an environment
-            # of its own on a worker of its own: 3 sandboxes of 2 vCPU on the
-            # node's 16.
-            env-worker-count: 3
-            actor-cpu: "2"
-            actor-memory: 2Gi
-      local: {sandbox-benchmark: {provider: {name: local}}}
-      # e2b, daytona, modal, anthropic and openai need E2B_API_KEY,
-      # DAYTONA_API_KEY, MODAL_TOKEN_ID/MODAL_TOKEN_SECRET, ANTHROPIC_API_KEY
-      # and OPENAI_API_KEY in the scenario-runner's environment.
-      e2b: {sandbox-benchmark: {provider: {name: e2b}}}
-      daytona: {sandbox-benchmark: {provider: {name: daytona}}}
-      modal: {sandbox-benchmark: {provider: {name: modal}}}
-      anthropic: {sandbox-benchmark: {provider: {name: anthropic}}}
-      openai: {sandbox-benchmark: {provider: {name: openai}}}
-
-  # The sandbox cost sheet, from the providers' suspend and resume overheads.
-  # substrate is installed for the whole case, so its subcases share a cluster.
-  sandbox-benchmark-cost:
-    # warmup-runs is the cheaper way to warm the paid providers up.
-    repeats:
-      warmups: 0
-    sandbox-benchmark:
-      install:
-        substrate:
-          sandbox-class: gvisor
-      infra:
-        cluster:
-          sandboxed-nodes: 1
-          # The cost sheet prices substrate at n2's rates.
-          sandboxed-machine-type: n2-standard-32
+          # The cost sheet prices substrate at its rates.
+          sandboxed-machine-type: c2-standard-16
       cost-sheet: true
       tests:
       - test_suspend_resume
@@ -390,11 +354,16 @@ cases:
         sandbox-benchmark:
           provider:
             name: substrate
-            # The comparator starts every run at once, each on a worker of its
-            # own: 10 sandboxes of 2 vCPU on the node's 32.
+            # The comparator starts every run at once, each in an environment
+            # of its own on a worker of its own: 10 sandboxes capped at 2 vCPU
+            # on the node's 16, which contend only while most are busy at once.
             env-worker-count: 10
             actor-cpu: "2"
             actor-memory: 2Gi
+      # e2b, modal, daytona, anthropic and openai need E2B_API_KEY,
+      # MODAL_TOKEN_ID/MODAL_TOKEN_SECRET, DAYTONA_API_KEY, ANTHROPIC_API_KEY
+      # and OPENAI_API_KEY in the scenario-runner's environment.
+      local: {sandbox-benchmark: {provider: {name: local}}}
       e2b: {sandbox-benchmark: {provider: {name: e2b}}}
       modal: {sandbox-benchmark: {provider: {name: modal}}}
       daytona: {sandbox-benchmark: {provider: {name: daytona}}}
