@@ -186,7 +186,7 @@ execution only; a `--scenario` or `--all` replaces the cases the job's `args`
 name:
 
 ```bash
-automation-infra/tools/trigger --deployment="$DEPLOYMENT" --scenario=glutton
+automation-infra/tools/trigger --deployment="$DEPLOYMENT" --scenario=glutton-gvisor
 ```
 
 ## Keeping your own runs' reports in BigQuery
@@ -197,7 +197,7 @@ is gone. To query them in BigQuery, as the scheduled runs' are, apply
 Cloud Run job. Then point your runs at its folder:
 
 ```bash
-./benchmarking/tools/run --report-deployment=automation-infra/dev/reports --scenario glutton
+./benchmarking/tools/run --report-deployment=automation-infra/dev/reports --scenario glutton-gvisor
 ```
 
 ### Creating the reports deployment
@@ -247,7 +247,7 @@ cluster's own bucket. It works with any other option, `--dev-infra` included,
 and a local copy still lands in `reports/<run-id>/`:
 
 ```bash
-./benchmarking/tools/run --report-deployment=automation-infra/dev/reports --scenario glutton
+./benchmarking/tools/run --report-deployment=automation-infra/dev/reports --scenario glutton-gvisor
 ```
 
 The run uploads the Jobs' logs with your own credentials, so your account

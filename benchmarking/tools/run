@@ -18,7 +18,7 @@
 # unchanged:
 #
 #   ./benchmarking/tools/run --project-id my-project \
-#     --state-backend gcs --state-bucket my-bucket --state-prefix terraform --scenario glutton
+#     --state-backend gcs --state-bucket my-bucket --state-prefix terraform --scenario glutton-gvisor
 
 set -o errexit -o nounset -o pipefail
 

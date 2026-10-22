@@ -98,7 +98,7 @@ PLACEMENTS = [
 
 class ShippedCases(unittest.TestCase):
     def test_every_shipped_case_loads(self):
-        self.assertIn("glutton", load_cases(SCENARIOS_FILE))
+        self.assertIn("glutton-gvisor", load_cases(SCENARIOS_FILE))
 
     def test_each_microvm_case_pairs_with_its_gvisor_case(self):
         # gVisor and microvm compare only if the cases differ in the class, and
@@ -107,7 +107,7 @@ class ShippedCases(unittest.TestCase):
         for name, case in cases.items():
             if not name.endswith("-microvm"):
                 continue
-            pair = copy.deepcopy(cases[name.removesuffix("-microvm")])
+            pair = copy.deepcopy(cases[name.removesuffix("-microvm") + "-gvisor"])
             self.assertEqual(pair["locust"].pop("install"), on("gvisor")["install"])
             mine = copy.deepcopy(case)
             self.assertEqual(mine["locust"].pop("install"), on("microvm")["install"])
@@ -117,7 +117,7 @@ class ShippedCases(unittest.TestCase):
     def test_each_case_asks_for_its_cluster(self):
         cases = load_cases(SCENARIOS_FILE)
         clusters = {name: benchmark.cluster_config(name, case) for name, case in cases.items()}
-        self.assertEqual(clusters["glutton"], CommonCluster(sandboxed_nodes=1))
+        self.assertEqual(clusters["glutton-gvisor"], CommonCluster(sandboxed_nodes=1))
         self.assertEqual(clusters["glutton-microvm"], CommonCluster(sandboxed_nodes=1, nested_virtualization=True))
         self.assertEqual(clusters["openclaw-density-baseline"], OpenclawCluster(sandboxed_nodes=10))
         self.assertEqual(

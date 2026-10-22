@@ -24,7 +24,7 @@
 #
 # Any SCENARIO_RUNNER_ARG goes to the scenario-runner after the job's own
 # arguments, for this execution only; a --scenario or --all replaces the job's
-# choice of cases, e.g. --scenario=glutton. Passing one also needs
+# choice of cases, e.g. --scenario=glutton-gvisor. Passing one also needs
 # run.jobs.runWithOverrides, e.g. roles/run.developer.
 #
 #   trigger --deployment=DEPLOYMENT [SCENARIO_RUNNER_ARG...]

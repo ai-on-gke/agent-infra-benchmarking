@@ -15,7 +15,7 @@
 # Named benchmark runs, each picked by the scenario-runner's --scenario, or
 # all of them with --all:
 #
-#   python3 -m scenario_runner.cli.run --scenario glutton ...
+#   python3 -m scenario_runner.cli.run --scenario glutton-gvisor ...
 #
 # A case's type is the key of the one mapping in it of the type's own keys,
 # `locust`, `sandbox-benchmark` or `noop`; the rest of the case is the
@@ -141,7 +141,7 @@ cases:
   # 10 a second and each actor woken by a ResumeActor first: on gvisor, and on
   # microvm with the nested virtualization it boots its guests on, the two
   # alike but for the class, so they compare.
-  "{workload}{suffix}":
+  "{workload}-{sandbox-class}":
     repeats:
       count: "{count}"
     locust:
@@ -184,10 +184,8 @@ cases:
         # Without an egress policy the actors can't reach mock-llm.
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
       class:
-      - suffix: ""
-        sandbox-class: gvisor
-      - suffix: -microvm
-        sandbox-class: microvm
+      - sandbox-class: gvisor
+      - sandbox-class: microvm
         nested-virtualization: true
 
   # glutton once rather than three times, with no warm-up, for a quicker check
