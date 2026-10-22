@@ -288,9 +288,17 @@ class Subcases(unittest.TestCase):
                 load({"c": case})
         with self.assertRaisesRegex(ValueError, "which is another case"):
             load({"c": {**GLUTTON, "subcases": {"a": {}}}, "c-a": GLUTTON})
-        with self.assertRaisesRegex(ValueError, r"case c-b has \{users\}, which none"):
-            case = glutton({"master": {"run-time": "1m", "users": "{users}"}})
-            load({"c": {**case, "subcases": {"a": {"users": 1}, "b": {}}}})
+        case = glutton({"master": {"run-time": "1m", "users": "{users}"}})
+        with self.assertRaisesRegex(ValueError, r"case c has \{users\}, which none of its subcases set"):
+            load({"c": {**case, "subcases": {"a": {}, "b": {}}}})
+        with self.assertRaisesRegex(ValueError, "subcase a sets user, which it does not use"):
+            load({"c": {**case, "subcases": {"a": {"users": 1, "user": 1}}}})
+
+    def test_a_placeholder_a_subcase_does_not_set_is_null(self):
+        case = glutton({"master": {"run-time": "1m", "users": 10, "warm-up": "{warm-up}"}})
+        cases = load({"c": {**case, "subcases": {"warm": {"warm-up": "10s"}, "cold": {}}}})
+        self.assertEqual(cases["c-warm"]["locust"]["master"]["warm-up"], "10s")
+        self.assertNotIn("warm-up", cases["c-cold"]["locust"]["master"])
 
     def test_a_subcase_on_bare_metal_is_one_of_the_case_on_it(self):
         case = {**GLUTTON, "bare-metal": "{metal}", "subcases": {"a": {"metal": True}, "b": {"metal": False}}}
@@ -326,12 +334,18 @@ class Parameters(unittest.TestCase):
         self.assertEqual(cases["c"]["locust"]["master"], {"run-time": "1m", "users": 3})
         self.assertEqual(cases["c"]["repeats"]["count"], 2)
 
+    def test_a_placeholder_an_entry_does_not_set_is_null(self):
+        case = glutton({"master": {"run-time": "1m", "users": 10, "warm-up": "{warm-up}"}}, name="{workload}")
+        cases = self.expand(case, {"p": [{"workload": "warm", "warm-up": "10s"}, {"workload": "cold"}]})
+        self.assertEqual(cases["warm"]["locust"]["master"]["warm-up"], "10s")
+        self.assertNotIn("warm-up", cases["cold"]["locust"]["master"])
+        with self.assertRaisesRegex(ValueError, r"case \{workload\}-x has \{workload\}, which its parameters"):
+            self.expand(glutton(name="{workload}-x"), {"p": [{"workload": "a"}, {}]})
+
     def test_subcases_win_over_parameters_and_take_theirs(self):
         case = glutton({"master": {"run-time": "{run-time}", "users": "{users}"}})
         subcases = {"short": {"users": 1}, "long": {"users": 2, "run-time": "{run-time-long}"}}
-        cases = self.expand(
-            {**case, "subcases": subcases}, {"p": [{"run-time": "1m", "run-time-long": "9m", "users": 5}]}
-        )
+        cases = self.expand({**case, "subcases": subcases}, {"p": [{"run-time": "1m", "run-time-long": "9m"}]})
         self.assertEqual(cases["c-short"]["locust"]["master"], {"run-time": "1m", "users": 1})
         self.assertEqual(cases["c-long"]["locust"]["master"], {"run-time": "9m", "users": 2})
 
@@ -343,13 +357,15 @@ class Parameters(unittest.TestCase):
             ({"p": [1]}, "must be a mapping of names to lists"),
             ({"p": [{"users": 1}], "q": [{"users": 2}]}, "sets users in more than one parameter"),
             ({"p": [{"users": 1}, {"users": 2}]}, "there are two cases c"),
+            ({"p": [{"user": 1}]}, r"has \{users\}, which none of its parameters or subcases set"),
+            ({"p": [{"users": 1, "user": 1}]}, "parameters set user, which it does not use"),
         ):
             case = glutton({"master": {"run-time": "1m", "users": "{users}"}})
             with self.subTest(parameters=parameters), self.assertRaisesRegex(ValueError, error):
                 self.expand(case, parameters)
         with self.assertRaisesRegex(ValueError, r"\{workload\} in '\{workload\}-x' must be a string or a number"):
             load({"{workload}-x": {**GLUTTON, "parameters": {"p": [{"workload": None}]}}})
-        with self.assertRaisesRegex(ValueError, r"case c has \{users\}, which none"):
+        with self.assertRaisesRegex(ValueError, r"case c has \{users\}, which its parameters or subcases leave unset"):
             load({"c": glutton({"master": {"run-time": "1m", "users": "{users}"}})})
 
 

@@ -84,7 +84,7 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
         if unset:
             raise ValueError(
                 f"{scenarios_file}: case {name} has {', '.join('{' + p + '}' for p in sorted(unset))},"
-                " which none of its parameters or subcases set"
+                " which its parameters or subcases leave unset"
             )
         if "type" in case:
             raise ValueError(
@@ -173,8 +173,9 @@ def placeholders(value: object) -> set[str]:
 def with_parameters(where: str, cases: dict) -> dict:
     """The cases, one with `parameters` replaced by a case of each choice of
     one entry from every list of them, in their order, with the entries'
-    values in its placeholders. Those its subcases set are left to them, each
-    subcase that does not set one given the parameter's value."""
+    values in its placeholders, null in those an entry does not set. Those its
+    subcases set are left to them, each subcase that does not set one given
+    the parameter's value."""
     out = {}
 
     def add(name: object, case: object) -> None:
@@ -197,7 +198,23 @@ def with_parameters(where: str, cases: dict) -> dict:
         ):
             raise ValueError(f"{where}: case {name}'s `{PARAMETERS}` must be a mapping of names to lists of values")
         subcases = case.get(SUBCASES) if isinstance(case.get(SUBCASES), dict) else {}
-        theirs = set().union(*(keys for keys in subcases.values() if isinstance(keys, dict)))
+        # In the order the subcases give them, as each subcase is printed.
+        theirs = dict.fromkeys(key for keys in subcases.values() if isinstance(keys, dict) for key in keys).keys()
+        body = {key: keys for key, keys in case.items() if key not in (PARAMETERS, SUBCASES)}
+        taken = placeholders([keys for keys in subcases.values() if isinstance(keys, dict)])
+        given = set().union(*(entry for entries in parameters.values() for entry in entries))
+        # Each set by none of them, or set by one and used by none, is a typo.
+        unset = ((placeholders(name) | placeholders(body)) - given - theirs) | (taken - given)
+        if unset:
+            raise ValueError(
+                f"{where}: case {name} has {', '.join('{' + p + '}' for p in sorted(unset))},"
+                " which none of its parameters or subcases set"
+            )
+        unused = given - placeholders(name) - placeholders(body) - taken
+        if unused:
+            raise ValueError(
+                f"{where}: case {name}'s parameters set {', '.join(sorted(unused))}, which it does not use"
+            )
         for choice in itertools.product(*parameters.values()):
             values = {}
             for entry in choice:
@@ -209,16 +226,13 @@ def with_parameters(where: str, cases: dict) -> dict:
             if not isinstance(renamed, str):
                 raise ValueError(f"{where}: case {name} is named {renamed!r}, not a string")
             what = f"case {renamed}"
-            expanded = {
-                key: substituted(keys, {k: v for k, v in values.items() if k not in theirs}, what)
-                for key, keys in case.items()
-                if key != PARAMETERS
-            }
+            mine = {p: values.get(p) for p in placeholders(body) - theirs}
+            expanded = {key: substituted(keys, mine, what) for key, keys in case.items() if key != PARAMETERS}
             if subcases:
                 expanded[SUBCASES] = {
                     subcase: (
                         {
-                            **{k: values[k] for k in theirs & values.keys()},
+                            **{k: values.get(k) for k in theirs},
                             **{k: substituted(v, values, f"{what}'s subcase {subcase}") for k, v in keys.items()},
                         }
                         if isinstance(keys, dict)
@@ -232,8 +246,8 @@ def with_parameters(where: str, cases: dict) -> dict:
 
 def with_subcases(where: str, cases: dict) -> dict[str, dict]:
     """The cases, one with `subcases` replaced by a case per subcase, in their
-    order, with the subcase's values in its placeholders, which SUBCASE says
-    it is a subcase of."""
+    order, with the subcase's values in its placeholders, null in those it
+    does not set, which SUBCASE says it is a subcase of."""
     out = {}
     for name, case in cases.items():
         if not isinstance(case, dict):
@@ -247,17 +261,32 @@ def with_subcases(where: str, cases: dict) -> dict[str, dict]:
         if not isinstance(subcases, dict) or not subcases:
             raise ValueError(f"{where}: case {name}'s `{SUBCASES}` must be a mapping of names to the values they set")
         base = {key: value for key, value in case.items() if key != SUBCASES}
+        used = placeholders(base)
+        unset = used - set().union(*(values for values in subcases.values() if isinstance(values, dict)))
+        if unset:
+            raise ValueError(
+                f"{where}: case {name} has {', '.join('{' + p + '}' for p in sorted(unset))},"
+                " which none of its subcases set"
+            )
         for subcase, values in subcases.items():
             if not isinstance(subcase, str) or not LABEL_RE.fullmatch(subcase):
                 raise ValueError(f"{where}: case {name}'s subcase {subcase!r} is not a valid label value")
             values = values or {}
             if not isinstance(values, dict):
                 raise ValueError(f"{where}: case {name}'s subcase {subcase} is not a mapping")
+            unused = values.keys() - used
+            if unused:
+                raise ValueError(
+                    f"{where}: case {name}'s subcase {subcase} sets {', '.join(sorted(unused))}, which it does not use"
+                )
             renamed = f"{name}-{subcase}"
             if renamed in cases or renamed in out:
                 raise ValueError(f"{where}: case {name}'s subcase {subcase} would be {renamed}, which is another case")
             what = f"case {renamed}"
-            out[renamed] = {**substituted(base, values, what), SUBCASE: {"of": name, "name": subcase}}
+            out[renamed] = {
+                **substituted(base, {**dict.fromkeys(used), **values}, what),
+                SUBCASE: {"of": name, "name": subcase},
+            }
     return out
 
 

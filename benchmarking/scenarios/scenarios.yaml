@@ -46,12 +46,16 @@
 # `parameters` makes a case of each choice of one entry from every one of its
 # lists, in their order: the case with the entry's values in its placeholders,
 # `{name}` in its name or any of its values. A value that is one placeholder
-# takes the entry's value as it is, null dropping its key; one in a longer
-# value, as in the name, takes its text. Each case so made is one of its own.
+# takes the entry's value as it is, null dropping its key, and null when the
+# entry does not set it; one in a longer value, as in the name, takes its text,
+# which every entry has to set. A placeholder none of the entries sets, or a
+# name an entry sets that no placeholder has, is refused. Each case so made is
+# one of its own.
 #
 # `subcases` makes a case of each of its entries, <case>-<subcase>: the case
 # with the entry's values in its placeholders, as a parameter's are, and over
-# the parameters'; an entry's values can take the parameters' in theirs.
+# the parameters'; an entry's values can take the parameters' in theirs, and
+# one it does not set is the parameter's, or null.
 # --scenario <case> runs them all one after another, then the type's summary of
 # them all; --scenario <case>-<subcase> just that one. Those alike in their
 # cluster share one, applied for them all.
@@ -166,11 +170,8 @@ cases:
       # 10 VUs for 5 minutes, measured three times.
       - workload: glutton
         count: 3
-        configuration: null
         run-time: 5m
         users: 10
-        workload-timeout: null
-        actor-egress-allow: null
       # 3 VUs for 2 minutes, on the cluster with mock-llm.
       - workload: openclaw
         count: 1
@@ -185,7 +186,6 @@ cases:
       class:
       - suffix: ""
         sandbox-class: gvisor
-        nested-virtualization: null
       - suffix: -microvm
         sandbox-class: microvm
         nested-virtualization: true
@@ -239,16 +239,13 @@ cases:
         workload-timeout: "{workload-timeout}"
         actor-egress-allow: "{actor-egress-allow}"
     subcases:
-      baseline: {users: 100, spawn-rate: 10, run-time: "{run-time}", suspend-disabled: true, wait: null}
+      baseline: {users: 100, spawn-rate: 10, run-time: "{run-time}", suspend-disabled: true}
       "10": {users: 100, spawn-rate: "{spawn-rate}", run-time: "{run-time}", suspend-disabled: false, wait: "{wait-10}"}
       "25": {users: 250, spawn-rate: "{spawn-rate}", run-time: "{run-time-25}", suspend-disabled: false, wait: "{wait-25}"}
       "50": {users: 500, spawn-rate: "{spawn-rate}", run-time: "{run-time-50}", suspend-disabled: false, wait: "{wait-50}"}
     parameters:
       workload:
       - workload: glutton
-        configuration: null
-        workload-timeout: null
-        actor-egress-allow: null
         spawn-rate: 10
         run-time: 3m
         run-time-25: 3m
