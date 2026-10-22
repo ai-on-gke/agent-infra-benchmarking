@@ -20,6 +20,7 @@ import argparse
 
 from . import ate_env, images, locust, monitoring, reports, sandbox_benchmark, workloads
 from .cluster import Cluster
+from .cluster_configs import CLUSTER_CONFIGS, ClusterConfig, from_infra
 from .log import log
 
 RUNNERS = {"locust": locust, "sandbox-benchmark": sandbox_benchmark}
@@ -48,6 +49,14 @@ def check(name: str, case: dict) -> None:
     RUNNERS[case["type"]].check_case(name, case, deploy_workloads=True)
 
 
+def cluster_config(name: str, case: dict) -> ClusterConfig:
+    """The cluster the case runs on, as its type asks for it; a noop's on any
+    configuration its `noop.infra.cluster.configuration` picks."""
+    if case["type"] == "noop":
+        return from_infra(name, "noop.infra", case["noop"].get("infra"), tuple(CLUSTER_CONFIGS.values()))
+    return RUNNERS[case["type"]].cluster_config(name, case)
+
+
 def check_run_id(run_id: str) -> str:
     # The runs' pods are labeled with it.
     if not reports.LABEL_RE.fullmatch(run_id):
@@ -70,3 +79,12 @@ def run(name: str, case: dict, run_id: str, cluster: Cluster, **options: object)
     # First, so it is watching before the run deploys anything to watch.
     monitoring.deploy(cluster)
     RUNNERS[case["type"]].run(cluster, name, case, run_id, **options)
+
+
+def summarize(runs: list[tuple[str, str, dict]], run_id: str, bucket: str | None, report_prefix: str) -> None:
+    """What a case's type does once all of it has run, its subcases too, if
+    it does anything: runs are each record of each, its case's name and the
+    case. bucket is the one they all reported to, if it is still there."""
+    summarize = getattr(RUNNERS.get(runs[0][2]["type"]), "summarize", None)
+    if summarize:
+        summarize(runs, run_id, bucket, report_prefix)

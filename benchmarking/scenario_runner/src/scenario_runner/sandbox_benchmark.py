@@ -12,16 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runs a case of type sandbox-benchmark: ai-sandbox-benchmark's tests on each
-of its providers in turn, each as a run of the comparator Job of
-sandbox-benchmark/manifests/comparator-job.yaml, and combines their results
-into those of one comparator run of them all. The case's `comparator` names
-the providers, the tests by function name, how many times each runs and how
-many warmup runs go before. The substrate provider runs them through
+"""Runs a case of type sandbox-benchmark: ai-sandbox-benchmark's tests on its
+provider, as a run of the comparator Job of
+sandbox-benchmark/manifests/comparator-job.yaml. The case's `sandbox-benchmark`
+names the provider, the tests by function name, how many times each runs and
+how many warmup runs go before. The substrate provider runs them through
 agent-substrate/env deployed for them by ate_env, whose pool and environments
-`env-worker-count`, `actor-memory` and `actor-cpu` size; local runs them in the
-comparator's own pod; e2b, daytona, modal, anthropic and openai in their
-clouds, with the PROVIDER_KEYS of the scenario-runner's environment."""
+its `env-worker-count`, `actor-memory` and `actor-cpu` size; local runs them in
+the comparator's own pod; e2b, daytona, modal, anthropic and openai in their
+clouds, with the PROVIDER_KEYS of the scenario-runner's environment, e2b's,
+modal's and daytona's sandboxes sized by their `cpu` and `memory`, openai's by
+its `container-size` tier. A case's
+subcases, each typically another provider, report side by side, and summarize
+combines their results into those of one comparator run of them all."""
 
 from __future__ import annotations
 
@@ -41,8 +44,10 @@ from . import RUNNER_DIR, ate_env, images, jobs, reports, run_info, workloads
 from . import sandbox_benchmark_combine as combine
 from . import sandbox_benchmark_cost_sheet as costs
 from .cluster import Cluster
+from .cluster_configs import CommonCluster, from_infra
+from .install import INSTALL, SANDBOX_CLASS, SUBSTRATE, control_plane, sandbox_class
 from .log import ON_CLOUD_RUN, log
-from .process import failure, stream
+from .process import stream
 
 MANIFEST = RUNNER_DIR.parent / "sandbox-benchmark" / "manifests" / "comparator-job.yaml"
 AI_SANDBOX_BENCHMARK_DIR = ate_env.DEPENDENCY_REPOS / "ai-sandbox-benchmark"
@@ -59,12 +64,28 @@ STOP_TIMEOUT_SECS = 150
 DEFAULT_MAX_FAILURE_RATIO = 0.01
 # ate-env manifest's own default.
 DEFAULT_ENV_WORKER_COUNT = 5
-CASE_KEYS = {
-    "type", "infra", "repeats", "skip-substrate-install", "sandbox-class", "env-worker-count", "actor-memory",
-    "actor-cpu", "max-failure-ratio", "comparator", "cost-sheet", "bare-metal",
-}  # fmt: skip
-COMPARATOR_KEYS = {"providers", "tests", "runs", "warmup-runs"}
+# The case's mapping of its type, and what it may state.
+TYPE = "sandbox-benchmark"
+KEYS = {"infra", INSTALL, "provider", "tests", "runs", "warmup-runs", "max-failure-ratio", "cost-sheet"}
 PROVIDERS = ("substrate", "local", "e2b", "daytona", "modal", "anthropic", "openai")
+# What a provider's mapping may state besides its name, and their defaults.
+PROVIDER_OPTIONS = {
+    "substrate": {
+        "env-worker-count": DEFAULT_ENV_WORKER_COUNT,
+        "actor-memory": ate_env.DEFAULT_ACTOR_MEMORY,
+        "actor-cpu": ate_env.DEFAULT_ACTOR_CPU,
+    },
+    # The sandbox's size, the provider's own when unset; e2b's in whole vCPUs,
+    # daytona's in whole vCPUs and GiB.
+    "e2b": {"cpu": None, "memory": None},
+    "modal": {"cpu": None, "memory": None},
+    "daytona": {"cpu": None, "memory": None},
+    # One of CONTAINER_SIZES, OpenAI's default when unset; see
+    # https://developers.openai.com/api/docs/guides/agents-api/environments/openai-hosted
+    "openai": {"container-size": None},
+}
+CONTAINER_SIZES = ("small", "medium", "large")
+CPU_RE = re.compile(r"[1-9][0-9]*m?|[0-9]*\.[0-9]+")
 # The API keys a provider needs, read from the scenario-runner's environment
 # and handed to the comparator in the Secret PROVIDER_SECRET, which the
 # manifest's env reads; have to match it.
@@ -111,67 +132,117 @@ def whole(value: object, least: int) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= least
 
 
+def provider_name(case: dict) -> str:
+    """The case's provider, checked or not."""
+    provider = (case.get(TYPE) or {}).get("provider")
+    return provider.get("name", "substrate") if isinstance(provider, dict) else "substrate"
+
+
+def check_size(where: str, provider: dict) -> dict:
+    """e2b's, modal's or daytona's provider with its `cpu` and `memory` checked."""
+    cpu, memory = provider["cpu"], provider["memory"]
+    daytona = provider["name"] == "daytona"
+    if cpu is not None and (not isinstance(cpu, str) or not CPU_RE.fullmatch(cpu)):
+        raise ValueError(f"{where}.cpu must be a quoted cpu quantity such as \"2\" or \"1500m\", got {cpu!r}")
+    if cpu is not None and provider["name"] != "modal" and not workloads.cpu_cores(cpu).is_integer():
+        raise ValueError(f"{where}.cpu must be whole vCPUs on {provider['name']}, got {cpu!r}")
+    if memory is not None:
+        mib = workloads.memory_mib(memory) if isinstance(memory, str) else None
+        unit, step = ("GiB", 1024) if daytona else ("MiB", 1)
+        if mib is None or mib % step:
+            raise ValueError(f"{where}.memory must be a quantity of whole {unit} such as 2Gi, got {memory!r}")
+    return provider
+
+
+def check_provider(name: str, provider: object) -> dict:
+    """The case's `provider` with its options' defaults filled in."""
+    where = f"case {name}'s `{TYPE}.provider`"
+    if not isinstance(provider, dict):
+        raise ValueError(f"{where} must be a mapping of its `name` and options, such as {{name: e2b}}")
+    if provider.get("name") not in PROVIDERS:
+        raise ValueError(f"{where}.name must be one of {', '.join(PROVIDERS)}")
+    options = PROVIDER_OPTIONS.get(provider["name"], {})
+    unknown = provider.keys() - {"name"} - options.keys()
+    if unknown:
+        takes = f"takes only {', '.join(options)}" if options else "takes no options"
+        raise ValueError(f"{where} has unknown {', '.join(sorted(unknown))}; {provider['name']} {takes}")
+    provider = {**options, **provider}
+    if provider["name"] in ("e2b", "modal", "daytona"):
+        return check_size(where, provider)
+    if provider["name"] == "openai" and provider["container-size"] not in (None, *CONTAINER_SIZES):
+        raise ValueError(f"{where}.container-size must be one of {', '.join(CONTAINER_SIZES)}")
+    if provider["name"] != "substrate":
+        return provider
+    count = provider["env-worker-count"]
+    if not whole(count, 1):
+        raise ValueError(f"{where}.env-worker-count must be a whole number from 1, got {count!r}")
+    memory = provider["actor-memory"]
+    if not isinstance(memory, str) or workloads.memory_mib(memory) is None:
+        raise ValueError(f"{where}.actor-memory must be a Kubernetes quantity such as 1Gi, got {memory!r}")
+    cpu = provider["actor-cpu"]
+    if not isinstance(cpu, str) or not CPU_RE.fullmatch(cpu):
+        raise ValueError(f"{where}.actor-cpu must be a quoted cpu quantity such as \"2\" or \"1500m\", got {cpu!r}")
+    return provider
+
+
 def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     """The case with its defaults filled in."""
     if not reports.LABEL_RE.fullmatch(name):
         raise ValueError(f"case name {name!r} is not a valid label value")
-    unknown = case.keys() - CASE_KEYS
+    options = case.get(TYPE)
+    if not isinstance(options, dict):
+        raise ValueError(f"case {name} has no `{TYPE}` mapping")
+    unknown = options.keys() - KEYS
     if unknown:
-        raise ValueError(f"case {name} has unknown {', '.join(sorted(unknown))}")
-    if case.get("sandbox-class", "gvisor") not in workloads.SANDBOX_CONFIGS:
-        raise ValueError(f"case {name}'s `sandbox-class` must be one of {', '.join(workloads.SANDBOX_CONFIGS)}")
-    count = case.get("env-worker-count", DEFAULT_ENV_WORKER_COUNT)
-    if not whole(count, 1):
-        raise ValueError(f"case {name}'s `env-worker-count` must be a whole number from 1, got {count!r}")
-    memory = case.get("actor-memory", ate_env.DEFAULT_ACTOR_MEMORY)
-    if not isinstance(memory, str) or workloads.memory_mib(memory) is None:
-        raise ValueError(f"case {name}'s `actor-memory` must be a Kubernetes quantity such as 1Gi, got {memory!r}")
-    cpu = case.get("actor-cpu", ate_env.DEFAULT_ACTOR_CPU)
-    if not isinstance(cpu, str) or not re.fullmatch(r"[1-9][0-9]*m?|[0-9]*\.[0-9]+", cpu):
-        raise ValueError(f"case {name}'s `actor-cpu` must be a quoted cpu quantity such as \"2\" or \"1500m\", got {cpu!r}")
-    ratio = case.get("max-failure-ratio", DEFAULT_MAX_FAILURE_RATIO)
+        raise ValueError(f"case {name}'s `{TYPE}` has unknown {', '.join(sorted(unknown))}")
+    ratio = options.get("max-failure-ratio", DEFAULT_MAX_FAILURE_RATIO)
     if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 <= ratio <= 1:
-        raise ValueError(f"case {name}'s `max-failure-ratio` must be a number from 0 to 1, got {ratio!r}")
-    if not isinstance(case.get("cost-sheet", False), bool):
-        raise ValueError(f"case {name}'s `cost-sheet` must be true or false")
-
-    comparator = case.get("comparator")
-    if not isinstance(comparator, dict):
-        raise ValueError(f"case {name} has no `comparator` mapping")
-    unknown = comparator.keys() - COMPARATOR_KEYS
-    if unknown:
-        raise ValueError(f"case {name}'s `comparator` has unknown {', '.join(sorted(unknown))}")
-    tests = comparator.get("tests")
+        raise ValueError(f"case {name}'s `{TYPE}.max-failure-ratio` must be a number from 0 to 1, got {ratio!r}")
+    if not isinstance(options.get("cost-sheet", False), bool):
+        raise ValueError(f"case {name}'s `{TYPE}.cost-sheet` must be true or false")
+    tests = options.get("tests")
     if not isinstance(tests, list) or not tests or not all(isinstance(t, str) for t in tests):
-        raise ValueError(f"case {name}'s `comparator.tests` must be a list of test function names")
+        raise ValueError(f"case {name}'s `{TYPE}.tests` must be a list of test function names")
     known = test_names()
     if known is not None and set(tests) - known:
         raise ValueError(
-            f"case {name}'s `comparator.tests` has unknown {', '.join(sorted(set(tests) - known))};"
+            f"case {name}'s `{TYPE}.tests` has unknown {', '.join(sorted(set(tests) - known))};"
             f" there are {', '.join(sorted(known))}"
         )
-    if not whole(comparator.get("runs"), 1):
-        raise ValueError(f"case {name}'s `comparator.runs` must be a whole number from 1")
-    if not whole(comparator.get("warmup-runs", 0), 0):
-        raise ValueError(f"case {name}'s `comparator.warmup-runs` must be a whole number")
-    providers = comparator.get("providers", ["substrate"])
-    if (
-        not isinstance(providers, list)
-        or not providers
-        or not set(providers) <= set(PROVIDERS)
-        or len(set(providers)) != len(providers)
-    ):
-        raise ValueError(f"case {name}'s `comparator.providers` must be a list of distinct {', '.join(PROVIDERS)}")
+    if not whole(options.get("runs"), 1):
+        raise ValueError(f"case {name}'s `{TYPE}.runs` must be a whole number from 1")
+    if not whole(options.get("warmup-runs", 0), 0):
+        raise ValueError(f"case {name}'s `{TYPE}.warmup-runs` must be a whole number")
+    provider = check_provider(name, options.get("provider", {"name": "substrate"}))
+    # env runs on substrate, which the cluster has only with it.
+    if provider["name"] == "substrate" and control_plane(case) != SUBSTRATE:
+        raise ValueError(f"case {name}'s substrate provider needs `{TYPE}.{INSTALL}.{SUBSTRATE}.{SANDBOX_CLASS}`")
+    cluster_config(name, case)
     return {
-        "sandbox-class": "gvisor",
-        "env-worker-count": DEFAULT_ENV_WORKER_COUNT,
-        "actor-memory": ate_env.DEFAULT_ACTOR_MEMORY,
-        "actor-cpu": ate_env.DEFAULT_ACTOR_CPU,
-        "max-failure-ratio": DEFAULT_MAX_FAILURE_RATIO,
-        "cost-sheet": False,
         **case,
-        "comparator": {"providers": ["substrate"], "warmup-runs": 0, **comparator},
+        TYPE: {
+            "warmup-runs": 0,
+            "max-failure-ratio": DEFAULT_MAX_FAILURE_RATIO,
+            "cost-sheet": False,
+            **options,
+            "provider": provider,
+        },
     }
+
+
+def cluster_config(name: str, case: dict) -> CommonCluster:
+    """The cluster the case runs on, its comparator Job whatever its
+    provider: its `sandbox-benchmark.infra.cluster`."""
+    return from_infra(name, f"{TYPE}.infra", case[TYPE].get("infra"))
+
+
+def report_folder(record: str, key: str, case: dict) -> str:
+    """Where under the run id the run of case key recorded as record reports:
+    in <record>/<provider>/, or a subcase's in <group record>/<subcase>/,
+    beside the others of its group."""
+    if reports.SUBCASE in case:
+        return f"{reports.group_record(record, key, case)}/{case[reports.SUBCASE]['name']}"
+    return f"{record}/{provider_name(case)}"
 
 
 def commit(path: object) -> str | None:
@@ -220,8 +291,8 @@ def run_provider(
     cluster: Cluster,
     name: str,
     case: dict,
-    provider: str,
     run_id: str,
+    folder: str,
     comparator_image: str,
     image_repo: str,
     deploy_workloads: bool,
@@ -231,24 +302,26 @@ def run_provider(
     repeat: int,
     warmup: int,
 ) -> None:
-    """Runs the case's tests on provider, as one comparator Job, whose reports
-    go under <run_id>/<name>/<provider>/."""
+    """Runs the case's tests on its provider, as one comparator Job, whose
+    reports go under <run_id>/<folder>/."""
+    options = case[TYPE]
+    provider = options["provider"]["name"]
+    cpu, memory = options["provider"].get("cpu"), options["provider"].get("memory")
     keys = PROVIDER_KEYS.get(provider, ())
     missing = [key for key in keys if not os.environ.get(key)]
     if missing:
         raise SandboxBenchmarkError(f"{provider} needs {', '.join(missing)} in the environment")
-    sandbox_class = case["sandbox-class"]
-    comparator = case["comparator"]
     on_env = provider == "substrate"
     template = None
     if on_env:
         if deploy_workloads:
+            env = options["provider"]
             ate_env.deploy(
-                cluster, image_repo, sandbox_class, case["env-worker-count"], case["actor-memory"], case["actor-cpu"]
+                cluster, image_repo, sandbox_class(case), env["env-worker-count"], env["actor-memory"], env["actor-cpu"]
             )
         template = workloads.deployed_template(cluster, ate_env.TEMPLATE, ate_env.ENV_ATESPACE)
         # Matters when the template was not deployed by this run (--no-deploy-workloads).
-        want = workloads.SANDBOX_CONFIGS[sandbox_class][1]
+        want = workloads.SANDBOX_CONFIGS[sandbox_class(case)][1]
         have = (template.get("sandboxConfig") or {}).get("sandboxClass")
         if have != want:
             raise SandboxBenchmarkError(
@@ -257,7 +330,7 @@ def run_provider(
             )
 
     info = run_info.collect(
-        cluster, case, ate_env.TEMPLATE if on_env else None, template, {COMPARATOR_IMAGE: comparator_image}, bucket,
+        cluster, case, cluster_config(name, case), ate_env.TEMPLATE if on_env else None, template, {COMPARATOR_IMAGE: comparator_image}, bucket,
         pool=(ate_env.NAMESPACE, ate_env.POOL),
     )  # fmt: skip
     if on_env:
@@ -268,10 +341,10 @@ def run_provider(
         "COMPARATOR_IMAGE": comparator_image,
         "BENCHMARK_RUNNER_KSA": cluster.runner_ksa,
         "BENCHMARK_PROVIDER": provider,
-        "BENCHMARK_TESTS": ",".join(comparator["tests"]),
-        "BENCHMARK_RUNS": str(comparator["runs"]),
-        "BENCHMARK_WARMUP_RUNS": str(comparator["warmup-runs"]),
-        "MAX_FAILURE_RATIO": str(case["max-failure-ratio"]),
+        "BENCHMARK_TESTS": ",".join(options["tests"]),
+        "BENCHMARK_RUNS": str(options["runs"]),
+        "BENCHMARK_WARMUP_RUNS": str(options["warmup-runs"]),
+        "MAX_FAILURE_RATIO": str(options["max-failure-ratio"]),
         "BENCHMARK_RUN_ID": run_id,
         "BENCHMARK_RECORD_NAME": name,
         "BENCHMARK_CASE": test_case or name,
@@ -280,9 +353,13 @@ def run_provider(
         "BENCHMARK_RUN_INFO": base64.b64encode(json.dumps(info).encode()).decode(),
         "BENCHMARK_REPORT_BUCKET": bucket,
         "BENCHMARK_REPORT_PREFIX": report_prefix,
+        "BENCHMARK_REPORT_FOLDER": folder,
         "SUBSTRATE_ENV_API_ADDR": ate_env.API_ADDR,
         "SUBSTRATE_ATESPACE": ate_env.ENV_ATESPACE,
         "SUBSTRATE_TEMPLATE": f"{ate_env.ENV_ATESPACE}/{ate_env.TEMPLATE}",
+        "SANDBOX_CPU": str(workloads.cpu_cores(cpu)) if cpu else "",
+        "SANDBOX_MEMORY_MIB": str(int(workloads.memory_mib(memory))) if memory else "",
+        "OPENAI_CONTAINER_SIZE": options["provider"].get("container-size") or "",
     }
 
     stream(
@@ -305,11 +382,10 @@ def run_provider(
             "delete", "job", JOB, "--ignore-not-found", "--cascade=foreground", "--wait", namespace=NAMESPACE
         )
     )
-    folder = f"{name}/{provider}"
     log(
         f"sandbox-benchmark: running {name} on {provider} (run {run_id}):\n"
         f"  comparator: {comparator_image}\n"
-        f"  tests: {values['BENCHMARK_TESTS']} ({comparator['runs']} runs, {comparator['warmup-runs']} warmup)\n"
+        f"  tests: {values['BENCHMARK_TESTS']} ({options['runs']} runs, {options['warmup-runs']} warmup)\n"
         f"  reports: gs://{bucket}/{report_prefix}/{run_id}/{folder}/"
     )
     stream(cluster.kubectl("apply", "-f", "-"), input=Template(MANIFEST.read_text()).substitute(values))
@@ -342,52 +418,72 @@ def run_provider(
 
 
 def combine_reports(
-    bucket: str, report_prefix: str, run_id: str, name: str, providers: list[str], cost_sheet: bool = False
+    bucket: str | None, report_prefix: str, run_id: str, name: str, labels: list[str], cost_sheet: bool = False
 ) -> None:
-    """Combines the providers' reports in the bucket into results.json and
-    comparison.md beside their folders, as one comparator run of them all
-    would have them, and with cost_sheet cost_sheet.csv. Best-effort: each
-    provider's own reports are the record either way."""
+    """Combines the reports in name's folders labels into perf_results.csv
+    beside them, as one comparator run of them all would have them, and with
+    cost_sheet cost_sheet.csv: read from and written to bucket,
+    or without one the downloaded reports, and written to those too unless on
+    Cloud Run. Best-effort: each run's own reports are the record either way."""
     prefix = f"{report_prefix}/{run_id}/{name}"
+    local = reports.REPORTS_DIR / run_id / name
+    if not bucket and ON_CLOUD_RUN:
+        log(f"sandbox-benchmark: {name}'s reports are in no bucket left to combine them from", "WARNING")
+        return
     sources = []
     try:
-        bucket_ = storage.Client().bucket(bucket)
-        for provider in providers:
+        bucket_ = storage.Client().bucket(bucket) if bucket else None
+        for label in labels:
             texts = {}
             for file in (combine.RESULTS_JSON, combine.RUN_JSON):
-                blob = bucket_.blob(f"{prefix}/{provider}/{file}")
-                texts[file] = blob.download_as_text() if blob.exists() else None
+                if bucket_:
+                    blob = bucket_.blob(f"{prefix}/{label}/{file}")
+                    texts[file] = blob.download_as_text() if blob.exists() else None
+                else:
+                    path = local / label / file
+                    texts[file] = path.read_text() if path.is_file() else None
             if None in texts.values():
-                log(f"sandbox-benchmark: {provider} left out of the combined results: it recorded none", "WARNING")
+                log(f"sandbox-benchmark: {label} left out of the combined results: it recorded none", "WARNING")
                 continue
             sources.append(
                 combine.source(
-                    provider,
+                    label,
                     json.loads(texts[combine.RESULTS_JSON]),
                     json.loads(texts[combine.RUN_JSON]),
-                    f"gs://{bucket}/{prefix}/{provider}",
+                    f"gs://{bucket}/{prefix}/{label}" if bucket_ else str(local / label),
                 )
             )
         if not sources:
-            log("sandbox-benchmark: no provider recorded results to combine", "WARNING")
+            log(f"sandbox-benchmark: nothing in {name} recorded results to combine", "WARNING")
             return
         combine.check(sources)
-        combined = combine.combined_results(sources)
-        bucket_.blob(f"{prefix}/{combine.RESULTS_JSON}").upload_from_string(
-            json.dumps(combined, indent=2) + "\n", content_type="application/json"
-        )
-        bucket_.blob(f"{prefix}/{combine.COMPARISON_MD}").upload_from_string(
-            combine.render(sources), content_type="text/markdown"
-        )
+        files = {combine.PERF_RESULTS_CSV: combine.csv_text(combine.perf_results(sources))}
         if cost_sheet:
-            bucket_.blob(f"{prefix}/{costs.COST_SHEET_CSV}").upload_from_string(
-                costs.csv_text(combined), content_type="text/csv"
-            )
+            files[costs.COST_SHEET_CSV] = combine.csv_text(costs.sheet(sources))
+        for file, text in files.items():
+            if bucket_:
+                bucket_.blob(f"{prefix}/{file}").upload_from_string(text, content_type="text/csv")
+            if not ON_CLOUD_RUN:
+                local.mkdir(parents=True, exist_ok=True)
+                (local / file).write_text(text)
     except Exception as exc:
-        log(f"sandbox-benchmark: could not combine the providers' results: {type(exc).__name__}: {exc}", "WARNING")
+        log(f"sandbox-benchmark: could not combine {name}'s results: {type(exc).__name__}: {exc}", "WARNING")
         return
-    names = ", ".join(s["name"] for s in sources)
-    log(f"sandbox-benchmark: {names} combined in gs://{bucket}/{prefix}/{combine.COMPARISON_MD}")
+    where = f"gs://{bucket}/{prefix}" if bucket else str(local)
+    log(f"sandbox-benchmark: {', '.join(s['name'] for s in sources)} combined in {where}/{combine.PERF_RESULTS_CSV}")
+
+
+def summarize(runs: list[tuple[str, str, dict]], run_id: str, bucket: str | None, report_prefix: str) -> None:
+    """Combines the runs' results, each of one provider, by the folder they
+    report beside one another in: a subcase's with the others of its group, the
+    first the one the others are compared with, under the group's record."""
+    folders = {}
+    for record, key, case in runs:
+        name, label = report_folder(record, key, case).rsplit("/", 1)
+        folder = folders.setdefault(name, {"labels": [], "cost-sheet": (case.get(TYPE) or {}).get("cost-sheet", False)})
+        folder["labels"].append(label)
+    for name, folder in folders.items():
+        combine_reports(bucket, report_prefix, run_id, name, folder["labels"], folder["cost-sheet"])
 
 
 def run(
@@ -406,67 +502,49 @@ def run(
     keeps_bucket: bool = False,
 ) -> None:
     """Runs the case, recorded under name, as part of run_id, by default a UTC
-    timestamp and the commit: on each of its providers in turn, then combines
-    their results, with the images built from this tree into image_repo. A
-    provider whose run fails does not stop the ones after it; the run fails
-    once they have run. test_case and repeat say which case it is a repeat of;
-    repeat is 0 for a case run once, or a warm-up, which warmup numbers. Without
-    deploy_workloads, uses the env and template already deployed. The reports
-    go under report_prefix in report_bucket, by default the cluster's own,
-    which keeps_bucket says outlives the run, as a dev infra's does. Expects
-    the cluster's credentials in its kubeconfig."""
+    timestamp and the commit, on its provider, with the images built from this
+    tree into image_repo. test_case and repeat say which case it is a repeat
+    of; repeat is 0 for a case run once, or a warm-up, which warmup numbers.
+    Without deploy_workloads, uses the env and template already deployed. The
+    reports go under report_prefix in report_bucket, by default the cluster's
+    own, which keeps_bucket says outlives the run, as a dev infra's does, in
+    report_folder. Expects the cluster's credentials in its kubeconfig."""
+    folder = report_folder(name, test_case or name, case)
     case = check_case(name, case, deploy_workloads)
-    sandbox_class = case["sandbox-class"]
-    providers = case["comparator"]["providers"]
-    # env's workers would never schedule past the sandboxed pool's taint.
-    if "substrate" in providers and sandbox_class != cluster.sandbox_class:
+    if case[TYPE]["provider"]["name"] == "substrate" and sandbox_class(case) == "microvm" and not cluster.sandboxed_kvm:
         raise SandboxBenchmarkError(
-            f"case {name} is {sandbox_class}, but cluster {cluster.name}'s sandboxed pool is"
-            f" {cluster.sandbox_class}; set the cluster's sandbox_class to match"
+            f"case {name} is microvm, but cluster {cluster.name}'s sandboxed pool has no /dev/kvm for its guests"
         )
     run_id = run_id or f"{datetime.now(timezone.utc):%Y%m%dt%H%M%Sz}-{images.commit()[:12]}"
     if not reports.LABEL_RE.fullmatch(run_id):
         raise ValueError(f"run id {run_id!r} is not a valid label value")
     bucket = report_bucket or cluster.bucket
-    reports.refuse_reused(bucket, report_prefix, run_id, name)
+    reports.refuse_reused(bucket, report_prefix, run_id, folder)
     # By digest, so the Job runs exactly the image built from this tree even
     # if the tag is pushed again meanwhile; run.json records it.
     comparator_image = images.pin(images.image_ref(images.SANDBOX_BENCHMARK_IMAGES, image_repo, COMPARATOR_IMAGE))
 
-    failed = []
     downloaded = None
     try:
-        for provider in providers:
-            try:
-                run_provider(
-                    cluster, name, case, provider, run_id, comparator_image, image_repo, deploy_workloads, bucket,
-                    report_prefix, test_case, repeat, warmup,
-                )  # fmt: skip
-            except SandboxBenchmarkTimeout:
-                raise
-            except (SandboxBenchmarkError, ate_env.EnvError, workloads.WorkloadError,
-                    subprocess.CalledProcessError) as exc:  # fmt: skip
-                reason = failure(exc) if isinstance(exc, subprocess.CalledProcessError) else str(exc)
-                log(f"sandbox-benchmark: {name} on {provider} failed: {reason}", "ERROR")
-                failed.append(provider)
-        combine_reports(bucket, report_prefix, run_id, name, providers, case["cost-sheet"])
+        run_provider(
+            cluster, name, case, run_id, folder, comparator_image, image_repo, deploy_workloads, bucket,
+            report_prefix, test_case, repeat, warmup,
+        )  # fmt: skip
     finally:
         # A failed run's reports are kept too. On Cloud Run they'd go with the
         # container, so they stay only in the bucket.
         if ON_CLOUD_RUN:
             log(
-                f"sandbox-benchmark: on Cloud Run, so the reports stay only in gs://{bucket}/{report_prefix}/{run_id}/{name}/"
+                f"sandbox-benchmark: on Cloud Run, so the reports stay only in gs://{bucket}/{report_prefix}/{run_id}/{folder}/"
             )
         else:
-            downloaded = reports.download_reports(bucket, report_prefix, run_id, name)
+            downloaded = reports.download_reports(bucket, report_prefix, run_id, folder)
     if downloaded is False and report_bucket is None and keeps_bucket:
-        log(f"sandbox-benchmark: the reports stay in gs://{bucket}/{report_prefix}/{run_id}/{name}/", "WARNING")
+        log(f"sandbox-benchmark: the reports stay in gs://{bucket}/{report_prefix}/{run_id}/{folder}/", "WARNING")
     # The case's own bucket goes with its cluster, so the local copy is the
     # only one; without it the run recorded nothing that lasts.
     elif downloaded is False and report_bucket is None:
         raise SandboxBenchmarkError(
-            f"the reports of {name} could not be downloaded from gs://{bucket}/{report_prefix}/{run_id}/{name}/, which"
+            f"the reports of {name} could not be downloaded from gs://{bucket}/{report_prefix}/{run_id}/{folder}/, which"
             " is destroyed with the cluster; pass --report-bucket to keep them in a bucket of your own"
         )
-    if failed:
-        raise SandboxBenchmarkError(f"{name} failed on {', '.join(failed)} of {', '.join(providers)}")

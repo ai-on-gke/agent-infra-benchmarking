@@ -1,5 +1,5 @@
 # The inputs of common that the scenario-runner and scenarios.yaml's cases pass,
-# so a case can switch infra.cluster.name between the two. Nothing here
+# so a case can switch infra.cluster.configuration between the two. Nothing here
 # reaches GCP.
 
 variable "project_id" {
@@ -54,10 +54,10 @@ variable "sandboxed_machine_type" {
   default     = ""
 }
 
-variable "sandbox_class" {
+variable "nested_virtualization" {
   description = "Unused; taken as common takes it."
-  type        = string
-  default     = "gvisor"
+  type        = bool
+  default     = false
 }
 
 variable "sandboxed_node_count" {

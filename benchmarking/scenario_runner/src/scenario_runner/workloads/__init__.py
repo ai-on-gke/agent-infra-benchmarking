@@ -41,6 +41,9 @@ NAMESPACE = worker_pool.NAMESPACE
 ATESPACE = "benchmark-workloads"
 # The templates whose image is neither ko:// nor a literal, but one of ours.
 TEMPLATE_IMAGES = {"openclaw": "openclaw-workload"}
+# The templates whose actors call mock-llm rather than a real LLM, which needs
+# a node pool of its own (cluster_configs.MOCK_LLM_POOL).
+MOCK_LLM_TEMPLATES = {"openclaw"}
 # Pinned rather than defaulted, so a stale SandboxConfig fails loudly. The
 # templates take the class as its proto enum.
 SANDBOX_CONFIGS = {
@@ -250,8 +253,7 @@ def deploy(
         f" actor_memory={actor_memory} for {', '.join(sized) or 'none of them'},"
         f" otlp_endpoint={otlp}, bucket=gs://{cluster.bucket}/{ATESPACE}/, substrate={substrate.revision()})"
     )
-    # The openclaw actors call it rather than a real LLM.
-    if "openclaw" in names:
+    if MOCK_LLM_TEMPLATES & set(names):
         openclaw.deploy_mock_llm(cluster, image_repo, timeout)
 
     with kubectl_ate(cluster) as ate:
@@ -301,6 +303,11 @@ def memory_mib(quantity: str) -> float | None:
     if not match or match[2] not in QUANTITY_UNITS:
         return None
     return float(match[1]) * QUANTITY_UNITS[match[2]] / 2**20
+
+
+def cpu_cores(quantity: str) -> float:
+    """A Kubernetes cpu quantity, such as "2" or "1500m", in cores."""
+    return int(quantity[:-1]) / 1000 if quantity.endswith("m") else float(quantity)
 
 
 def check_deployed(template: dict, name: str, sandbox_class: str, workload: str, actor_memory: str) -> None:

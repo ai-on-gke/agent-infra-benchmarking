@@ -99,15 +99,16 @@ module "cluster" {
       node_locations = [var.zone]
       labels         = merge(local.substrate_version_label, { "benchmarking-worker" = "true" })
       # The microvm guests boot on /dev/kvm.
-      enable_nested_virtualization = var.sandbox_class == "microvm" && !local.sandboxed_bare_metal
+      enable_nested_virtualization = var.nested_virtualization && !local.sandboxed_bare_metal
       # worker-pool.yaml.tmpl's WorkerPool already tolerates this taint; without
       # it actually applied to the nodes, nothing stops substrate's own
       # control-plane pods (and anything else) from also landing here
       # alongside the workers, which is how a 100-worker run blows past GKE's
-      # 110-pods-per-node cap on this single pinned node.
+      # 110-pods-per-node cap on this single pinned node. Its value names no
+      # class: the workers of any tolerate the key, as atelet does.
       taints = [{
         key    = "ate.dev/sandboxClass"
-        value  = var.sandbox_class
+        value  = "any"
         effect = "NO_SCHEDULE"
       }]
     }

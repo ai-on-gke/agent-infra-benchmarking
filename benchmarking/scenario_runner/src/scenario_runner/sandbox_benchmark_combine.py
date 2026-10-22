@@ -13,18 +13,20 @@
 # limitations under the License.
 
 """Several sandbox-benchmark runs, each of one provider, combined into the
-comparison ai-sandbox-benchmark's comparator prints for a run of them all:
-results.json, every run of every provider, and comparison.md, the
-comparator's tables. sandbox_benchmark.run combines its providers' runs in
-the bucket; combine, runs already downloaded.
+comparison ai-sandbox-benchmark's comparator prints for a run of them all, as
+perf_results.csv: its metrics' mean, P90 and deviation, to import into Sheets.
+sandbox_benchmark.summarize combines a case's subcases' runs; combine, runs
+already downloaded.
 
 The comparator runs every provider's tests at once and reports only each
 provider's averages, so its runs of different providers are not paired and
 separate runs combine into the same tables. They were not measured at the
-same time, though, which comparison.md's sources table shows."""
+same time, though, which each run's run.json shows."""
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import statistics
 from pathlib import Path
@@ -33,7 +35,7 @@ from .log import log
 
 RESULTS_JSON = "results.json"
 RUN_JSON = "run.json"
-COMPARISON_MD = "comparison.md"
+PERF_RESULTS_CSV = "perf_results.csv"
 # What the sources must agree on to be one run's.
 SAME = ("tests", "runs", "warmup_runs", "ai_sandbox_benchmark_commit")
 # The comparator's table rows, and the metrics its total time adds up.
@@ -94,89 +96,70 @@ def total_time(run: dict) -> float:
     return sum(statistics.fmean(run["metrics"][m]) for m in TOTAL_METRICS if run["metrics"].get(m))
 
 
-def test_table(sources: list[dict], test: str) -> list[list[str]]:
-    """The comparator's performance table of the test, as it computes it: of
-    every run, failed ones too, each metric's mean, averaged, ± their
-    population deviation; then the mean total time, and each provider's
-    against the first's."""
-    rows = []
-    of_test = {s["name"]: [r for r in s["runs"] if r["test"] == test] for s in sources}
-    for metric in TABLE_METRICS:
-        row = [metric]
-        for name, runs in of_test.items():
-            means = [statistics.fmean(r["metrics"][metric]) for r in runs if r["metrics"].get(metric)]
-            row.append(f"{statistics.fmean(means):.2f}ms (±{statistics.pstdev(means):.2f})" if means else "N/A")
-        rows.append(row)
-    totals = {name: mean([total_time(r) for r in runs]) for name, runs in of_test.items()}
-    rows.append(["Total Time"] + [f"{t:.2f}ms" if t is not None else "N/A" for t in totals.values()])
-    base = sources[0]["name"]
-    vs = []
-    for name, total in totals.items():
-        if name == base or not totals[base]:
-            vs.append("0%")
-        elif total is not None:
-            vs.append(f"{(total - totals[base]) / totals[base] * 100:+.1f}%")
-        else:
-            vs.append("N/A")
-    rows.append([f"vs {base} %"] + vs)
-    return rows
+def against_first(totals: list[float | None]) -> list[str]:
+    """Each mean total time against the first's, as the comparator has it."""
+    base = totals[0]
+    return [
+        "0%" if i == 0 or not base else f"{(total - base) / base * 100:+.1f}%" if total is not None else "N/A"
+        for i, total in enumerate(totals)
+    ]
 
 
-def markdown_table(headers: list[str], rows: list[list[str]]) -> str:
-    lines = ["| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)]
-    lines += ["| " + " | ".join(row) + " |" for row in rows]
-    return "\n".join(lines) + "\n"
+def stats(values: list[float]) -> list[str]:
+    """Mean, P90 and population deviation, as the sheet's columns have them."""
+    if not values:
+        return ["N/A"] * 3
+    p90 = statistics.quantiles(values, n=10, method="inclusive")[-1] if len(values) > 1 else values[0]
+    return [f"{v:.2f}" for v in (statistics.fmean(values), p90, statistics.pstdev(values))]
 
 
-def source_record(source: dict) -> dict:
-    """Which run the source was, and when."""
-    info = source["info"]
-    return {
-        "name": source["name"],
-        "provider": source["provider"],
-        **{key: info.get(key) for key in ("run_id", "record", "status", "started", "ended")},
-    }
-
-
-def render(sources: list[dict]) -> str:
+def perf_results(sources: list[dict]) -> list[list[str]]:
+    """The perf results sheet's rows: for each test, of every run, failed ones
+    too, each metric's mean, P90 and deviation of the runs' means, then the
+    total time's and the mean total against the first's; and beside the first
+    test the configuration."""
     info = sources[0]["info"]
     names = [s["name"] for s in sources]
-    records = [source_record(s) for s in sources]
-    out = [
-        "# Sandbox benchmark comparison\n",
-        (
-            f"Tests: {', '.join(info['tests'])}; {info['runs']} runs, {info['warmup_runs']} warmup;"
-            f" ai-sandbox-benchmark {info.get('ai_sandbox_benchmark_commit')}.\n"
-        ),
-        "## Sources\n",
-        markdown_table(
-            ["Name", "Provider", "Run", "Record", "Status", "Started", "Ended"],
-            [[str(value) for value in record.values()] for record in records],
-        ),
-    ]
+    summary = [
+        "Test Configuration Summary", "",
+        f"Warmup Runs: {info['warmup_runs']}",
+        f"Measurement Runs: {info['runs']}",
+        f"Tests Used ({len(info['tests'])}): {', '.join(info['tests'])}",
+        f"Providers Used: {', '.join(s['provider'] for s in sources)}",
+        f"Run: {info.get('run_id')}",
+        f"ai-sandbox-benchmark: {(info.get('ai_sandbox_benchmark_commit') or '')[:7]}",
+    ]  # fmt: skip
+    rows = []
     for test in info["tests"]:
-        out += [f"## {test}\n", markdown_table(["Metric"] + names, test_table(sources, test))]
-        # The comparator counts only the errors a provider raises; these are all of them.
-        failed = {s["name"]: sum(1 for r in s["runs"] if r["test"] == test and r["errors"]) for s in sources}
-        if any(failed.values()):
-            out.append(
-                markdown_table(
-                    ["Provider", f"Failed Runs (out of {info['runs']})"],
-                    [[n, f"{f}/{info['runs']}"] for n, f in failed.items()],
-                )
+        of_test = {s["name"]: [r for r in s["runs"] if r["test"] == test] for s in sources}
+        block = [
+            [test] + [cell for name in names for cell in (name, "", "")],
+            ["Metric"] + ["Mean (ms)", "P90 (ms)", "Std Dev (ms)"] * len(names),
+        ]
+        for metric in TABLE_METRICS:
+            block.append(
+                [metric]
+                + [
+                    cell
+                    for runs in of_test.values()
+                    for cell in stats([statistics.fmean(r["metrics"][metric]) for r in runs if r["metrics"].get(metric)])
+                ]
             )
-        else:
-            out.append("No failures recorded for this test.\n")
-    return "\n".join(out)
+        block.append(["Total Time"] + [cell for runs in of_test.values() for cell in stats([total_time(r) for r in runs])])
+        vs = against_first([mean([total_time(r) for r in runs]) for runs in of_test.values()])
+        block.append([f"vs {names[0]} %"] + [cell for v in vs for cell in (v, "", "")])
+        if not rows:
+            side = [""] + summary
+            block += [[""] * len(block[0]) for _ in range(len(side) - len(block))]
+            block = [row + ["", side[i] if i < len(side) else ""] for i, row in enumerate(block)]
+        rows += block + [[]]
+    return rows[:-1]
 
 
-def combined_results(sources: list[dict]) -> dict:
-    return {
-        "providers": [s["name"] for s in sources],
-        "sources": [source_record(s) for s in sources],
-        **{key: sources[0]["info"].get(key) for key in SAME},
-        "runs": [{"provider": s["name"], **run} for s in sources for run in s["runs"]],
-    }
+def csv_text(rows: list[list[str]]) -> str:
+    out = io.StringIO()
+    csv.writer(out).writerows(rows)
+    return out.getvalue()
 
 
 def combine(folders: list[Path], out_dir: Path, names: list[str] | None = None) -> None:
@@ -186,6 +169,5 @@ def combine(folders: list[Path], out_dir: Path, names: list[str] | None = None) 
     sources = read(folders, names)
     check(sources)
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / RESULTS_JSON).write_text(json.dumps(combined_results(sources), indent=2) + "\n")
-    (out_dir / COMPARISON_MD).write_text(render(sources))
-    log(f"sandbox-benchmark: {len(sources)} runs combined in {out_dir / COMPARISON_MD}")
+    (out_dir / PERF_RESULTS_CSV).write_text(csv_text(perf_results(sources)))
+    log(f"sandbox-benchmark: {len(sources)} runs combined in {out_dir / PERF_RESULTS_CSV}")

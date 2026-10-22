@@ -14,8 +14,8 @@
 
 """Installs substrate on a case's cluster from the submodule's images, which
 builder.py pushes ahead of the run, with its hack/install-ate.sh
---deploy-ate-system, and hack/install-microvm-deps.sh --install on a microvm
-one, configured from the cluster's Terraform outputs. The gVisor SandboxConfig's assets are then
+--deploy-ate-system, and hack/install-microvm-deps.sh --install for a microvm
+case, configured from the cluster's Terraform outputs. The gVisor SandboxConfig's assets are then
 mirrored into the cluster's bucket."""
 
 from __future__ import annotations
@@ -180,15 +180,20 @@ def missing_requirements() -> list[str]:
     return list(dict.fromkeys(missing + images.missing_requirements() + missing_submodule()))
 
 
-def install(cluster: Cluster) -> None:
-    """From the images image_refs names, so the installer builds nothing.
-    A failed install runs again from the start."""
-    retry(f"substrate on cluster {cluster.name}", lambda: install_once(cluster))
+def install(cluster: Cluster, microvm: bool = False) -> None:
+    """From the images image_refs names, so the installer builds nothing, and
+    with microvm the microvm SandboxConfig too. A failed install runs again
+    from the start."""
+    retry(f"substrate on cluster {cluster.name}", lambda: install_once(cluster, microvm))
 
 
-def install_once(cluster: Cluster) -> None:
-    cluster.get_credentials()
-    env = {
+def install_microvm(cluster: Cluster) -> None:
+    """The microvm SandboxConfig alone, on a cluster substrate is installed on."""
+    retry(f"substrate's microvm SandboxConfig on cluster {cluster.name}", lambda: install_microvm_once(cluster))
+
+
+def install_env(cluster: Cluster) -> dict[str, str]:
+    return {
         "PROJECT_ID": cluster.project_id,
         "CLUSTER_NAME": cluster.name,
         "CLUSTER_LOCATION": cluster.location,
@@ -204,6 +209,11 @@ def install_once(cluster: Cluster) -> None:
         # A .ate-dev-env.sh in the submodule would name another cluster.
         "NO_DEV_ENV": "1",
     }
+
+
+def install_once(cluster: Cluster, microvm: bool) -> None:
+    cluster.get_credentials()
+    env = install_env(cluster)
     log(f"substrate: installing on cluster {cluster.name}")
     # Egress credential injection is off: no workload needs the bundled
     # provider, and the installer requires a choice either way.
@@ -212,13 +222,18 @@ def install_once(cluster: Cluster) -> None:
     mirror_gvisor_assets(cluster)
     # install-ate.sh lays down only the gVisor SandboxConfig. This one needs
     # substrate's CRDs, so it comes after.
-    if cluster.sandbox_class == "microvm":
-        # Assembled and checked here, so install-microvm-deps.sh only uploads
-        # them: it skips assembling a complete set it would assemble the same.
-        microvm_env = {**env, **MICROVM_ASSET_ENV}
-        verify_microvm_assets(assemble_microvm_assets(microvm_env))
-        log(f"substrate: installing the microvm SandboxConfig and its assets on cluster {cluster.name}")
-        stream([str(SUBSTRATE_DIR / "hack" / "install-microvm-deps.sh"), "--install"], env=microvm_env, cwd=SUBSTRATE_DIR)
+    if microvm:
+        install_microvm_once(cluster)
+
+
+def install_microvm_once(cluster: Cluster) -> None:
+    cluster.get_credentials()
+    # Assembled and checked here, so install-microvm-deps.sh only uploads
+    # them: it skips assembling a complete set it would assemble the same.
+    microvm_env = {**install_env(cluster), **MICROVM_ASSET_ENV}
+    verify_microvm_assets(assemble_microvm_assets(microvm_env))
+    log(f"substrate: installing the microvm SandboxConfig and its assets on cluster {cluster.name}")
+    stream([str(SUBSTRATE_DIR / "hack" / "install-microvm-deps.sh"), "--install"], env=microvm_env, cwd=SUBSTRATE_DIR)
 
 
 def mirror_gvisor_assets(cluster: Cluster) -> None:

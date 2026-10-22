@@ -28,8 +28,10 @@ import subprocess
 from collections import defaultdict
 from typing import Callable
 
-from . import SCENARIOS_DIR, agent_sandbox, images, substrate, worker_pool
+from . import agent_sandbox, images, substrate, worker_pool
 from .cluster import Cluster
+from .cluster_configs import ClusterConfig, to_record
+from .install import AGENT_SANDBOX, SUBSTRATE, control_plane
 from .log import log
 from .process import output
 
@@ -156,8 +158,8 @@ CONTROL_PLANE_NAMESPACE = "ate-system"
 
 
 def control_plane_namespace(case: dict) -> str:
-    """Where the case's provider runs its control plane."""
-    return agent_sandbox.NAMESPACE if case.get("provider") == "agent-sandbox" else CONTROL_PLANE_NAMESPACE
+    """Where the case's control plane runs."""
+    return agent_sandbox.NAMESPACE if control_plane(case) == AGENT_SANDBOX else CONTROL_PLANE_NAMESPACE
 
 
 def workload_of(pod: dict) -> str:
@@ -222,28 +224,19 @@ def tools() -> dict:
     }
 
 
-def infra(case: dict) -> dict:
-    """The case's cluster spec, with the text of the tfvars file it names, so
-    a published run says what hardware it asked for."""
-    spec = dict(case["infra"]["cluster"])
-    tfvars = spec.get("tfvars")
-    if tfvars:
-        # As cases.CLUSTERS_DIR, which importing would be circular.
-        path = SCENARIOS_DIR / "infra" / "clusters" / spec["name"] / tfvars
-        spec["tfvars_content"] = path.read_text() if path.is_file() else None
-    return spec
-
-
 def collect(
     cluster: Cluster,
     case: dict,
+    infra: ClusterConfig,
     template_name: str | None,
     template: dict | None,
     image_refs: dict,
     bucket: str,
     pool: tuple[str, str] = (worker_pool.NAMESPACE, worker_pool.NAME),
 ) -> dict:
-    """pool is the namespace and name of the WorkerPool the run's actors run on."""
+    """infra is the cluster the case's type asked for, so a published run
+    says what hardware it asked for; pool is the namespace and name of the
+    WorkerPool the run's actors run on."""
     pool_namespace, pool_name = pool
     errors: dict[str, str] = {}
     sandbox_configs = {}
@@ -251,7 +244,7 @@ def collect(
     if config_name:
         config = _read("sandbox config", lambda: _kubectl_json(cluster, "sandboxconfig", config_name), errors)
         sandbox_configs = {config_name: (config or {}).get("spec")}
-    if case.get("provider") == "agent-sandbox":
+    if control_plane(case) == AGENT_SANDBOX:
         pool = _read(
             "warm pool",
             lambda: _kubectl_json(cluster, "sandboxwarmpool", f"{template_name}-warm-pool", namespace=pool_namespace),
@@ -266,7 +259,7 @@ def collect(
     dirty = _read("repo state", lambda: bool(output(["git", "status", "--porcelain"], cwd=images.ROOT).strip()), errors)
     info = {
         "case": case,
-        "infra": _read("infra", lambda: infra(case), errors),
+        "infra": to_record(infra),
         "cluster": _read("cluster config", lambda: cluster_config(cluster), errors),
         "nodes": _read("nodes", lambda: nodes(cluster), errors),
         "worker_pool": {"spec": pool.get("spec"), "status": pool.get("status")} if pool else None,
@@ -283,11 +276,11 @@ def collect(
         "image_tag": images.tag(),
         "commit_dirty": dirty,
         "tools": _read("tool versions", tools, errors),
-        "provider": case.get("provider", "agent-substrate"),
-        "substrate_commit": _read("substrate commit", lambda: output(["git", "rev-parse", "HEAD"], cwd=substrate.SUBSTRATE_DIR).strip(), errors) if case.get("provider", "agent-substrate") == "agent-substrate" else None,
-        "substrate_version": _read("substrate version", substrate.build_version, errors) if case.get("provider", "agent-substrate") == "agent-substrate" else None,
-        "agent_sandbox_commit": _read("agent-sandbox commit", lambda: output(["git", "rev-parse", "HEAD"], cwd=agent_sandbox.AGENT_SANDBOX_DIR).strip(), errors) if case.get("provider") == "agent-sandbox" else None,
-        "agent_sandbox_version": _read("agent-sandbox version", agent_sandbox.build_version, errors) if case.get("provider") == "agent-sandbox" else None,
+        "control_plane": control_plane(case),
+        "substrate_commit": _read("substrate commit", lambda: output(["git", "rev-parse", "HEAD"], cwd=substrate.SUBSTRATE_DIR).strip(), errors) if control_plane(case) == SUBSTRATE else None,
+        "substrate_version": _read("substrate version", substrate.build_version, errors) if control_plane(case) == SUBSTRATE else None,
+        "agent_sandbox_commit": _read("agent-sandbox commit", lambda: output(["git", "rev-parse", "HEAD"], cwd=agent_sandbox.AGENT_SANDBOX_DIR).strip(), errors) if control_plane(case) == AGENT_SANDBOX else None,
+        "agent_sandbox_version": _read("agent-sandbox version", agent_sandbox.build_version, errors) if control_plane(case) == AGENT_SANDBOX else None,
         "bucket": bucket,
     }
     # A locust run's run.json keeps the key it has always had.

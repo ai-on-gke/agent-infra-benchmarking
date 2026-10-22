@@ -27,9 +27,9 @@ from functools import partial
 from pathlib import Path
 
 from . import LOCAL_DATA_DIR, agent_sandbox, names, substrate, terraform
-from .cases import SKIP_SUBSTRATE_INSTALL, placed
 from .cluster import Cluster, gke_stockout, utc_now
-from .deployment import RUNNER_INFRA_DIR, VARIABLES_FILE, Deployment, cluster_deployment
+from .cluster_configs import execution, from_record
+from .deployment import RUNNER_INFRA_DIR, VARIABLES_FILE, Deployment
 from .log import log
 
 DEV_INFRA_DIR = LOCAL_DATA_DIR / "dev-infra" / "terraform"
@@ -38,6 +38,8 @@ DEV_INFRA_DIR = LOCAL_DATA_DIR / "dev-infra" / "terraform"
 RECORD_FILE = "dev-infra.json"
 # In the order they are applied.
 INFRAS = ("scenario-runner", "cluster")
+# The record's, true unless the first case's control plane is substrate.
+SKIP_SUBSTRATE_INSTALL = "skip-substrate-install"
 
 
 def check_name(name: str) -> str:
@@ -77,8 +79,10 @@ def create_deployment(record: dict, infra: str, json_output: bool = False) -> De
     version = None if record.get(SKIP_SUBSTRATE_INSTALL) else substrate.build_version()
     # Applied before the cluster is created.
     repository = runner_outputs(record["name"])["artifact_registry_repository"]
-    spec = placed(record["cluster"], record["placement"]) if record.get("placement") else record["cluster"]
-    return cluster_deployment(spec, uncreated, variables, version, repository, record.get("sandbox_class"))
+    config = from_record(record["cluster"])
+    if record.get("placement"):
+        config = config.placed(record["placement"])
+    return config.deployment(uncreated, execution(variables, repository, version))
 
 
 def runner_outputs(name: str) -> dict:
@@ -112,6 +116,7 @@ def apply(record: dict, json_output: bool = False, update: bool = False) -> dict
     # worker would schedule until substrate is installed again.
     if substrate_version(record["name"]) != installed_version:
         record.pop("substrate_installed", None)
+        record.pop("microvm_installed", None)
     record["complete"] = True
     write_record(record)
     return record
@@ -158,14 +163,18 @@ def cluster(name: str) -> Cluster:
     return Cluster(infra.state_outputs(), infra.data / "kubeconfig")
 
 
-def install_substrate(record: dict) -> dict:
+def install_substrate(record: dict, microvm: bool = False) -> dict:
     """Installs substrate on the dev infra's cluster from the images in its
-    repository unless its record says it is installed, and returns its
-    record."""
-    if record.get("substrate_installed"):
+    repository, and with microvm its microvm SandboxConfig, unless its record
+    says they are installed, and returns its record."""
+    if not record.get("substrate_installed"):
+        substrate.install(cluster(record["name"]), microvm)
+        record = {**record, "substrate_installed": True, "microvm_installed": microvm}
+    elif microvm and not record.get("microvm_installed"):
+        substrate.install_microvm(cluster(record["name"]))
+        record = {**record, "microvm_installed": True}
+    else:
         return record
-    substrate.install(cluster(record["name"]))
-    record = {**record, "substrate_installed": True}
     write_record(record)
     return record
 

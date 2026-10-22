@@ -196,6 +196,11 @@ def _summary_files(case: str, jobs) -> str:
     ])
 
 
+def _locust(case: dict) -> dict:
+    """The case's `locust`, the keys of its type."""
+    return case.get("locust") if isinstance(case.get("locust"), dict) else {}
+
+
 def _repeats(info: dict) -> dict:
     """The case's `repeats` as run.json records it, from a run before it was a
     mapping the count alone."""
@@ -245,7 +250,7 @@ def _results(info: dict, stats: list[dict], stats_file: str | None) -> str:
             table.append([f"`{name}`", row.get("Request Count", UNKNOWN), row.get("Failure Count", UNKNOWN),
                           *(_ms(row.get(stat)) for stat in ("50%", "90%", "99%", "Max Response Time"))])  # fmt: skip
     lines += _table(["Request", "Count", "Failed", "p50", "p90", "p99", "Max"], table)
-    case = info.get("case") if isinstance(info.get("case"), dict) else {}
+    case = _locust(info.get("case") if isinstance(info.get("case"), dict) else {})
     worker = case.get("worker") if isinstance(case.get("worker"), dict) else {}
     workload = worker.get("workload-name") or worker.get("workload-template")
     if workload in SLOW_INSTRUCTION_WORKLOADS:
@@ -270,11 +275,13 @@ def _case(info: dict) -> str:
     if not isinstance(case, dict) or not case:
         lines.append("The resolved case was not recorded.")
         return "\n".join(lines)
-    master = case.get("master") if isinstance(case.get("master"), dict) else {}
-    worker = case.get("worker") if isinstance(case.get("worker"), dict) else {}
-    keys = [[k, v] for k, v in case.items() if k not in ("master", "worker", "infra")]
+    locust = _locust(case)
+    master = locust.get("master") if isinstance(locust.get("master"), dict) else {}
+    worker = locust.get("worker") if isinstance(locust.get("worker"), dict) else {}
+    keys = [[k, v] for k, v in case.items() if k not in ("locust", "infra")]
+    keys += [[k, v] for k, v in locust.items() if k not in ("master", "worker", "infra")]
     users = master.get("users")
-    workers = case.get("worker-count")
+    workers = locust.get("worker-count")
     if isinstance(users, (int, float)) and isinstance(workers, (int, float)) and workers > 0:
         keys.append(["density", f"{users / workers:g}x ({users} actors / {workers} workers)"])
     lines += _table(["Key", "Value"], keys)
@@ -358,7 +365,7 @@ def _workers(info: dict, golden: bool = True) -> str:
             f"WorkerPool: {ready}/{replicas} workers ready, "
             f"sandbox class {spec.get('sandboxClass') or UNKNOWN}."
         )
-        case = info.get("case") or {}
+        case = _locust(info.get("case") or {})
         users = (case.get("master") or {}).get("users")
         workers = spec.get("replicas") or case.get("worker-count")
         if isinstance(users, (int, float)) and isinstance(workers, (int, float)) and workers > 0:
@@ -419,10 +426,6 @@ def _versions(info: dict) -> str:
     tools = info.get("tools") if isinstance(info.get("tools"), dict) else {}
     if any(tools.values()):
         rows.append(["Tools", ", ".join(f"{tool} {version}" for tool, version in tools.items() if version)])
-    builders = info.get("builders") if isinstance(info.get("builders"), dict) else {}
-    if builders.get("where"):
-        used = [f"`{image}`" for key, image in builders.items() if key != "where" and image]
-        rows.append(["Images built with", ", ".join([builders["where"], *used])])
 
     if not rows:
         return ""

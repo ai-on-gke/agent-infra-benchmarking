@@ -19,10 +19,11 @@ import unittest
 from unittest import mock
 
 from scenario_runner import preflight
+from scenario_runner.cluster_configs import CommonCluster
 
-CASE = {"infra": {"cluster": {"name": "common"}}, "worker": {"workload-name": "glutton"}}
+CONFIG = CommonCluster()
 SETTINGS = {
-    "sandbox_class": "gvisor",
+    "nested_virtualization": False,
     "sandboxed_machine_type": "c2-standard-16",
     "additional_node_pools": [],
     "kubernetes_version": "1.35.8-gke.1225000",
@@ -39,23 +40,16 @@ class Rules(unittest.TestCase):
             self.assertFalse(preflight.nested_virtualization(machine_type), machine_type)
 
     def test_a_good_case_has_no_problems(self):
-        self.assertEqual(preflight.cluster_problems("c", CASE, SETTINGS, ["1.35.8-gke.1225000"], True, "z"), [])
+        self.assertEqual(preflight.cluster_problems("c", CONFIG, SETTINGS, ["1.35.8-gke.1225000"], True, "z"), [])
 
-    def test_microvm_on_e2(self):
-        settings = {**SETTINGS, "sandbox_class": "microvm", "sandboxed_machine_type": "e2-standard-8"}
-        problems = preflight.cluster_problems("c", CASE, settings, None, True, "z")
-        self.assertRegex(problems[0], "needs nested virtualization")
-
-    def test_openclaw_without_a_mock_llm_pool(self):
-        case = {**CASE, "worker": {"workload-name": "openclaw"}}
-        self.assertRegex(preflight.cluster_problems("c", case, SETTINGS, None, True, "z")[0], "mock-llm")
-        pools = [{"name": "mock-llm", "labels": {"benchmarking-mock-llm": "true"}}]
-        settings = {**SETTINGS, "additional_node_pools": pools}
-        self.assertEqual(preflight.cluster_problems("c", case, settings, None, True, "z"), [])
+    def test_nested_virtualization_on_e2(self):
+        settings = {**SETTINGS, "nested_virtualization": True, "sandboxed_machine_type": "e2-standard-8"}
+        problems = preflight.cluster_problems("c", CONFIG, settings, None, True, "z")
+        self.assertRegex(problems[0], "has nested virtualization, but its sandboxed pool is e2-standard-8")
 
     def test_a_version_the_channel_does_not_offer_where_the_cluster_goes(self):
         problems = preflight.cluster_problems(
-            "c", CASE, SETTINGS, ["1.35.9-gke.100", "1.36.1-gke.200"], True, "us-central1-a"
+            "c", CONFIG, SETTINGS, ["1.35.9-gke.100", "1.36.1-gke.200"], True, "us-central1-a"
         )
         self.assertRegex(problems[0], "does not offer in us-central1-a")
         self.assertIn("1.35.9-gke.100", problems[0])
@@ -65,18 +59,18 @@ class Rules(unittest.TestCase):
         offered = ["1.35.8-gke.1439001", "1.36.4-gke.1391002"]
         for version in ("1.35", "1.35.8", "1.35.8-gke.1439001"):
             settings = {**SETTINGS, "kubernetes_version": version}
-            self.assertEqual(preflight.cluster_problems("c", CASE, settings, offered, True, "z"), [], version)
+            self.assertEqual(preflight.cluster_problems("c", CONFIG, settings, offered, True, "z"), [], version)
         settings = {**SETTINGS, "kubernetes_version": "1.3"}
-        self.assertTrue(preflight.cluster_problems("c", CASE, settings, offered, True, "z"))
+        self.assertTrue(preflight.cluster_problems("c", CONFIG, settings, offered, True, "z"))
 
     def test_a_minor_no_longer_offered_names_the_minors_that_are(self):
         settings = {**SETTINGS, "kubernetes_version": "1.33"}
-        problems = preflight.cluster_problems("c", CASE, settings, ["1.35.8-gke.1439001", "1.36.4-gke.1"], True, "z")
+        problems = preflight.cluster_problems("c", CONFIG, settings, ["1.35.8-gke.1439001", "1.36.4-gke.1"], True, "z")
         self.assertIn("of 1.33 it offers none there, of all 1.35, 1.36", problems[0])
 
     def test_unknown_versions_are_not_held_against_it(self):
-        self.assertEqual(preflight.cluster_problems("c", CASE, SETTINGS, None, True, "z"), [])
-        self.assertEqual(preflight.cluster_problems("c", CASE, SETTINGS, [], False, "z"), [])
+        self.assertEqual(preflight.cluster_problems("c", CONFIG, SETTINGS, None, True, "z"), [])
+        self.assertEqual(preflight.cluster_problems("c", CONFIG, SETTINGS, [], False, "z"), [])
 
     def test_versions_are_read_where_the_cluster_goes(self):
         self.assertEqual(preflight.cluster_location(SETTINGS, "us-central1"), "us-central1-a")
@@ -106,6 +100,45 @@ class AppliedClusters(unittest.TestCase):
 
     def test_a_complete_dev_infra_applies_none(self):
         self.assertEqual(self.applied({"complete": True}), [])
+
+
+class DevInfraConfiguration(unittest.TestCase):
+    def prepare(self, applied: str, asked: str) -> str | None:
+        """What a case asking for configuration asked fails with on a complete
+        dev infra applied as applied; None if it runs on it."""
+        from argparse import Namespace
+
+        from scenario_runner.cli import run
+        from scenario_runner.cluster_configs import CLUSTER_CONFIGS, to_record
+
+        args = Namespace(dev_infra="dev", dev_infra_update=False, project_id="p", region="r", terraform_output="text")
+        record = {
+            "project_id": "p",
+            "region": "r",
+            "cluster": to_record(CLUSTER_CONFIGS[applied]()),
+            "bare_metal": False,
+            "complete": True,
+        }
+        case = {"type": "noop", "bare-metal": False, "noop": {"infra": {"cluster": {"configuration": asked}}}}
+        with mock.patch.object(run.dev_infra, "read_record", return_value=record), \
+             mock.patch.object(run, "log") as log:  # fmt: skip
+            try:
+                run.prepare_dev_infra(args, {"c": case})
+            except SystemExit:
+                return log.call_args.args[0]
+        return None
+
+    def test_a_case_runs_on_its_configuration_or_one_that_has_more(self):
+        self.assertIsNone(self.prepare("common", "common"))
+        self.assertIsNone(self.prepare("openclaw", "openclaw"))
+        self.assertIsNone(self.prepare("openclaw", "common"))
+
+    def test_a_case_is_refused_one_without_what_it_asks_for(self):
+        for applied, asked in (("common", "openclaw"), ("common", "dummy"), ("dummy", "common")):
+            with self.subTest(applied=applied, asked=asked):
+                self.assertIn(
+                    f"case c runs on configuration {asked}, but dev infra dev is {applied}", self.prepare(applied, asked)
+                )
 
 
 class BareMetal(unittest.TestCase):
@@ -147,46 +180,39 @@ class ClusterSettings(unittest.TestCase):
     """Evaluated by terraform from the shipped common config, as the run would
     apply it."""
 
-    def test_the_case_sets_the_class(self):
-        spec = {"name": "common", "tfvars": "default.tfvars"}
-        settings = preflight.cluster_settings(spec, "microvm", "my-project", "us-central1")
-        self.assertEqual(settings["sandbox_class"], "microvm")
+    def test_a_case_asks_for_nested_virtualization(self):
+        settings = preflight.cluster_settings(CommonCluster(nested_virtualization=True), "my-project", "us-central1")
+        self.assertIs(settings["nested_virtualization"], True)
         self.assertEqual(settings["sandboxed_machine_type"], "c2-standard-16")
         self.assertEqual(preflight.cluster_location(settings, "us-central1"), "us-central1-a")
 
-    def test_the_config_refuses_bad_counts(self):
-        counts = "sandboxed_node_count = 3\nsandboxed_max_node_count = 2\n"
-        spec = {"name": "common", "tfvars": "default.tfvars", "tfvars_inline": counts}
-        with self.assertRaisesRegex(ValueError, "sandboxed_node_count must be between"):
-            preflight.cluster_settings(spec, "gvisor", "my-project", "us-central1")
+    def test_the_pool_is_pinned(self):
+        settings = preflight.cluster_settings(CommonCluster(sandboxed_nodes=3), "my-project", "us-central1")
+        counts = [settings[f"sandboxed_{key}node_count"] for key in ("", "min_", "max_")]
+        self.assertEqual(counts, [3, 3, 3])
 
     def test_the_config_takes_a_cloud_run_jobs_network(self):
         from unittest import mock
 
-        from scenario_runner import deployment
+        from scenario_runner import cluster_configs
 
         network = {"CLUSTER_NETWORK": "projects/p/global/networks/runs",
                    "CLUSTER_SUBNETWORK": "projects/p/regions/us-central1/subnetworks/runs"}  # fmt: skip
-        with mock.patch.multiple(deployment, **network):
-            spec = {"name": "common", "tfvars": "default.tfvars"}
-            settings = preflight.cluster_settings(spec, "gvisor", "my-project", "us-central1")
-        self.assertEqual(settings["sandbox_class"], "gvisor")
-
-    def test_a_variable_left_unset_is_named_as_such(self):
-        with self.assertRaisesRegex(ValueError, "has no value"):
-            preflight.cluster_settings({"name": "common"}, "gvisor", "my-project", "us-central1")
+        with mock.patch.multiple(cluster_configs, **network):
+            settings = preflight.cluster_settings(CommonCluster(), "my-project", "us-central1")
+        self.assertIs(settings["nested_virtualization"], False)
 
     def test_a_metal_machine_type_runs_microvm(self):
-        spec = {"name": "common", "tfvars": "default.tfvars",
-                "variables": {"zone": "us-central1-c", "sandboxed_machine_type": "c3-highcpu-192-metal"}}  # fmt: skip
-        settings = preflight.cluster_settings(spec, "microvm", "my-project", "us-central1")
+        placement = {"zone": "us-central1-c", "machine-type": "c3-highcpu-192-metal"}
+        config = CommonCluster(nested_virtualization=True).placed(placement)
+        settings = preflight.cluster_settings(config, "my-project", "us-central1")
         self.assertEqual(settings["sandboxed_machine_type"], "c3-highcpu-192-metal")
         self.assertEqual(preflight.cluster_location(settings, "us-central1"), "us-central1-c")
 
-    def test_the_config_refuses_microvm_without_nested_virtualization(self):
-        spec = {"name": "common", "tfvars_inline": 'sandboxed_machine_type = "e2-standard-8"\n'}
-        with self.assertRaisesRegex(ValueError, "nested virtualization"):
-            preflight.cluster_settings(spec, "microvm", "my-project", "us-central1")
+    def test_the_config_refuses_nested_virtualization_off_intel(self):
+        config = CommonCluster(sandboxed_machine_type="e2-standard-8", nested_virtualization=True)
+        with self.assertRaisesRegex(ValueError, "Nested virtualization is offered only on Intel"):
+            preflight.cluster_settings(config, "my-project", "us-central1")
 
 
 class TfFiles(unittest.TestCase):

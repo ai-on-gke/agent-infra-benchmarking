@@ -18,18 +18,18 @@ against it and destroys it afterwards.
   gke-gcloud-auth-plugin`), which kubectl reaches the clusters through
 - Docker with Buildx, for building the images, by `tools/build-images` or a
   run: the image builds use `--build-context`
-- curl and a `tar` with zstd support, for `sandbox-class: microvm` cases
+- curl and a `tar` with zstd support, for cases that install substrate with
+  `sandbox-class: microvm`
 
 ### Cost and quota
 
 Each run of a case applies a cluster of its own in one zone (`us-central1-a`)
 and destroys it afterwards. It has a `default` node, `c2-standard-16`
 (`default_machine_type`); the `sandboxed` workers, `sandboxed_node_count` of
-`sandboxed_machine_type` (one `c2-standard-16` in the shipped cases, an
-`n2-standard-16` in `sandbox-benchmark`); and an `e2-standard-4` for
-Prometheus. The openclaw case adds an `e2-standard-8` for its mock LLM. So a
-run needs at least 32 vCPUs of C2 quota in the region, or 16 of C2 and 16 of
-N2 for `sandbox-benchmark`, all billed while it is up. Check it with:
+`sandboxed_machine_type` (one `c2-standard-16` in the shipped cases); and an
+`e2-standard-4` for Prometheus. The openclaw case adds an `e2-standard-8` for
+its mock LLM. So a run needs at least 32 vCPUs of C2 quota in the region, all
+billed while it is up. Check it with:
 
 ```bash
 gcloud compute regions describe us-central1 --project <project-id> \
@@ -37,11 +37,9 @@ gcloud compute regions describe us-central1 --project <project-id> \
   grep -E "^(METRIC|C2_CPUS|N2_CPUS) "
 ```
 
-Short of C2, set `default_machine_type` and `sandboxed_machine_type` in the
-case's `tfvars_inline` to another family, such as `n2-standard-16` (which the
-`microvm` class also runs on). To deploy into a VPC you already have rather
-than a new one per run, set `existing_network`; see its description in
-[`variables.tf`](scenarios/infra/clusters/common/variables.tf).
+Short of C2, set `default-machine-type` and `sandboxed-machine-type` in the
+case's `infra.cluster` to another family, such as `n2-standard-16` (which the
+`microvm` class also runs on).
 
 ## Setup
 
@@ -186,9 +184,10 @@ set the case's `worker: actor-egress-allow` (cleartext) or
       and a public control-plane endpoint, which IAM guards; from
       automation-infra's Cloud Run job, it goes into the job's network with an
       internal endpoint only.
-   2. Installs substrate, unless the case sets `skip-substrate-install`; on a
-      `microvm` cluster also its kata and cloud-hypervisor assets, checked
-      against the sha256s the SandboxConfig pins before they are uploaded.
+   2. Installs what the `install` in the case's type's mapping names,
+      substrate or agent-sandbox, if either; substrate with `sandbox-class:
+      microvm` also its kata and cloud-hypervisor assets, checked against the
+      sha256s the SandboxConfig pins before they are uploaded.
    3. Deploys Prometheus, the worker pool and the case's workload, then the
       locust master and boomer worker Jobs, and waits for both to end.
    4. Deletes any actors the run left, recording them in `cleanup.json`,
@@ -303,10 +302,10 @@ project.
 
 ### When a run fails or is stopped
 
-A run fails when more than its case's `max-failure-ratio` of its cycles fail
-(0.01 by default), over the whole run. A cycle fails on any of its calls, and
-counts once however many rows that failure shows in; an actor that could not
-be created counts as a failed cycle too. A run also fails when it completes no
+A run fails when more than its case's `locust.max-failure-ratio` of its cycles
+fail (0.01 by default), over the whole run. A cycle fails on any of its calls,
+and counts once however many rows that failure shows in; an actor that could
+not be created counts as a failed cycle too. A run also fails when it completes no
 cycle, or when the load generator raises any exception
 (`locust_exceptions.csv`). A failed case does not stop the ones after it; the
 execution exits non-zero at the end, naming them.
@@ -390,18 +389,20 @@ Add an entry under `cases:` in `scenarios.yaml`. The comments at the top of that
 file describe each key. To change the load or the worker pool, add a new case
 rather than editing an existing one, so results stay tied to the case name
 they were recorded under. To compare gVisor and microvm, add both, the same
-but for `sandbox-class`.
+but for `locust.install.substrate.sandbox-class` and the microvm one's
+`infra.cluster.nested-virtualization: true`, which off bare metal gives its
+guests `/dev/kvm`.
 
 Besides the load, a case can shape each cycle with the worker's options:
 
-| `worker` key | What each cycle does |
+| `locust.worker` key | What each cycle does |
 |---|---|
 | `resume-mode: implicit` | no `ResumeActor`: the instruction wakes the actor through the router (`glutton-implicit`) |
 | `instructions-per-cycle: N` | N instructions between the resume and the suspend, the first closing TTFI (`glutton-session`) |
 | `concurrent-instructions: N` | N instructions at once at each of those steps (`glutton-concurrent`) |
 | `glutton-write-ram: SIZE`, `glutton-write-disk: BYTES` | rewrites that much of the actor's memory and a file on its disk before the suspend, as `WriteRAM` and `WriteDisk` rows, so the snapshot holds changed state (`glutton-load`, with `actor-memory: 512Mi`) |
 
-At the case's top level, `actor-memory` sets the actors' memory limit, which
+In the case's `locust`, `actor-memory` sets the actors' memory limit, which
 on `microvm` is the guest's RAM, and `locust-workers` runs that many boomer
 worker pods, each with its own connections to substrate, for loads one pod
 cannot drive (`glutton-large`).
@@ -450,13 +451,13 @@ of pool as its first.
 
 ### Comparing sandbox providers' costs
 
-The `sandbox-benchmark-cost` case measures E2B's, Modal's and Daytona's
-suspend and resume overheads and writes a monthly cost sheet next to Anthropic
-Managed Agents and OpenAI. It needs the providers' API keys; see
-[sandbox-benchmark-cost.md](sandbox-benchmark/sandbox-benchmark-cost.md):
+The `sandbox-benchmark` case measures substrate's, E2B's, Modal's and
+Daytona's suspend and resume overheads and writes a monthly cost sheet next to
+Anthropic Managed Agents and OpenAI. It needs the providers' API keys; see
+[sandbox-benchmark.md](sandbox-benchmark/sandbox-benchmark.md):
 
 ```bash
-./benchmarking/tools/run --dev-infra cost-dev --scenario sandbox-benchmark-cost
+./benchmarking/tools/run --dev-infra cost-dev --scenario sandbox-benchmark
 ```
 
 ## Reading the results

@@ -5,8 +5,6 @@ crash.log
 crash.*.log
 *.tfvars
 *.tfvars.json
-!default.tfvars
-!openclaw.tfvars
 override.tf
 override.tf.json
 *_override.tf

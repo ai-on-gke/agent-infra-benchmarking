@@ -30,6 +30,10 @@ from scenario_runner.cli import run
 from scenario_runner import cluster as cluster_module
 from scenario_runner.cluster import Cluster
 
+# A locust case as far as the series reads it: its type, and the cluster its
+# mapping asks for.
+LOCUST = {"type": "locust", "locust": {}}
+
 
 class Environ(unittest.TestCase):
     def test_none_removes_a_variable(self):
@@ -257,10 +261,10 @@ class Series(unittest.TestCase):
             run.run_repeats("c", per_repeat, stuck, shared_cluster=False)
 
     def test_a_failed_case_does_not_stop_the_series(self):
-        cases = {"a": {"type": "locust"}, "b": {"type": "locust"}}
+        cases = {"a": LOCUST, "b": LOCUST}
         ran = []
 
-        def case(name, _):
+        def case(name, _case, _cluster):
             ran.append(name)
             if name == "a":
                 raise locust.LocustStillRunning("unread")
@@ -270,12 +274,57 @@ class Series(unittest.TestCase):
         with self.assertRaises(locust.LocustStillRunning):
             run.run_cases(self.args, cases, case, shared_cluster=True)
 
+    def subcases(self, *names: str, infra: dict | None = None) -> dict:
+        from scenario_runner.reports import SUBCASE
+
+        return {f"g-{n}": {**LOCUST, "locust": {"infra": infra}, SUBCASE: {"of": "g", "name": n}} for n in names}
+
+    def test_subcases_alike_share_a_cluster_then_are_summarized(self):
+        from contextlib import contextmanager
+
+        from scenario_runner import benchmark
+
+        other = {"cluster": {"sandboxed-nodes": 2}}
+        cases = {**self.subcases("a", "b"), **self.subcases("c", infra=other), "h": LOCUST}
+        cases = {name: cases[name] for name in ["g-a", "g-c", "g-b", "h"]}
+        applied, ran = [], []
+
+        @contextmanager
+        def cluster(key, case):
+            applied.append(key)
+            yield key
+
+        with mock.patch.object(benchmark, "summarize") as summarize:
+            failed = run.run_cases(self.args, cases, lambda name, case, cluster: ran.append((name, cluster)),
+                                   shared_cluster=False, applied=cluster)  # fmt: skip
+        self.assertEqual(failed, [])
+        self.assertEqual(applied, ["g-a", "g-c", "h"])
+        self.assertEqual(ran, [("g-a", "g-a"), ("g-b", "g-a"), ("g-c", "g-c"), ("h", "h")])
+        self.assertEqual(run.cluster_keys(cases), ["g-a", "g-c", "h"])
+        groups = [[record for record, _, _ in call.args[0]] for call in summarize.call_args_list]
+        self.assertEqual(groups, [["g-a-warmup-1", "g-a", "g-c-warmup-1", "g-c", "g-b-warmup-1", "g-b"], ["h-warmup-1", "h"]])
+
+    def test_all_of_a_group_on_one_cluster_is_recorded_as_the_group(self):
+        self.assertEqual(run.cluster_keys(self.subcases("a", "b")), ["g"])
+
+    def test_a_stuck_subcase_leaves_the_rest_of_its_batch_unrun(self):
+        cases = self.subcases("a", "b", "c")
+        ran = []
+
+        def case(name, _case, _cluster):
+            ran.append(name)
+            if name == "g-a":
+                raise locust.LocustStillRunning("unread")
+
+        self.assertEqual(run.run_cases(self.args, cases, case, shared_cluster=False), ["g-a", "g-b", "g-c"])
+        self.assertEqual(ran, ["g-a"])
+
     def test_a_failed_destroy_stops_the_series(self):
-        def case(name, _):
+        def case(name, _case, _cluster):
             raise deployment.DestroyFailed(Path("/x"), None)
 
         with self.assertRaises(deployment.DestroyFailed):
-            run.run_cases(self.args, {"a": {"type": "locust"}, "b": {"type": "locust"}}, case, shared_cluster=False)
+            run.run_cases(self.args, {"a": LOCUST, "b": LOCUST}, case, shared_cluster=False)
 
 
 class Args(unittest.TestCase):
@@ -340,11 +389,12 @@ class NeededImages(unittest.TestCase):
     def needed(self, cases: dict) -> dict:
         import argparse
 
-        from scenario_runner import ate_env, images, sandbox_benchmark, substrate
+        from scenario_runner import agent_sandbox, ate_env, images, sandbox_benchmark, substrate
 
         args = argparse.Namespace(no_deploy_workloads=False, image_repo="repo")
         with mock.patch.object(images, "tag", return_value="t"), \
              mock.patch.object(substrate, "build_version", return_value="v"), \
+             mock.patch.object(agent_sandbox, "build_version", return_value="s"), \
              mock.patch.object(ate_env, "build_version", return_value="e"), \
              mock.patch.object(sandbox_benchmark, "test_names", return_value=None):  # fmt: skip
             return run.needed_images(args, cases)
@@ -352,7 +402,8 @@ class NeededImages(unittest.TestCase):
     def test_locust_needs_its_the_workloads_and_substrate(self):
         from scenario_runner import images
 
-        needed = self.needed({"a": {"type": "locust"}, "b": {"type": "noop"}})
+        substrate = {"install": {"substrate": {"sandbox-class": "gvisor"}}}
+        needed = self.needed({"a": {"type": "locust", "locust": substrate}, "b": {"type": "noop"}})
         self.assertEqual(set(needed), {"substrate", "benchmark"})
         with mock.patch.object(images, "tag", return_value="t"):
             self.assertEqual(needed["benchmark"], images.refs("repo", [images.LOCUST_IMAGES, images.WORKLOADS_IMAGES]))
@@ -361,21 +412,23 @@ class NeededImages(unittest.TestCase):
         self.assertIn("repo/substrate/envoy-dataplane:v", needed["substrate"])
 
     def test_sandbox_benchmark_needs_env_only_for_substrate(self):
-        from scenario_runner.cases import SKIP_SUBSTRATE_INSTALL
-
-        comparator = {"tests": ["test_x"], "runs": 1}
-        case = {"type": "sandbox-benchmark", "comparator": comparator, SKIP_SUBSTRATE_INSTALL: True}
+        options = {"tests": ["test_x"], "runs": 1}
+        substrate = {"install": {"substrate": {"sandbox-class": "gvisor"}}}
+        case = {"type": "sandbox-benchmark", "sandbox-benchmark": {**options, **substrate}}
         needed = self.needed({"a": case})
-        self.assertEqual(set(needed), {"env", "benchmark"})
+        self.assertEqual(set(needed), {"substrate", "env", "benchmark"})
         self.assertEqual(needed["env"], ["repo/env/ate-env-api:e", "repo/env/ate-env-guest:e"])
-        cloud = {**case, "comparator": {**case["comparator"], "providers": ["e2b"]}}
+        cloud = {**case, "sandbox-benchmark": {**options, "provider": {"name": "e2b"}}}
         self.assertEqual(set(self.needed({"a": cloud})), {"benchmark"})
 
     def test_noop_needs_only_what_its_install_does(self):
-        from scenario_runner.cases import SKIP_SUBSTRATE_INSTALL
+        def noop(install: dict) -> dict:
+            return {"type": "noop", "noop": {"install": install}}
 
-        self.assertEqual(set(self.needed({"a": {"type": "noop"}})), {"substrate"})
-        self.assertEqual(self.needed({"a": {"type": "noop", SKIP_SUBSTRATE_INSTALL: True}}), {})
+        gvisor = {"sandbox-class": "gvisor"}
+        self.assertEqual(set(self.needed({"a": noop({"substrate": gvisor})})), {"substrate"})
+        self.assertEqual(set(self.needed({"a": noop({"agent-sandbox": gvisor})})), {"agent-sandbox"})
+        self.assertEqual(self.needed({"a": {"type": "noop", "noop": {}}}), {})
 
 
 class BenchmarkRun(unittest.TestCase):

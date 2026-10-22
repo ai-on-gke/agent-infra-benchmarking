@@ -140,12 +140,10 @@ def render_stack(cli: AteEnv, cluster: Cluster, sandbox_class: str, worker_count
     config_name, _ = workloads.SANDBOX_CONFIGS[sandbox_class]
     pool["spec"]["sandboxClasses"] = [{"name": sandbox_class, "configRef": {"name": config_name}}]
     # env's workers go on any node; the sandboxed nodes are the benchmarking
-    # workers, tainted with their class, as in worker-pool.yaml.tmpl.
+    # workers, tainted for any class, as in worker-pool.yaml.tmpl.
     pool["spec"]["template"] = {
         "nodeSelector": {"benchmarking-worker": "true"},
-        "tolerations": [
-            {"key": "ate.dev/sandboxClass", "operator": "Equal", "value": sandbox_class, "effect": "NoSchedule"}
-        ],
+        "tolerations": [{"key": "ate.dev/sandboxClass", "operator": "Exists", "effect": "NoSchedule"}],
     }
     return substrate.resolve(cluster, yaml.safe_dump_all(docs, sort_keys=False))
 
