@@ -22,8 +22,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .log import log
-from .process import output, stream
+from ..log import log
+from ..process import output, stream
 from .terraform import STOCKOUT_MARKERS
 
 # How long a cluster's persistent volumes get to go before it is destroyed.

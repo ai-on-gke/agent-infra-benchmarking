@@ -24,8 +24,8 @@ import json
 import statistics
 from pathlib import Path
 
-from . import RUNNER_DIR
-from .log import log
+from .. import RUNNER_DIR
+from ..log import log
 
 STEADY_STATS = "locust_stats_steady.csv"
 RUN_JSON = "run.json"

@@ -19,8 +19,9 @@
 #
 # A case's type is the key of the one mapping in it of the type's own keys,
 # `locust`, `sandbox-benchmark` or `noop`; the rest of the case is the
-# scenario-runner's. scenario_runner/src/scenario_runner/<type>.py, '-' spelled
-# '_', documents the type's keys.
+# scenario-runner's. The type's module in
+# scenario_runner/src/scenario_runner/benchmarks/, '-' spelled '_', documents
+# the type's keys.
 # For locust: `worker-count` and the `sandbox-class` in its `install` shape the
 # WorkerPool, and every key in `master` and `worker` becomes `--key=value` on
 # that process. `actor-memory` is the actors' memory limit, which on microvm is
@@ -93,7 +94,7 @@
 #
 # `infra.cluster`, in the type's mapping, is the cluster the case runs on: its
 # `configuration` and that configuration's inputs, which
-# scenario_runner/src/scenario_runner/cluster_configs.py turns into the
+# scenario_runner/src/scenario_runner/infra/cluster_configs.py turns into the
 # Terraform variables of the infra/clusters/ config it applies, all of them
 # optional:
 #   configuration           common, the default, a GKE cluster from

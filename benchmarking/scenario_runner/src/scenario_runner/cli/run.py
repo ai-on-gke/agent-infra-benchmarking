@@ -43,23 +43,19 @@ from typing import Callable, Iterator, NoReturn
 
 import yaml
 
-from .. import (
-    LOCAL_DATA_DIR,
-    agent_sandbox,
-    ate_env,
-    benchmark,
-    builder,
-    dev_infra,
-    images,
-    names,
-    preflight,
-    reports,
-    sandbox_benchmark,
-    substrate,
-    summary,
-    terraform,
-)
-from ..cases import (
+from .. import LOCAL_DATA_DIR, benchmarks, images, preflight, reports
+from ..benchmarks import sandbox_benchmark
+from ..benchmarks.sandbox_benchmark import ate_env
+from ..control_planes import agent_sandbox, substrate
+from ..images import builder
+from ..infra import dev_infra, names, terraform
+from ..infra.cluster import Cluster, gke_stockout, utc_now
+from ..infra.cluster_configs import execution, from_record, to_record
+from ..infra.deployment import RUNNER_INFRA_DIR, Deployment, DestroyFailed, GcsDeployment
+from ..log import ON_CLOUD_RUN, log
+from ..process import failure
+from ..reports import summary
+from ..scenarios.cases import (
     BARE_METAL,
     SCENARIOS_FILE,
     grouped,
@@ -71,12 +67,7 @@ from ..cases import (
     warmup_names,
     with_bare_metal,
 )
-from ..cluster import Cluster, gke_stockout, utc_now
-from ..cluster_configs import execution, from_record, to_record
-from ..deployment import RUNNER_INFRA_DIR, Deployment, DestroyFailed, GcsDeployment
-from ..install import AGENT_SANDBOX, INSTALL, SANDBOX_CLASS, SUBSTRATE, control_plane, installs, sandbox_class
-from ..log import ON_CLOUD_RUN, log
-from ..process import failure
+from ..scenarios.install import AGENT_SANDBOX, INSTALL, SANDBOX_CLASS, SUBSTRATE, control_plane, installs, sandbox_class
 
 # The executions' Deployments, kept after they are destroyed, and with gcs in
 # the state bucket under <state prefix>/ too. An execution's are in <name>/:
@@ -95,7 +86,7 @@ IMAGE_FILES = {
 }
 
 # What a failed repeat raises, its infra's apply included.
-RUN_ERRORS = (subprocess.CalledProcessError, *benchmark.ERRORS, substrate.SubstrateError, agent_sandbox.AgentSandboxError)
+RUN_ERRORS = (subprocess.CalledProcessError, *benchmarks.ERRORS, substrate.SubstrateError, agent_sandbox.AgentSandboxError)
 
 
 class CaseFailed(RuntimeError):
@@ -196,7 +187,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--name",
-        type=benchmark.check_run_id,
+        type=benchmarks.check_run_id,
         default=datetime.now(timezone.utc).strftime("run-%Y%m%dt%H%M%Sz"),
         help="this execution's run id and state prefix, which its infra's names start with; unique to it."
         " Default: run-<UTC timestamp>",
@@ -320,7 +311,7 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
         for name, case in selected.items():
             selected[name] = case = {**case, "sandbox-benchmark": {**case["sandbox-benchmark"], "tests": tests}}
             try:
-                benchmark.check(name, case)
+                benchmarks.check(name, case)
             except ValueError as exc:
                 fail(str(exc))
     try:
@@ -331,7 +322,7 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
         for name, case in selected.items():
             if case[BARE_METAL] and case["type"] != "noop":
                 for record in warmup_names(name, case) + record_names(name, case):
-                    benchmark.check(record, case)
+                    benchmarks.check(record, case)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         fail(str(exc))
     return selected
@@ -391,15 +382,15 @@ def needed_images(args: argparse.Namespace, cases: dict[str, dict]) -> dict[str,
         needed["substrate"] = substrate.image_refs(args.image_repo)
     if any(control_plane(case) == AGENT_SANDBOX for case in cases.values()):
         needed["agent-sandbox"] = agent_sandbox.image_refs(args.image_repo)
-    benchmarks = {name: case for name, case in cases.items() if case["type"] != "noop"}
+    measured = {name: case for name, case in cases.items() if case["type"] != "noop"}
     # env's images are only read when it is deployed, for the substrate provider.
     if not args.no_deploy_workloads and any(
         sandbox_benchmark.provider_name(case) == "substrate"
-        for case in benchmarks.values()
+        for case in measured.values()
         if case["type"] == "sandbox-benchmark"
     ):
         needed["env"] = ate_env.image_refs(args.image_repo)
-    files = list(dict.fromkeys(file for case in benchmarks.values() for file in IMAGE_FILES[case["type"]]))
+    files = list(dict.fromkeys(file for case in measured.values() for file in IMAGE_FILES[case["type"]]))
     if files:
         needed["benchmark"] = images.refs(args.image_repo, files)
     return needed
@@ -467,7 +458,7 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
     new or updated one has the first case's cluster."""
     record = dev_infra.read_record(args.dev_infra)
     first = next(iter(cases))
-    wanted = benchmark.cluster_config(first, cases[first])
+    wanted = benchmarks.cluster_config(first, cases[first])
     if record is not None:
         if (record["project_id"], record["region"]) != (args.project_id, args.region):
             fail(
@@ -504,7 +495,7 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
         }
     current = from_record(record["cluster"])
     for name, case in cases.items():
-        config = benchmark.cluster_config(name, case)
+        config = benchmarks.cluster_config(name, case)
         # A configuration's subclass is its cluster and more, such as openclaw's common's.
         if not isinstance(current, type(config)):
             fail(
@@ -551,7 +542,7 @@ def run_case(
     if case["type"] == "noop":
         log(f"{record}: noop, nothing to run")
         return
-    benchmark.run(
+    benchmarks.run(
         record,
         case,
         args.name,
@@ -584,7 +575,7 @@ def run_repeats(name: str, case: dict, run: Callable[[str, int, int], None], sha
         try:
             run(record, 0, n)
         except RUN_ERRORS as exc:
-            if shared_cluster and isinstance(exc, benchmark.STILL_RUNNING):
+            if shared_cluster and isinstance(exc, benchmarks.STILL_RUNNING):
                 raise
             log(f"{record}: {describe(exc)}; only a warm-up, so {name} goes on", "WARNING")
     records = record_names(name, case)
@@ -596,7 +587,7 @@ def run_repeats(name: str, case: dict, run: Callable[[str, int, int], None], sha
         log(f"{name}: repeat {n} of {len(records)}, as {record}")
         try:
             run(record, n, 0)
-        except benchmark.STILL_RUNNING as exc:
+        except benchmarks.STILL_RUNNING as exc:
             if shared_cluster:
                 raise
             log(f"{record}: {exc}", "ERROR")
@@ -611,7 +602,7 @@ def run_repeats(name: str, case: dict, run: Callable[[str, int, int], None], sha
 def cluster_setup(name: str, case: dict) -> tuple:
     """What the case's cluster is applied with and has installed, which a
     case's subcases alike in share."""
-    return benchmark.cluster_config(name, case), case.get(BARE_METAL, False), yaml.safe_dump(installs(case))
+    return benchmarks.cluster_config(name, case), case.get(BARE_METAL, False), yaml.safe_dump(installs(case))
 
 
 def batches(names: list[str], cases: dict[str, dict]) -> list[list[str]]:
@@ -667,7 +658,7 @@ def run_cases(
                         case = cases[name]
                         try:
                             run(name, case, cluster)
-                        except benchmark.STILL_RUNNING as exc:
+                        except benchmarks.STILL_RUNNING as exc:
                             if shared_cluster:
                                 raise
                             log(f"{name}: {exc}", "ERROR")
@@ -681,9 +672,9 @@ def run_cases(
                             failed.append(name)
                         # From what was downloaded, so not on Cloud Run.
                         records = record_names(name, case)
-                        if len(records) > 1 and case["type"] in benchmark.SUMMARIZED and not ON_CLOUD_RUN:
+                        if len(records) > 1 and case["type"] in benchmarks.SUMMARIZED and not ON_CLOUD_RUN:
                             summary.write(reports.REPORTS_DIR / args.name, name, records)
-            except benchmark.STILL_RUNNING:
+            except benchmarks.STILL_RUNNING:
                 raise
             except RUN_ERRORS as exc:
                 # The batch's cluster: its apply, install or cleanup.
@@ -694,7 +685,7 @@ def run_cases(
             for name in members
             for record in warmup_names(name, cases[name]) + record_names(name, cases[name])
         ]
-        benchmark.summarize(runs, args.name, summary_bucket, args.report_prefix)
+        benchmarks.summarize(runs, args.name, summary_bucket, args.report_prefix)
     return failed
 
 
@@ -766,7 +757,7 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
         placements in turn, from the last one applied, until one has the
         machine type."""
         nonlocal current_placement
-        config = benchmark.cluster_config(key, case)
+        config = benchmarks.cluster_config(key, case)
         version = substrate.build_version() if control_plane(case) == SUBSTRATE else None
         uncreated = deployment(args, "scenarios", key)
         # A cluster that pulls none of the images is not granted the repository.

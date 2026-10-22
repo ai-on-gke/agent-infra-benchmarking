@@ -40,14 +40,16 @@ from typing import Callable
 
 from google.cloud import storage
 
-from . import RUNNER_DIR, ate_env, images, jobs, reports, run_info, workloads
-from . import sandbox_benchmark_combine as combine
-from . import sandbox_benchmark_cost_sheet as costs
-from .cluster import Cluster
-from .cluster_configs import CommonCluster, from_infra
-from .install import INSTALL, SANDBOX_CLASS, SUBSTRATE, control_plane, sandbox_class
-from .log import ON_CLOUD_RUN, log
-from .process import stream
+from ... import RUNNER_DIR, images, reports, workloads
+from ...infra.cluster import Cluster
+from ...infra.cluster_configs import CommonCluster, from_infra
+from ...log import ON_CLOUD_RUN, log
+from ...process import stream
+from ...reports import run_info
+from ...scenarios.install import INSTALL, SANDBOX_CLASS, SUBSTRATE, control_plane, sandbox_class
+from .. import jobs
+from . import ate_env, combine
+from . import cost_sheet as costs
 
 MANIFEST = RUNNER_DIR.parent / "sandbox-benchmark" / "manifests" / "comparator-job.yaml"
 AI_SANDBOX_BENCHMARK_DIR = ate_env.DEPENDENCY_REPOS / "ai-sandbox-benchmark"

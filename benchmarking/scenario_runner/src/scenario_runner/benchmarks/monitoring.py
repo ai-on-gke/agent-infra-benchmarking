@@ -17,10 +17,10 @@ monitoring node pool, and waits for it."""
 
 from __future__ import annotations
 
-from . import RUNNER_DIR
-from .cluster import Cluster
-from .log import log
-from .process import output, stream
+from .. import RUNNER_DIR
+from ..infra.cluster import Cluster
+from ..log import log
+from ..process import output, stream
 
 MANIFEST = RUNNER_DIR.parent / "monitoring" / "prometheus.yaml"
 # Have to match the Deployment in the manifest, and its nodeSelector the

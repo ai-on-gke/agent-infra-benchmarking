@@ -17,7 +17,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scenario_runner import summary
+from scenario_runner.reports import summary
 
 STATS = """Type,Name,Request Count,Failure Count,Median Response Time,Average Response Time,Min Response Time,Max Response Time,Average Content Size,Requests/s,Failures/s,50%,66%,75%,80%,90%,95%,98%,99%,99.9%,99.99%,100%
 runworkload,TTFI,{n},0,300,310,200,900,0,9.5,0,300,310,320,330,360,400,500,{p99},900,900,900

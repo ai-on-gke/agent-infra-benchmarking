@@ -31,10 +31,11 @@ from typing import Callable, Iterator
 
 import yaml
 
-from . import RUNNER_DIR, images, substrate, worker_pool, workloads
-from .cluster import Cluster
-from .log import log
-from .process import output, stream
+from ... import RUNNER_DIR, images, workloads
+from ...control_planes import substrate, worker_pool
+from ...infra.cluster import Cluster
+from ...log import log
+from ...process import output, stream
 
 DEPENDENCY_REPOS = RUNNER_DIR.parent.parent / "dependency-repos"
 ENV_DIR = DEPENDENCY_REPOS / "env"

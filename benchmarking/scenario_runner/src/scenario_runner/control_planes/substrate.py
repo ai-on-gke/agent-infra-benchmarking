@@ -31,10 +31,10 @@ from pathlib import Path
 
 import yaml
 
-from . import RUNNER_DIR, images
-from .cluster import Cluster
-from .log import log
-from .process import output, retry, stream
+from .. import RUNNER_DIR, images
+from ..infra.cluster import Cluster
+from ..log import log
+from ..process import output, retry, stream
 
 SUBSTRATE_DIR = RUNNER_DIR.parent.parent / "dependency-repos" / "substrate"
 SUBSTRATE_PATH = SUBSTRATE_DIR.relative_to(images.ROOT).as_posix()

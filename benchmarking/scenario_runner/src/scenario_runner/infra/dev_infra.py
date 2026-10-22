@@ -26,11 +26,13 @@ import shutil
 from functools import partial
 from pathlib import Path
 
-from . import LOCAL_DATA_DIR, agent_sandbox, names, substrate, terraform
+from .. import LOCAL_DATA_DIR
+from ..control_planes import agent_sandbox, substrate
+from ..log import log
+from . import names, terraform
 from .cluster import Cluster, gke_stockout, utc_now
 from .cluster_configs import execution, from_record
 from .deployment import RUNNER_INFRA_DIR, VARIABLES_FILE, Deployment
-from .log import log
 
 DEV_INFRA_DIR = LOCAL_DATA_DIR / "dev-infra" / "terraform"
 # What a dev infra is, written before it is applied so that one whose apply

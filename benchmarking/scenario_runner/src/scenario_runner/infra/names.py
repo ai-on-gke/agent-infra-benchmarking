@@ -30,7 +30,7 @@ import hashlib
 import os
 import re
 
-from . import images
+from .. import images
 from .deployment import tf_vars
 
 SHORT_LENGTH = 25

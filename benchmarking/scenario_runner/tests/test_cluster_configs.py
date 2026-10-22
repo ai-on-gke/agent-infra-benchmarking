@@ -20,7 +20,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scenario_runner.cluster_configs import (
+from scenario_runner.infra.cluster_configs import (
     CLUSTER_CONFIGS,
     CommonCluster,
     DummyCluster,
@@ -29,7 +29,7 @@ from scenario_runner.cluster_configs import (
     from_record,
     to_record,
 )
-from scenario_runner.deployment import VARIABLES_FILE, Deployment, declared_variables, tf_vars
+from scenario_runner.infra.deployment import VARIABLES_FILE, Deployment, declared_variables, tf_vars
 
 NAMED = {
     **tf_vars("p", "us-central1", "run-x-12345678"),

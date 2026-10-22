@@ -21,10 +21,11 @@ import shutil
 import subprocess
 from string import Template
 
-from . import RUNNER_DIR, substrate
-from .cluster import Cluster
-from .log import log
-from .process import output, stream
+from .. import RUNNER_DIR
+from ..infra.cluster import Cluster
+from ..log import log
+from ..process import output, stream
+from . import substrate
 
 MANIFEST = RUNNER_DIR.parent / "workloads" / "manifests" / "worker-pool.yaml.tmpl"
 # Have to match the WorkerPool in the manifest.

@@ -27,12 +27,15 @@ from datetime import datetime, timezone
 from string import Template
 from typing import Callable
 
-from . import RUNNER_DIR, images, jobs, reports, run_info, worker_pool, workloads
-from .cluster import Cluster
-from .cluster_configs import CommonCluster, OpenclawCluster, from_infra
-from .install import AGENT_SANDBOX, INSTALL, SUBSTRATE, control_plane, sandbox_class
-from .log import ON_CLOUD_RUN, log
-from .process import stream
+from .. import RUNNER_DIR, images, reports, workloads
+from ..control_planes import worker_pool
+from ..infra.cluster import Cluster
+from ..infra.cluster_configs import CommonCluster, OpenclawCluster, from_infra
+from ..log import ON_CLOUD_RUN, log
+from ..process import stream
+from ..reports import run_info
+from ..scenarios.install import AGENT_SANDBOX, INSTALL, SUBSTRATE, control_plane, sandbox_class
+from . import jobs
 
 MANIFESTS_DIR = RUNNER_DIR.parent / "locust" / "manifests"
 # Have to match metadata.name and namespace in the manifests.
@@ -329,7 +332,7 @@ def run(
     workload = options["worker"].get("workload-name") or template_name
     template = None
     if provider == AGENT_SANDBOX:
-        from . import agent_sandbox
+        from ..control_planes import agent_sandbox
         if deploy_workloads:
             agent_sandbox.deploy_workload_and_pool(
                 cluster, workload, options["worker-count"], image_repo, sandbox_class(case)
@@ -471,7 +474,7 @@ roleRef:
     finally:
         if not still_running:
             if provider == AGENT_SANDBOX:
-                from . import agent_sandbox
+                from ..control_planes import agent_sandbox
                 rec = agent_sandbox.cleanup(cluster, "benchmark-workloads")
                 log(f"locust: agent-sandbox cleanup: {rec['claims_deleted']} claims, {rec['sandboxes_deleted']} sandboxes deleted")
             else:

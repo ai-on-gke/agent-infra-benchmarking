@@ -25,8 +25,8 @@ from pathlib import Path
 
 import yaml
 
-from ..cases import SCENARIOS_FILE, load_cases, resolved
 from ..log import log
+from ..scenarios.cases import SCENARIOS_FILE, load_cases, resolved
 
 
 def main() -> None:

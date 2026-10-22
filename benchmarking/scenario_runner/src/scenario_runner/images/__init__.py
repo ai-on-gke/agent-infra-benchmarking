@@ -27,8 +27,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import RUNNER_DIR
-from .process import output
+from .. import RUNNER_DIR
+from ..process import output
 
 ROOT = RUNNER_DIR.parent.parent
 LOCUST_IMAGES = ROOT / "benchmarking" / "locust" / "images.json"
@@ -131,7 +131,7 @@ def tag() -> str:
     from, -dirty-<digest of them>. So a manifest names the image built from
     the code that rendered it, and an image already pushed under it is of
     exactly this code. Read once, like commit."""
-    from . import substrate
+    from ..control_planes import substrate
 
     sources = [ROOT, substrate.SUBSTRATE_DIR, *(path for path in OTHER_SOURCES if (path / ".git").exists())]
     changes = "".join(changes_digest(path) for path in sources)

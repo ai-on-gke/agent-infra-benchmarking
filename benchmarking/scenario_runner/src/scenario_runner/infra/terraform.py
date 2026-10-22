@@ -25,9 +25,9 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
-from . import RUNNER_DIR
-from .log import log
-from .process import environ, stream
+from .. import RUNNER_DIR
+from ..log import log
+from ..process import environ, stream
 
 # Every TF_DATA_DIR the scenario-runner uses starts empty, so its providers come
 # from here rather than from a download each.

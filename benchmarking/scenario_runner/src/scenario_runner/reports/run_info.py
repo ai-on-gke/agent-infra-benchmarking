@@ -28,12 +28,13 @@ import subprocess
 from collections import defaultdict
 from typing import Callable
 
-from . import agent_sandbox, images, substrate, worker_pool
-from .cluster import Cluster
-from .cluster_configs import ClusterConfig, to_record
-from .install import AGENT_SANDBOX, SUBSTRATE, control_plane
-from .log import log
-from .process import output
+from .. import images
+from ..control_planes import agent_sandbox, substrate, worker_pool
+from ..infra.cluster import Cluster
+from ..infra.cluster_configs import ClusterConfig, to_record
+from ..log import log
+from ..process import output
+from ..scenarios.install import AGENT_SANDBOX, SUBSTRATE, control_plane
 
 
 def _read(what: str, read: Callable[[], object], errors: dict[str, str]) -> object:

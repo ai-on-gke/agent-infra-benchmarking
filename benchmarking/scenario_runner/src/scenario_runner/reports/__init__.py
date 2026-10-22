@@ -26,10 +26,10 @@ import time
 
 from google.cloud import storage
 
-from . import RUNNER_DIR, workloads
-from .cluster import Cluster
-from .log import ON_CLOUD_RUN, log
-from .process import output
+from .. import RUNNER_DIR, workloads
+from ..infra.cluster import Cluster
+from ..log import ON_CLOUD_RUN, log
+from ..process import output
 
 # Where a local run copies the uploads to, as <run-id>/<case>/ beneath it, as
 # they are under the report prefix in the bucket.

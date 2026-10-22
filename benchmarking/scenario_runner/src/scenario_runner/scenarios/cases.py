@@ -23,9 +23,9 @@ from pathlib import Path
 
 import yaml
 
-from . import SCENARIOS_DIR, benchmark
+from .. import SCENARIOS_DIR, benchmarks
+from ..reports import LABEL_RE, SUBCASE
 from .install import INSTALL, check_install
-from .reports import LABEL_RE, SUBCASE
 
 SCENARIOS_FILE = SCENARIOS_DIR / "scenarios.yaml"
 BARE_METAL = "bare-metal"
@@ -61,7 +61,7 @@ CASE_KEYS = {REPEATS, BARE_METAL, SUBCASES}
 
 
 def types() -> list[str]:
-    return ["noop", *benchmark.types()]
+    return ["noop", *benchmarks.types()]
 
 
 def resolved(scenarios_file: Path) -> dict:
@@ -119,11 +119,11 @@ def load_cases(scenarios_file: Path) -> dict[str, dict]:
             raise ValueError(f"{scenarios_file}: case {name}'s `{REPEATS}` {exc}") from None
         try:
             if case["type"] == "noop":
-                benchmark.cluster_config(name, case)
+                benchmarks.cluster_config(name, case)
             else:
                 # As each repeat runs under its own name.
                 for record in warmup_names(name, case) + record_names(name, case):
-                    benchmark.check(record, case)
+                    benchmarks.check(record, case)
         except ValueError as exc:
             raise ValueError(f"{scenarios_file}: {exc}") from None
     return cases

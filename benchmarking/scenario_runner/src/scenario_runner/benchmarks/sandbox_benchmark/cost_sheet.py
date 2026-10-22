@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import statistics
 
-from . import workloads
-from .log import log
+from ... import workloads
+from ...log import log
 
 COST_SHEET_CSV = "cost_sheet.csv"
 

@@ -86,7 +86,7 @@ prices that time and multiplies by 270 hours a month.
 ## Changing prices or assumptions
 
 The prices and usage assumptions are constants at the top of
-[`sandbox_benchmark_cost_sheet.py`](../scenario_runner/src/scenario_runner/sandbox_benchmark_cost_sheet.py):
+[`cost_sheet.py`](../scenario_runner/src/scenario_runner/benchmarks/sandbox_benchmark/cost_sheet.py):
 `RESOURCE_PRICED` and `ANTHROPIC_SESSION_HOUR` for prices,
 `ACTIVE_SECS_PER_HOUR`, `HOURS_PER_MONTH`, `VCPUS` and `RAM_GIB` for usage. They
 are copied from the original sheet, and substrate's from GCP's billing catalog,

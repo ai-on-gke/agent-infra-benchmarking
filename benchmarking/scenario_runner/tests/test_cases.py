@@ -25,8 +25,11 @@ import yaml
 
 from unittest import mock
 
-from scenario_runner import benchmark, locust, sandbox_benchmark
-from scenario_runner.cases import (
+from scenario_runner import benchmarks
+from scenario_runner.benchmarks import locust, sandbox_benchmark
+from scenario_runner.infra.cluster_configs import CommonCluster, DummyCluster, OpenclawCluster
+from scenario_runner.reports import SUBCASE
+from scenario_runner.scenarios.cases import (
     SCENARIOS_FILE,
     grouped,
     load_bare_metal,
@@ -36,8 +39,6 @@ from scenario_runner.cases import (
     warmup_names,
     with_bare_metal,
 )
-from scenario_runner.cluster_configs import CommonCluster, DummyCluster, OpenclawCluster
-from scenario_runner.reports import SUBCASE
 
 GLUTTON = {
     "locust": {
@@ -118,7 +119,7 @@ class ShippedCases(unittest.TestCase):
 
     def test_each_case_asks_for_its_cluster(self):
         cases = load_cases(SCENARIOS_FILE)
-        clusters = {name: benchmark.cluster_config(name, case) for name, case in cases.items()}
+        clusters = {name: benchmarks.cluster_config(name, case) for name, case in cases.items()}
         self.assertEqual(clusters["glutton-gvisor"], CommonCluster(sandboxed_nodes=1))
         self.assertEqual(clusters["glutton-microvm"], CommonCluster(sandboxed_nodes=1, nested_virtualization=True))
         self.assertEqual(clusters["openclaw-density-baseline"], OpenclawCluster(sandboxed_nodes=10))
@@ -231,9 +232,9 @@ class Clusters(unittest.TestCase):
     def test_locust_asks_for_its_configuration(self):
         cluster = {"sandboxed-nodes": 3, "nested-virtualization": True}
         case = load({"c": glutton({"infra": {"cluster": cluster}, **on("microvm")})})["c"]
-        self.assertEqual(benchmark.cluster_config("c", case), CommonCluster(3, nested_virtualization=True))
+        self.assertEqual(benchmarks.cluster_config("c", case), CommonCluster(3, nested_virtualization=True))
         openclaw = load({"c": glutton({"infra": {"cluster": {"configuration": "openclaw"}}})})["c"]
-        self.assertEqual(benchmark.cluster_config("c", openclaw), OpenclawCluster())
+        self.assertEqual(benchmarks.cluster_config("c", openclaw), OpenclawCluster())
 
     def test_a_workload_that_calls_mock_llm_needs_openclaw(self):
         with self.assertRaisesRegex(ValueError, "set `locust.infra.cluster.configuration: openclaw`"):
@@ -241,9 +242,9 @@ class Clusters(unittest.TestCase):
         load({"c": glutton(OPENCLAW)})
 
     def test_a_noop_picks_its_configuration_common_by_default(self):
-        self.assertEqual(benchmark.cluster_config("n", load({"n": {"noop": None}})["n"]), CommonCluster())
+        self.assertEqual(benchmarks.cluster_config("n", load({"n": {"noop": None}})["n"]), CommonCluster())
         dummy = load({"n": {"noop": {"infra": {"cluster": {"configuration": "dummy", "sandboxed-nodes": 2}}}}})["n"]
-        self.assertEqual(benchmark.cluster_config("n", dummy), DummyCluster(2))
+        self.assertEqual(benchmarks.cluster_config("n", dummy), DummyCluster(2))
 
     def test_what_is_wrong_is_named_where_it_is(self):
         with self.assertRaisesRegex(ValueError, r"case c\S*'s `locust.infra.cluster`: has unknown size; it takes"):

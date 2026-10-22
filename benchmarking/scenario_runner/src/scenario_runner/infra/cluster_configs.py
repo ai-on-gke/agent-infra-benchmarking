@@ -26,7 +26,7 @@ from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import ClassVar, Self
 
-from . import SCENARIOS_DIR
+from .. import SCENARIOS_DIR
 from .deployment import Deployment
 
 CLUSTERS_DIR = SCENARIOS_DIR / "infra" / "clusters"

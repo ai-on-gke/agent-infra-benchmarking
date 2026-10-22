@@ -31,7 +31,7 @@ import json
 import statistics
 from pathlib import Path
 
-from .log import log
+from ...log import log
 
 RESULTS_JSON = "results.json"
 RUN_JSON = "run.json"

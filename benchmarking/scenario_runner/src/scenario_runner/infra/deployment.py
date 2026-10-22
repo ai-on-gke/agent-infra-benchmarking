@@ -42,9 +42,10 @@ from typing import Callable, Iterator, Self
 
 from google.cloud import storage
 
-from . import RUNNER_DIR, terraform
-from .log import log
-from .process import retry, shielded
+from .. import RUNNER_DIR
+from ..log import log
+from ..process import retry, shielded
+from . import terraform
 
 RUNNER_INFRA_DIR = RUNNER_DIR / "infra"
 # The config's own deployments' files, e.g. one applied by hand, which would

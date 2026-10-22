@@ -19,7 +19,7 @@ imported by."""
 
 from __future__ import annotations
 
-from .workloads import SANDBOX_CONFIGS
+from ..workloads import SANDBOX_CONFIGS
 
 INSTALL = "install"
 SUBSTRATE = "substrate"

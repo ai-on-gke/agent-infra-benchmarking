@@ -23,10 +23,10 @@ import re
 import subprocess
 import time
 
-from . import RUNNER_DIR, images
-from .cluster import Cluster
-from .log import log
-from .process import retry, stream
+from .. import RUNNER_DIR, images
+from ..infra.cluster import Cluster
+from ..log import log
+from ..process import retry, stream
 
 AGENT_SANDBOX_DIR = RUNNER_DIR.parent.parent / "dependency-repos" / "agent-sandbox"
 AGENT_SANDBOX_PATH = AGENT_SANDBOX_DIR.relative_to(images.ROOT).as_posix()
@@ -294,7 +294,7 @@ def deploy_workload_and_pool(
     stream(cluster.kubectl("apply", "-f", "-"), input=f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {ns}\n")
 
     if workload_name == "openclaw":
-        from .workloads import openclaw
+        from ..workloads import openclaw
         openclaw.deploy_mock_llm(cluster, image_repo, timeout)
 
     if workload_name == "openclaw":
@@ -431,5 +431,5 @@ def delete_workload_and_pool(cluster: Cluster, workload_name: str) -> None:
     stream(cluster.kubectl("delete", "sandboxwarmpool", warm_pool_name, "-n", ns, "--ignore-not-found"))
     stream(cluster.kubectl("delete", "sandboxtemplate", workload_name, "-n", ns, "--ignore-not-found"))
     if workload_name == "openclaw":
-        from .workloads import openclaw
+        from ..workloads import openclaw
         openclaw.delete_mock_llm(cluster)

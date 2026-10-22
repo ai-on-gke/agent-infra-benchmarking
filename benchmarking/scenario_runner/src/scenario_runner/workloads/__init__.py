@@ -30,8 +30,9 @@ from contextlib import contextmanager
 from string import Template
 from typing import Callable, Iterator
 
-from .. import RUNNER_DIR, images, substrate, worker_pool
-from ..cluster import Cluster
+from .. import RUNNER_DIR, images
+from ..control_planes import substrate, worker_pool
+from ..infra.cluster import Cluster
 from ..log import log
 from ..process import output, stream
 from . import openclaw

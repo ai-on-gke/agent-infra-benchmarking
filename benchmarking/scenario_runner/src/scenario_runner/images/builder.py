@@ -14,7 +14,7 @@
 
 """Builds the images the scenario-runner pulls and pushes them to a
 repository ahead of its runs, with local Docker and ko, each
-under the name and tag images.py, substrate.py, ate_env.py and
+under the name and tag images, substrate.py, ate_env.py and
 agent_sandbox.py look it up by. The groups are substrate's, env's,
 agent-sandbox's, and the benchmark's own of the images.json files."""
 
@@ -24,10 +24,12 @@ import shutil
 import subprocess
 from collections.abc import Sequence
 
-from . import agent_sandbox, ate_env, images, substrate
-from .images import Image, ImageError
-from .log import log
-from .process import stream
+from .. import images
+from ..benchmarks.sandbox_benchmark import ate_env
+from ..control_planes import agent_sandbox, substrate
+from ..log import log
+from ..process import stream
+from . import Image, ImageError
 
 GROUPS = ("substrate", "env", "agent-sandbox", "benchmark")
 # The ko substrate's hack/tools/ko pins.

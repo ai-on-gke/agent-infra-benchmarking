@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import argparse
 
-from . import ate_env, images, locust, monitoring, reports, sandbox_benchmark, workloads
-from .cluster import Cluster
-from .cluster_configs import CLUSTER_CONFIGS, ClusterConfig, from_infra
-from .log import log
+from .. import images, reports, workloads
+from ..infra.cluster import Cluster
+from ..infra.cluster_configs import CLUSTER_CONFIGS, ClusterConfig, from_infra
+from ..log import log
+from . import locust, monitoring, sandbox_benchmark
+from .sandbox_benchmark import ate_env
 
 RUNNERS = {"locust": locust, "sandbox-benchmark": sandbox_benchmark}
 # What a failed run raises besides CalledProcessError.

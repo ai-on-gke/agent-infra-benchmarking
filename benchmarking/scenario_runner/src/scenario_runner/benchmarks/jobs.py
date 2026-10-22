@@ -22,8 +22,8 @@ import threading
 from contextlib import contextmanager
 from typing import Callable, Iterator
 
-from .cluster import Cluster
-from .log import log
+from ..infra.cluster import Cluster
+from ..log import log
 
 
 class StatusUnread(RuntimeError):
