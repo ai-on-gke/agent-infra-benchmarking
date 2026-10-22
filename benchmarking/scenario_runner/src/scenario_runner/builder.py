@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from collections.abc import Sequence
 
 from . import agent_sandbox, ate_env, images, substrate
 from .images import Image, ImageError
@@ -73,19 +74,20 @@ def dirty(group: str) -> bool:
     return False
 
 
-def build(group: str, repo: str, image_refs: list[str], login: bool) -> None:
+def build(group: str, repo: str, image_refs: list[str], login: bool, cache_args: Sequence[str] = ()) -> None:
     """Builds and pushes group's images to repo: of the benchmark's, only
-    image_refs; of the others, all of them."""
+    image_refs; of the others, all of them. cache_args go to each docker
+    build, as docker_build_and_push says; ko's builds take none."""
     if group == "substrate":
-        build_substrate(repo, login)
+        build_substrate(repo, login, cache_args)
     elif group == "env":
         build_env(repo, login)
     elif group == "agent-sandbox":
-        build_agent_sandbox(repo, login)
+        build_agent_sandbox(repo, login, cache_args)
     else:
         repo = images.group_repo(repo, group)
         wanted = [i for i in images.read_images(*images.IMAGE_FILES) if images.ref(repo, i.name) in image_refs]
-        docker_build_and_push(wanted, repo, images.tag(), images.DEFAULT_PLATFORM, login)
+        docker_build_and_push(wanted, repo, images.tag(), images.DEFAULT_PLATFORM, login, cache_args)
 
 
 def access_token(host: str) -> str:
@@ -107,8 +109,13 @@ def docker_login(host: str) -> None:
     )
 
 
-def docker_build_and_push(to_build: list[Image], repo: str, image_tag: str, platform: str, login: bool) -> None:
-    """Without login, uses the registry credentials Docker already has."""
+def docker_build_and_push(
+    to_build: list[Image], repo: str, image_tag: str, platform: str, login: bool, cache_args: Sequence[str] = ()
+) -> None:
+    """Without login, uses the registry credentials Docker already has.
+    cache_args, such as --cache-from=type=gha,scope={image}, go to every build
+    with {image} as the image's name. The build pushes, as the
+    docker-container builder a cache export takes loads nothing into Docker."""
     logged_in: set[str] = set()
     for image in to_build:
         image_ref = images.ref(repo, image.name, image_tag)
@@ -116,13 +123,13 @@ def docker_build_and_push(to_build: list[Image], repo: str, image_tag: str, plat
         if login and host not in logged_in:
             docker_login(host)
             logged_in.add(host)
-        log(f"images: building {image_ref} (platform: {image.platform or platform})")
-        stream(["docker", *image.docker_build_args(image_ref, platform)], cwd=images.ROOT)
-        log(f"images: pushing {image_ref}")
-        stream(["docker", "push", image_ref])
+        log(f"images: building and pushing {image_ref} (platform: {image.platform or platform})")
+        cache = [arg.replace("{image}", image.name) for arg in cache_args]
+        build = image.docker_build_args(image_ref, platform)
+        stream(["docker", *build[:-1], "--push", "--provenance=false", *cache, build[-1]], cwd=images.ROOT)
 
 
-def build_substrate(repo: str, login: bool) -> None:
+def build_substrate(repo: str, login: bool, cache_args: Sequence[str] = ()) -> None:
     """Pushes substrate.image_refs, with ko and Docker."""
     repo = images.group_repo(repo, "substrate")
     version = substrate.build_version()
@@ -138,15 +145,15 @@ def build_substrate(repo: str, login: bool) -> None:
         token = access_token(host)
         stream([*ko, "--username=oauth2accesstoken", "--password-stdin"], cwd=substrate.SUBSTRATE_DIR, input=token)
     stream(ko_build, env=env, cwd=substrate.SUBSTRATE_DIR)
-    docker_build_and_push([substrate.ENVOY_DATAPLANE], repo, version, images.DEFAULT_PLATFORM, login)
+    docker_build_and_push([substrate.ENVOY_DATAPLANE], repo, version, images.DEFAULT_PLATFORM, login, cache_args)
 
 
-def build_agent_sandbox(repo: str, login: bool) -> None:
+def build_agent_sandbox(repo: str, login: bool, cache_args: Sequence[str] = ()) -> None:
     """Pushes agent_sandbox.image_refs."""
     repo = images.group_repo(repo, "agent-sandbox")
     version = agent_sandbox.build_version()
     log(f"agent-sandbox: building the {version} images into {repo}")
-    docker_build_and_push(agent_sandbox.IMAGES, repo, version, images.DEFAULT_PLATFORM, login)
+    docker_build_and_push(agent_sandbox.IMAGES, repo, version, images.DEFAULT_PLATFORM, login, cache_args)
 
 
 def build_env(repo: str, login: bool) -> None:

@@ -74,6 +74,15 @@ def parse_args() -> argparse.Namespace:
         help="leave a local build's registry credentials to Docker's own configuration, rather than logging in"
         " with gcloud's access token",
     )
+    for flag in ("--cache-from", "--cache-to"):
+        p.add_argument(
+            flag,
+            action="append",
+            default=[],
+            metavar="SPEC",
+            help=f"docker build's {flag} for each image Docker builds, {{image}} in it as the image's name, such as"
+            " type=gha,scope={image}; repeatable. ko's builds take none",
+        )
     p.add_argument("--force", action="store_true", help="build every image, even those the repository has")
     p.add_argument("--dry-run", action="store_true", help="only say which images would be built")
     args = p.parse_args()
@@ -88,6 +97,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    cache_args = [f"--cache-from={spec}" for spec in args.cache_from] + [f"--cache-to={spec}" for spec in args.cache_to]
     missing = builder.missing_requirements(args.images)
     if missing:
         fail(f"building {', '.join(args.images)} requires {', '.join(missing)}")
@@ -109,7 +119,7 @@ def main() -> None:
                 log(f"build-images: {group}: would build\n{listed}")
                 continue
             log(f"build-images: {group}: building\n{listed}")
-            builder.build(group, args.repo, wanted, not args.no_docker_login)
+            builder.build(group, args.repo, wanted, not args.no_docker_login, cache_args)
     except subprocess.CalledProcessError as exc:
         fail(failure(exc))
     except (images.ImageError, substrate.SubstrateError) as exc:
