@@ -54,7 +54,7 @@
 # same way. A key set to null, here or in a subcase, drops it. Templates are
 # not cases, and need not be whole ones.
 #   python3 -m scenario_runner.cli.cases glutton-density
-# prints a case as it runs, with its templates and subcases in it.
+# prints a case with its templates merged in, its subcases as they are.
 #
 # `max-failure-ratio`, in the type's mapping, is the share of cycles, 0 to 1,
 # that may fail before a run of the case counts as failed, 0.01 by default. A

@@ -58,16 +58,22 @@ def types() -> list[str]:
     return ["noop", *benchmark.types()]
 
 
-def load_cases(scenarios_file: Path) -> dict[str, dict]:
-    """The cases, each with its templates merged in, subcases in their place
-    and `type` filled in from the mapping that names it."""
+def resolved(scenarios_file: Path) -> dict:
+    """The scenarios file with its templates merged into the cases that extend
+    them and left out, which the scenario-runner runs the same."""
     with scenarios_file.open() as f:
         loaded = yaml.safe_load(f) or {}
     cases = loaded.get("cases")
     if not isinstance(cases, dict) or not cases:
         raise ValueError(f"{scenarios_file} has no `cases` mapping")
     cases = with_templates(str(scenarios_file), loaded.get(TEMPLATES) or {}, cases)
-    cases = with_subcases(str(scenarios_file), cases)
+    return {**{key: value for key, value in loaded.items() if key != TEMPLATES}, "cases": cases}
+
+
+def load_cases(scenarios_file: Path) -> dict[str, dict]:
+    """The cases, each with its templates merged in, subcases in their place
+    and `type` filled in from the mapping that names it."""
+    cases = with_subcases(str(scenarios_file), resolved(scenarios_file)["cases"])
     known = types()
     for name, case in cases.items():
         if "type" in case:
