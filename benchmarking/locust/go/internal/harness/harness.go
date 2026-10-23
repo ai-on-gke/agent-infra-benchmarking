@@ -34,14 +34,14 @@ import (
 )
 
 const (
-	// Caps the teardown's concurrent control-plane calls. Every VU's actor is
-	// removed at once, so an unbounded run would open one suspend and one
-	// delete per actor against an ateapi still draining the run's own traffic.
+	// Caps the teardown's concurrent closes. Every VU's session is closed at
+	// once, so an unbounded run would open one close per session against a
+	// control plane still draining the run's own traffic.
 	teardownConcurrency = 16
 
 	// drainTimeout bounds the wait for in-flight iterations at the start of
 	// the teardown. Well under the budget the caller allows for the whole
-	// teardown, so that the actors already created are still removed when an
+	// teardown, so that the sessions already started are still closed when an
 	// iteration is wedged rather than merely slow.
 	drainTimeout = 35 * time.Second
 
@@ -187,20 +187,20 @@ func (r *runtime) start(ctx context.Context) (Session, error) {
 }
 
 // discard throws away a session whose state is no longer known. Any failed
-// call can leave an actor mid transition and nothing reconciles it, so the
-// session is closed and the goroutine's slot freed; the next iteration starts
-// a fresh one rather than working against a broken actor for the rest of the
-// run.
+// call can leave what it holds mid transition and nothing reconciles it, so
+// the session is closed and the goroutine's slot freed; the next iteration
+// starts a fresh one rather than working against a broken one for the rest of
+// the run.
 //
 // The slot is freed whether or not the close worked, because a VU that cannot
-// get rid of its actor still has to stop using it. A close that failed is
-// named, since that actor holds a worker until someone removes it.
+// get rid of its session still has to stop using it. A close that failed is
+// named, since what the session held stays until someone removes it.
 func (r *runtime) discard(ctx context.Context, gid int64, s Session, call string, cause error) {
-	slog.LogAttrs(ctx, slog.LevelWarn, "discarding the actor after a failed call",
+	slog.LogAttrs(ctx, slog.LevelWarn, "discarding the session after a failed call",
 		slices.Concat(s.LogAttrs(), []slog.Attr{slog.String("call", call), slog.String("err", cause.Error())})...)
 
 	if err := s.Close(ctx); err != nil {
-		slog.LogAttrs(ctx, slog.LevelWarn, "discarded actor was left behind", leftBehind(s, err)...)
+		slog.LogAttrs(ctx, slog.LevelWarn, "discarded session was left behind", leftBehind(s, err)...)
 	}
 	r.sessions.Delete(gid)
 	bmetrics.UpdateUsers(r.opts.UserClass, -1)
@@ -212,9 +212,9 @@ func leftBehind(s Session, err error) []slog.Attr {
 }
 
 // shutdown closes every session the run holds, and says per session whether
-// what it held went. An actor that outlives the run holds a worker until
-// someone deletes it by hand, so the one place that knows it was left behind
-// names it.
+// what it held went. What outlives the run, such as an actor holding a worker,
+// stays until someone deletes it by hand, so the one place that knows it was
+// left behind names it.
 //
 // The sessions are closed in parallel, capped at teardownConcurrency: a run's
 // worth of them closed one at a time would outlast the budget the caller
@@ -231,8 +231,8 @@ func (r *runtime) shutdown(ctx context.Context) {
 
 	// The drain takes a slice of the caller's budget rather than all of it, so
 	// that one wedged iteration cannot spend every second the suspend and
-	// delete calls need — turning a drain meant to prevent leaked actors into
-	// the cause of them.
+	// delete calls need — turning a drain meant to prevent leaks into the
+	// cause of them.
 	drainCtx, cancel := context.WithTimeout(ctx, drainTimeout)
 	defer cancel()
 	if !r.inflight.drain(drainCtx) {
@@ -265,11 +265,11 @@ func (r *runtime) shutdown(ctx context.Context) {
 			bmetrics.UpdateUsers(r.opts.UserClass, -1)
 			if err != nil {
 				left.Add(1)
-				slog.LogAttrs(ctx, slog.LevelWarn, "teardown left an actor behind", leftBehind(s, err)...)
+				slog.LogAttrs(ctx, slog.LevelWarn, "teardown left a session behind", leftBehind(s, err)...)
 				return
 			}
 			removed.Add(1)
-			slog.LogAttrs(ctx, slog.LevelInfo, "teardown removed an actor", s.LogAttrs()...)
+			slog.LogAttrs(ctx, slog.LevelInfo, "teardown closed a session", s.LogAttrs()...)
 		}()
 	}
 	wg.Wait()

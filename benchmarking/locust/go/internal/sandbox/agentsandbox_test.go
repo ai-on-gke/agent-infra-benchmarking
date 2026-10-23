@@ -21,6 +21,7 @@ import (
 
 	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -82,6 +83,61 @@ func TestParseClaimStatus(t *testing.T) {
 }
 
 func TestClaimWarmSandboxLifecycle(t *testing.T) {
+	s := wokenAgentSandbox(t, "glutton")
+
+	err := s.Sleep(context.Background())
+	if err != nil {
+		t.Fatalf("Sleep failed: %v", err)
+	}
+	if s.isActive {
+		t.Fatalf("expected s.isActive=false after release")
+	}
+}
+
+// A claimed sandbox removed by a discard or the teardown, rather than put to
+// sleep, still leaves the active gauge.
+func TestAgentSandboxRemoveDropsActiveGauge(t *testing.T) {
+	const wl = "gauge-test"
+	s := wokenAgentSandbox(t, wl)
+	if got := activeGauge(t, wl); got != 1 {
+		t.Fatalf("active actors after Wake: got %v, want 1", got)
+	}
+
+	if err := s.Remove(context.Background()); err != nil {
+		t.Fatalf("Remove failed: %v", err)
+	}
+	if got := activeGauge(t, wl); got != 0 {
+		t.Errorf("active actors after Remove: got %v, want 0", got)
+	}
+}
+
+// activeGauge is boomer_active_actors for workload, as Prometheus scrapes it.
+func activeGauge(t *testing.T, workload string) float64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, f := range families {
+		if f.GetName() != "boomer_active_actors" {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "workload" && l.GetValue() == workload {
+					return m.GetGauge().GetValue()
+				}
+			}
+		}
+	}
+	t.Fatalf("no boomer_active_actors{workload=%q}", workload)
+	return 0
+}
+
+// wokenAgentSandbox is a sandbox whose Wake claimed a warm one from a fake
+// controller, its gauges labelled workload.
+func wokenAgentSandbox(t *testing.T, workload string) *agentSandbox {
+	t.Helper()
 	scheme := runtime.NewScheme()
 	fakeDyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
 		sandboxClaimsGVR: "SandboxClaimList",
@@ -96,7 +152,7 @@ func TestClaimWarmSandboxLifecycle(t *testing.T) {
 			Timeout:      5 * time.Second,
 			WindowMethod: "runworkload",
 		},
-		Workload: "glutton",
+		Workload: workload,
 		WarmPool: "glutton-warm-pool",
 	}
 
@@ -141,14 +197,7 @@ func TestClaimWarmSandboxLifecycle(t *testing.T) {
 	if !s.isActive {
 		t.Fatalf("expected s.isActive=true")
 	}
-
-	err = s.Sleep(ctx)
-	if err != nil {
-		t.Fatalf("Sleep failed: %v", err)
-	}
-	if s.isActive {
-		t.Fatalf("expected s.isActive=false after release")
-	}
+	return s
 }
 
 // The router finds a claimed sandbox by these headers alone.

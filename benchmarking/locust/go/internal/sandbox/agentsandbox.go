@@ -248,16 +248,17 @@ func (s *agentSandbox) Sleep(ctx context.Context) error {
 
 	start := time.Now()
 	err := s.Remove(ctx)
-	if s.isActive {
-		activeActors.WithLabelValues(s.p.Workload).Dec()
-		s.isActive = false
-	}
 	s.p.Rec.Window(ctx, span, SuspendMetric, time.Since(start), err)
 	return err
 }
 
-// Remove deletes the claim, if the sandbox holds one.
+// Remove deletes the claim, if the sandbox holds one. The gauge drops whether
+// or not the delete works, since the sandbox is not used again either way.
 func (s *agentSandbox) Remove(ctx context.Context) error {
+	if s.isActive {
+		activeActors.WithLabelValues(s.p.Workload).Dec()
+		s.isActive = false
+	}
 	if s.claimName == "" {
 		return nil
 	}

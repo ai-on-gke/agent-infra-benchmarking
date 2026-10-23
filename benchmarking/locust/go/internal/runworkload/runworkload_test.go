@@ -287,7 +287,7 @@ func TestARefusedInstructionDiscardsTheActor(t *testing.T) {
 	if got := ctrl.countCalls("DeleteActor"); got != 1 {
 		t.Errorf("DeleteActor: got %d, want 1", got)
 	}
-	if !strings.Contains(buf.String(), "discarding the actor") {
+	if !strings.Contains(buf.String(), "discarding the session") {
 		t.Errorf("no discard was logged; got:\n%s", buf.String())
 	}
 	// The window is still reported, as a failure over the wait it spent.
@@ -344,7 +344,7 @@ func TestAFailedCallDiscardsTheActor(t *testing.T) {
 			if got := tc.ctrl.countCalls("DeleteActor"); got != 1 {
 				t.Errorf("DeleteActor: got %d, want 1", got)
 			}
-			if !strings.Contains(buf.String(), "discarding the actor") {
+			if !strings.Contains(buf.String(), "discarding the session") {
 				t.Errorf("no discard was logged; got:\n%s", buf.String())
 			}
 
@@ -448,14 +448,14 @@ func TestShutdownReportsWhatItLeftBehind(t *testing.T) {
 		{
 			name:      "a clean teardown",
 			ctrl:      &fakeControlClient{},
-			wantInLog: []string{"teardown removed an actor", `"left":0`, `"removed":1`},
+			wantInLog: []string{"teardown closed a session", `"left":0`, `"removed":1`},
 		},
 		{
 			name: "an actor still in a transitional state",
 			ctrl: &fakeControlClient{suspendErr: errActorBusy, deleteErr: errActorBusy},
 			// The suspend failure rides along, because the delete failing on
 			// its own means something else entirely.
-			wantInLog: []string{"teardown left an actor behind", "after suspend", `"left":1`},
+			wantInLog: []string{"teardown left a session behind", "after suspend", `"left":1`},
 		},
 	}
 

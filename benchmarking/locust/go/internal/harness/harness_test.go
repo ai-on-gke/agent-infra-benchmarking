@@ -204,7 +204,7 @@ func TestAFailedIterationDiscardsTheSession(t *testing.T) {
 		t.Errorf("closes: got %d, want 1", closes)
 	}
 	got := buf.String()
-	for _, want := range []string{"discarding the actor after a failed call", `"actor":"actor-1"`, `"call":"FakeCall"`, errIterate.Error()} {
+	for _, want := range []string{"discarding the session after a failed call", `"actor":"actor-1"`, `"call":"FakeCall"`, errIterate.Error()} {
 		if !strings.Contains(got, want) {
 			t.Errorf("discard log missing %q; got:\n%s", want, got)
 		}
@@ -229,7 +229,7 @@ func TestADiscardThatCouldNotCloseStillFreesTheSlot(t *testing.T) {
 	task()
 
 	got := buf.String()
-	for _, want := range []string{"discarded actor was left behind", `"actor":"actor-1"`, `"template":"fake-template"`, errClose.Error()} {
+	for _, want := range []string{"discarded session was left behind", `"actor":"actor-1"`, `"template":"fake-template"`, errClose.Error()} {
 		if !strings.Contains(got, want) {
 			t.Errorf("a leaked actor was not named: log missing %q; got:\n%s", want, got)
 		}
@@ -250,12 +250,12 @@ func TestShutdownReportsWhatItLeftBehind(t *testing.T) {
 	}{
 		{
 			name:      "a clean teardown",
-			wantInLog: []string{"teardown removed an actor", `"actor":"actor-1"`, `"left":0`, `"removed":1`},
+			wantInLog: []string{"teardown closed a session", `"actor":"actor-1"`, `"left":0`, `"removed":1`},
 		},
 		{
 			name:      "a session that could not be closed",
 			closeErr:  errClose,
-			wantInLog: []string{"teardown left an actor behind", `"actor":"actor-1"`, `"template":"fake-template"`, errClose.Error(), `"left":1`},
+			wantInLog: []string{"teardown left a session behind", `"actor":"actor-1"`, `"template":"fake-template"`, errClose.Error(), `"left":1`},
 		},
 	}
 
@@ -350,7 +350,7 @@ func TestTheEndOfTheRunCutsOffAnIterationWithoutADiscard(t *testing.T) {
 	if _, _, closes := f.counts(); closes != 1 {
 		t.Errorf("closes: got %d, want the teardown's one", closes)
 	}
-	if strings.Contains(buf.String(), "discarding the actor") {
+	if strings.Contains(buf.String(), "discarding the session") {
 		t.Errorf("the cut-off session was discarded; log:\n%s", buf.String())
 	}
 }
