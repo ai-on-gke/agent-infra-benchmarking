@@ -59,7 +59,7 @@ from ..scenarios.bare_metal import BARE_METAL
 from ..scenarios.batches import batch_key, batches, cluster_keys
 from ..scenarios.expand import grouped
 from ..scenarios.file import SCENARIOS_FILE, load_scenarios
-from ..scenarios.install import AGENT_SANDBOX, INSTALL, SANDBOX_CLASS, SUBSTRATE, control_plane, sandbox_class
+from ..scenarios.install import AGENT_SANDBOX, SUBSTRATE, control_plane, sandbox_class
 from ..scenarios.repeats import record_names, run_names, shares_cluster, warmup_names
 from ..scenarios.select import select
 
@@ -114,11 +114,6 @@ def parse_args() -> argparse.Namespace:
         "--suite",
         metavar="NAME",
         help="run the cases the scenarios file's `suites` lists under this name, in the order listed",
-    )
-    p.add_argument(
-        "--provider",
-        choices=[SUBSTRATE, AGENT_SANDBOX],
-        help=f"the control plane every locust case installs, with its {SANDBOX_CLASS}, in place of its `locust.{INSTALL}`'s",
     )
     p.add_argument(
         "--bare-metal",
@@ -278,7 +273,6 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
             scenarios,
             None if args.all else args.scenario,
             args.suite,
-            provider=args.provider,
             tests=args.test,
             bare_metal=args.bare_metal,
             placements=args.placements,

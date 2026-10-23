@@ -95,14 +95,14 @@ PLACEMENTS = [
 
 class ShippedCases(unittest.TestCase):
     def test_every_shipped_case_loads(self):
-        self.assertIn("glutton-gvisor", SHIPPED.cases)
+        self.assertIn("glutton-substrate-gvisor", SHIPPED.cases)
 
     def test_each_microvm_case_pairs_with_its_gvisor_case(self):
         # gVisor and microvm compare only if the cases differ in the class, and
         # the nested virtualization microvm boots its guests on, alone.
         cases = SHIPPED.cases
         for name, case in cases.items():
-            if not name.endswith("-microvm"):
+            if not name.endswith("-substrate-microvm"):
                 continue
             pair = copy.deepcopy(cases[name.removesuffix("-microvm") + "-gvisor"])
             self.assertEqual(pair["locust"].pop("install"), on("gvisor")["install"])
@@ -111,11 +111,24 @@ class ShippedCases(unittest.TestCase):
             self.assertIs(mine["locust"]["infra"]["cluster"].pop("nested-virtualization"), True)
             self.assertEqual(mine, pair, f"{name} differs from its gVisor case in more than the class")
 
+    def test_each_agent_sandbox_case_pairs_with_its_substrate_case(self):
+        cases = SHIPPED.cases
+        paired = [name for name in cases if name.endswith("-agent-sandbox-gvisor")]
+        self.assertTrue(paired)
+        for name in paired:
+            pair = copy.deepcopy(cases[name.removesuffix("-agent-sandbox-gvisor") + "-substrate-gvisor"])
+            self.assertEqual(pair["locust"].pop("install"), on("gvisor")["install"])
+            mine = copy.deepcopy(cases[name])
+            self.assertEqual(mine["locust"].pop("install"), {"agent-sandbox": {"sandbox-class": "gvisor"}})
+            self.assertEqual(mine, pair, f"{name} differs from its substrate case in more than the control plane")
+
     def test_each_case_asks_for_its_cluster(self):
         cases = SHIPPED.cases
         clusters = {name: benchmarks.cluster_config(name, case) for name, case in cases.items()}
-        self.assertEqual(clusters["glutton-gvisor"], CommonCluster(sandboxed_nodes=1))
-        self.assertEqual(clusters["glutton-microvm"], CommonCluster(sandboxed_nodes=1, nested_virtualization=True))
+        self.assertEqual(clusters["glutton-substrate-gvisor"], CommonCluster(sandboxed_nodes=1))
+        self.assertEqual(
+            clusters["glutton-substrate-microvm"], CommonCluster(sandboxed_nodes=1, nested_virtualization=True)
+        )
         self.assertEqual(clusters["openclaw-density-baseline"], OpenclawCluster(sandboxed_nodes=10))
         self.assertEqual(
             clusters["sandbox-benchmark-substrate"],
@@ -214,6 +227,7 @@ class CaseChecks(unittest.TestCase):
             glutton({"install": {"substrate": {"sandbox-class": "kata"}}}),
             glutton({"install": {"substrate": {"sandbox-class": "gvisor", "x": 1}}}),
             glutton({"install": {**on("gvisor")["install"], "agent-sandbox": {"sandbox-class": "gvisor"}}}),
+            glutton({"install": {"agent-sandbox": {"sandbox-class": "microvm"}}}),
             {"noop": {"install": {"substrate": {}}}},
         ):
             with self.subTest(case=case), self.assertRaises(ValueError):
@@ -330,6 +344,20 @@ class Parameters(unittest.TestCase):
         cases = self.expand({**case, "repeats": {"count": "{count}"}}, {"p": [values]})
         self.assertEqual(cases["c"]["locust"]["master"], {"run-time": "1m", "users": 3})
         self.assertEqual(cases["c"]["repeats"]["count"], 2)
+
+    def test_a_key_takes_its_text(self):
+        case = glutton({"install": {"{plane}": {"sandbox-class": "{class}"}}}, name="{plane}-{class}")
+        parameters = {"p": [{"plane": "substrate", "class": "microvm"}, {"plane": "agent-sandbox", "class": "gvisor"}]}
+        cases = self.expand(case, parameters)
+        self.assertEqual(cases["substrate-microvm"]["locust"]["install"], on("microvm")["install"])
+        self.assertEqual(
+            cases["agent-sandbox-gvisor"]["locust"]["install"], {"agent-sandbox": {"sandbox-class": "gvisor"}}
+        )
+        with self.assertRaisesRegex(ValueError, r"\{plane\} in '\{plane\}' must be a string or a number, got None"):
+            self.expand(glutton({"install": {"{plane}": {"sandbox-class": "gvisor"}}}), {"p": [{"plane": None}]})
+        twice = glutton({"master": {"{a}": 1, "{b}": 2}})
+        with self.assertRaisesRegex(ValueError, "two keys are 'users'"):
+            self.expand(twice, {"p": [{"a": "users", "b": "users"}]})
 
     def test_a_placeholder_an_entry_does_not_set_is_null(self):
         case = glutton({"master": {"run-time": "1m", "users": 10, "warm-up": "{warm-up}"}}, name="{workload}")
@@ -471,7 +499,7 @@ class Suites(unittest.TestCase):
 
         args = argparse.Namespace(
             scenarios_file=SCENARIOS_FILE, all=False, scenario=None, suite="staging",
-            provider=None, test=None, bare_metal=None, region="us-central1",
+            test=None, bare_metal=None, region="us-central1",
         )  # fmt: skip
         self.assertEqual(list(run.selected_cases(args)), SHIPPED.suites["staging"])
         with mock.patch.object(run, "log"), self.assertRaises(SystemExit):

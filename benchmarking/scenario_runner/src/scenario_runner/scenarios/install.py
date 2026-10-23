@@ -45,6 +45,9 @@ def check_install(given: object) -> None:
             raise ValueError(f"`{name}` must be a mapping of {', '.join(sorted(KEYS[name]))}, got {settings!r}")
         if settings[SANDBOX_CLASS] not in SANDBOX_CONFIGS:
             raise ValueError(f"`{name}.{SANDBOX_CLASS}` must be one of {', '.join(SANDBOX_CONFIGS)}")
+    # Nothing installs a microvm runtime without substrate.
+    if AGENT_SANDBOX in given and given[AGENT_SANDBOX][SANDBOX_CLASS] != "gvisor":
+        raise ValueError(f"`{AGENT_SANDBOX}.{SANDBOX_CLASS}` must be gvisor")
 
 
 def installs(case: dict) -> dict:

@@ -19,7 +19,7 @@
 # every other option on unchanged:
 #
 #   ./benchmarking/tools/run-local --project-id my-project \
-#     --scenario glutton-gvisor
+#     --scenario glutton-substrate-gvisor
 
 set -o errexit -o nounset -o pipefail
 

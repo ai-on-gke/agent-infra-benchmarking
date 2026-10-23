@@ -18,12 +18,11 @@ scenario-runner's options override in them."""
 from __future__ import annotations
 
 from .. import benchmarks
-from ..benchmarks import locust, sandbox_benchmark
+from ..benchmarks import sandbox_benchmark
 from .bare_metal import BARE_METAL, with_bare_metal
 from .cases import check_records
 from .expand import grouped
 from .file import Scenarios
-from .install import INSTALL, control_plane, installs
 
 
 def select(
@@ -31,18 +30,15 @@ def select(
     names: list[str] | None = None,
     suite: str | None = None,
     *,
-    provider: str | None = None,
     tests: list[str] | None = None,
     bare_metal: bool | None = None,
     placements: list[dict] = (),
 ) -> dict[str, dict]:
     """The cases to run, by name, in the order they run: those names gives,
     a case's subcases in its place, or else those suite lists, or else every
-    one. provider is the control plane every locust case installs in place of
-    its own, tests the ai-sandbox-benchmark
-    tests every sandbox-benchmark case runs, and bare_metal, unless None,
-    whether every case runs on bare metal, on placements. Raises ValueError,
-    its message what is wrong with them."""
+    one. tests is the ai-sandbox-benchmark tests every sandbox-benchmark case
+    runs, and bare_metal, unless None, whether every case runs on bare metal,
+    on placements. Raises ValueError, its message what is wrong with them."""
     cases = scenarios.cases
     groups = grouped(cases)
     if suite is not None:
@@ -57,7 +53,7 @@ def select(
         from_suite = f" (from suite {suite})" if suite else ""
         raise ValueError(f"no case {', '.join(unknown)}{from_suite} in {scenarios.path}; it has {known}")
     selected = {member: cases[member] for name in names for member in groups.get(name, [name])}
-    selected = {name: overridden(name, case, provider, tests) for name, case in selected.items()}
+    selected = {name: overridden(name, case, tests) for name, case in selected.items()}
     if tests:
         others = [name for name, case in selected.items() if case["type"] != sandbox_benchmark.TYPE]
         if others:
@@ -72,10 +68,8 @@ def select(
     return selected
 
 
-def overridden(name: str, case: dict, provider: str | None, tests: list[str] | None) -> dict:
+def overridden(name: str, case: dict, tests: list[str] | None) -> dict:
     kind = case["type"]
-    if kind == locust.TYPE and provider:
-        case = {**case, kind: {**case[kind], INSTALL: {provider: installs(case)[control_plane(case)]}}}
     if kind == sandbox_benchmark.TYPE and tests:
         tests = list(dict.fromkeys(t if t.startswith("test_") else f"test_{t}" for t in tests))
         case = {**case, kind: {**case[kind], "tests": tests}}
