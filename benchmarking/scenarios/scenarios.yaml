@@ -38,7 +38,7 @@
 # vCPUs, through a template of that size it builds once, daytona's in whole vCPUs
 # and GiB; openai's `container-size` picks its tier, small, medium or large. The
 # cost sheet prices each sandbox at its size. A
-# case's subcases' results are combined into one comparison, the first subcase
+# case's variants' results are combined into one comparison, the first variant
 # the others are compared with: perf_results.csv, and with `cost-sheet: true`
 # cost_sheet.csv, the sandbox cost sheet.
 # `noop` is the scenario-runner's alone, and holds its `infra` and `install` at
@@ -49,19 +49,19 @@
 # `{name}` in its name or any of its keys or values. A value that is one
 # placeholder takes the entry's value as it is, null dropping its key, and null
 # when the entry does not set it; one in a longer value or in a key, as in the
-# name, takes its text, which every entry has to set. The case's subcases are
+# name, takes its text, which every entry has to set. The case's variants are
 # part of it, their placeholders filled in too. A placeholder none of the
 # entries sets, or a name an entry sets that no placeholder has, is refused.
 # Each case so made is one of its own.
 #
-# `subcases` makes a case of each of its entries, <case>-<subcase>: the case,
+# `variants` makes a case of each of its entries, <case>-<variant>: the case,
 # already made of its parameters, with the entry's keys on top, a mapping
 # merged into a mapping, a key set to null dropped.
 # --scenario <case> runs them all one after another, then the type's summary of
-# them all; --scenario <case>-<subcase> just that one. Those alike in their
+# them all; --scenario <case>-<variant> just that one. Those alike in their
 # cluster share one, applied for them all.
 #   python3 -m scenario_runner.cli.cases glutton-density
-# prints a case made of its parameters, its subcases with theirs in them.
+# prints a case made of its parameters, its variants with theirs in them.
 #
 # `max-failure-ratio`, in the type's mapping, is the share of cycles, 0 to 1,
 # that may fail before a run of the case counts as failed, 0.01 by default. A
@@ -258,7 +258,7 @@ cases:
         workload-template: "{workload}"
         workload-timeout: "{workload-timeout}"
         actor-egress-allow: "{actor-egress-allow}"
-    subcases:
+    variants:
       baseline:
         locust:
           master: {users: 100, spawn-rate: 10}
@@ -434,7 +434,7 @@ cases:
       - test_suspend_resume
       runs: 10
       warmup-runs: 1
-    subcases:
+    variants:
       substrate:
         sandbox-benchmark:
           provider:

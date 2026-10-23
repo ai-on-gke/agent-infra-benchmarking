@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..benchmarks import noop
-from .subcases import SUBCASE
+from .variants import VARIANT
 
 BARE_METAL = "bare-metal"
 # What a case on bare metal is recorded under: its name with this added.
@@ -71,8 +71,8 @@ def with_bare_metal(
     its records and reports are; its cluster goes on placements when applied.
     A case's own `bare-metal` wins over default, and override, unless None,
     over both. Neither default nor override puts a noop on bare metal, as it
-    runs nothing there. A subcase on bare metal is one of <case>-metal, so
-    subcases on and off it are compared apart."""
+    runs nothing there. A variant on bare metal is one of <case>-metal, so
+    variants on and off it are compared apart."""
     result = {}
     for name, case in cases.items():
         metal = case.get(BARE_METAL, default if case["type"] != noop.TYPE else False)
@@ -87,9 +87,9 @@ def with_bare_metal(
         if not placements:
             raise ValueError(f"case {name} runs on bare metal, but `{BARE_METAL}.placements` has none in its region")
         result[renamed] = {**case, BARE_METAL: True}
-        if SUBCASE in case:
-            group = case[SUBCASE]["of"] + SUFFIX
+        if VARIANT in case:
+            group = case[VARIANT]["of"] + SUFFIX
             if group in all_names:
-                raise ValueError(f"case {name} on bare metal would be a subcase of {group}, which is another case")
-            result[renamed][SUBCASE] = {**case[SUBCASE], "of": group}
+                raise ValueError(f"case {name} on bare metal would be a variant of {group}, which is another case")
+            result[renamed][VARIANT] = {**case[VARIANT], "of": group}
     return result

@@ -14,7 +14,7 @@
 
 """The cases scenarios.yaml's cases make of their `parameters`: a case of each
 choice of them, with their values in its placeholders, `{name}` in its name or
-any of its keys or values, its subcases' too."""
+any of its keys or values, its variants' too."""
 
 from __future__ import annotations
 
@@ -110,7 +110,7 @@ def with_parameters(where: str, cases: dict) -> dict:
 
 def parametrized(where: str, name: str, case: dict) -> list[tuple[str, dict]]:
     """The case made of each choice of its parameters, with the entries'
-    values in its placeholders, its subcases' too, null in those an entry
+    values in its placeholders, its variants' too, null in those an entry
     does not set and another does."""
     parameters = case[PARAMETERS]
     if (

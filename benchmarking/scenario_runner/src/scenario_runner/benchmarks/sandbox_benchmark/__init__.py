@@ -23,7 +23,7 @@ the comparator's own pod; e2b, daytona, modal, anthropic and openai in their
 clouds, with the PROVIDER_KEYS of the scenario-runner's environment, e2b's,
 modal's and daytona's sandboxes sized by their `cpu` and `memory`, openai's by
 its `container-size` tier. A case's
-subcases, each typically another provider, report side by side, and summarize
+variants, each typically another provider, report side by side, and summarize
 combines their results into those of one comparator run of them all."""
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ from ...log import ON_CLOUD_RUN, log
 from ...process import stream
 from ...reports import run_info
 from ...scenarios.install import INSTALL, SANDBOX_CLASS, SUBSTRATE, control_plane, sandbox_class
-from ...scenarios.subcases import SUBCASE, group_record
+from ...scenarios.variants import VARIANT, group_record
 from .. import jobs
 from . import ate_env, combine
 from . import cost_sheet as costs
@@ -244,10 +244,10 @@ def cluster_config(name: str, case: dict) -> CommonCluster:
 
 def report_folder(record: str, key: str, case: dict) -> str:
     """Where under the run id the run of case key recorded as record reports:
-    in <record>/<provider>/, or a subcase's in <group record>/<subcase>/,
+    in <record>/<provider>/, or a variant's in <group record>/<variant>/,
     beside the others of its group."""
-    if SUBCASE in case:
-        return f"{group_record(record, key, case)}/{case[SUBCASE]['name']}"
+    if VARIANT in case:
+        return f"{group_record(record, key, case)}/{case[VARIANT]['name']}"
     return f"{record}/{provider_name(case)}"
 
 
@@ -481,7 +481,7 @@ def combine_reports(
 
 def summarize(runs: list[tuple[str, str, dict]], run_id: str, bucket: str | None, report_prefix: str) -> None:
     """Combines the runs' results, each of one provider, by the folder they
-    report beside one another in: a subcase's with the others of its group, the
+    report beside one another in: a variant's with the others of its group, the
     first the one the others are compared with, under the group's record."""
     folders = {}
     for record, key, case in runs:

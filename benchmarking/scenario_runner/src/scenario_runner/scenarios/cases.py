@@ -25,17 +25,17 @@ from . import bare_metal
 from .bare_metal import BARE_METAL
 from .install import INSTALL, check_install
 from .repeats import REPEATS, check_repeats, run_names
-from .subcases import SUBCASE, with_subcases
+from .variants import VARIANT, with_variants
 
 CASE_KEYS = {REPEATS, BARE_METAL}
 
 
 def load_cases(where: str, cases: dict) -> dict[str, dict]:
-    """The cases, made of their parameters already, with their subcases in
+    """The cases, made of their parameters already, with their variants in
     their place, each checked, with `type` filled in from the mapping that
     names it and `repeats` with its defaults, so run.json records how the case
     was sampled."""
-    return {name: checked(where, name, case) for name, case in with_subcases(where, cases).items()}
+    return {name: checked(where, name, case) for name, case in with_variants(where, cases).items()}
 
 
 def checked(where: str, name: str, case: dict) -> dict:
@@ -46,7 +46,7 @@ def checked(where: str, name: str, case: dict) -> dict:
     if len(given) != 1:
         raise ValueError(f"{where}: case {name} needs a mapping of exactly one type of {', '.join(known)}")
     kind = given[0]
-    unknown = case.keys() - CASE_KEYS - {kind, SUBCASE}
+    unknown = case.keys() - CASE_KEYS - {kind, VARIANT}
     if unknown:
         raise ValueError(f"{where}: case {name} has unknown {', '.join(sorted(unknown))}")
     options = case[kind]

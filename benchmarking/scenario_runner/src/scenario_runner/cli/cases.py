@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """Prints the scenarios file with a case made of each choice of its cases'
-parameters, a file the scenario-runner runs the same; a case's subcases stay in
+parameters, a file the scenario-runner runs the same; a case's variants stay in
 it, the parameters' values in theirs, for the scenario-runner to make cases of.
 No case named prints every one."""
 

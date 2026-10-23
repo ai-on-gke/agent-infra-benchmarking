@@ -22,7 +22,7 @@ from ..benchmarks import sandbox_benchmark
 from .bare_metal import BARE_METAL, with_bare_metal
 from .cases import check_records
 from .file import Scenarios
-from .subcases import grouped
+from .variants import grouped
 
 
 def select(
@@ -35,7 +35,7 @@ def select(
     placements: list[dict] = (),
 ) -> dict[str, dict]:
     """The cases to run, by name, in the order they run: those names gives,
-    a case's subcases in its place, or else those suite lists, or else every
+    a case's variants in its place, or else those suite lists, or else every
     one. tests is the ai-sandbox-benchmark tests every sandbox-benchmark case
     runs, and bare_metal, unless None, whether every case runs on bare metal,
     on placements. Raises ValueError, its message what is wrong with them."""

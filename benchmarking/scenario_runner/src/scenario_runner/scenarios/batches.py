@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Which of a case's subcases share a cluster, and what each cluster applied
+"""Which of a case's variants share a cluster, and what each cluster applied
 for the cases is recorded as."""
 
 from __future__ import annotations
@@ -23,17 +23,17 @@ from .. import benchmarks
 from .bare_metal import BARE_METAL
 from .install import installs
 from .repeats import record_names, shares_cluster
-from .subcases import grouped
+from .variants import grouped
 
 
 def cluster_setup(name: str, case: dict) -> tuple:
     """What the case's cluster is applied with and has installed, which a
-    case's subcases alike in share."""
+    case's variants alike in share."""
     return benchmarks.cluster_config(name, case), case.get(BARE_METAL, False), yaml.safe_dump(installs(case))
 
 
 def batches(names: list[str], cases: dict[str, dict]) -> list[list[str]]:
-    """A case's subcases by the cluster they can share, alike in its setup, in
+    """A case's variants by the cluster they can share, alike in its setup, in
     the order the first of each comes; one whose repeats have a cluster each
     alone."""
     out = {}

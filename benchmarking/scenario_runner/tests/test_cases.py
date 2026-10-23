@@ -31,7 +31,7 @@ from scenario_runner.infra.cluster_configs import CommonCluster, DummyCluster, O
 from scenario_runner.scenarios.bare_metal import Settings, with_bare_metal
 from scenario_runner.scenarios.file import SCENARIOS_FILE, load_scenarios
 from scenario_runner.scenarios.repeats import record_names, warmup_names
-from scenario_runner.scenarios.subcases import SUBCASE, grouped
+from scenario_runner.scenarios.variants import VARIANT, grouped
 
 SHIPPED = load_scenarios(SCENARIOS_FILE)
 
@@ -259,7 +259,7 @@ class Clusters(unittest.TestCase):
             load({"c": glutton({"infra": {"cluster": {"size": 1}}})})
 
 
-class Subcases(unittest.TestCase):
+class Variants(unittest.TestCase):
     def test_shipped_sandbox_benchmark_is_a_case_per_provider(self):
         cases = SHIPPED.cases
         members = grouped(cases)["sandbox-benchmark"]
@@ -269,7 +269,7 @@ class Subcases(unittest.TestCase):
             options = cases[name]["sandbox-benchmark"]
             self.assertEqual(name, f"sandbox-benchmark-{options['provider']['name']}")
             self.assertEqual(options["tests"], ["test_suspend_resume"])
-            self.assertEqual(cases[name][SUBCASE], {"of": "sandbox-benchmark", "name": options["provider"]["name"]})
+            self.assertEqual(cases[name][VARIANT], {"of": "sandbox-benchmark", "name": options["provider"]["name"]})
         self.assertEqual(cases["sandbox-benchmark-substrate"]["sandbox-benchmark"]["provider"]["env-worker-count"], 10)
         for name in ("e2b", "modal", "daytona"):
             provider = cases[f"sandbox-benchmark-{name}"]["sandbox-benchmark"]["provider"]
@@ -277,9 +277,9 @@ class Subcases(unittest.TestCase):
         openai = cases["sandbox-benchmark-openai"]["sandbox-benchmark"]["provider"]
         self.assertEqual(openai, {"name": "openai", "container-size": "medium"})
 
-    def test_a_subcase_s_keys_are_merged_on_top_of_the_case(self):
-        subcases = {"micro": {"locust": {**on("microvm"), "master": {"users": 3}}}, "plain": {}}
-        cases = load({"c": {**GLUTTON, "subcases": subcases}, "d": GLUTTON})
+    def test_a_variant_s_keys_are_merged_on_top_of_the_case(self):
+        variants = {"micro": {"locust": {**on("microvm"), "master": {"users": 3}}}, "plain": {}}
+        cases = load({"c": {**GLUTTON, "variants": variants}, "d": GLUTTON})
         self.assertEqual(list(cases), ["c-micro", "c-plain", "d"])
         self.assertEqual(cases["c-micro"]["locust"]["install"], on("microvm")["install"])
         self.assertEqual(cases["c-micro"]["locust"]["master"], {"run-time": "1m", "users": 3})
@@ -288,32 +288,32 @@ class Subcases(unittest.TestCase):
         self.assertEqual(cases["c-plain"]["locust"]["master"], GLUTTON["locust"]["master"])
         self.assertEqual(grouped(cases), {"c": ["c-micro", "c-plain"], "d": ["d"]})
 
-    def test_bad_subcases_are_refused(self):
+    def test_bad_variants_are_refused(self):
         for case in (
-            {**GLUTTON, "subcases": {}},
-            {**GLUTTON, "subcases": ["a"]},
-            {**GLUTTON, "subcases": {"a": 1}},
-            {**GLUTTON, "subcases": {"a b": {}}},
-            {**GLUTTON, SUBCASE: {"of": "x", "name": "y"}},
-            {**GLUTTON, "subcases": {"a": {"subcases": {"b": {}}}}},
+            {**GLUTTON, "variants": {}},
+            {**GLUTTON, "variants": ["a"]},
+            {**GLUTTON, "variants": {"a": 1}},
+            {**GLUTTON, "variants": {"a b": {}}},
+            {**GLUTTON, VARIANT: {"of": "x", "name": "y"}},
+            {**GLUTTON, "variants": {"a": {"variants": {"b": {}}}}},
         ):
             with self.subTest(case=case), self.assertRaises(ValueError):
                 load({"c": case})
         with self.assertRaisesRegex(ValueError, "which is another case"):
-            load({"c": {**GLUTTON, "subcases": {"a": {}}}, "c-a": GLUTTON})
-        # A subcase fills in no placeholder.
+            load({"c": {**GLUTTON, "variants": {"a": {}}}, "c-a": GLUTTON})
+        # A variant fills in no placeholder.
         case = glutton({"master": {"run-time": "1m", "users": "{users}"}})
         with self.assertRaisesRegex(ValueError, r"case c has \{users\}, which none of its parameters set"):
-            load({"c": {**case, "subcases": {"a": {"users": 1}}}})
+            load({"c": {**case, "variants": {"a": {"users": 1}}}})
 
-    def test_a_key_a_subcase_sets_to_null_is_dropped(self):
+    def test_a_key_a_variant_sets_to_null_is_dropped(self):
         case = glutton({"master": {"run-time": "1m", "users": 10, "warm-up": "10s"}})
-        cases = load({"c": {**case, "subcases": {"warm": {}, "cold": {"locust": {"master": {"warm-up": None}}}}}})
+        cases = load({"c": {**case, "variants": {"warm": {}, "cold": {"locust": {"master": {"warm-up": None}}}}}})
         self.assertEqual(cases["c-warm"]["locust"]["master"]["warm-up"], "10s")
         self.assertNotIn("warm-up", cases["c-cold"]["locust"]["master"])
 
-    def test_a_subcase_on_bare_metal_is_one_of_the_case_on_it(self):
-        case = {**GLUTTON, "subcases": {"a": {"bare-metal": True}, "b": {"bare-metal": False}}}
+    def test_a_variant_on_bare_metal_is_one_of_the_case_on_it(self):
+        case = {**GLUTTON, "variants": {"a": {"bare-metal": True}, "b": {"bare-metal": False}}}
         cases = load({"c": case})
         cases = with_bare_metal(cases, set(cases), False, None, PLACEMENTS)
         self.assertEqual(grouped(cases), {"c-metal": ["c-a-metal"], "c": ["c-b"]})
@@ -369,10 +369,10 @@ class Parameters(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, error):
             self.expand(glutton(name="{workload}-x"), {"p": [{"workload": "a"}, {}]})
 
-    def test_parameters_fill_in_the_subcases_too(self):
+    def test_parameters_fill_in_the_variants_too(self):
         case = glutton({"master": {"run-time": "{run-time}", "users": 10}})
-        subcases = {"short": {}, "long": {"locust": {"master": {"run-time": "{run-time-long}"}}}}
-        cases = self.expand({**case, "subcases": subcases}, {"p": [{"run-time": "1m", "run-time-long": "9m"}]})
+        variants = {"short": {}, "long": {"locust": {"master": {"run-time": "{run-time-long}"}}}}
+        cases = self.expand({**case, "variants": variants}, {"p": [{"run-time": "1m", "run-time-long": "9m"}]})
         self.assertEqual(cases["c-short"]["locust"]["master"], {"run-time": "1m", "users": 10})
         self.assertEqual(cases["c-long"]["locust"]["master"], {"run-time": "9m", "users": 10})
 
@@ -456,14 +456,14 @@ class SandboxBenchmarkCases(unittest.TestCase):
 class SandboxBenchmarkReports(unittest.TestCase):
     CASE = {"type": "sandbox-benchmark", "sandbox-benchmark": {"provider": {"name": "e2b"}}}
 
-    def test_a_subcase_reports_beside_the_others_of_its_group(self):
-        subcase = {**self.CASE, SUBCASE: {"of": "sb-metal", "name": "fast"}}
-        self.assertEqual(sandbox_benchmark.report_folder("sb-fast-metal-2", "sb-fast-metal", subcase), "sb-metal-2/fast")
+    def test_a_variant_reports_beside_the_others_of_its_group(self):
+        variant = {**self.CASE, VARIANT: {"of": "sb-metal", "name": "fast"}}
+        self.assertEqual(sandbox_benchmark.report_folder("sb-fast-metal-2", "sb-fast-metal", variant), "sb-metal-2/fast")
         self.assertEqual(sandbox_benchmark.report_folder("sb-2", "sb", self.CASE), "sb-2/e2b")
 
-    def test_summarize_combines_each_record_s_subcases_in_order(self):
-        a = {**self.CASE, SUBCASE: {"of": "sb", "name": "a"}, "sandbox-benchmark": {"cost-sheet": True}}
-        b = {**self.CASE, SUBCASE: {"of": "sb", "name": "b"}}
+    def test_summarize_combines_each_record_s_variants_in_order(self):
+        a = {**self.CASE, VARIANT: {"of": "sb", "name": "a"}, "sandbox-benchmark": {"cost-sheet": True}}
+        b = {**self.CASE, VARIANT: {"of": "sb", "name": "b"}}
         runs = [("sb-a-1", "sb-a", a), ("sb-a-2", "sb-a", a), ("sb-b-1", "sb-b", b), ("sb-b-2", "sb-b", b)]
         with mock.patch.object(sandbox_benchmark, "combine_reports") as combine:
             sandbox_benchmark.summarize(runs, "run-1", "bucket", "reports")

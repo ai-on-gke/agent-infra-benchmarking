@@ -39,7 +39,7 @@ afterwards.
 
 On an existing dev infra a run takes about 15 minutes. The sandboxes cost
 cents; most of the cost is Anthropic's and OpenAI's model tokens. To run one
-provider alone, such as substrate without paying the others, name its subcase:
+provider alone, such as substrate without paying the others, name its variant:
 
 ```bash
 ./benchmarking/tools/run --dev-infra cost-dev --scenario sandbox-benchmark-substrate

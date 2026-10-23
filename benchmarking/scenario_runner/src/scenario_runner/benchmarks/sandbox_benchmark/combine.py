@@ -15,7 +15,7 @@
 """Several sandbox-benchmark runs, each of one provider, combined into the
 comparison ai-sandbox-benchmark's comparator prints for a run of them all, as
 perf_results.csv: its metrics' mean, P90 and deviation, to import into Sheets.
-sandbox_benchmark.summarize combines a case's subcases' runs; combine, runs
+sandbox_benchmark.summarize combines a case's variants' runs; combine, runs
 already downloaded.
 
 The comparator runs every provider's tests at once and reports only each

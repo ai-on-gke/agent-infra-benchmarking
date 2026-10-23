@@ -37,9 +37,9 @@ SUITES = "suites"
 class Scenarios:
     path: Path
     # The file with a case made of each choice of its cases' parameters,
-    # which the scenario-runner runs the same; subcases are still in it.
+    # which the scenario-runner runs the same; variants are still in it.
     resolved: dict
-    # Every case by name, its subcases in its place, checked.
+    # Every case by name, its variants in its place, checked.
     cases: dict[str, dict]
     # Lists of case names, each as --scenario takes them, which --suite runs.
     suites: dict[str, list[str]]
