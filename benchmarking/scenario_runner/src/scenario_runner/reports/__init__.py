@@ -20,7 +20,6 @@ run's Jobs and cleanup.json, what the run left in its atespace."""
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import time
 
@@ -37,8 +36,6 @@ REPORTS_DIR = RUNNER_DIR.parent.parent / "reports"
 # The default report prefix, which a case's own bucket deletes reports under
 # after its report_retention_days.
 REPORT_PREFIX = "reports"
-# The run id and case name end up as label values.
-LABEL_RE = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?")
 # How long after the run its actors get to be gone before the ones left are
 # recorded in cleanup.json.
 ACTOR_DELETE_WAIT_SECS = 60

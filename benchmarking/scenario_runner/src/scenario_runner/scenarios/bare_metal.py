@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..benchmarks import noop
 from .expand import SUBCASE
 
 BARE_METAL = "bare-metal"
@@ -74,8 +75,8 @@ def with_bare_metal(
     subcases on and off it are compared apart."""
     result = {}
     for name, case in cases.items():
-        metal = case.get(BARE_METAL, default if case["type"] != "noop" else False)
-        if override is not None and case["type"] != "noop":
+        metal = case.get(BARE_METAL, default if case["type"] != noop.TYPE else False)
+        if override is not None and case["type"] != noop.TYPE:
             metal = override
         if not metal:
             result[name] = {**case, BARE_METAL: False}

@@ -35,12 +35,13 @@ import re
 import subprocess
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from string import Template
 from typing import Callable
 
 from google.cloud import storage
 
-from ... import RUNNER_DIR, images, reports, workloads
+from ... import LABEL_RE, RUNNER_DIR, git, images, reports, workloads
 from ...infra.cluster import Cluster
 from ...infra.cluster_configs import CommonCluster, from_infra
 from ...log import ON_CLOUD_RUN, log
@@ -56,7 +57,7 @@ MANIFEST = RUNNER_DIR.parent / "sandbox-benchmark" / "manifests" / "comparator-j
 AI_SANDBOX_BENCHMARK_DIR = ate_env.DEPENDENCY_REPOS / "ai-sandbox-benchmark"
 # Have to match metadata.name and namespace in the manifest.
 JOB = "sandbox-benchmark-comparator"
-NAMESPACE = "benchmarking"
+NAMESPACE = jobs.NAMESPACE
 COMPARATOR_IMAGE = "sandbox-benchmark-comparator"
 # The comparator image is large; its first pull on a node takes a while.
 POD_START_TIMEOUT_SECS = 600
@@ -192,7 +193,7 @@ def check_provider(name: str, provider: object) -> dict:
 
 def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     """The case with its defaults filled in."""
-    if not reports.LABEL_RE.fullmatch(name):
+    if not LABEL_RE.fullmatch(name):
         raise ValueError(f"case name {name!r} is not a valid label value")
     options = case.get(TYPE)
     if not isinstance(options, dict):
@@ -250,9 +251,11 @@ def report_folder(record: str, key: str, case: dict) -> str:
     return f"{record}/{provider_name(case)}"
 
 
-def commit(path: object) -> str | None:
-    proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True)
-    return proc.stdout.strip() if proc.returncode == 0 else None
+def commit(path: Path) -> str | None:
+    try:
+        return git.head(path)
+    except subprocess.CalledProcessError:
+        return None
 
 
 def wait_started(cluster: Cluster) -> None:
@@ -367,9 +370,7 @@ def run_provider(
         "OPENAI_CONTAINER_SIZE": options["provider"].get("container-size") or "",
     }
 
-    stream(
-        cluster.kubectl("apply", "-f", "-"), input=f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {NAMESPACE}\n"
-    )
+    cluster.apply_namespace(NAMESPACE)
     if keys:
         # Server-side, so no last-applied-configuration annotation copies the keys.
         secret = {
@@ -521,7 +522,7 @@ def run(
             f"case {name} is microvm, but cluster {cluster.name}'s sandboxed pool has no /dev/kvm for its guests"
         )
     run_id = run_id or f"{datetime.now(timezone.utc):%Y%m%dt%H%M%Sz}-{images.commit()[:12]}"
-    if not reports.LABEL_RE.fullmatch(run_id):
+    if not LABEL_RE.fullmatch(run_id):
         raise ValueError(f"run id {run_id!r} is not a valid label value")
     bucket = report_bucket or cluster.bucket
     reports.refuse_reused(bucket, report_prefix, run_id, folder)

@@ -27,6 +27,7 @@ import tempfile
 from pathlib import Path
 
 from . import benchmarks
+from .benchmarks import noop
 from .control_planes import agent_sandbox, substrate
 from .infra.cluster_configs import ClusterConfig, execution
 from .infra.deployment import Deployment, declared_variables, tf_vars
@@ -256,7 +257,7 @@ def check(
     if not shutil.which("terraform"):
         return ["terraform is required to apply the infra"]
     installs = any(control_plane(case) == SUBSTRATE for case in cases.values())
-    measured = {name: case for name, case in cases.items() if case["type"] != "noop"}
+    measured = {name: case for name, case in cases.items() if case["type"] != noop.TYPE}
     if installs:
         missing = substrate.missing_requirements()
         if missing:

@@ -170,6 +170,13 @@ def render_template(
     return Template((MANIFESTS_DIR / f"{name}-template.yaml.tmpl").read_text()).substitute(values)
 
 
+def ensure_atespace(ate: KubectlAte, atespace: str) -> None:
+    """Creates the atespace unless it exists: the store wants a template's
+    atespace to exist when the template is created."""
+    if subprocess.run(ate("create", "atespace", atespace), capture_output=True).returncode:
+        output(ate("get", "atespace", atespace))
+
+
 def delete_template(ate: KubectlAte, name: str, atespace: str = ATESPACE) -> None:
     subprocess.run(ate("delete", "actor-template", name, "-a", atespace), capture_output=True)
 
@@ -258,9 +265,7 @@ def deploy(
         openclaw.deploy_mock_llm(cluster, image_repo, timeout)
 
     with kubectl_ate(cluster) as ate:
-        # The store wants a template's atespace to exist when it is created.
-        if subprocess.run(ate("create", "atespace", ATESPACE), capture_output=True).returncode:
-            output(ate("get", "atespace", ATESPACE))
+        ensure_atespace(ate, ATESPACE)
         for name in names:
             # Templates are immutable, and the endpoint and class change between
             # runs. Deleting one also deletes its golden actor and snapshot.

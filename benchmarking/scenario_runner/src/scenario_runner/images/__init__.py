@@ -27,7 +27,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .. import RUNNER_DIR
+from .. import RUNNER_DIR, git
 from ..process import output
 
 ROOT = RUNNER_DIR.parent.parent
@@ -106,7 +106,7 @@ def read_images(*files: Path) -> list[Image]:
 def commit() -> str:
     """The commit the repo is at. Read once, so a commit made during a run
     doesn't change it between the build and what reads it."""
-    return output(["git", "rev-parse", "HEAD"], cwd=ROOT).strip()
+    return git.head(ROOT)
 
 
 def changes_digest(repo: Path) -> str:

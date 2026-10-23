@@ -24,14 +24,13 @@ from __future__ import annotations
 import functools
 import re
 import shutil
-import subprocess
 import tempfile
 from contextlib import contextmanager
 from typing import Callable, Iterator
 
 import yaml
 
-from ... import RUNNER_DIR, images, workloads
+from ... import RUNNER_DIR, git, images, workloads
 from ...control_planes import substrate, worker_pool
 from ...infra.cluster import Cluster
 from ...log import log
@@ -81,7 +80,7 @@ def check_client() -> None:
     """Refuses an env submodule at another commit than the one the provider's
     client is pinned to."""
     pinned = re.search(r'^ENV_COMMIT = "([0-9a-f]{40})"', PROVIDER.read_text(), re.MULTILINE)
-    head = output(["git", "rev-parse", "HEAD"], cwd=ENV_DIR).strip()
+    head = git.head(ENV_DIR)
     if not pinned:
         raise EnvError(f"no ENV_COMMIT in {PROVIDER}")
     if pinned[1] != head:
@@ -93,9 +92,7 @@ def build_version() -> str:
     """What env's images are tagged, read once per run: git describe in the
     submodule, as substrate's build version is, so they are built again only
     once it moves."""
-    describe = ["git", "describe", "--tags", "--always", "--dirty"]
-    proc = subprocess.run(describe, cwd=ENV_DIR, capture_output=True, text=True)
-    return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else "dev"
+    return git.describe(ENV_DIR) or "dev"
 
 
 def image_refs(repo: str) -> list[str]:
@@ -214,9 +211,7 @@ def deploy(
         f" bucket=gs://{cluster.bucket}/{ENV_ATESPACE}/{TEMPLATE}/)"
     )
     with workloads.kubectl_ate(cluster) as ate:
-        # The store wants a template's atespace to exist when it is created.
-        if subprocess.run(ate("create", "atespace", ENV_ATESPACE), capture_output=True).returncode:
-            output(ate("get", "atespace", ENV_ATESPACE))
+        workloads.ensure_atespace(ate, ENV_ATESPACE)
         # Templates are immutable. Deleting one also deletes its golden actor and snapshot.
         workloads.delete_template(ate, TEMPLATE, ENV_ATESPACE)
         stream(ate("create", "actor-template", "-f", "-"), input=template)

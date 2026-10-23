@@ -43,8 +43,8 @@ from typing import Callable, Iterator, NoReturn
 
 import yaml
 
-from .. import LOCAL_DATA_DIR, benchmarks, images, preflight, reports
-from ..benchmarks import sandbox_benchmark
+from .. import LABEL_RE, LOCAL_DATA_DIR, benchmarks, images, preflight, reports
+from ..benchmarks import noop, sandbox_benchmark
 from ..benchmarks.sandbox_benchmark import ate_env
 from ..control_planes import agent_sandbox, substrate
 from ..images import builder
@@ -88,7 +88,7 @@ def fail(message: str) -> NoReturn:
 
 def check_run_id(run_id: str) -> str:
     # The runs' pods are labeled with it.
-    if not reports.LABEL_RE.fullmatch(run_id):
+    if not LABEL_RE.fullmatch(run_id):
         raise argparse.ArgumentTypeError(
             f"{run_id!r}: use at most 63 letters, digits, '-', '_' and '.', starting and ending with a letter or digit"
         )
@@ -314,7 +314,7 @@ def check_requirements(args: argparse.Namespace, cases: dict[str, dict]) -> None
     # to check until it is.
     if args.image_repo:
         check_images(args, cases)
-    if args.report_bucket or all(case["type"] == "noop" for case in cases.values()):
+    if args.report_bucket or all(case["type"] == noop.TYPE for case in cases.values()):
         return
     if args.dev_infra:
         log(

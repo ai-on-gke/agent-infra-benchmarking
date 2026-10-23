@@ -28,7 +28,7 @@ import subprocess
 from collections import defaultdict
 from typing import Callable
 
-from .. import images
+from .. import git, images
 from ..control_planes import agent_sandbox, substrate, worker_pool
 from ..infra.cluster import Cluster
 from ..infra.cluster_configs import ClusterConfig, to_record
@@ -278,9 +278,9 @@ def collect(
         "commit_dirty": dirty,
         "tools": _read("tool versions", tools, errors),
         "control_plane": control_plane(case),
-        "substrate_commit": _read("substrate commit", lambda: output(["git", "rev-parse", "HEAD"], cwd=substrate.SUBSTRATE_DIR).strip(), errors) if control_plane(case) == SUBSTRATE else None,
+        "substrate_commit": _read("substrate commit", lambda: git.head(substrate.SUBSTRATE_DIR), errors) if control_plane(case) == SUBSTRATE else None,
         "substrate_version": _read("substrate version", substrate.build_version, errors) if control_plane(case) == SUBSTRATE else None,
-        "agent_sandbox_commit": _read("agent-sandbox commit", lambda: output(["git", "rev-parse", "HEAD"], cwd=agent_sandbox.AGENT_SANDBOX_DIR).strip(), errors) if control_plane(case) == AGENT_SANDBOX else None,
+        "agent_sandbox_commit": _read("agent-sandbox commit", lambda: git.head(agent_sandbox.AGENT_SANDBOX_DIR), errors) if control_plane(case) == AGENT_SANDBOX else None,
         "agent_sandbox_version": _read("agent-sandbox version", agent_sandbox.build_version, errors) if control_plane(case) == AGENT_SANDBOX else None,
         "bucket": bucket,
     }

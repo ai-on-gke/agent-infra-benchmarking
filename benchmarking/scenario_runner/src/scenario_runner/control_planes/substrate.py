@@ -31,14 +31,13 @@ from pathlib import Path
 
 import yaml
 
-from .. import RUNNER_DIR, images
+from .. import LABEL_RE, RUNNER_DIR, git, images
 from ..infra.cluster import Cluster
 from ..log import log
 from ..process import output, retry, stream
 
 SUBSTRATE_DIR = RUNNER_DIR.parent.parent / "dependency-repos" / "substrate"
 SUBSTRATE_PATH = SUBSTRATE_DIR.relative_to(images.ROOT).as_posix()
-LABEL_VALUE = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?")
 # What a pre-built install takes: images.Components in
 # cmd/ate-setup/internal/images, less the demos.
 SUBSTRATE_PACKAGES = [
@@ -96,14 +95,9 @@ def build_version() -> str:
     missing = missing_submodule()
     if missing:
         raise SubstrateError(f"the substrate build version requires {missing[0]}")
-    version = os.environ.get("VERSION", "")
-    if not version:
-        cmd = ["git", "describe", "--tags", "--always", "--dirty"]
-        proc = subprocess.run(cmd, cwd=SUBSTRATE_DIR, capture_output=True, text=True)
-        version = proc.stdout.strip() if proc.returncode == 0 else ""
-    version = version or "dev"
+    version = os.environ.get("VERSION") or git.describe(SUBSTRATE_DIR) or "dev"
     # ate-setup rejects one that is not a label value rather than sanitizing it.
-    if not LABEL_VALUE.fullmatch(version):
+    if not LABEL_RE.fullmatch(version):
         raise SubstrateError(f"substrate build version {version!r} is not a Kubernetes label value; set VERSION")
     return version
 
@@ -151,10 +145,6 @@ def pinned_commit() -> str:
     return entry[1]
 
 
-def checkout_commit() -> str:
-    return output(["git", "rev-parse", "HEAD"], cwd=SUBSTRATE_DIR).strip()
-
-
 def check_pinned() -> None:
     """Refuses a submodule checked out at another commit than the one the
     repo pins, as after a pull without git submodule update: the run would
@@ -164,7 +154,7 @@ def check_pinned() -> None:
     missing = missing_submodule()
     if missing:
         raise SubstrateError(f"{missing[0]} is not checked out; run git submodule update --init")
-    pinned, checked_out = pinned_commit(), checkout_commit()
+    pinned, checked_out = pinned_commit(), git.head(SUBSTRATE_DIR)
     if pinned != checked_out:
         raise SubstrateError(
             f"{SUBSTRATE_PATH} is checked out at {checked_out[:12]}, but the repo pins {pinned[:12]}; run"

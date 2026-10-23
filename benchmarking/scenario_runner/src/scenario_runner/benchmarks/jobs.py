@@ -25,6 +25,10 @@ from typing import Callable, Iterator
 from ..infra.cluster import Cluster
 from ..log import log
 
+# Where every case's Jobs, and Prometheus, run; has to match the manifests'
+# namespace.
+NAMESPACE = "benchmarking"
+
 
 class StatusUnread(RuntimeError):
     """kubectl could not read a Job."""

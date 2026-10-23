@@ -107,6 +107,10 @@ class Cluster:
         """A kubectl command for the cluster, in namespace if given."""
         return ["kubectl", *args, *self.kubectl_flags(namespace)]
 
+    def apply_namespace(self, namespace: str) -> None:
+        manifest = f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {namespace}\n"
+        stream(self.kubectl("apply", "-f", "-"), input=manifest)
+
     @property
     def context(self) -> str:
         """The name get_credentials gives the cluster's context."""

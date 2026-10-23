@@ -26,7 +26,7 @@ import subprocess
 import time
 from string import Template
 
-from .. import RUNNER_DIR, images
+from .. import LABEL_RE, RUNNER_DIR, git, images
 from ..infra.cluster import Cluster
 from ..log import log
 from ..process import retry, stream
@@ -35,7 +35,6 @@ from ..workloads import openclaw
 AGENT_SANDBOX_DIR = RUNNER_DIR.parent.parent / "dependency-repos" / "agent-sandbox"
 AGENT_SANDBOX_PATH = AGENT_SANDBOX_DIR.relative_to(images.ROOT).as_posix()
 MANIFESTS_DIR = RUNNER_DIR.parent / "agent-sandbox" / "manifests"
-LABEL_VALUE = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?")
 
 CONTROLLER_IMAGE = images.Image(
     name="agent-sandbox-controller",
@@ -68,13 +67,8 @@ def build_version() -> str:
     missing = missing_submodule()
     if missing:
         raise AgentSandboxError(f"the agent-sandbox build version requires {missing[0]}")
-    version = os.environ.get("AGENT_SANDBOX_VERSION", "")
-    if not version:
-        cmd = ["git", "describe", "--tags", "--always", "--dirty"]
-        proc = subprocess.run(cmd, cwd=AGENT_SANDBOX_DIR, capture_output=True, text=True)
-        version = proc.stdout.strip() if proc.returncode == 0 else ""
-    version = version or "dev"
-    if not LABEL_VALUE.fullmatch(version):
+    version = os.environ.get("AGENT_SANDBOX_VERSION") or git.describe(AGENT_SANDBOX_DIR) or "dev"
+    if not LABEL_RE.fullmatch(version):
         version = re.sub(r"[^A-Za-z0-9_.-]", "-", version)[:63]
     return version
 
@@ -123,7 +117,7 @@ def install_once(cluster: Cluster) -> None:
     k8s = AGENT_SANDBOX_DIR / "k8s"
     for crd in sorted((k8s / "crds").glob("*.yaml")):
         stream(cluster.kubectl("apply", "-f", str(crd)))
-    apply(cluster, f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {NAMESPACE}\n")
+    cluster.apply_namespace(NAMESPACE)
     for rbac in ("rbac.generated.yaml", "extensions-rbac.generated.yaml", "extensions.yaml"):
         stream(cluster.kubectl("apply", "-f", str(k8s / rbac)))
     apply(cluster, render("controller.yaml.tmpl", NAMESPACE=NAMESPACE, IMAGE=controller_img))
@@ -162,7 +156,7 @@ def deploy_workload_and_pool(
 ) -> None:
     if workload_name not in WORKLOAD_IMAGES:
         raise AgentSandboxError(f"no agent-sandbox template of {workload_name}; there are {', '.join(WORKLOAD_IMAGES)}")
-    apply(cluster, f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {WORKLOADS_NAMESPACE}\n")
+    cluster.apply_namespace(WORKLOADS_NAMESPACE)
     if workload_name == "openclaw":
         openclaw.deploy_mock_llm(cluster, image_repo, timeout)
     template = render(

@@ -19,9 +19,8 @@ cluster the type asks for in its `infra` and what it installs on it."""
 
 from __future__ import annotations
 
-from .. import benchmarks
+from .. import LABEL_RE, benchmarks
 from ..benchmarks import noop
-from ..reports import LABEL_RE
 from . import bare_metal
 from .bare_metal import BARE_METAL
 from .expand import SUBCASE, listed, placeholders, with_subcases

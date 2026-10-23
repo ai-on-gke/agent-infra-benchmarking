@@ -18,6 +18,7 @@ scenario-runner's options override in them."""
 from __future__ import annotations
 
 from .. import benchmarks
+from ..benchmarks import locust, sandbox_benchmark
 from .bare_metal import BARE_METAL, with_bare_metal
 from .cases import check_records
 from .expand import grouped
@@ -58,7 +59,7 @@ def select(
     selected = {member: cases[member] for name in names for member in groups.get(name, [name])}
     selected = {name: overridden(name, case, provider, tests) for name, case in selected.items()}
     if tests:
-        others = [name for name, case in selected.items() if case["type"] != "sandbox-benchmark"]
+        others = [name for name, case in selected.items() if case["type"] != sandbox_benchmark.TYPE]
         if others:
             raise ValueError(f"--test is only for sandbox-benchmark cases, not {', '.join(others)}")
         for name, case in selected.items():
@@ -73,9 +74,9 @@ def select(
 
 def overridden(name: str, case: dict, provider: str | None, tests: list[str] | None) -> dict:
     kind = case["type"]
-    if kind == "locust" and provider:
+    if kind == locust.TYPE and provider:
         case = {**case, kind: {**case[kind], INSTALL: {provider: installs(case)[control_plane(case)]}}}
-    if kind == "sandbox-benchmark" and tests:
+    if kind == sandbox_benchmark.TYPE and tests:
         tests = list(dict.fromkeys(t if t.startswith("test_") else f"test_{t}" for t in tests))
         case = {**case, kind: {**case[kind], "tests": tests}}
     return case

@@ -21,12 +21,13 @@ from .. import RUNNER_DIR
 from ..infra.cluster import Cluster
 from ..log import log
 from ..process import output, stream
+from . import jobs
 
 MANIFEST = RUNNER_DIR.parent / "monitoring" / "prometheus.yaml"
 # Have to match the Deployment in the manifest, and its nodeSelector the
 # monitoring pool's label in infra/clusters/common/main.tf.
 NAME = "prometheus"
-NAMESPACE = "benchmarking"
+NAMESPACE = jobs.NAMESPACE
 NODE_LABEL = "benchmarking-monitoring=true"
 TIMEOUT_SECS = 300
 

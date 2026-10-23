@@ -22,7 +22,7 @@ import copy
 import itertools
 import re
 
-from ..reports import LABEL_RE
+from .. import LABEL_RE
 
 # Lists of the values a case's placeholders take: a case is made of each
 # choice of one entry from every list.

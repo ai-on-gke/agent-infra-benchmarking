@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from string import Template
 from typing import Callable
 
-from .. import RUNNER_DIR, images, reports, workloads
+from .. import LABEL_RE, RUNNER_DIR, images, reports, workloads
 from ..control_planes import agent_sandbox, worker_pool
 from ..infra.cluster import Cluster
 from ..infra.cluster_configs import CommonCluster, OpenclawCluster, from_infra
@@ -41,7 +41,7 @@ MANIFESTS_DIR = RUNNER_DIR.parent / "locust" / "manifests"
 # Have to match metadata.name and namespace in the manifests.
 MASTER_JOB = "locust-master"
 WORKER_JOB = "boomer-worker"
-NAMESPACE = "benchmarking"
+NAMESPACE = jobs.NAMESPACE
 MASTER_HOST = f"{MASTER_JOB}.{NAMESPACE}.svc.cluster.local"
 USER_CLASS = "runworkload"
 POD_START_TIMEOUT_SECS = 300
@@ -96,7 +96,7 @@ def flags(values: dict) -> list[str]:
 
 def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     """The case with its defaults filled in."""
-    if not reports.LABEL_RE.fullmatch(name):
+    if not LABEL_RE.fullmatch(name):
         raise ValueError(f"case name {name!r} is not a valid label value")
     options = case.get(TYPE)
     if not isinstance(options, dict):
@@ -307,7 +307,7 @@ def run(
             f"case {name} is microvm, but cluster {cluster.name}'s sandboxed pool has no /dev/kvm for its guests"
         )
     run_id = run_id or f"{datetime.now(timezone.utc):%Y%m%dt%H%M%Sz}-{images.commit()[:12]}"
-    if not reports.LABEL_RE.fullmatch(run_id):
+    if not LABEL_RE.fullmatch(run_id):
         raise ValueError(f"run id {run_id!r} is not a valid label value")
     bucket = report_bucket or cluster.bucket
     reports.refuse_reused(bucket, report_prefix, run_id, name)
@@ -318,7 +318,7 @@ def run(
         for image in ("locust-master", "boomer-worker")
     }
 
-    apply(cluster, f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {NAMESPACE}\n")
+    cluster.apply_namespace(NAMESPACE)
     # A Job's pod template is immutable. Foreground, so their pods are gone too
     # and the job-name lookup only sees this run's.
     log(f"locust: deleting any previous {MASTER_JOB} and {WORKER_JOB}")
