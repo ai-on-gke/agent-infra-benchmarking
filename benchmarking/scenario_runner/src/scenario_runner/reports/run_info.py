@@ -238,32 +238,21 @@ def collect(
     """infra is the cluster the case's type asked for, so a published run
     says what hardware it asked for; pool is the namespace and name of the
     WorkerPool the run's actors run on."""
-    pool_namespace, pool_name = pool
+    pool_namespace = pool[0]
     errors: dict[str, str] = {}
     sandbox_configs = {}
     config_name = ((template or {}).get("sandboxConfig") or {}).get("configName")
     if config_name:
         config = _read("sandbox config", lambda: _kubectl_json(cluster, "sandboxconfig", config_name), errors)
         sandbox_configs = {config_name: (config or {}).get("spec")}
-    if control_plane(case) == AGENT_SANDBOX:
-        pool = _read(
-            "warm pool",
-            lambda: _kubectl_json(cluster, "sandboxwarmpool", agent_sandbox.warm_pool_name(template_name), namespace=pool_namespace),
-            errors,
-        )
-    else:
-        pool = _read(
-            "worker pool",
-            lambda: _kubectl_json(cluster, "workerpool", pool_name, namespace=pool_namespace),
-            errors,
-        )
+    pool_info = actors_pool(cluster, case, template_name, pool, errors)
     dirty = _read("repo state", lambda: bool(output(["git", "status", "--porcelain"], cwd=images.ROOT).strip()), errors)
     info = {
         "case": case,
         "infra": to_record(infra),
         "cluster": _read("cluster config", lambda: cluster_config(cluster), errors),
         "nodes": _read("nodes", lambda: nodes(cluster), errors),
-        "worker_pool": {"spec": pool.get("spec"), "status": pool.get("status")} if pool else None,
+        "worker_pool": {"spec": pool_info.get("spec"), "status": pool_info.get("status")} if pool_info else None,
         "actor_templates": {template_name: template} if template_name and template else {},
         "sandbox_configs": sandbox_configs,
         "deployments": _read("deployments", lambda: deployments(cluster, pool_namespace), errors),
@@ -272,16 +261,12 @@ def collect(
         ),
         "worker_pool_images": _read("worker pool images", lambda: pod_images(cluster, pool_namespace), errors),
         "images": image_refs,
-        "locust_image": image_refs.get("locust-master"),
         "commit": images.commit(),
         "image_tag": images.tag(),
         "commit_dirty": dirty,
         "tools": _read("tool versions", tools, errors),
         "control_plane": control_plane(case),
-        "substrate_commit": _read("substrate commit", lambda: git.head(substrate.SUBSTRATE_DIR), errors) if control_plane(case) == SUBSTRATE else None,
-        "substrate_version": _read("substrate version", substrate.build_version, errors) if control_plane(case) == SUBSTRATE else None,
-        "agent_sandbox_commit": _read("agent-sandbox commit", lambda: git.head(agent_sandbox.AGENT_SANDBOX_DIR), errors) if control_plane(case) == AGENT_SANDBOX else None,
-        "agent_sandbox_version": _read("agent-sandbox version", agent_sandbox.build_version, errors) if control_plane(case) == AGENT_SANDBOX else None,
+        **control_plane_build(case, errors),
         "bucket": bucket,
     }
     # A locust run's run.json keeps the key it has always had.
@@ -289,4 +274,31 @@ def collect(
         info["locust_image"] = image_refs["locust-master"]
     if errors:
         info["run_info_errors"] = errors
+    return info
+
+
+def actors_pool(
+    cluster: Cluster, case: dict, template_name: str | None, pool: tuple[str, str], errors: dict[str, str]
+) -> dict | None:
+    """The pool the run's actors come from: agent-sandbox's warm pool of the
+    template, or else the WorkerPool pool names."""
+    namespace, name = pool
+    if control_plane(case) == AGENT_SANDBOX:
+        warm_pool = agent_sandbox.warm_pool_name(template_name)
+        return _read("warm pool", lambda: _kubectl_json(cluster, "sandboxwarmpool", warm_pool, namespace=namespace), errors)
+    return _read("worker pool", lambda: _kubectl_json(cluster, "workerpool", name, namespace=namespace), errors)
+
+
+def control_plane_build(case: dict, errors: dict[str, str]) -> dict:
+    """The commit and build version of each control plane, those of the one
+    the case installs read, the others None."""
+    builds = {
+        SUBSTRATE: ("substrate", substrate.SUBSTRATE_DIR, substrate.build_version),
+        AGENT_SANDBOX: ("agent_sandbox", agent_sandbox.AGENT_SANDBOX_DIR, agent_sandbox.build_version),
+    }
+    info = {}
+    for plane, (key, repo, build_version) in builds.items():
+        installed = control_plane(case) == plane
+        info[f"{key}_commit"] = _read(f"{plane} commit", lambda: git.head(repo), errors) if installed else None
+        info[f"{key}_version"] = _read(f"{plane} version", build_version, errors) if installed else None
     return info
