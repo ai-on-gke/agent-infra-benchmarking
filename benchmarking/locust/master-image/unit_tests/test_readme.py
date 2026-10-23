@@ -80,7 +80,7 @@ class Render(unittest.TestCase):
 
     def test_density_renders_in_case_and_workers(self):
         info = self.info()
-        info["case"]["locust"]["worker-count"] = 100
+        info["case"]["locust"]["workers"] = {"count": 100}
         info["case"]["locust"]["master"] = {"users": 500, "spawn-rate": 1}
         info["worker_pool"] = {"spec": {"replicas": 100}, "status": {"readyReplicas": 100}}
         info["nodes"] = {"sandboxed": {"count": 10, "ready": 10}}

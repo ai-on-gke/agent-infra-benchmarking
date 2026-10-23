@@ -17,7 +17,7 @@ names in the order given, the ones a --suite lists, or with --all every case in
 the order listed), each
 case's warm-ups and repeats on an infra/clusters/ cluster applied for it and
 destroyed after them, or with `repeats.cluster: per-repeat` each repeat on one
-of its own; a case's subcases one after another, those alike in their cluster
+of its own; a case's variants one after another, those alike in their cluster
 on one, then its type's summarize of them all; pulling the images
 benchmarking/tools/build-images built into
 --image-repo. From a machine rather
@@ -57,11 +57,11 @@ from ..process import failure
 from ..reports import summary
 from ..scenarios.bare_metal import BARE_METAL
 from ..scenarios.batches import batch_key, batches, cluster_keys
-from ..scenarios.expand import grouped
 from ..scenarios.file import SCENARIOS_FILE, load_scenarios
 from ..scenarios.install import AGENT_SANDBOX, SUBSTRATE, control_plane, sandbox_class
 from ..scenarios.repeats import record_names, run_names, shares_cluster, warmup_names
 from ..scenarios.select import select
+from ..scenarios.variants import grouped
 
 # The executions' Deployments, kept after they are destroyed, and with gcs in
 # the state bucket under <state prefix>/ too. An execution's are in <name>/:
@@ -103,7 +103,7 @@ def parse_args() -> argparse.Namespace:
         "--scenario",
         action="append",
         metavar="NAME",
-        help="a case to run, all its subcases, or one of them as <case>-<subcase>; repeat it for more",
+        help="a case to run, all its variants, or one of them as <case>-<variant>; repeat it for more",
     )
     which.add_argument(
         "--all",
@@ -558,7 +558,7 @@ def run_cases(
 ) -> list[str]:
     """Calls run with each case and the cluster applied gives each batch of
     them, recorded as its key, and returns the ones that failed. A case's
-    subcases run one after another, then its type's summarize, given
+    variants run one after another, then its type's summarize, given
     summary_bucket. A failed case does not stop the ones after it; an
     interrupt, or a cluster that could not be destroyed, does. So does a run
     that may still be going on a shared_cluster, which the next case would
@@ -653,7 +653,7 @@ def on_placements(
 def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[str]:
     """A case's warm-ups and repeats run on a cluster applied for it and
     destroyed after them, or with `repeats.cluster: per-repeat` each repeat on
-    one of its own; a batch of a case's subcases on one applied for them all.
+    one of its own; a batch of a case's variants on one applied for them all.
     The clusters pull from args.image_repo, or without one from
     a repository applied for the execution, the images built into it, and
     destroyed after the clusters. Returns the cases that failed."""

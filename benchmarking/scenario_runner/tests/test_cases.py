@@ -29,9 +29,9 @@ from scenario_runner import benchmarks
 from scenario_runner.benchmarks import locust, sandbox_benchmark
 from scenario_runner.infra.cluster_configs import CommonCluster, DummyCluster, OpenclawCluster
 from scenario_runner.scenarios.bare_metal import Settings, with_bare_metal
-from scenario_runner.scenarios.expand import SUBCASE, grouped
 from scenario_runner.scenarios.file import SCENARIOS_FILE, load_scenarios
 from scenario_runner.scenarios.repeats import record_names, warmup_names
+from scenario_runner.scenarios.variants import VARIANT, grouped
 
 SHIPPED = load_scenarios(SCENARIOS_FILE)
 
@@ -122,6 +122,15 @@ class ShippedCases(unittest.TestCase):
             self.assertEqual(mine["locust"].pop("install"), {"agent-sandbox": {"sandbox-class": "gvisor"}})
             self.assertEqual(mine, pair, f"{name} differs from its substrate case in more than the control plane")
 
+    def test_shared_workers_is_glutton_on_fewer_bounded_workers(self):
+        # So it compares, and runs on glutton-substrate-gvisor's dev infra.
+        cases = copy.deepcopy(SHIPPED.cases)
+        mine, pair = cases["glutton-shared-workers"], cases["glutton-substrate-gvisor"]
+        self.assertEqual(mine["locust"].pop("workers"), {"count": 2, "limits": {"memory": "1536Mi"}})
+        pair["locust"].pop("workers")
+        mine.pop("repeats"), pair.pop("repeats")
+        self.assertEqual(mine, pair)
+
     def test_each_case_asks_for_its_cluster(self):
         cases = SHIPPED.cases
         clusters = {name: benchmarks.cluster_config(name, case) for name, case in cases.items()}
@@ -161,13 +170,36 @@ class CaseChecks(unittest.TestCase):
             ("actor-memory", "lots"),
             ("locust-workers", 0),
             ("max-failure-ratio", 2),
-            ("worker-count", -1),
+            ("worker-count", 10),
+            ("workers", 10),
+            ("workers", {"count": -1}),
+            ("workers", {"size": 1}),
+            ("workers", {"limits": {}}),
+            ("workers", {"limits": {"gpu": "1"}}),
+            ("workers", {"limits": {"cpu": 2}}),
+            ("workers", {"limits": {"memory": "lots"}}),
             ("users", 10),
         ]:
-            with self.subTest(key=key), self.assertRaises(ValueError):
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 check("c", glutton({key: value}))
         with self.assertRaisesRegex(ValueError, "must name substrate or agent-sandbox"):
             check("c", glutton({"install": {}}))
+
+    def test_workers_default_to_one_without_limits(self):
+        self.assertEqual(check("c", GLUTTON)["locust"]["workers"], {"count": 1})
+        workers = {"count": 2, "limits": {"cpu": "4", "memory": "1Gi"}}
+        self.assertEqual(check("c", glutton({"workers": workers}))["locust"]["workers"], workers)
+
+    def test_worker_limits_must_fit_an_actor(self):
+        with self.assertRaisesRegex(ValueError, "leaves no room for one actor of 512Mi"):
+            check("c", glutton({"actor-memory": "512Mi", "workers": {"limits": {"memory": "256Mi"}}}))
+        check("c", glutton({"actor-memory": "512Mi", "workers": {"limits": {"memory": "512Mi"}}}))
+
+    def test_worker_limits_are_substrate_s(self):
+        agent_sandbox = {"install": {"agent-sandbox": {"sandbox-class": "gvisor"}}}
+        with self.assertRaisesRegex(ValueError, "agent-sandbox has none"):
+            check("c", glutton({**agent_sandbox, "workers": {"limits": {"memory": "1Gi"}}}))
+        check("c", glutton({**agent_sandbox, "workers": {"count": 3}}))
 
     def test_several_worker_pods_are_expected_by_the_master(self):
         case = check("c", glutton({"locust-workers": 3}))
@@ -217,7 +249,7 @@ class CaseChecks(unittest.TestCase):
             {"noop": {"infra": {"cluster": {"configuration": "nowhere"}}}},
             {"noop": {"infra": {"cluster": {"configuration": "dummy", "default-machine-type": "n2-standard-16"}}}},
             {**GLUTTON, "jmeter": {}},
-            {**GLUTTON, "worker-count": 10},
+            {**GLUTTON, "workers": {"count": 10}},
             {**GLUTTON, "locust": None},
             {**GLUTTON, "install": {"substrate": {"sandbox-class": "gvisor"}}},
             glutton({"install": []}),
@@ -259,7 +291,7 @@ class Clusters(unittest.TestCase):
             load({"c": glutton({"infra": {"cluster": {"size": 1}}})})
 
 
-class Subcases(unittest.TestCase):
+class Variants(unittest.TestCase):
     def test_shipped_sandbox_benchmark_is_a_case_per_provider(self):
         cases = SHIPPED.cases
         members = grouped(cases)["sandbox-benchmark"]
@@ -269,7 +301,7 @@ class Subcases(unittest.TestCase):
             options = cases[name]["sandbox-benchmark"]
             self.assertEqual(name, f"sandbox-benchmark-{options['provider']['name']}")
             self.assertEqual(options["tests"], ["test_suspend_resume"])
-            self.assertEqual(cases[name][SUBCASE], {"of": "sandbox-benchmark", "name": options["provider"]["name"]})
+            self.assertEqual(cases[name][VARIANT], {"of": "sandbox-benchmark", "name": options["provider"]["name"]})
         self.assertEqual(cases["sandbox-benchmark-substrate"]["sandbox-benchmark"]["provider"]["env-worker-count"], 10)
         for name in ("e2b", "modal", "daytona"):
             provider = cases[f"sandbox-benchmark-{name}"]["sandbox-benchmark"]["provider"]
@@ -277,42 +309,43 @@ class Subcases(unittest.TestCase):
         openai = cases["sandbox-benchmark-openai"]["sandbox-benchmark"]["provider"]
         self.assertEqual(openai, {"name": "openai", "container-size": "medium"})
 
-    def test_a_subcase_sets_the_case_s_placeholders(self):
-        case = glutton({**on("{class}"), "master": {"run-time": "1m", "users": "{users}"}})
-        subcases = {"micro": {"class": "microvm", "users": 3}, "plain": {"class": "gvisor", "users": 10}}
-        cases = load({"c": {**case, "subcases": subcases}, "d": GLUTTON})
+    def test_a_variant_s_keys_are_merged_on_top_of_the_case(self):
+        variants = {"micro": {"locust": {**on("microvm"), "master": {"users": 3}}}, "plain": {}}
+        cases = load({"c": {**GLUTTON, "variants": variants}, "d": GLUTTON})
         self.assertEqual(list(cases), ["c-micro", "c-plain", "d"])
         self.assertEqual(cases["c-micro"]["locust"]["install"], on("microvm")["install"])
         self.assertEqual(cases["c-micro"]["locust"]["master"], {"run-time": "1m", "users": 3})
+        self.assertEqual(cases["c-micro"]["locust"]["worker"], GLUTTON["locust"]["worker"])
+        self.assertEqual(cases["c-plain"]["locust"]["install"], GLUTTON["locust"]["install"])
         self.assertEqual(cases["c-plain"]["locust"]["master"], GLUTTON["locust"]["master"])
         self.assertEqual(grouped(cases), {"c": ["c-micro", "c-plain"], "d": ["d"]})
 
-    def test_bad_subcases_are_refused(self):
+    def test_bad_variants_are_refused(self):
         for case in (
-            {**GLUTTON, "subcases": {}},
-            {**GLUTTON, "subcases": ["a"]},
-            {**GLUTTON, "subcases": {"a": 1}},
-            {**GLUTTON, "subcases": {"a b": {}}},
-            {**GLUTTON, SUBCASE: {"of": "x", "name": "y"}},
+            {**GLUTTON, "variants": {}},
+            {**GLUTTON, "variants": ["a"]},
+            {**GLUTTON, "variants": {"a": 1}},
+            {**GLUTTON, "variants": {"a b": {}}},
+            {**GLUTTON, VARIANT: {"of": "x", "name": "y"}},
+            {**GLUTTON, "variants": {"a": {"variants": {"b": {}}}}},
         ):
             with self.subTest(case=case), self.assertRaises(ValueError):
                 load({"c": case})
         with self.assertRaisesRegex(ValueError, "which is another case"):
-            load({"c": {**GLUTTON, "subcases": {"a": {}}}, "c-a": GLUTTON})
+            load({"c": {**GLUTTON, "variants": {"a": {}}}, "c-a": GLUTTON})
+        # A variant fills in no placeholder.
         case = glutton({"master": {"run-time": "1m", "users": "{users}"}})
-        with self.assertRaisesRegex(ValueError, r"case c has \{users\}, which none of its subcases set"):
-            load({"c": {**case, "subcases": {"a": {}, "b": {}}}})
-        with self.assertRaisesRegex(ValueError, "subcase a sets user, which it does not use"):
-            load({"c": {**case, "subcases": {"a": {"users": 1, "user": 1}}}})
+        with self.assertRaisesRegex(ValueError, r"case c has \{users\}, which none of its parameters set"):
+            load({"c": {**case, "variants": {"a": {"users": 1}}}})
 
-    def test_a_placeholder_a_subcase_does_not_set_is_null(self):
-        case = glutton({"master": {"run-time": "1m", "users": 10, "warm-up": "{warm-up}"}})
-        cases = load({"c": {**case, "subcases": {"warm": {"warm-up": "10s"}, "cold": {}}}})
+    def test_a_key_a_variant_sets_to_null_is_dropped(self):
+        case = glutton({"master": {"run-time": "1m", "users": 10, "warm-up": "10s"}})
+        cases = load({"c": {**case, "variants": {"warm": {}, "cold": {"locust": {"master": {"warm-up": None}}}}}})
         self.assertEqual(cases["c-warm"]["locust"]["master"]["warm-up"], "10s")
         self.assertNotIn("warm-up", cases["c-cold"]["locust"]["master"])
 
-    def test_a_subcase_on_bare_metal_is_one_of_the_case_on_it(self):
-        case = {**GLUTTON, "bare-metal": "{metal}", "subcases": {"a": {"metal": True}, "b": {"metal": False}}}
+    def test_a_variant_on_bare_metal_is_one_of_the_case_on_it(self):
+        case = {**GLUTTON, "variants": {"a": {"bare-metal": True}, "b": {"bare-metal": False}}}
         cases = load({"c": case})
         cases = with_bare_metal(cases, set(cases), False, None, PLACEMENTS)
         self.assertEqual(grouped(cases), {"c-metal": ["c-a-metal"], "c": ["c-b"]})
@@ -364,15 +397,16 @@ class Parameters(unittest.TestCase):
         cases = self.expand(case, {"p": [{"workload": "warm", "warm-up": "10s"}, {"workload": "cold"}]})
         self.assertEqual(cases["warm"]["locust"]["master"]["warm-up"], "10s")
         self.assertNotIn("warm-up", cases["cold"]["locust"]["master"])
-        with self.assertRaisesRegex(ValueError, r"case \{workload\}-x has \{workload\}, which its parameters"):
+        error = r"case \{workload\}-x has \{workload\}, which none of its parameters set"
+        with self.assertRaisesRegex(ValueError, error):
             self.expand(glutton(name="{workload}-x"), {"p": [{"workload": "a"}, {}]})
 
-    def test_subcases_win_over_parameters_and_take_theirs(self):
-        case = glutton({"master": {"run-time": "{run-time}", "users": "{users}"}})
-        subcases = {"short": {"users": 1}, "long": {"users": 2, "run-time": "{run-time-long}"}}
-        cases = self.expand({**case, "subcases": subcases}, {"p": [{"run-time": "1m", "run-time-long": "9m"}]})
-        self.assertEqual(cases["c-short"]["locust"]["master"], {"run-time": "1m", "users": 1})
-        self.assertEqual(cases["c-long"]["locust"]["master"], {"run-time": "9m", "users": 2})
+    def test_parameters_fill_in_the_variants_too(self):
+        case = glutton({"master": {"run-time": "{run-time}", "users": 10}})
+        variants = {"short": {}, "long": {"locust": {"master": {"run-time": "{run-time-long}"}}}}
+        cases = self.expand({**case, "variants": variants}, {"p": [{"run-time": "1m", "run-time-long": "9m"}]})
+        self.assertEqual(cases["c-short"]["locust"]["master"], {"run-time": "1m", "users": 10})
+        self.assertEqual(cases["c-long"]["locust"]["master"], {"run-time": "9m", "users": 10})
 
     def test_bad_parameters_are_refused(self):
         for parameters, error in (
@@ -382,15 +416,17 @@ class Parameters(unittest.TestCase):
             ({"p": [1]}, "must be a mapping of names to lists"),
             ({"p": [{"users": 1}], "q": [{"users": 2}]}, "sets users in more than one parameter"),
             ({"p": [{"users": 1}, {"users": 2}]}, "there are two cases c"),
-            ({"p": [{"user": 1}]}, r"has \{users\}, which none of its parameters or subcases set"),
             ({"p": [{"users": 1, "user": 1}]}, "parameters set user, which it does not use"),
         ):
             case = glutton({"master": {"run-time": "1m", "users": "{users}"}})
             with self.subTest(parameters=parameters), self.assertRaisesRegex(ValueError, error):
                 self.expand(case, parameters)
+        with self.assertRaisesRegex(ValueError, r"case c has \{users\}, which none of its parameters set"):
+            self.expand(glutton({"master": {"run-time": "{time}", "users": "{users}"}}), {"p": [{"time": "1m"}]})
         with self.assertRaisesRegex(ValueError, r"\{workload\} in '\{workload\}-x' must be a string or a number"):
             load({"{workload}-x": {**GLUTTON, "parameters": {"p": [{"workload": None}]}}})
-        with self.assertRaisesRegex(ValueError, r"case c has \{users\}, which its parameters or subcases leave unset"):
+        # A case without parameters has no placeholder.
+        with self.assertRaisesRegex(ValueError, r"case c has \{users\}, which none of its parameters set"):
             load({"c": glutton({"master": {"run-time": "1m", "users": "{users}"}})})
 
 
@@ -452,14 +488,14 @@ class SandboxBenchmarkCases(unittest.TestCase):
 class SandboxBenchmarkReports(unittest.TestCase):
     CASE = {"type": "sandbox-benchmark", "sandbox-benchmark": {"provider": {"name": "e2b"}}}
 
-    def test_a_subcase_reports_beside_the_others_of_its_group(self):
-        subcase = {**self.CASE, SUBCASE: {"of": "sb-metal", "name": "fast"}}
-        self.assertEqual(sandbox_benchmark.report_folder("sb-fast-metal-2", "sb-fast-metal", subcase), "sb-metal-2/fast")
+    def test_a_variant_reports_beside_the_others_of_its_group(self):
+        variant = {**self.CASE, VARIANT: {"of": "sb-metal", "name": "fast"}}
+        self.assertEqual(sandbox_benchmark.report_folder("sb-fast-metal-2", "sb-fast-metal", variant), "sb-metal-2/fast")
         self.assertEqual(sandbox_benchmark.report_folder("sb-2", "sb", self.CASE), "sb-2/e2b")
 
-    def test_summarize_combines_each_record_s_subcases_in_order(self):
-        a = {**self.CASE, SUBCASE: {"of": "sb", "name": "a"}, "sandbox-benchmark": {"cost-sheet": True}}
-        b = {**self.CASE, SUBCASE: {"of": "sb", "name": "b"}}
+    def test_summarize_combines_each_record_s_variants_in_order(self):
+        a = {**self.CASE, VARIANT: {"of": "sb", "name": "a"}, "sandbox-benchmark": {"cost-sheet": True}}
+        b = {**self.CASE, VARIANT: {"of": "sb", "name": "b"}}
         runs = [("sb-a-1", "sb-a", a), ("sb-a-2", "sb-a", a), ("sb-b-1", "sb-b", b), ("sb-b-2", "sb-b", b)]
         with mock.patch.object(sandbox_benchmark, "combine_reports") as combine:
             sandbox_benchmark.summarize(runs, "run-1", "bucket", "reports")

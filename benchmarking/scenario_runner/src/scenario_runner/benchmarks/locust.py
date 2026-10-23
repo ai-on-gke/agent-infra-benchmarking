@@ -61,7 +61,10 @@ DEFAULT_MAX_FAILURE_RATIO = 0.01
 ACTOR_ATESPACE = "benchmark"
 # The case's mapping of its type, and what it may state.
 TYPE = "locust"
-KEYS = {"infra", INSTALL, "worker-count", "locust-workers", "actor-memory", "max-failure-ratio", "master", "worker"}
+KEYS = {"infra", INSTALL, "workers", "locust-workers", "actor-memory", "max-failure-ratio", "master", "worker"}
+# What `workers` may state: the pool's replicas and each one's limits.
+WORKERS_KEYS = {"count", "limits"}
+WORKER_LIMITS = ("cpu", "memory")
 # The images.json files of the images a run pulls.
 IMAGE_FILES = [images.LOCUST_IMAGES, images.WORKLOADS_IMAGES]
 
@@ -113,9 +116,6 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
         raise ValueError(f"case {name}'s `{TYPE}.master` and `{TYPE}.worker` must be mappings of flags")
     if "run-time" not in master or "users" not in master:
         raise ValueError(f"case {name}'s `{TYPE}.master` must state `run-time` and `users`")
-    count = options.get("worker-count", 1)
-    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
-        raise ValueError(f"case {name}'s `{TYPE}.worker-count` must be a whole number, got {count!r}")
     ratio = options.get("max-failure-ratio", DEFAULT_MAX_FAILURE_RATIO)
     if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 <= ratio <= 1:
         raise ValueError(f"case {name}'s `{TYPE}.max-failure-ratio` must be a number from 0 to 1, got {ratio!r}")
@@ -139,6 +139,7 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
         raise ValueError(
             f"case {name}'s `{TYPE}.actor-memory` {memory} is less than {workload} needs on {on}, {need}Mi"
         )
+    workers = check_workers(name, options.get("workers"), memory, control_plane(case))
     config = cluster_config(name, case)
     # mock-llm's pods select and tolerate only its pool, and stay pending without it.
     if template in workloads.MOCK_LLM_TEMPLATES and not isinstance(config, OpenclawCluster):
@@ -150,15 +151,45 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     return {
         **case,
         TYPE: {
-            "worker-count": 1,
             "max-failure-ratio": DEFAULT_MAX_FAILURE_RATIO,
             "locust-workers": 1,
             **options,
+            "workers": workers,
             "actor-memory": memory,
             "master": {**master, "spawn-rate": master.get("spawn-rate", master["users"])},
             "worker": worker,
         },
     }
+
+
+def check_workers(name: str, workers: object, actor_memory: str, provider: str) -> dict:
+    """The case's `workers` with its count filled in, 1 by default. Its
+    `limits` are substrate's alone, as agent-sandbox has no workers of its
+    own to bound."""
+    where = f"case {name}'s `{TYPE}.workers"
+    workers = {} if workers is None else workers
+    if not isinstance(workers, dict) or workers.keys() - WORKERS_KEYS:
+        raise ValueError(f"{where}` must be a mapping of {', '.join(sorted(WORKERS_KEYS))}, got {workers!r}")
+    count = workers.get("count", 1)
+    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        raise ValueError(f"{where}.count` must be a whole number, got {count!r}")
+    limits = workers.get("limits")
+    if limits is None:
+        return {"count": count}
+    if not isinstance(limits, dict) or not limits or limits.keys() - set(WORKER_LIMITS):
+        raise ValueError(f"{where}.limits` must be a mapping of {' or '.join(WORKER_LIMITS)}, got {limits!r}")
+    if provider != SUBSTRATE:
+        raise ValueError(f"{where}.limits` are substrate's worker limits, and {provider} has none")
+    cpu, memory = limits.get("cpu"), limits.get("memory")
+    if cpu is not None and (not isinstance(cpu, str) or not workloads.CPU_RE.fullmatch(cpu)):
+        raise ValueError(f"{where}.limits.cpu` must be a quoted cpu quantity such as \"2\" or \"1500m\", got {cpu!r}")
+    if memory is not None:
+        if not isinstance(memory, str) or workloads.memory_mib(memory) is None:
+            raise ValueError(f"{where}.limits.memory` must be a Kubernetes memory quantity such as 1Gi, got {memory!r}")
+        # The scheduler would find no worker with room for any actor.
+        if workloads.memory_mib(memory) < workloads.memory_mib(actor_memory):
+            raise ValueError(f"{where}.limits.memory` {memory} leaves no room for one actor of {actor_memory}")
+    return {"count": count, "limits": limits}
 
 
 def cluster_config(name: str, case: dict) -> CommonCluster:
@@ -333,10 +364,10 @@ def run(
     if provider == AGENT_SANDBOX:
         if deploy_workloads:
             agent_sandbox.deploy_workload_and_pool(
-                cluster, workload, options["worker-count"], image_repo, sandbox_class(case)
+                cluster, workload, options["workers"]["count"], image_repo, sandbox_class(case)
             )
         else:
-            agent_sandbox.recreate_warm_pool(cluster, workload, options["worker-count"])
+            agent_sandbox.recreate_warm_pool(cluster, workload, options["workers"]["count"])
         options = {
             **options,
             "worker": {
@@ -362,7 +393,9 @@ roleRef:
   name: agent-sandbox-controller-extensions
   apiGroup: rbac.authorization.k8s.io"""
     else:
-        worker_pool.deploy(cluster, options["worker-count"], sandbox_class(case))
+        worker_pool.deploy(
+            cluster, options["workers"]["count"], sandbox_class(case), options["workers"].get("limits")
+        )
         # The golden snapshot is taken on the pool just deployed.
         if deploy_workloads:
             workloads.deploy(cluster, [template_name], sandbox_class(case), image_repo, options["actor-memory"])
