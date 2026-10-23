@@ -49,14 +49,14 @@
 # `{name}` in its name or any of its keys or values. A value that is one
 # placeholder takes the entry's value as it is, null dropping its key, and null
 # when the entry does not set it; one in a longer value or in a key, as in the
-# name, takes its text, which every entry has to set. A placeholder none of the entries sets, or a
-# name an entry sets that no placeholder has, is refused. Each case so made is
-# one of its own.
+# name, takes its text, which every entry has to set. The case's subcases are
+# part of it, their placeholders filled in too. A placeholder none of the
+# entries sets, or a name an entry sets that no placeholder has, is refused.
+# Each case so made is one of its own.
 #
-# `subcases` makes a case of each of its entries, <case>-<subcase>: the case
-# with the entry's values in its placeholders, as a parameter's are, and over
-# the parameters'; an entry's values can take the parameters' in theirs, and
-# one it does not set is the parameter's, or null.
+# `subcases` makes a case of each of its entries, <case>-<subcase>: the case,
+# already made of its parameters, with the entry's keys on top, a mapping
+# merged into a mapping, a key set to null dropped.
 # --scenario <case> runs them all one after another, then the type's summary of
 # them all; --scenario <case>-<subcase> just that one. Those alike in their
 # cluster share one, applied for them all.
@@ -250,22 +250,31 @@ cases:
       worker-count: 100
       master:
         run-time: "{run-time}"
-        users: "{users}"
         spawn-rate: "{spawn-rate}"
       worker:
         resume-mode: explicit
-        suspend-disabled: "{suspend-disabled}"
-        min-wait: "{wait}"
-        max-wait: "{wait}"
+        suspend-disabled: false
         workload-name: "{workload}"
         workload-template: "{workload}"
         workload-timeout: "{workload-timeout}"
         actor-egress-allow: "{actor-egress-allow}"
     subcases:
-      baseline: {users: 100, spawn-rate: 10, run-time: "{run-time}", suspend-disabled: true}
-      "10": {users: 100, spawn-rate: "{spawn-rate}", run-time: "{run-time}", suspend-disabled: false, wait: "{wait-10}"}
-      "25": {users: 250, spawn-rate: "{spawn-rate}", run-time: "{run-time-25}", suspend-disabled: false, wait: "{wait-25}"}
-      "50": {users: 500, spawn-rate: "{spawn-rate}", run-time: "{run-time-50}", suspend-disabled: false, wait: "{wait-50}"}
+      baseline:
+        locust:
+          master: {users: 100, spawn-rate: 10}
+          worker: {suspend-disabled: true}
+      "10":
+        locust:
+          master: {users: 100}
+          worker: {min-wait: "{wait-10}", max-wait: "{wait-10}"}
+      "25":
+        locust:
+          master: {users: 250, run-time: "{run-time-25}"}
+          worker: {min-wait: "{wait-25}", max-wait: "{wait-25}"}
+      "50":
+        locust:
+          master: {users: 500, run-time: "{run-time-50}"}
+          worker: {min-wait: "{wait-50}", max-wait: "{wait-50}"}
     parameters:
       workload:
       - workload: glutton
@@ -425,34 +434,34 @@ cases:
       - test_suspend_resume
       runs: 10
       warmup-runs: 1
-      provider: "{provider}"
     subcases:
       substrate:
-        provider:
-          name: substrate
-          # The comparator starts every run at once, each in an environment
-          # of its own on a worker of its own: 10 sandboxes capped at 2 vCPU
-          # on the node's 16, which contend only while most are busy at once.
-          env-worker-count: 10
-          actor-cpu: "2"
-          actor-memory: 2Gi
+        sandbox-benchmark:
+          provider:
+            name: substrate
+            # The comparator starts every run at once, each in an environment
+            # of its own on a worker of its own: 10 sandboxes capped at 2 vCPU
+            # on the node's 16, which contend only while most are busy at once.
+            env-worker-count: 10
+            actor-cpu: "2"
+            actor-memory: 2Gi
       # e2b, modal, daytona, anthropic and openai need E2B_API_KEY,
       # MODAL_TOKEN_ID/MODAL_TOKEN_SECRET, DAYTONA_API_KEY, ANTHROPIC_API_KEY
       # and OPENAI_API_KEY in the scenario-runner's environment.
       # Not sized: no sandbox, the tests run in the comparator's own pod.
-      local: {provider: {name: local}}
-      e2b: {provider: {name: e2b, cpu: "2", memory: 2Gi}}
-      modal: {provider: {name: modal, cpu: "2", memory: 2Gi}}
-      daytona: {provider: {name: daytona, cpu: "2", memory: 2Gi}}
+      local: {sandbox-benchmark: {provider: {name: local}}}
+      e2b: {sandbox-benchmark: {provider: {name: e2b, cpu: "2", memory: 2Gi}}}
+      modal: {sandbox-benchmark: {provider: {name: modal, cpu: "2", memory: 2Gi}}}
+      daytona: {sandbox-benchmark: {provider: {name: daytona, cpu: "2", memory: 2Gi}}}
       # Cannot be sized: Managed Agents' cloud environments take no cpu or
       # memory, and give every session a sandbox of 2 vCPU and 4 GB.
-      anthropic: {provider: {name: anthropic}}
+      anthropic: {sandbox-benchmark: {provider: {name: anthropic}}}
       # Cannot be sized to match: OpenAI's hosted environments take only a
       # container-size tier, none of them 2 vCPU and 2 GiB: small is 1 vCPU and
       # 1 GB, medium, OpenAI's default and the nearest, 2 vCPU and 4 GB, and
       # large 4 vCPU and 16 GB. See
       # https://developers.openai.com/api/docs/guides/agents-api/environments/openai-hosted
-      openai: {provider: {name: openai, container-size: medium}}
+      openai: {sandbox-benchmark: {provider: {name: openai, container-size: medium}}}
 
   # The scenario-runner's Terraform path on infra/clusters/dummy, which creates
   # no GCP resources and so has nothing to benchmark on.

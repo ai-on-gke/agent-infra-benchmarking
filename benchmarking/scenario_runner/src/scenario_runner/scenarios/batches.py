@@ -21,9 +21,9 @@ import yaml
 
 from .. import benchmarks
 from .bare_metal import BARE_METAL
-from .expand import grouped
 from .install import installs
 from .repeats import record_names, shares_cluster
+from .subcases import grouped
 
 
 def cluster_setup(name: str, case: dict) -> tuple:

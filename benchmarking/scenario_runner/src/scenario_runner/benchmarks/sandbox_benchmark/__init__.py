@@ -47,8 +47,8 @@ from ...infra.cluster_configs import CommonCluster, from_infra
 from ...log import ON_CLOUD_RUN, log
 from ...process import stream
 from ...reports import run_info
-from ...scenarios.expand import SUBCASE, group_record
 from ...scenarios.install import INSTALL, SANDBOX_CLASS, SUBSTRATE, control_plane, sandbox_class
+from ...scenarios.subcases import SUBCASE, group_record
 from .. import jobs
 from . import ate_env, combine
 from . import cost_sheet as costs

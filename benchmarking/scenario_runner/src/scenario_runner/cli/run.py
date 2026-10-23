@@ -57,11 +57,11 @@ from ..process import failure
 from ..reports import summary
 from ..scenarios.bare_metal import BARE_METAL
 from ..scenarios.batches import batch_key, batches, cluster_keys
-from ..scenarios.expand import grouped
 from ..scenarios.file import SCENARIOS_FILE, load_scenarios
 from ..scenarios.install import AGENT_SANDBOX, SUBSTRATE, control_plane, sandbox_class
 from ..scenarios.repeats import record_names, run_names, shares_cluster, warmup_names
 from ..scenarios.select import select
+from ..scenarios.subcases import grouped
 
 # The executions' Deployments, kept after they are destroyed, and with gcs in
 # the state bucket under <state prefix>/ too. An execution's are in <name>/:

@@ -23,9 +23,9 @@ from .. import LABEL_RE, benchmarks
 from ..benchmarks import noop
 from . import bare_metal
 from .bare_metal import BARE_METAL
-from .expand import SUBCASE, listed, placeholders, with_subcases
 from .install import INSTALL, check_install
 from .repeats import REPEATS, check_repeats, run_names
+from .subcases import SUBCASE, with_subcases
 
 CASE_KEYS = {REPEATS, BARE_METAL}
 
@@ -39,9 +39,6 @@ def load_cases(where: str, cases: dict) -> dict[str, dict]:
 
 
 def checked(where: str, name: str, case: dict) -> dict:
-    unset = placeholders(name) | placeholders(case)
-    if unset:
-        raise ValueError(f"{where}: case {name} has {listed(unset)}, which its parameters or subcases leave unset")
     known = benchmarks.types()
     if "type" in case:
         raise ValueError(f"{where}: case {name}'s type is the key of its mapping, one of {', '.join(known)}")

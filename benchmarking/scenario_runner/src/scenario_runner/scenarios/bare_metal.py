@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..benchmarks import noop
-from .expand import SUBCASE
+from .subcases import SUBCASE
 
 BARE_METAL = "bare-metal"
 # What a case on bare metal is recorded under: its name with this added.

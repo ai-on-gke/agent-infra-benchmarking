@@ -21,8 +21,8 @@ from .. import benchmarks
 from ..benchmarks import sandbox_benchmark
 from .bare_metal import BARE_METAL, with_bare_metal
 from .cases import check_records
-from .expand import grouped
 from .file import Scenarios
+from .subcases import grouped
 
 
 def select(

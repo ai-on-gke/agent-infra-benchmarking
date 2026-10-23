@@ -277,7 +277,7 @@ class Series(unittest.TestCase):
             run.run_cases(self.args, cases, case, shared_cluster=True)
 
     def subcases(self, *names: str, infra: dict | None = None) -> dict:
-        from scenario_runner.scenarios.expand import SUBCASE
+        from scenario_runner.scenarios.subcases import SUBCASE
 
         return {f"g-{n}": {**LOCUST, "locust": {"infra": infra}, SUBCASE: {"of": "g", "name": n}} for n in names}
 

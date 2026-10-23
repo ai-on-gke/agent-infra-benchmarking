@@ -26,7 +26,7 @@ from .. import SCENARIOS_DIR
 from . import bare_metal
 from .bare_metal import BARE_METAL
 from .cases import load_cases
-from .expand import with_parameters
+from .parameters import with_parameters
 
 SCENARIOS_FILE = SCENARIOS_DIR / "scenarios.yaml"
 CASES = "cases"
