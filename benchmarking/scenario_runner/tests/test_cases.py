@@ -122,6 +122,15 @@ class ShippedCases(unittest.TestCase):
             self.assertEqual(mine["locust"].pop("install"), {"agent-sandbox": {"sandbox-class": "gvisor"}})
             self.assertEqual(mine, pair, f"{name} differs from its substrate case in more than the control plane")
 
+    def test_shared_workers_is_glutton_on_fewer_bounded_workers(self):
+        # So it compares, and runs on glutton-substrate-gvisor's dev infra.
+        cases = copy.deepcopy(SHIPPED.cases)
+        mine, pair = cases["glutton-shared-workers"], cases["glutton-substrate-gvisor"]
+        self.assertEqual(mine["locust"].pop("workers"), {"count": 2, "limits": {"memory": "1536Mi"}})
+        pair["locust"].pop("workers")
+        mine.pop("repeats"), pair.pop("repeats")
+        self.assertEqual(mine, pair)
+
     def test_each_case_asks_for_its_cluster(self):
         cases = SHIPPED.cases
         clusters = {name: benchmarks.cluster_config(name, case) for name, case in cases.items()}
@@ -161,13 +170,36 @@ class CaseChecks(unittest.TestCase):
             ("actor-memory", "lots"),
             ("locust-workers", 0),
             ("max-failure-ratio", 2),
-            ("worker-count", -1),
+            ("worker-count", 10),
+            ("workers", 10),
+            ("workers", {"count": -1}),
+            ("workers", {"size": 1}),
+            ("workers", {"limits": {}}),
+            ("workers", {"limits": {"gpu": "1"}}),
+            ("workers", {"limits": {"cpu": 2}}),
+            ("workers", {"limits": {"memory": "lots"}}),
             ("users", 10),
         ]:
-            with self.subTest(key=key), self.assertRaises(ValueError):
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 check("c", glutton({key: value}))
         with self.assertRaisesRegex(ValueError, "must name substrate or agent-sandbox"):
             check("c", glutton({"install": {}}))
+
+    def test_workers_default_to_one_without_limits(self):
+        self.assertEqual(check("c", GLUTTON)["locust"]["workers"], {"count": 1})
+        workers = {"count": 2, "limits": {"cpu": "4", "memory": "1Gi"}}
+        self.assertEqual(check("c", glutton({"workers": workers}))["locust"]["workers"], workers)
+
+    def test_worker_limits_must_fit_an_actor(self):
+        with self.assertRaisesRegex(ValueError, "leaves no room for one actor of 512Mi"):
+            check("c", glutton({"actor-memory": "512Mi", "workers": {"limits": {"memory": "256Mi"}}}))
+        check("c", glutton({"actor-memory": "512Mi", "workers": {"limits": {"memory": "512Mi"}}}))
+
+    def test_worker_limits_are_substrate_s(self):
+        agent_sandbox = {"install": {"agent-sandbox": {"sandbox-class": "gvisor"}}}
+        with self.assertRaisesRegex(ValueError, "agent-sandbox has none"):
+            check("c", glutton({**agent_sandbox, "workers": {"limits": {"memory": "1Gi"}}}))
+        check("c", glutton({**agent_sandbox, "workers": {"count": 3}}))
 
     def test_several_worker_pods_are_expected_by_the_master(self):
         case = check("c", glutton({"locust-workers": 3}))
@@ -217,7 +249,7 @@ class CaseChecks(unittest.TestCase):
             {"noop": {"infra": {"cluster": {"configuration": "nowhere"}}}},
             {"noop": {"infra": {"cluster": {"configuration": "dummy", "default-machine-type": "n2-standard-16"}}}},
             {**GLUTTON, "jmeter": {}},
-            {**GLUTTON, "worker-count": 10},
+            {**GLUTTON, "workers": {"count": 10}},
             {**GLUTTON, "locust": None},
             {**GLUTTON, "install": {"substrate": {"sandbox-class": "gvisor"}}},
             glutton({"install": []}),

@@ -22,9 +22,13 @@
 # scenario-runner's. The type's module in
 # scenario_runner/src/scenario_runner/benchmarks/, '-' spelled '_', documents
 # the type's keys.
-# For locust: `worker-count` and the `sandbox-class` in its `install` shape the
+# For locust: `workers` and the `sandbox-class` in its `install` shape the
 # WorkerPool, and every key in `master` and `worker` becomes `--key=value` on
-# that process. `actor-memory` is the actors' memory limit, which on microvm is
+# that process. `workers.count` is the pool's workers, 1 by default, and
+# `workers.limits`, substrate's only, each worker's `cpu` and `memory`: the
+# room its actors share, as substrate places an actor only on a worker whose
+# actors leave room for its own limits. A worker without them has room for any
+# number. `actor-memory` is the actors' memory limit, which on microvm is
 # the guest's RAM: 256Mi by default, 2Gi for openclaw. `locust-workers` is how
 # many boomer worker pods share the users, 1 by default.
 # For sandbox-benchmark: `tests` names ai-sandbox-benchmark's tests by function
@@ -174,7 +178,8 @@ cases:
           sandboxed-nodes: 1
           configuration: "{configuration}"
           nested-virtualization: "{nested-virtualization}"
-      worker-count: 10
+      workers:
+        count: 10
       master:
         run-time: "{run-time}"
         users: "{users}"
@@ -225,7 +230,35 @@ cases:
       infra:
         cluster:
           sandboxed-nodes: 1
-      worker-count: 10
+      workers:
+        count: 10
+      master:
+        run-time: 5m
+        users: 10
+        spawn-rate: 10
+        warm-up: 10s
+      worker:
+        resume-mode: explicit
+        workload-name: glutton
+        workload-template: glutton
+
+  # glutton-substrate-gvisor's load and cluster, so it runs on the same dev
+  # infra, on 2 workers rather than 10, each with room for 6 of its 256Mi
+  # actors: its 10 VUs' actors can only all be placed by sharing them.
+  glutton-shared-workers:
+    repeats:
+      warmups: 0
+    locust:
+      install:
+        substrate:
+          sandbox-class: gvisor
+      infra:
+        cluster:
+          sandboxed-nodes: 1
+      workers:
+        count: 2
+        limits:
+          memory: 1536Mi
       master:
         run-time: 5m
         users: 10
@@ -247,7 +280,8 @@ cases:
         cluster:
           sandboxed-nodes: 10
           configuration: "{configuration}"
-      worker-count: 100
+      workers:
+        count: 100
       master:
         run-time: "{run-time}"
         spawn-rate: "{spawn-rate}"
@@ -308,7 +342,8 @@ cases:
       infra:
         cluster:
           sandboxed-nodes: 1
-      worker-count: 10
+      workers:
+        count: 10
       master:
         run-time: 5m
         users: 10
@@ -330,7 +365,8 @@ cases:
       infra:
         cluster:
           sandboxed-nodes: 1
-      worker-count: 10
+      workers:
+        count: 10
       actor-memory: 512Mi
       master:
         run-time: 5m
@@ -353,7 +389,8 @@ cases:
       infra:
         cluster:
           sandboxed-nodes: 1
-      worker-count: 10
+      workers:
+        count: 10
       master:
         run-time: 5m
         users: 10
@@ -374,7 +411,8 @@ cases:
       infra:
         cluster:
           sandboxed-nodes: 1
-      worker-count: 10
+      workers:
+        count: 10
       master:
         run-time: 5m
         users: 10
@@ -399,7 +437,8 @@ cases:
       infra:
         cluster:
           sandboxed-nodes: 25
-      worker-count: 100
+      workers:
+        count: 100
       locust-workers: 4
       master:
         run-time: 5m

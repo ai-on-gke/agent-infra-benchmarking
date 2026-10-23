@@ -61,7 +61,9 @@ DEFAULT_ACTOR_MEMORY_BY_WORKLOAD = {"openclaw": "2Gi"}
 # and at 1Gi in a microvm, whose guest gets the limit less the VMM's share.
 MIN_ACTOR_MEMORY_MIB = {"openclaw": {"gvisor": 1024, "microvm": 2048}}
 # Kubernetes quantity suffixes, in bytes.
-QUANTITY_UNITS = {"": 1, "k": 10**3, "M": 10**6, "G": 10**9, "T": 10**12, "Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40}
+# A Kubernetes cpu quantity as a case quotes it, such as "2" or "1500m".
+CPU_RE = re.compile(r"[1-9][0-9]*m?|[0-9]*\.[0-9]+")
+QUANTITY_UNITS = {"": 1,"k": 10**3, "M": 10**6, "G": 10**9, "T": 10**12, "Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40}
 DEFAULT_TIMEOUT_SECS = 300
 POLL_SECS = 5
 PROGRESS_EVERY_SECS = 30

@@ -281,7 +281,7 @@ def _case(info: dict) -> str:
     keys = [[k, v] for k, v in case.items() if k not in ("locust", "infra")]
     keys += [[k, v] for k, v in locust.items() if k not in ("master", "worker", "infra")]
     users = master.get("users")
-    workers = locust.get("worker-count")
+    workers = (locust.get("workers") or {}).get("count")
     if isinstance(users, (int, float)) and isinstance(workers, (int, float)) and workers > 0:
         keys.append(["density", f"{users / workers:g}x ({users} actors / {workers} workers)"])
     lines += _table(["Key", "Value"], keys)
@@ -367,7 +367,7 @@ def _workers(info: dict, golden: bool = True) -> str:
         )
         case = _locust(info.get("case") or {})
         users = (case.get("master") or {}).get("users")
-        workers = spec.get("replicas") or case.get("worker-count")
+        workers = spec.get("replicas") or (case.get("workers") or {}).get("count")
         if isinstance(users, (int, float)) and isinstance(workers, (int, float)) and workers > 0:
             density = users / workers
             sandboxed = ((info.get("nodes") or {}).get("sandboxed") or {}).get("count")

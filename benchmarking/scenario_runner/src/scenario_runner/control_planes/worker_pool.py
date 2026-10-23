@@ -17,6 +17,7 @@ workloads/manifests/worker-pool.yaml.tmpl."""
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from string import Template
@@ -52,12 +53,23 @@ def delete(cluster: Cluster, timeout: int = DEFAULT_TIMEOUT_SECS, name: str = NA
         pass
 
 
-def deploy(cluster: Cluster, worker_count: int, sandbox_class: str, timeout: int = DEFAULT_TIMEOUT_SECS) -> None:
-    """Always a new pool, so no run starts on workers the last one warmed."""
+def deploy(
+    cluster: Cluster,
+    worker_count: int,
+    sandbox_class: str,
+    limits: dict | None = None,
+    timeout: int = DEFAULT_TIMEOUT_SECS,
+) -> None:
+    """Always a new pool, so no run starts on workers the last one warmed.
+    limits, {"cpu", "memory"}, are each worker's, which substrate places an
+    actor on only while the actors on it leave room for its own."""
     delete(cluster, timeout)
 
-    log(f"worker pool: deploying {NAME} (replicas={worker_count}, sandbox_class={sandbox_class})")
-    manifest = Template(MANIFEST.read_text()).substitute(WORKER_COUNT=worker_count, SANDBOX_CLASS=sandbox_class)
+    log(f"worker pool: deploying {NAME} (replicas={worker_count}, sandbox_class={sandbox_class}, limits={limits or {}})")
+    resources = json.dumps({"limits": limits} if limits else {})
+    manifest = Template(MANIFEST.read_text()).substitute(
+        WORKER_COUNT=worker_count, SANDBOX_CLASS=sandbox_class, WORKER_RESOURCES=resources
+    )
     resolved = substrate.resolve(cluster, manifest)
     log(output(cluster.kubectl("apply", "-f", "-", namespace=NAMESPACE), input=resolved).strip())
 

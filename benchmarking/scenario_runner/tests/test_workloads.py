@@ -13,8 +13,12 @@
 # limitations under the License.
 
 import unittest
+from unittest import mock
+
+import yaml
 
 from scenario_runner import workloads
+from scenario_runner.control_planes import worker_pool
 
 
 def template(*urls: str, memory: str = "256Mi", enum: str = "SANDBOX_CLASS_GVISOR") -> dict:
@@ -53,3 +57,24 @@ class Memory(unittest.TestCase):
             workloads.check_deployed(template(), "glutton", "microvm", "glutton", "256Mi")
         with self.assertRaisesRegex(workloads.WorkloadError, "actor-memory is 512Mi"):
             workloads.check_deployed(template(), "glutton", "gvisor", "glutton", "512Mi")
+
+
+class WorkerPool(unittest.TestCase):
+    def deployed(self, *args) -> dict:
+        """The WorkerPool deploy applies, its images left unresolved."""
+        with (
+            mock.patch.object(worker_pool, "delete"),
+            mock.patch.object(worker_pool, "wait_ready"),
+            mock.patch.object(worker_pool.substrate, "resolve", side_effect=lambda cluster, manifest: manifest),
+            mock.patch.object(worker_pool, "output", return_value="") as applied,
+        ):
+            worker_pool.deploy(mock.Mock(), *args)
+        return list(yaml.safe_load_all(applied.call_args.kwargs["input"]))[1]
+
+    def test_each_worker_gets_the_limits(self):
+        pool = self.deployed(2, "gvisor", {"memory": "1536Mi", "cpu": "4"})
+        self.assertEqual(pool["spec"]["replicas"], 2)
+        self.assertEqual(pool["spec"]["template"]["resources"], {"limits": {"memory": "1536Mi", "cpu": "4"}})
+
+    def test_no_limits_no_resources(self):
+        self.assertEqual(self.deployed(10, "gvisor")["spec"]["template"]["resources"], {})
