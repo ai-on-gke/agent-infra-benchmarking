@@ -14,7 +14,7 @@
 
 """The cases scenarios.yaml's cases make: a case of each choice of a case's
 `parameters`, and a case of each of its `subcases`, with their values in its
-placeholders, `{name}` in its name or any of its values."""
+placeholders, `{name}` in its name or any of its keys or values."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ DROPPED = object()
 def placeholders(value: object) -> set[str]:
     """The names of the placeholders left in value."""
     if isinstance(value, dict):
-        return set().union(*map(placeholders, value.values()))
+        return set().union(*map(placeholders, value.keys()), *map(placeholders, value.values()))
     if isinstance(value, list):
         return set().union(*map(placeholders, value))
     return set(PLACEHOLDER_RE.findall(value)) if isinstance(value, str) else set()
@@ -50,16 +50,24 @@ def placeholders(value: object) -> set[str]:
 def substituted(value: object, values: dict, where: str) -> object:
     """value with its placeholders that values names replaced, those it does
     not left: a string that is one placeholder by the value as it is, a key or
-    an item set to null dropped, and a placeholder in a longer string by its
-    text."""
+    an item set to null dropped, and a placeholder in a longer string or in a
+    key by its text."""
     out = _substituted(value, values, where)
     return None if out is DROPPED else out
 
 
 def _substituted(value: object, values: dict, where: str) -> object:
     if isinstance(value, dict):
-        out = {key: _substituted(item, values, where) for key, item in value.items()}
-        return {key: item for key, item in out.items() if item is not DROPPED}
+        out = {}
+        for key, item in value.items():
+            item = _substituted(item, values, where)
+            if item is DROPPED:
+                continue
+            key = _text(key, values, where) if isinstance(key, str) else key
+            if key in out:
+                raise ValueError(f"{where}: two keys are {key!r}")
+            out[key] = item
+        return out
     if isinstance(value, list):
         return [item for item in (_substituted(item, values, where) for item in value) if item is not DROPPED]
     if not isinstance(value, str):
@@ -68,6 +76,11 @@ def _substituted(value: object, values: dict, where: str) -> object:
     if whole and whole[1] in values:
         given = values[whole[1]]
         return DROPPED if given is None else copy.deepcopy(given)
+    return _text(value, values, where)
+
+
+def _text(value: str, values: dict, where: str) -> str:
+    """value with each placeholder that values names replaced by its text."""
 
     def text(match: re.Match) -> str:
         if match[1] not in values:
