@@ -179,6 +179,9 @@ class CaseChecks(unittest.TestCase):
             ("workers", {"limits": {"cpu": 2}}),
             ("workers", {"limits": {"memory": "lots"}}),
             ("users", 10),
+            ("user-class", "glutton"),
+            ("user-class", "_master"),
+            ("user-class", None),
         ]:
             with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 check("c", glutton({key: value}))
@@ -205,6 +208,35 @@ class CaseChecks(unittest.TestCase):
         case = check("c", glutton({"locust-workers": 3}))
         args = locust.master_args(case["locust"])
         self.assertEqual(args[args.index("--expect-workers") + 1], "3")
+
+    def test_runworkload_by_default(self):
+        options = check("c", GLUTTON)["locust"]
+        self.assertEqual(options["user-class"], "runworkload")
+        self.assertEqual(
+            locust.master_args(options),
+            ["-f", "/app/tests/runworkload.py", "--headless", "--master", "--expect-workers", "1",
+             "--expect-workers-max-wait", "300", "--exit-code-on-error", "0",
+             "--run-time=1m", "--users=10", "--spawn-rate=10"],
+        )  # fmt: skip
+        self.assertEqual(
+            locust.worker_args(options),
+            [f"--master-host={locust.MASTER_HOST}", "--user-class=runworkload",
+             "--workload-name=glutton", "--workload-template=glutton"],
+        )  # fmt: skip
+
+    def test_the_user_class_picks_the_master_s_locustfile_and_the_worker_s_class(self):
+        tests = Path(tempfile.mkdtemp())
+        for locustfile in ("runworkload.py", "other.py", "_master.py"):
+            (tests / locustfile).touch()
+        with mock.patch.object(locust, "LOCUSTFILES_DIR", tests):
+            self.assertEqual(locust.user_classes(), ["other", "runworkload"])
+            options = check("c", glutton({"user-class": "other"}))["locust"]
+        master = locust.master_args(options)
+        self.assertEqual(master[:2], ["-f", "/app/tests/other.py"])
+        self.assertIn("--user-class=other", locust.worker_args(options))
+
+    def test_the_master_has_a_locustfile_for_runworkload_alone(self):
+        self.assertEqual(locust.user_classes(), ["runworkload"])
 
     def test_flags(self):
         self.assertEqual(locust.flags({"a": True, "b": 2, "c": "x", "d": False}), ["--a", "--b=2", "--c=x", "--d=false"])

@@ -12,12 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The steady-state window the locustfile cuts out of the worker reports."""
+"""The steady-state window the master cuts out of the worker reports."""
 
 import csv
 import importlib.util
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,10 +25,9 @@ from unittest import mock
 
 from locust.stats import RequestStats
 
-os.environ["LOCUST_NO_RUNWORKLOAD_USER"] = "1"
-_spec = importlib.util.spec_from_file_location("locustfile", Path(__file__).resolve().parent.parent / "tests" / "runworkload.py")
-locustfile = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(locustfile)
+_spec = importlib.util.spec_from_file_location("_master", Path(__file__).resolve().parent.parent / "tests" / "_master.py")
+master = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(master)
 
 
 class Hook:
@@ -53,10 +51,10 @@ class SteadyWindow(unittest.TestCase):
         self.prefix = str(Path(tempfile.mkdtemp()) / "locust")
         events = SimpleNamespace(spawning_complete=Hook(), worker_report=Hook(), test_stopping=Hook(), quitting=Hook())
         self.now = 1000.0
-        patcher = mock.patch.object(locustfile.time, "time", side_effect=lambda: self.now)
+        patcher = mock.patch.object(master.time, "time", side_effect=lambda: self.now)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.steady = locustfile.SteadyState(SimpleNamespace(events=events), warm_up=10, csv_prefix=self.prefix)
+        self.steady = master.SteadyState(SimpleNamespace(events=events), warm_up=10, csv_prefix=self.prefix)
 
     def at(self, t: float, client: str, n: int, latency_ms: int) -> None:
         self.now = t
