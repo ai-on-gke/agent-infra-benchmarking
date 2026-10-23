@@ -13,7 +13,9 @@
 # limitations under the License.
 
 """Installs agent-sandbox (controller, CRDs, extensions, and sandbox-router) on
-a case's cluster, from the images builder.py built into its repository."""
+a case's cluster, from the images builder.py built into its repository, and
+deploys a workload's SandboxTemplate and SandboxWarmPool, from
+agent-sandbox/manifests/."""
 
 from __future__ import annotations
 
@@ -22,14 +24,17 @@ import os
 import re
 import subprocess
 import time
+from string import Template
 
 from .. import RUNNER_DIR, images
 from ..infra.cluster import Cluster
 from ..log import log
 from ..process import retry, stream
+from ..workloads import openclaw
 
 AGENT_SANDBOX_DIR = RUNNER_DIR.parent.parent / "dependency-repos" / "agent-sandbox"
 AGENT_SANDBOX_PATH = AGENT_SANDBOX_DIR.relative_to(images.ROOT).as_posix()
+MANIFESTS_DIR = RUNNER_DIR.parent / "agent-sandbox" / "manifests"
 LABEL_VALUE = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?")
 
 CONTROLLER_IMAGE = images.Image(
@@ -46,16 +51,16 @@ ROUTER_IMAGE = images.Image(
 
 IMAGES = [CONTROLLER_IMAGE, ROUTER_IMAGE]
 NAMESPACE = "agent-sandbox-system"
+# Where the templates and warm pools go: beside mock-llm, which the openclaw
+# template's MOCK_LLM_BASE_URL names.
+WORKLOADS_NAMESPACE = openclaw.NAMESPACE
+# The image of workloads.json each workload's template runs.
+WORKLOAD_IMAGES = {"glutton": "glutton", "openclaw": "openclaw-workload"}
+ROLLOUT_TIMEOUT_SECS = 180
 
 
 class AgentSandboxError(RuntimeError):
     pass
-
-
-def revision() -> str:
-    """The submodule's short commit."""
-    proc = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=AGENT_SANDBOX_DIR, capture_output=True, text=True)
-    return proc.stdout.strip() if proc.returncode == 0 else "unknown revision"
 
 
 @functools.cache
@@ -91,6 +96,18 @@ def router_image_ref(repo: str) -> str:
     return f"{images.group_repo(repo, 'agent-sandbox')}/{ROUTER_IMAGE.name}:{build_version()}"
 
 
+def render(manifest: str, **values: object) -> str:
+    return Template((MANIFESTS_DIR / manifest).read_text()).substitute(values)
+
+
+def apply(cluster: Cluster, manifest: str) -> None:
+    stream(cluster.kubectl("apply", "-f", "-"), input=manifest)
+
+
+def warm_pool_name(workload: str) -> str:
+    return f"{workload}-warm-pool"
+
+
 def install(cluster: Cluster) -> None:
     cluster.get_credentials()
     retry(f"agent-sandbox on cluster {cluster.name}", lambda: install_once(cluster))
@@ -103,182 +120,35 @@ def install_once(cluster: Cluster) -> None:
     controller_img = images.pin(controller_image_ref(repo))
     router_img = images.pin(router_image_ref(repo))
     log(f"agent-sandbox: installing on cluster {cluster.name} (controller: {controller_img}, router: {router_img})")
-
-    # 1. Apply CRDs
-    crds_dir = AGENT_SANDBOX_DIR / "k8s" / "crds"
-    for crd_file in sorted(crds_dir.glob("*.yaml")):
-        stream(cluster.kubectl("apply", "-f", str(crd_file)))
-
-    # 2. Namespace
-    ns_manifest = f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {NAMESPACE}\n"
-    stream(cluster.kubectl("apply", "-f", "-"), input=ns_manifest)
-
-    # 3. RBAC
-    rbac_file = AGENT_SANDBOX_DIR / "k8s" / "rbac.generated.yaml"
-    stream(cluster.kubectl("apply", "-f", str(rbac_file)))
-    ext_rbac_file = AGENT_SANDBOX_DIR / "k8s" / "extensions-rbac.generated.yaml"
-    stream(cluster.kubectl("apply", "-f", str(ext_rbac_file)))
-    ext_binding_file = AGENT_SANDBOX_DIR / "k8s" / "extensions.yaml"
-    stream(cluster.kubectl("apply", "-f", str(ext_binding_file)))
-
-    # 4. Controller Deployment
-    controller_manifest = f"""apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: agent-sandbox-controller
-  namespace: {NAMESPACE}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: agent-sandbox-controller
-subjects:
-- kind: ServiceAccount
-  name: agent-sandbox-controller
-  namespace: {NAMESPACE}
-roleRef:
-  kind: ClusterRole
-  name: agent-sandbox-controller
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: agent-sandbox-controller
-  namespace: {NAMESPACE}
-  labels:
-    app: agent-sandbox-controller
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: agent-sandbox-controller
-  template:
-    metadata:
-      labels:
-        app: agent-sandbox-controller
-    spec:
-      serviceAccountName: agent-sandbox-controller
-      containers:
-      - name: agent-sandbox-controller
-        image: {controller_img}
-        args:
-        - --leader-elect=true
-        - --extensions
-        - --api-connections=4
-        - --separate-watch-connection=true
-        - --sandbox-concurrent-workers=200
-        - --sandbox-claim-concurrent-workers=150
-        - --sandbox-warm-pool-concurrent-workers=2
-        - --sandbox-warm-pool-replenish-delay=0
-        - --sandbox-warm-pool-max-refill-rate=100
-        - --cache-label-selectors=true
-        - --disable-sandbox-events=true
-        - --disable-claim-events=true
-        - --disable-claim-observability-annotations=true
-        ports:
-        - name: metrics
-          containerPort: 8080
-          protocol: TCP
-        - name: healthz
-          containerPort: 8081
-          protocol: TCP
-"""
-    stream(cluster.kubectl("apply", "-f", "-"), input=controller_manifest)
-
-    # 5. Sandbox Router
-    router_deploy_dir = AGENT_SANDBOX_DIR / "sandbox-router" / "deploy"
-    stream(cluster.kubectl("apply", "-f", str(router_deploy_dir / "serviceaccount.yaml")))
-    stream(cluster.kubectl("apply", "-f", str(router_deploy_dir / "rbac.yaml")))
-    stream(cluster.kubectl("apply", "-f", str(router_deploy_dir / "service.yaml")))
-
-    router_deployment_manifest = f"""apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: sandbox-router
-  namespace: {NAMESPACE}
-  labels:
-    app: sandbox-router
-    app.kubernetes.io/name: sandbox-router
-    app.kubernetes.io/component: sandbox-router
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: sandbox-router
-      app.kubernetes.io/component: sandbox-router
-  template:
-    metadata:
-      labels:
-        app: sandbox-router
-        app.kubernetes.io/name: sandbox-router
-        app.kubernetes.io/component: sandbox-router
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "9090"
-        prometheus.io/path: "/metrics"
-    spec:
-      serviceAccountName: sandbox-router
-      containers:
-      - name: sandbox-router
-        image: {router_img}
-        imagePullPolicy: IfNotPresent
-        args:
-        - --http-bind-address=:8080
-        - --metrics-bind-address=:9090
-        - --health-probe-bind-address=:8081
-        - --cluster-domain=cluster.local
-        - --proxy-timeout=180s
-        - --response-header-timeout=180s
-        - --upstream-max-retries=3
-        - --cache-enabled=true
-        ports:
-        - name: proxy
-          containerPort: 8080
-          protocol: TCP
-        - name: metrics
-          containerPort: 9090
-          protocol: TCP
-        - name: healthz
-          containerPort: 8081
-          protocol: TCP
-        livenessProbe:
-          httpGet:
-            path: /healthz
-            port: healthz
-          initialDelaySeconds: 5
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /healthz
-            port: healthz
-          initialDelaySeconds: 2
-          periodSeconds: 5
-"""
-    stream(cluster.kubectl("apply", "-f", "-"), input=router_deployment_manifest)
-
-    # 6. Wait for deployments
-    timeout = 180
-    stream(cluster.kubectl("rollout", "status", "deployment/agent-sandbox-controller", f"--timeout={timeout}s", namespace=NAMESPACE))
-    stream(cluster.kubectl("rollout", "status", "deployment/sandbox-router", f"--timeout={timeout}s", namespace=NAMESPACE))
+    k8s = AGENT_SANDBOX_DIR / "k8s"
+    for crd in sorted((k8s / "crds").glob("*.yaml")):
+        stream(cluster.kubectl("apply", "-f", str(crd)))
+    apply(cluster, f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {NAMESPACE}\n")
+    for rbac in ("rbac.generated.yaml", "extensions-rbac.generated.yaml", "extensions.yaml"):
+        stream(cluster.kubectl("apply", "-f", str(k8s / rbac)))
+    apply(cluster, render("controller.yaml.tmpl", NAMESPACE=NAMESPACE, IMAGE=controller_img))
+    router_deploy = AGENT_SANDBOX_DIR / "sandbox-router" / "deploy"
+    for manifest in ("serviceaccount.yaml", "rbac.yaml", "service.yaml"):
+        stream(cluster.kubectl("apply", "-f", str(router_deploy / manifest)))
+    apply(cluster, render("router.yaml.tmpl", NAMESPACE=NAMESPACE, IMAGE=router_img))
+    for deployment in ("agent-sandbox-controller", "sandbox-router"):
+        rollout = ["rollout", "status", f"deployment/{deployment}", f"--timeout={ROLLOUT_TIMEOUT_SECS}s"]
+        stream(cluster.kubectl(*rollout, namespace=NAMESPACE))
     log(f"agent-sandbox: controller and router are ready on cluster {cluster.name}")
 
 
 def cleanup(cluster: Cluster, namespace: str, timeout: int = 60) -> dict:
     """Deletes any leftover SandboxClaim and Sandbox resources in namespace."""
-    record = {"namespace": namespace, "claims_deleted": 0, "sandboxes_deleted": 0, "left": []}
-    for kind in ("sandboxclaims", "sandboxes"):
-        cmd = cluster.kubectl("get", kind, "-n", namespace, "-o", "jsonpath={.items[*].metadata.name}")
+    record = {"namespace": namespace, "claims_deleted": 0, "sandboxes_deleted": 0}
+    for kind, deleted in (("sandboxclaims", "claims_deleted"), ("sandboxes", "sandboxes_deleted")):
+        cmd = cluster.kubectl("get", kind, "-o", "jsonpath={.items[*].metadata.name}", namespace=namespace)
         proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.returncode == 0 and proc.stdout.strip():
-            names = proc.stdout.strip().split()
+        names = proc.stdout.split() if proc.returncode == 0 else []
+        if names:
             log(f"agent-sandbox: cleaning up {len(names)} {kind} in {namespace}")
-            del_cmd = cluster.kubectl("delete", kind, *names, "-n", namespace, "--ignore-not-found", f"--timeout={timeout}s")
-            subprocess.run(del_cmd, capture_output=True, text=True)
-            if kind == "sandboxclaims":
-                record["claims_deleted"] = len(names)
-            else:
-                record["sandboxes_deleted"] = len(names)
+            delete = ["delete", kind, *names, "--ignore-not-found", f"--timeout={timeout}s"]
+            subprocess.run(cluster.kubectl(*delete, namespace=namespace), capture_output=True, text=True)
+            record[deleted] = len(names)
     return record
 
 
@@ -290,146 +160,50 @@ def deploy_workload_and_pool(
     sandbox_class: str = "gvisor",
     timeout: int = 300,
 ) -> None:
-    ns = "benchmark-workloads"
-    stream(cluster.kubectl("apply", "-f", "-"), input=f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {ns}\n")
-
+    if workload_name not in WORKLOAD_IMAGES:
+        raise AgentSandboxError(f"no agent-sandbox template of {workload_name}; there are {', '.join(WORKLOAD_IMAGES)}")
+    apply(cluster, f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {WORKLOADS_NAMESPACE}\n")
     if workload_name == "openclaw":
-        from ..workloads import openclaw
         openclaw.deploy_mock_llm(cluster, image_repo, timeout)
-
-    if workload_name == "openclaw":
-        image = images.pin(images.image_ref(images.WORKLOADS_IMAGES, image_repo, "openclaw-workload"))
-        containers_yaml = f"""      containers:
-      - name: openclaw
-        image: {image}
-        command: ["python3", "-u", "/app/openclaw_actor.py"]
-        env:
-        - name: OPENCLAW_USE_MOCK_LLM
-          value: "true"
-        - name: MOCK_LLM_BASE_URL
-          value: "http://mock-llm.benchmark-workloads.svc.cluster.local/v1"
-        - name: OPENCLAW_TIMEOUT_SECS
-          value: "100"
-        ports:
-        - containerPort: 80
-          name: http
-        readinessProbe:
-          httpGet:
-            path: /readyz
-            port: 80
-          initialDelaySeconds: 2
-          periodSeconds: 5
-        resources:
-          limits:
-            memory: 2Gi"""
-    else:
-        image = images.pin(images.image_ref(images.WORKLOADS_IMAGES, image_repo, "glutton"))
-        containers_yaml = f"""      containers:
-      - name: glutton
-        image: {image}
-        command:
-        - "/ko-app/glutton"
-        - "--grpc-listen-addr=:80"
-        - "--metrics-listen-addr=:9090"
-        - "--data-dir=/tmp/glutton"
-        - "--mode=http"
-        ports:
-        - containerPort: 80
-          name: http
-        readinessProbe:
-          httpGet:
-            path: /readyz
-            port: 80
-          initialDelaySeconds: 1
-          periodSeconds: 2
-        resources:
-          limits:
-            memory: 256Mi"""
-
-    runtime_class_field = ""
-    if sandbox_class == "microvm":
-        runtime_class_field = "      runtimeClassName: kata\n"
-    template_yaml = f"""apiVersion: extensions.agents.x-k8s.io/v1beta1
-kind: SandboxTemplate
-metadata:
-  name: {workload_name}
-  namespace: {ns}
-spec:
-  networkPolicyManagement: Unmanaged
-  podTemplate:
-    spec:
-      dnsPolicy: ClusterFirst
-{runtime_class_field}      nodeSelector:
-        benchmarking-worker: "true"
-      tolerations:
-      - key: ate.dev/sandboxClass
-        operator: Exists
-        effect: NoSchedule
-{containers_yaml}
-"""
+    template = render(
+        f"{workload_name}-template.yaml.tmpl",
+        NAME=workload_name,
+        NAMESPACE=WORKLOADS_NAMESPACE,
+        IMAGE=images.pin(images.image_ref(images.WORKLOADS_IMAGES, image_repo, WORKLOAD_IMAGES[workload_name])),
+        RUNTIME_CLASS="runtimeClassName: kata" if sandbox_class == "microvm" else "",
+    )
     log(f"agent-sandbox: deploying SandboxTemplate {workload_name}")
-    stream(cluster.kubectl("apply", "-f", "-"), input=template_yaml)
-
-    warm_pool_name = f"{workload_name}-warm-pool"
-    warm_pool_yaml = f"""apiVersion: extensions.agents.x-k8s.io/v1beta1
-kind: SandboxWarmPool
-metadata:
-  name: {warm_pool_name}
-  namespace: {ns}
-spec:
-  replicas: {worker_count}
-  sandboxTemplateRef:
-    name: {workload_name}
-"""
-    log(f"agent-sandbox: deploying SandboxWarmPool {warm_pool_name} with {worker_count} replicas")
-    stream(cluster.kubectl("apply", "-f", "-"), input=warm_pool_yaml)
-    wait_warm_pool_ready(cluster, warm_pool_name, worker_count, timeout)
-
-
-def wait_warm_pool_ready(cluster: Cluster, warm_pool_name: str, worker_count: int, timeout: int = 300) -> None:
-    ns = "benchmark-workloads"
-    log(f"agent-sandbox: waiting for {warm_pool_name} to pre-warm {worker_count} sandboxes (timeout: {timeout}s)")
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        cmd = cluster.kubectl("get", "sandboxwarmpool", warm_pool_name, "-n", ns, "-o", "jsonpath={.status.readyReplicas}")
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.returncode == 0 and proc.stdout.strip():
-            try:
-                ready = int(proc.stdout.strip())
-                if ready >= worker_count:
-                    log(f"agent-sandbox: {warm_pool_name} ready with {ready}/{worker_count} sandboxes")
-                    return
-                log(f"agent-sandbox: {warm_pool_name} has {ready}/{worker_count} ready sandboxes...")
-            except ValueError:
-                pass
-        time.sleep(5)
-    raise AgentSandboxError(f"timed out waiting for {warm_pool_name} to reach {worker_count} ready sandboxes")
+    apply(cluster, template)
+    apply_warm_pool(cluster, workload_name, worker_count, timeout)
 
 
 def recreate_warm_pool(cluster: Cluster, workload_name: str, worker_count: int, timeout: int = 300) -> None:
-    ns = "benchmark-workloads"
-    warm_pool_name = f"{workload_name}-warm-pool"
-    stream(cluster.kubectl("delete", "sandboxwarmpool", warm_pool_name, "-n", ns, "--ignore-not-found"))
-    warm_pool_yaml = f"""apiVersion: extensions.agents.x-k8s.io/v1beta1
-kind: SandboxWarmPool
-metadata:
-  name: {warm_pool_name}
-  namespace: {ns}
-spec:
-  replicas: {worker_count}
-  sandboxTemplateRef:
-    name: {workload_name}
-"""
-    log(f"agent-sandbox: recreating SandboxWarmPool {warm_pool_name} with {worker_count} replicas")
-    stream(cluster.kubectl("apply", "-f", "-"), input=warm_pool_yaml)
-    wait_warm_pool_ready(cluster, warm_pool_name, worker_count, timeout)
+    delete = ["delete", "sandboxwarmpool", warm_pool_name(workload_name), "--ignore-not-found"]
+    stream(cluster.kubectl(*delete, namespace=WORKLOADS_NAMESPACE))
+    apply_warm_pool(cluster, workload_name, worker_count, timeout)
 
 
-def delete_workload_and_pool(cluster: Cluster, workload_name: str) -> None:
-    ns = "benchmark-workloads"
-    warm_pool_name = f"{workload_name}-warm-pool"
-    stream(cluster.kubectl("delete", "sandboxwarmpool", warm_pool_name, "-n", ns, "--ignore-not-found"))
-    stream(cluster.kubectl("delete", "sandboxtemplate", workload_name, "-n", ns, "--ignore-not-found"))
-    if workload_name == "openclaw":
-        from ..workloads import openclaw
-        openclaw.delete_mock_llm(cluster)
+def apply_warm_pool(cluster: Cluster, workload_name: str, worker_count: int, timeout: int) -> None:
+    name = warm_pool_name(workload_name)
+    log(f"agent-sandbox: deploying SandboxWarmPool {name} with {worker_count} replicas")
+    values = {"NAME": name, "NAMESPACE": WORKLOADS_NAMESPACE, "REPLICAS": worker_count, "TEMPLATE": workload_name}
+    apply(cluster, render("warm-pool.yaml.tmpl", **values))
+    wait_warm_pool_ready(cluster, name, worker_count, timeout)
+
+
+def wait_warm_pool_ready(cluster: Cluster, name: str, worker_count: int, timeout: int = 300) -> None:
+    log(f"agent-sandbox: waiting for {name} to pre-warm {worker_count} sandboxes (timeout: {timeout}s)")
+    deadline = time.monotonic() + timeout
+    get = cluster.kubectl(
+        "get", "sandboxwarmpool", name, "-o", "jsonpath={.status.readyReplicas}", namespace=WORKLOADS_NAMESPACE
+    )
+    while time.monotonic() < deadline:
+        proc = subprocess.run(get, capture_output=True, text=True)
+        ready = proc.stdout.strip()
+        if proc.returncode == 0 and ready.isdigit():
+            if int(ready) >= worker_count:
+                log(f"agent-sandbox: {name} ready with {ready}/{worker_count} sandboxes")
+                return
+            log(f"agent-sandbox: {name} has {ready}/{worker_count} ready sandboxes...")
+        time.sleep(5)
+    raise AgentSandboxError(f"timed out waiting for {name} to reach {worker_count} ready sandboxes")

@@ -248,7 +248,7 @@ def collect(
     if control_plane(case) == AGENT_SANDBOX:
         pool = _read(
             "warm pool",
-            lambda: _kubectl_json(cluster, "sandboxwarmpool", f"{template_name}-warm-pool", namespace=pool_namespace),
+            lambda: _kubectl_json(cluster, "sandboxwarmpool", agent_sandbox.warm_pool_name(template_name), namespace=pool_namespace),
             errors,
         )
     else:

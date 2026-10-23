@@ -28,7 +28,7 @@ from string import Template
 from typing import Callable
 
 from .. import RUNNER_DIR, images, reports, workloads
-from ..control_planes import worker_pool
+from ..control_planes import agent_sandbox, worker_pool
 from ..infra.cluster import Cluster
 from ..infra.cluster_configs import CommonCluster, OpenclawCluster, from_infra
 from ..log import ON_CLOUD_RUN, log
@@ -331,7 +331,6 @@ def run(
     workload = options["worker"].get("workload-name") or template_name
     template = None
     if provider == AGENT_SANDBOX:
-        from ..control_planes import agent_sandbox
         if deploy_workloads:
             agent_sandbox.deploy_workload_and_pool(
                 cluster, workload, options["worker-count"], image_repo, sandbox_class(case)
@@ -344,8 +343,8 @@ def run(
                 **options["worker"],
                 "provider": "agent-sandbox",
                 "router-url": "http://sandbox-router-svc.agent-sandbox-system.svc.cluster.local:8080",
-                "warm-pool-name": f"{workload}-warm-pool",
-                "atespace": "benchmark-workloads",
+                "warm-pool-name": agent_sandbox.warm_pool_name(workload),
+                "atespace": agent_sandbox.WORKLOADS_NAMESPACE,
             },
         }
         boomer_volume_mounts = ""
@@ -473,8 +472,7 @@ roleRef:
     finally:
         if not still_running:
             if provider == AGENT_SANDBOX:
-                from ..control_planes import agent_sandbox
-                rec = agent_sandbox.cleanup(cluster, "benchmark-workloads")
+                rec = agent_sandbox.cleanup(cluster, agent_sandbox.WORKLOADS_NAMESPACE)
                 log(f"locust: agent-sandbox cleanup: {rec['claims_deleted']} claims, {rec['sandboxes_deleted']} sandboxes deleted")
             else:
                 atespace = options["worker"].get("atespace") or ACTOR_ATESPACE

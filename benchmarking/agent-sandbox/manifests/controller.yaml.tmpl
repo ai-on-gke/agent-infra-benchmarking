@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent-sandbox-controller
+  namespace: ${NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agent-sandbox-controller
+subjects:
+- kind: ServiceAccount
+  name: agent-sandbox-controller
+  namespace: ${NAMESPACE}
+roleRef:
+  kind: ClusterRole
+  name: agent-sandbox-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-sandbox-controller
+  namespace: ${NAMESPACE}
+  labels:
+    app: agent-sandbox-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-sandbox-controller
+  template:
+    metadata:
+      labels:
+        app: agent-sandbox-controller
+    spec:
+      serviceAccountName: agent-sandbox-controller
+      containers:
+      - name: agent-sandbox-controller
+        image: ${IMAGE}
+        args:
+        - --leader-elect=true
+        - --extensions
+        - --api-connections=4
+        - --separate-watch-connection=true
+        - --sandbox-concurrent-workers=200
+        - --sandbox-claim-concurrent-workers=150
+        - --sandbox-warm-pool-concurrent-workers=2
+        - --sandbox-warm-pool-replenish-delay=0
+        - --sandbox-warm-pool-max-refill-rate=100
+        - --cache-label-selectors=true
+        - --disable-sandbox-events=true
+        - --disable-claim-events=true
+        - --disable-claim-observability-annotations=true
+        ports:
+        - name: metrics
+          containerPort: 8080
+          protocol: TCP
+        - name: healthz
+          containerPort: 8081
+          protocol: TCP
