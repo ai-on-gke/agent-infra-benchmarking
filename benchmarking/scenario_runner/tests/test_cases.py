@@ -471,7 +471,7 @@ class Suites(unittest.TestCase):
 
         args = argparse.Namespace(
             scenarios_file=SCENARIOS_FILE, all=False, scenario=None, suite="staging",
-            provider=None, lifecycle_mode=None, test=None, bare_metal=None, region="us-central1",
+            provider=None, test=None, bare_metal=None, region="us-central1",
         )  # fmt: skip
         self.assertEqual(list(run.selected_cases(args)), SHIPPED.suites["staging"])
         with mock.patch.object(run, "log"), self.assertRaises(SystemExit):

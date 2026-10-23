@@ -61,10 +61,7 @@ DEFAULT_MAX_FAILURE_RATIO = 0.01
 ACTOR_ATESPACE = "benchmark"
 # The case's mapping of its type, and what it may state.
 TYPE = "locust"
-KEYS = {
-    "infra", INSTALL, "worker-count", "locust-workers", "actor-memory", "max-failure-ratio", "lifecycle-mode", "master",
-    "worker",
-}
+KEYS = {"infra", INSTALL, "worker-count", "locust-workers", "actor-memory", "max-failure-ratio", "master", "worker"}
 # The images.json files of the images a run pulls.
 IMAGE_FILES = [images.LOCUST_IMAGES, images.WORKLOADS_IMAGES]
 

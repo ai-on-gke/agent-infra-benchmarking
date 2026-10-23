@@ -31,7 +31,6 @@ def select(
     suite: str | None = None,
     *,
     provider: str | None = None,
-    lifecycle_mode: str | None = None,
     tests: list[str] | None = None,
     bare_metal: bool | None = None,
     placements: list[dict] = (),
@@ -39,7 +38,7 @@ def select(
     """The cases to run, by name, in the order they run: those names gives,
     a case's subcases in its place, or else those suite lists, or else every
     one. provider is the control plane every locust case installs in place of
-    its own, lifecycle_mode agent-sandbox's, tests the ai-sandbox-benchmark
+    its own, tests the ai-sandbox-benchmark
     tests every sandbox-benchmark case runs, and bare_metal, unless None,
     whether every case runs on bare metal, on placements. Raises ValueError,
     its message what is wrong with them."""
@@ -57,7 +56,7 @@ def select(
         from_suite = f" (from suite {suite})" if suite else ""
         raise ValueError(f"no case {', '.join(unknown)}{from_suite} in {scenarios.path}; it has {known}")
     selected = {member: cases[member] for name in names for member in groups.get(name, [name])}
-    selected = {name: overridden(name, case, provider, lifecycle_mode, tests) for name, case in selected.items()}
+    selected = {name: overridden(name, case, provider, tests) for name, case in selected.items()}
     if tests:
         others = [name for name, case in selected.items() if case["type"] != "sandbox-benchmark"]
         if others:
@@ -72,17 +71,10 @@ def select(
     return selected
 
 
-def overridden(
-    name: str, case: dict, provider: str | None, lifecycle_mode: str | None, tests: list[str] | None
-) -> dict:
+def overridden(name: str, case: dict, provider: str | None, tests: list[str] | None) -> dict:
     kind = case["type"]
-    if kind == "locust" and (provider or lifecycle_mode):
-        options = dict(case[kind])
-        if provider:
-            options[INSTALL] = {provider: installs(case)[control_plane(case)]}
-        if lifecycle_mode:
-            options["lifecycle-mode"] = lifecycle_mode
-        case = {**case, kind: options}
+    if kind == "locust" and provider:
+        case = {**case, kind: {**case[kind], INSTALL: {provider: installs(case)[control_plane(case)]}}}
     if kind == "sandbox-benchmark" and tests:
         tests = list(dict.fromkeys(t if t.startswith("test_") else f"test_{t}" for t in tests))
         case = {**case, kind: {**case[kind], "tests": tests}}

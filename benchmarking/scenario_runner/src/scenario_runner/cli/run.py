@@ -121,12 +121,6 @@ def parse_args() -> argparse.Namespace:
         help=f"the control plane every locust case installs, with its {SANDBOX_CLASS}, in place of its `locust.{INSTALL}`'s",
     )
     p.add_argument(
-        "--lifecycle-mode",
-        choices=["claim", "snapshot"],
-        default="claim",
-        help="agent-sandbox lifecycle mode: 'claim' (warm pool claim/release) or 'snapshot' (GKE Pod Snapshot hibernate/resume). Default: %(default)s",
-    )
-    p.add_argument(
         "--bare-metal",
         action=argparse.BooleanOptionalAction,
         help="run every case's sandboxed pool on bare metal, or with --no-bare-metal on VMs, whatever the case or the"
@@ -285,7 +279,6 @@ def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
             None if args.all else args.scenario,
             args.suite,
             provider=args.provider,
-            lifecycle_mode=args.lifecycle_mode,
             tests=args.test,
             bare_metal=args.bare_metal,
             placements=args.placements,
