@@ -182,8 +182,8 @@ Run these from the repo root, in the same shell as [Preparing](#preparing):
 
 [`tools/trigger`](tools/trigger) starts one execution and prints its log as it
 comes in. Any other argument is passed to the scenario-runner, for that
-execution only; a `--scenario` or `--all` replaces the cases the job's `args`
-name:
+execution only; a `--scenario`, `--suite` or `--all` replaces the suite the
+job's `args` name:
 
 ```bash
 automation-infra/tools/trigger --deployment="$DEPLOYMENT" --scenario=glutton-gvisor

@@ -25,10 +25,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scenario_runner import deployment, jobs, locust, process, terraform
+from scenario_runner import process
+from scenario_runner.benchmarks import jobs, locust
 from scenario_runner.cli import run
-from scenario_runner import cluster as cluster_module
-from scenario_runner.cluster import Cluster
+from scenario_runner.infra import cluster as cluster_module
+from scenario_runner.infra import deployment, terraform
+from scenario_runner.infra.cluster import Cluster
 
 # A locust case as far as the series reads it: its type, and the cluster its
 # mapping asks for.
@@ -275,14 +277,14 @@ class Series(unittest.TestCase):
             run.run_cases(self.args, cases, case, shared_cluster=True)
 
     def subcases(self, *names: str, infra: dict | None = None) -> dict:
-        from scenario_runner.reports import SUBCASE
+        from scenario_runner.scenarios.expand import SUBCASE
 
         return {f"g-{n}": {**LOCUST, "locust": {"infra": infra}, SUBCASE: {"of": "g", "name": n}} for n in names}
 
     def test_subcases_alike_share_a_cluster_then_are_summarized(self):
         from contextlib import contextmanager
 
-        from scenario_runner import benchmark
+        from scenario_runner import benchmarks
 
         other = {"cluster": {"sandboxed-nodes": 2}}
         cases = {**self.subcases("a", "b"), **self.subcases("c", infra=other), "h": LOCUST}
@@ -294,7 +296,7 @@ class Series(unittest.TestCase):
             applied.append(key)
             yield key
 
-        with mock.patch.object(benchmark, "summarize") as summarize:
+        with mock.patch.object(benchmarks, "summarize") as summarize:
             failed = run.run_cases(self.args, cases, lambda name, case, cluster: ran.append((name, cluster)),
                                    shared_cluster=False, applied=cluster)  # fmt: skip
         self.assertEqual(failed, [])
@@ -389,7 +391,10 @@ class NeededImages(unittest.TestCase):
     def needed(self, cases: dict) -> dict:
         import argparse
 
-        from scenario_runner import agent_sandbox, ate_env, images, sandbox_benchmark, substrate
+        from scenario_runner.control_planes import agent_sandbox, substrate
+        from scenario_runner.benchmarks.sandbox_benchmark import ate_env
+        from scenario_runner import images
+        from scenario_runner.benchmarks import sandbox_benchmark
 
         args = argparse.Namespace(no_deploy_workloads=False, image_repo="repo")
         with mock.patch.object(images, "tag", return_value="t"), \
@@ -433,11 +438,12 @@ class NeededImages(unittest.TestCase):
 
 class BenchmarkRun(unittest.TestCase):
     def test_options_reach_the_type_s_run_as_the_runner_passes_them(self):
-        from scenario_runner import benchmark, monitoring
+        from scenario_runner import benchmarks
+        from scenario_runner.benchmarks import monitoring
 
         cluster = mock.Mock()
         with mock.patch.object(monitoring, "deploy"), mock.patch.object(locust, "run") as run:
-            benchmark.run("c-1", {"type": "locust"}, "run-1", cluster, image_repo="repo", test_case="c", repeat=1)
+            benchmarks.run("c-1", {"type": "locust"}, "run-1", cluster, image_repo="repo", test_case="c", repeat=1)
         run.assert_called_once_with(cluster, "c-1", {"type": "locust"}, "run-1", image_repo="repo", test_case="c", repeat=1)
 
     def test_locust_run_takes_them_by_name(self):
@@ -451,12 +457,15 @@ class BenchmarkRun(unittest.TestCase):
         import argparse
         import inspect
 
-        from scenario_runner import benchmark
+        from scenario_runner import benchmarks
 
         args = argparse.Namespace(name="run-1", no_deploy_workloads=False, report_bucket=None,
                                   report_prefix="reports", dev_infra=None)  # fmt: skip
-        with mock.patch.object(benchmark, "run") as bench_run:
+        with mock.patch.object(benchmarks, "run") as bench_run:
             run.run_case(args, "c-1", {"type": "locust"}, mock.Mock(), "c", 1, 0, "repo")
-        for type_, module in benchmark.RUNNERS.items():
+        for type_, module in benchmarks.RUNNERS.items():
+            # benchmarks.run runs nothing of a noop's.
+            if module is benchmarks.noop:
+                continue
             params = inspect.signature(module.run).parameters
             self.assertLessEqual(set(bench_run.call_args.kwargs), set(params), type_)

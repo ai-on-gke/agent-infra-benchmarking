@@ -26,7 +26,10 @@ import subprocess
 import sys
 from typing import NoReturn
 
-from .. import builder, dev_infra, images, substrate
+from .. import images
+from ..control_planes import substrate
+from ..images import builder
+from ..infra import dev_infra
 from ..log import log
 from ..process import failure
 

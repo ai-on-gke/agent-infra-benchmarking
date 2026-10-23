@@ -13,9 +13,9 @@
 # limitations under the License.
 
 # The boomer worker of one benchmark run. Rendered and submitted by
-# scenario_runner/src/scenario_runner/locust.py once master-job.yaml's pod is
-# ready; it ends when the master quits it, after deleting the actors it
-# created.
+# scenario_runner/src/scenario_runner/benchmarks/locust.py once
+# master-job.yaml's pod is ready; it ends when the master quits it, after
+# deleting the actors it created.
 apiVersion: batch/v1
 kind: Job
 metadata:

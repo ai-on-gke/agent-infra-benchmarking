@@ -27,7 +27,7 @@ import subprocess
 import sys
 from typing import NoReturn
 
-from ..deployment import DESTROYED_FILE, VARIABLES_FILE, GcsDeployment, storage_client
+from ..infra.deployment import DESTROYED_FILE, VARIABLES_FILE, GcsDeployment, storage_client
 from ..log import log
 from ..process import failure
 from .dev_infra import resource_count

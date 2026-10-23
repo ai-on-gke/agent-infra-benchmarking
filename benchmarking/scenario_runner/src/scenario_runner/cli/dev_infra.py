@@ -24,9 +24,18 @@ import subprocess
 import sys
 from typing import NoReturn
 
-from .. import terraform
-from ..deployment import Deployment
-from ..dev_infra import DEV_INFRA_DIR, INFRAS, RECORD_FILE, check_name, deployment, destroy, read_record, record_file
+from ..infra import terraform
+from ..infra.deployment import Deployment
+from ..infra.dev_infra import (
+    DEV_INFRA_DIR,
+    INFRAS,
+    RECORD_FILE,
+    check_name,
+    deployment,
+    destroy,
+    read_record,
+    record_file,
+)
 from ..process import failure
 
 

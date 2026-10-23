@@ -20,8 +20,9 @@ from __future__ import annotations
 import subprocess
 from string import Template
 
-from .. import RUNNER_DIR, images, worker_pool
-from ..cluster import Cluster
+from .. import RUNNER_DIR, images
+from ..control_planes import worker_pool
+from ..infra.cluster import Cluster
 from ..log import log
 from ..process import stream
 

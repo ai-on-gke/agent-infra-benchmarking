@@ -26,14 +26,16 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from . import agent_sandbox, benchmark, substrate
-from .cases import BARE_METAL
-from .cluster_configs import ClusterConfig, execution
-from .deployment import Deployment, declared_variables, tf_vars
-from .install import AGENT_SANDBOX, SUBSTRATE, control_plane, sandbox_class
+from . import benchmarks
+from .benchmarks import noop
+from .control_planes import agent_sandbox, substrate
+from .infra.cluster_configs import ClusterConfig, execution
+from .infra.deployment import Deployment, declared_variables, tf_vars
+from .infra.terraform import data_env
 from .log import log
 from .process import environ
-from .terraform import data_env
+from .scenarios.bare_metal import BARE_METAL
+from .scenarios.install import AGENT_SANDBOX, SUBSTRATE, control_plane, sandbox_class
 
 # `kubectl wait --for=create`, which the runner waits for the worker pool with.
 MIN_KUBECTL = (1, 31)
@@ -255,7 +257,7 @@ def check(
     if not shutil.which("terraform"):
         return ["terraform is required to apply the infra"]
     installs = any(control_plane(case) == SUBSTRATE for case in cases.values())
-    benchmarks = {name: case for name, case in cases.items() if case["type"] != "noop"}
+    measured = {name: case for name, case in cases.items() if case["type"] != noop.TYPE}
     if installs:
         missing = substrate.missing_requirements()
         if missing:
@@ -273,12 +275,12 @@ def check(
             agent_sandbox.build_version()
         except agent_sandbox.AgentSandboxError as exc:
             problems.append(str(exc))
-    missing = benchmark.missing_requirements(benchmarks)
+    missing = benchmarks.missing_requirements(measured)
     if missing:
         return problems + [f"running the benchmark requires {', '.join(missing)}"]
 
     problems += credential_problems()
-    if installs or benchmarks:
+    if installs or measured:
         if not shutil.which("gke-gcloud-auth-plugin"):
             problems.append("gke-gcloud-auth-plugin is missing: gcloud components install gke-gcloud-auth-plugin")
         version = kubectl_version()
@@ -297,7 +299,7 @@ def check(
     evaluated: dict[ClusterConfig, dict | ValueError] = {}
     for name in applied:
         case = cases[name]
-        config = benchmark.cluster_config(name, case)
+        config = benchmarks.cluster_config(name, case)
         bare_metal = case.get(BARE_METAL) and placements
         # Evaluated at the first placement; the others only move its pool.
         if bare_metal:

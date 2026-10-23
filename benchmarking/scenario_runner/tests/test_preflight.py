@@ -19,7 +19,7 @@ import unittest
 from unittest import mock
 
 from scenario_runner import preflight
-from scenario_runner.cluster_configs import CommonCluster
+from scenario_runner.infra.cluster_configs import CommonCluster
 
 CONFIG = CommonCluster()
 SETTINGS = {
@@ -109,7 +109,7 @@ class DevInfraConfiguration(unittest.TestCase):
         from argparse import Namespace
 
         from scenario_runner.cli import run
-        from scenario_runner.cluster_configs import CLUSTER_CONFIGS, to_record
+        from scenario_runner.infra.cluster_configs import CLUSTER_CONFIGS, to_record
 
         args = Namespace(dev_infra="dev", dev_infra_update=False, project_id="p", region="r", terraform_output="text")
         record = {
@@ -194,7 +194,7 @@ class ClusterSettings(unittest.TestCase):
     def test_the_config_takes_a_cloud_run_jobs_network(self):
         from unittest import mock
 
-        from scenario_runner import cluster_configs
+        from scenario_runner.infra import cluster_configs
 
         network = {"CLUSTER_NETWORK": "projects/p/global/networks/runs",
                    "CLUSTER_SUBNETWORK": "projects/p/regions/us-central1/subnetworks/runs"}  # fmt: skip

@@ -47,11 +47,8 @@ module "cloud_run" {
   reports_prefix      = "data"
   source_branch       = "main"
 
-  # dummy, which creates no cluster, and glutton-single, one glutton run.
-  args = [
-    "--scenario=dummy",
-    "--scenario=glutton-single",
-  ]
+  # The cases scenarios.yaml's staging suite lists.
+  args = ["--suite=staging"]
 
   # Daily, an hour after substrate-bench-auto's.
   schedule = "0 4 * * *"

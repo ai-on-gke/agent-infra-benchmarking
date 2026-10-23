@@ -15,6 +15,7 @@
 """Runs the cases in scenarios.yaml on infra of their own, with the command
 lines in cli/."""
 
+import re
 from pathlib import Path
 
 RUNNER_DIR = Path(__file__).resolve().parent.parent.parent
@@ -22,3 +23,5 @@ RUNNER_DIR = Path(__file__).resolve().parent.parent.parent
 SCENARIOS_DIR = RUNNER_DIR.parent / "scenarios"
 # The runs' and dev infras' local files, gitignored.
 LOCAL_DATA_DIR = RUNNER_DIR / ".local-data"
+# A Kubernetes label value, which run ids, case names and build versions end up as.
+LABEL_RE = re.compile(r"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?")

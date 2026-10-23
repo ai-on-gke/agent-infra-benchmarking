@@ -15,7 +15,7 @@
 import unittest
 from unittest import mock
 
-from scenario_runner import run_info
+from scenario_runner.reports import run_info
 
 
 def pod(

@@ -106,8 +106,9 @@ anything, only the ones it lacks being built:
 ```
 
 To run more than one case, repeat `--scenario`; they run in the order given.
-`--all` runs every case in `scenarios.yaml`, in the order listed; one or the
-other is required, as every case means a cluster or more. A case's
+`--suite NAME` runs the cases a suite in `scenarios.yaml`'s `suites` lists.
+`--all` runs every case in `scenarios.yaml`, in the order listed; one of the
+three is required, as every case means a cluster or more. A case's
 `repeats` say how many times it runs and on how many clusters (see
 [Repeats](#repeats)). A failed repeat doesn't stop the ones after it.
 
@@ -147,6 +148,7 @@ Useful flags (`--help` lists them all):
 | Flag | |
 |---|---|
 | `--scenario NAME` | case to run; repeatable |
+| `--suite NAME` | run a suite's cases instead |
 | `--all` | run every case instead |
 | `--name RUN_ID` | run id, default `run-<UTC timestamp>`. It starts the names of the GCP resources, so keep it lowercase |
 | `--project-id ID` | overrides `PROJECT_ID` |
