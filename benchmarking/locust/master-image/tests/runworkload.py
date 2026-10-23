@@ -25,7 +25,7 @@ Its name is load-bearing twice over: the master loads
 /app/tests/<USER_CLASS>.py, and the boomer worker is passed
 --user-class=<USER_CLASS>, which selects the "runworkload" entry the Go
 package registers with userclass.Add; USER_CLASS is in
-scenario_runner/src/scenario_runner/locust.py.
+scenario_runner/src/scenario_runner/benchmarks/locust.py.
 """
 
 import csv

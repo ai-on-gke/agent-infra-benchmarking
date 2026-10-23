@@ -12,15 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Named benchmark runs, each picked by the scenario-runner's --scenario, or
-# all of them with --all:
+# Named benchmark runs, each picked by the scenario-runner's --scenario, those
+# of a suite below with --suite, or all of them with --all:
 #
 #   python3 -m scenario_runner.cli.run --scenario glutton-gvisor ...
 #
 # A case's type is the key of the one mapping in it of the type's own keys,
 # `locust`, `sandbox-benchmark` or `noop`; the rest of the case is the
-# scenario-runner's. scenario_runner/src/scenario_runner/<type>.py, '-' spelled
-# '_', documents the type's keys.
+# scenario-runner's. The type's module in
+# scenario_runner/src/scenario_runner/benchmarks/, '-' spelled '_', documents
+# the type's keys.
 # For locust: `worker-count` and the `sandbox-class` in its `install` shape the
 # WorkerPool, and every key in `master` and `worker` becomes `--key=value` on
 # that process. `actor-memory` is the actors' memory limit, which on microvm is
@@ -93,7 +94,7 @@
 #
 # `infra.cluster`, in the type's mapping, is the cluster the case runs on: its
 # `configuration` and that configuration's inputs, which
-# scenario_runner/src/scenario_runner/cluster_configs.py turns into the
+# scenario_runner/src/scenario_runner/infra/cluster_configs.py turns into the
 # Terraform variables of the infra/clusters/ config it applies, all of them
 # optional:
 #   configuration           common, the default, a GKE cluster from
@@ -135,6 +136,23 @@ bare-metal:
     machine-type: c3-highcpu-192-metal
   - zone: us-central1-a
     machine-type: c3-highmem-192-metal
+
+# `suites` lists cases by name, as --scenario takes them, for --suite to run in
+# that order. The automation-infra deployments run one each, so a case is added
+# to or dropped from their scheduled runs here, without applying them again.
+suites:
+  # substrate-bench-auto's nightly.
+  nightly:
+  - glutton-gvisor
+  - glutton-microvm
+  - openclaw-gvisor
+  - openclaw-microvm
+  - dummy
+  # substrate-bench-staging's: dummy, which creates no cluster, and
+  # glutton-single, one glutton run.
+  staging:
+  - dummy
+  - glutton-single
 
 cases:
   # Each workload on 10 workers on one node, its VUs (virtual users) started

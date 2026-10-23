@@ -15,6 +15,7 @@
 """scenarios.yaml as the scenario-runner reads it: the shipped cases and the
 checks a case has to pass."""
 
+import argparse
 import copy
 import tempfile
 import unittest
@@ -24,18 +25,15 @@ import yaml
 
 from unittest import mock
 
-from scenario_runner import benchmark, locust, sandbox_benchmark
-from scenario_runner.cases import (
-    SCENARIOS_FILE,
-    grouped,
-    load_bare_metal,
-    load_cases,
-    record_names,
-    warmup_names,
-    with_bare_metal,
-)
-from scenario_runner.cluster_configs import CommonCluster, DummyCluster, OpenclawCluster
-from scenario_runner.reports import SUBCASE
+from scenario_runner import benchmarks
+from scenario_runner.benchmarks import locust, sandbox_benchmark
+from scenario_runner.infra.cluster_configs import CommonCluster, DummyCluster, OpenclawCluster
+from scenario_runner.scenarios.bare_metal import Settings, with_bare_metal
+from scenario_runner.scenarios.expand import SUBCASE, grouped
+from scenario_runner.scenarios.file import SCENARIOS_FILE, load_scenarios
+from scenario_runner.scenarios.repeats import record_names, warmup_names
+
+SHIPPED = load_scenarios(SCENARIOS_FILE)
 
 GLUTTON = {
     "locust": {
@@ -46,7 +44,7 @@ GLUTTON = {
 }
 
 
-# As load_cases has it.
+# As load_scenarios has it.
 LOADED = {**GLUTTON, "type": "locust"}
 
 
@@ -61,7 +59,7 @@ def on(sandbox_class: str) -> dict:
 
 
 def check(name: str, case: dict) -> dict:
-    """locust.check_case's case, typed as load_cases has it."""
+    """locust.check_case's case, typed as load_scenarios has it."""
     return locust.check_case(name, {**case, "type": "locust"}, True)
 
 
@@ -72,22 +70,21 @@ OPENCLAW = {
 }
 
 
+def load_file(scenarios: dict):
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.safe_dump(scenarios, f, sort_keys=False)
+    try:
+        return load_scenarios(Path(f.name))
+    finally:
+        Path(f.name).unlink()
+
+
 def load(cases: dict) -> dict:
-    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
-        yaml.safe_dump({"cases": cases}, f, sort_keys=False)
-    try:
-        return load_cases(Path(f.name))
-    finally:
-        Path(f.name).unlink()
+    return load_file({"cases": cases}).cases
 
 
-def load_metal(settings) -> dict:
-    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
-        yaml.safe_dump({"bare-metal": settings, "cases": {"c": GLUTTON}}, f)
-    try:
-        return load_bare_metal(Path(f.name))
-    finally:
-        Path(f.name).unlink()
+def load_metal(settings) -> Settings:
+    return load_file({"bare-metal": settings, "cases": {"c": GLUTTON}}).bare_metal
 
 
 PLACEMENTS = [
@@ -98,12 +95,12 @@ PLACEMENTS = [
 
 class ShippedCases(unittest.TestCase):
     def test_every_shipped_case_loads(self):
-        self.assertIn("glutton-gvisor", load_cases(SCENARIOS_FILE))
+        self.assertIn("glutton-gvisor", SHIPPED.cases)
 
     def test_each_microvm_case_pairs_with_its_gvisor_case(self):
         # gVisor and microvm compare only if the cases differ in the class, and
         # the nested virtualization microvm boots its guests on, alone.
-        cases = load_cases(SCENARIOS_FILE)
+        cases = SHIPPED.cases
         for name, case in cases.items():
             if not name.endswith("-microvm"):
                 continue
@@ -115,8 +112,8 @@ class ShippedCases(unittest.TestCase):
             self.assertEqual(mine, pair, f"{name} differs from its gVisor case in more than the class")
 
     def test_each_case_asks_for_its_cluster(self):
-        cases = load_cases(SCENARIOS_FILE)
-        clusters = {name: benchmark.cluster_config(name, case) for name, case in cases.items()}
+        cases = SHIPPED.cases
+        clusters = {name: benchmarks.cluster_config(name, case) for name, case in cases.items()}
         self.assertEqual(clusters["glutton-gvisor"], CommonCluster(sandboxed_nodes=1))
         self.assertEqual(clusters["glutton-microvm"], CommonCluster(sandboxed_nodes=1, nested_virtualization=True))
         self.assertEqual(clusters["openclaw-density-baseline"], OpenclawCluster(sandboxed_nodes=10))
@@ -229,9 +226,9 @@ class Clusters(unittest.TestCase):
     def test_locust_asks_for_its_configuration(self):
         cluster = {"sandboxed-nodes": 3, "nested-virtualization": True}
         case = load({"c": glutton({"infra": {"cluster": cluster}, **on("microvm")})})["c"]
-        self.assertEqual(benchmark.cluster_config("c", case), CommonCluster(3, nested_virtualization=True))
+        self.assertEqual(benchmarks.cluster_config("c", case), CommonCluster(3, nested_virtualization=True))
         openclaw = load({"c": glutton({"infra": {"cluster": {"configuration": "openclaw"}}})})["c"]
-        self.assertEqual(benchmark.cluster_config("c", openclaw), OpenclawCluster())
+        self.assertEqual(benchmarks.cluster_config("c", openclaw), OpenclawCluster())
 
     def test_a_workload_that_calls_mock_llm_needs_openclaw(self):
         with self.assertRaisesRegex(ValueError, "set `locust.infra.cluster.configuration: openclaw`"):
@@ -239,9 +236,9 @@ class Clusters(unittest.TestCase):
         load({"c": glutton(OPENCLAW)})
 
     def test_a_noop_picks_its_configuration_common_by_default(self):
-        self.assertEqual(benchmark.cluster_config("n", load({"n": {"noop": None}})["n"]), CommonCluster())
+        self.assertEqual(benchmarks.cluster_config("n", load({"n": {"noop": None}})["n"]), CommonCluster())
         dummy = load({"n": {"noop": {"infra": {"cluster": {"configuration": "dummy", "sandboxed-nodes": 2}}}}})["n"]
-        self.assertEqual(benchmark.cluster_config("n", dummy), DummyCluster(2))
+        self.assertEqual(benchmarks.cluster_config("n", dummy), DummyCluster(2))
 
     def test_what_is_wrong_is_named_where_it_is(self):
         with self.assertRaisesRegex(ValueError, r"case c\S*'s `locust.infra.cluster`: has unknown size; it takes"):
@@ -250,7 +247,7 @@ class Clusters(unittest.TestCase):
 
 class Subcases(unittest.TestCase):
     def test_shipped_sandbox_benchmark_is_a_case_per_provider(self):
-        cases = load_cases(SCENARIOS_FILE)
+        cases = SHIPPED.cases
         members = grouped(cases)["sandbox-benchmark"]
         self.assertEqual(members[0], "sandbox-benchmark-substrate")
         self.assertNotIn("sandbox-benchmark", cases)
@@ -447,15 +444,49 @@ class SandboxBenchmarkReports(unittest.TestCase):
         )
 
 
+def load_suites_of(suites) -> dict:
+    return load_file({"suites": suites, "cases": {"c": GLUTTON}}).suites
+
+
+class Suites(unittest.TestCase):
+    def test_shipped_suites_name_shipped_cases(self):
+        cases = SHIPPED.cases
+        known = set(cases) | set(grouped(cases))
+        suites = SHIPPED.suites
+        self.assertTrue({"nightly", "staging"} <= suites.keys())
+        for name, members in suites.items():
+            with self.subTest(suite=name):
+                self.assertEqual([m for m in members if m not in known], [])
+
+    def test_suites_default_to_none(self):
+        self.assertEqual(load_suites_of({}), {})
+
+    def test_bad_suites_are_refused(self):
+        for suites in (["c"], {"s": "c"}, {"s": []}, {"s": [1]}):
+            with self.subTest(suites=suites), self.assertRaises(ValueError):
+                load_suites_of(suites)
+
+    def test_a_suite_selects_its_cases_in_order(self):
+        from scenario_runner.cli import run
+
+        args = argparse.Namespace(
+            scenarios_file=SCENARIOS_FILE, all=False, scenario=None, suite="staging",
+            provider=None, test=None, bare_metal=None, region="us-central1",
+        )  # fmt: skip
+        self.assertEqual(list(run.selected_cases(args)), SHIPPED.suites["staging"])
+        with mock.patch.object(run, "log"), self.assertRaises(SystemExit):
+            run.selected_cases(argparse.Namespace(**{**vars(args), "suite": "unknown"}))
+
+
 class BareMetal(unittest.TestCase):
     def test_shipped_settings_load(self):
-        settings = load_bare_metal(SCENARIOS_FILE)
-        self.assertIsInstance(settings["default"], bool)
-        self.assertTrue(settings["placements"])
-        self.assertTrue(all(p["machine-type"].endswith("-metal") for p in settings["placements"]))
+        settings = SHIPPED.bare_metal
+        self.assertIsInstance(settings.default, bool)
+        self.assertTrue(settings.placements)
+        self.assertTrue(all(p["machine-type"].endswith("-metal") for p in settings.placements))
 
     def test_settings_default_to_none(self):
-        self.assertEqual(load_metal({}), {"default": False, "placements": []})
+        self.assertEqual(load_metal({}), Settings())
 
     def test_bad_settings_are_refused(self):
         for settings in (

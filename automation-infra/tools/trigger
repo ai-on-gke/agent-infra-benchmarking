@@ -23,9 +23,9 @@
 # Stopping the script leaves the execution running.
 #
 # Any SCENARIO_RUNNER_ARG goes to the scenario-runner after the job's own
-# arguments, for this execution only; a --scenario or --all replaces the job's
-# choice of cases, e.g. --scenario=glutton-gvisor. Passing one also needs
-# run.jobs.runWithOverrides, e.g. roles/run.developer.
+# arguments, for this execution only; a --scenario, --suite or --all replaces
+# the job's choice of cases, e.g. --scenario=glutton-gvisor. Passing one also
+# needs run.jobs.runWithOverrides, e.g. roles/run.developer.
 #
 #   trigger --deployment=DEPLOYMENT [SCENARIO_RUNNER_ARG...]
 
@@ -52,11 +52,11 @@ fi
 
 POLL_SECS=10
 # The job's arguments without its choice of cases, as --scenario=NAME,
-# --scenario NAME or --all.
+# --scenario NAME, --suite=NAME, --suite NAME or --all.
 DROP_CASES='reduce .[] as $arg ({args: [], skip: false};
   if .skip then .skip = false
-  elif $arg == "--all" or ($arg | startswith("--scenario=")) then .
-  elif $arg == "--scenario" then .skip = true
+  elif $arg == "--all" or ($arg | test("^--(scenario|suite)=")) then .
+  elif $arg == "--scenario" or $arg == "--suite" then .skip = true
   else .args += [$arg] end) | .args'
 
 TOKEN="$(gcloud auth print-access-token)"
@@ -69,7 +69,7 @@ if [[ $# -gt 0 ]]; then
   JOB_ARGS="$(curl --silent --show-error --fail-with-body -H "Authorization: Bearer ${TOKEN}" "${JOB_URL}" |
     jq -c '.template.template.containers[0].args // []')"
   for arg in "$@"; do
-    if [[ "${arg}" == --all || "${arg}" == --scenario || "${arg}" == --scenario=* ]]; then
+    if [[ "${arg}" =~ ^--(all|scenario|scenario=.*|suite|suite=.*)$ ]]; then
       JOB_ARGS="$(jq -c "${DROP_CASES}" <<<"${JOB_ARGS}")"
       break
     fi

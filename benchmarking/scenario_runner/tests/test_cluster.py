@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scenario_runner import cluster, cluster_configs
+from scenario_runner.infra import cluster, cluster_configs
 
 NETWORK = "projects/p/global/networks/runs"
 SUBNETWORK = "projects/p/regions/us-central1/subnetworks/runs"

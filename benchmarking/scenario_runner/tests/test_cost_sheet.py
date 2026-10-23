@@ -16,7 +16,7 @@
 
 import unittest
 
-from scenario_runner import sandbox_benchmark_cost_sheet as costs
+from scenario_runner.benchmarks.sandbox_benchmark import cost_sheet as costs
 
 
 def source(provider: str, options: dict) -> dict:

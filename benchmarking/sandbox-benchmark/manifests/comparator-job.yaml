@@ -13,9 +13,9 @@
 # limitations under the License.
 
 # The comparator of one sandbox-benchmark run, which runs ai-sandbox-benchmark's
-# tests on one provider, substrate's through env's ate-env-api. Rendered and submitted by
-# scenario_runner/src/scenario_runner/sandbox_benchmark.py. The run's results
-# are this pod's log and the files run_comparator.py uploads.
+# tests on one provider, substrate's through env's ate-env-api. Rendered and
+# submitted by scenario_runner/src/scenario_runner/benchmarks/sandbox_benchmark/.
+# The run's results are this pod's log and the files run_comparator.py uploads.
 apiVersion: batch/v1
 kind: Job
 metadata:
