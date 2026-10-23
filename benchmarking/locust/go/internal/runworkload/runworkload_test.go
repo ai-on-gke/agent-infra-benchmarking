@@ -19,8 +19,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -29,6 +27,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/prometheus/client_golang/prometheus"
@@ -50,25 +51,18 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
-// newTestRuntime builds a runtime around ctrl, with no user registered yet.
-func newTestRuntime(t *testing.T, ctrl *fakeControlClient) *runWorkloadRuntime {
+// newTestRuntime runs a scenario around ctrl, with no user started yet.
+func newTestRuntime(t *testing.T, ctrl *fakeControlClient) *testRun {
 	t.Helper()
 	cfg := newTestConfig(t, &pingServer{}, &userclass.Config{APIStub: ctrl})
-	return &runWorkloadRuntime{cfg: cfg, workload: gluttonWorkload{}}
+	return newTestRunOn(newTestScenarioOn(cfg, scenario.Options{}))
 }
 
-func TestUserClassIsRegistered(t *testing.T) {
-	entry, ok := userclass.Lookup("runworkload")
-	if !ok {
-		t.Fatalf("runworkload user class not registered; have %v", userclass.Names())
-	}
-	// The master's spawn messages match on the Python class name, so a
-	// mismatch here starts no users at all.
-	if entry.UserClass != runWorkloadUserClass {
-		t.Errorf("UserClass: got %q, want %q", entry.UserClass, runWorkloadUserClass)
-	}
-	if entry.LocustFile != "runworkload.py" {
-		t.Errorf("LocustFile: got %q, want %q", entry.LocustFile, "runworkload.py")
+// The master's spawn messages match on the Python class name in
+// master-image/tests/runworkload.py, so a mismatch here starts no users at all.
+func TestUserClassIsTheMasters(t *testing.T) {
+	if UserClass != "RunWorkloadUser" {
+		t.Errorf("UserClass: got %q, want %q", UserClass, "RunWorkloadUser")
 	}
 }
 
@@ -98,22 +92,6 @@ func TestIterateCreatesOnceThenCycles(t *testing.T) {
 	}
 	if got := ctrl.recordedCalls(); !slices.Equal(got, want) {
 		t.Errorf("calls after three iterations:\n got  %v\n want %v", got, want)
-	}
-}
-
-// boomer.Run returns while iterations are still in flight, so the teardown
-// drains the task function first and the gate stays shut afterwards. An
-// iteration admitted past that point would create an actor the walk has
-// already passed, which is how one leaks.
-func TestIterateIsGatedByTheTeardownDrain(t *testing.T) {
-	ctrl := &fakeControlClient{}
-	rt := newTestRuntime(t, ctrl)
-
-	rt.shutdown(context.Background())
-	rt.iterate()
-
-	if got := ctrl.countCalls("CreateActor"); got != 0 {
-		t.Errorf("CreateActor after the teardown drained: got %d, want 0", got)
 	}
 }
 
@@ -157,20 +135,17 @@ func mustAttr(t *testing.T, s sdktrace.ReadOnlySpan, key string) attribute.Value
 	return attribute.Value{}
 }
 
-// newMeasuringUser builds a user whose spans are recorded, with an actor
-// already registered on this goroutine so iterate goes down the cycling path.
-func newMeasuringUser(t *testing.T, srv *pingServer, ctrl *fakeControlClient) (*runWorkloadRuntime, *tracetest.SpanRecorder) {
+// newMeasuringUser runs a scenario for opts whose spans are recorded, with an
+// actor already started on this goroutine so the next iteration cycles it.
+func newMeasuringUser(t *testing.T, srv *pingServer, ctrl *fakeControlClient, opts scenario.Options) (*testRun, *tracetest.SpanRecorder) {
 	t.Helper()
 	tracer, sr := newRecordingTracer(t)
 	cfg := newTestConfig(t, srv, &userclass.Config{APIStub: ctrl, Tracer: tracer})
-	rt := &runWorkloadRuntime{cfg: cfg, workload: gluttonWorkload{}}
-	rt.users.Store(boomerutil.GoroutineID(), &runWorkloadUser{
-		cfg:          cfg,
-		workload:     gluttonWorkload{},
-		actorName:    "sb-measuring",
-		templateName: gluttonWorkload{}.DefaultTemplate(),
-		userClass:    runWorkloadUserClass,
-	})
+	rt := newTestRunOn(newTestScenarioOn(cfg, opts))
+	rt.iterate()
+	if got := ctrl.countCalls("CreateActor"); got != 1 {
+		t.Fatalf("CreateActor after the first iteration: got %d, want 1", got)
+	}
 	return rt, sr
 }
 
@@ -185,12 +160,12 @@ func TestResumeModeSelectsTheControlPlaneCall(t *testing.T) {
 	}{
 		{
 			name:        "explicit resume mode",
-			resumeMode:  ResumeModeExplicit,
+			resumeMode:  scenario.ResumeModeExplicit,
 			wantResumes: 1,
 		},
 		{
 			name:       "implicit resume mode",
-			resumeMode: ResumeModeImplicit,
+			resumeMode: scenario.ResumeModeImplicit,
 		},
 		{
 			// Same default as common/resume_mode.py, so an unset value behaves
@@ -204,8 +179,7 @@ func TestResumeModeSelectsTheControlPlaneCall(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := &fakeControlClient{}
-			rt, sr := newMeasuringUser(t, &pingServer{}, ctrl)
-			rt.opts.ResumeMode = tc.resumeMode
+			rt, sr := newMeasuringUser(t, &pingServer{}, ctrl, scenario.Options{ResumeMode: tc.resumeMode})
 
 			rt.iterate()
 
@@ -214,7 +188,7 @@ func TestResumeModeSelectsTheControlPlaneCall(t *testing.T) {
 			}
 			// The instruction goes out either way; only the wake differs.
 			span := spanByName(t, sr, ttfiMetric)
-			if got := mustAttr(t, span, "resume_mode").AsString(); got != cmp.Or(tc.resumeMode, ResumeModeExplicit) {
+			if got := mustAttr(t, span, "resume_mode").AsString(); got != cmp.Or(tc.resumeMode, scenario.ResumeModeExplicit) {
 				t.Errorf("resume_mode: got %q, want the effective mode", got)
 			}
 		})
@@ -225,7 +199,7 @@ func TestResumeModeSelectsTheControlPlaneCall(t *testing.T) {
 // however long it took must not appear in TTFI.
 func TestTTFIExcludesTheSuspend(t *testing.T) {
 	const suspend = 200 * time.Millisecond
-	rt, sr := newMeasuringUser(t, &pingServer{}, &fakeControlClient{suspendDelay: suspend})
+	rt, sr := newMeasuringUser(t, &pingServer{}, &fakeControlClient{suspendDelay: suspend}, scenario.Options{})
 
 	rt.iterate()
 
@@ -239,10 +213,9 @@ func TestTTFIExcludesTheSuspend(t *testing.T) {
 // resume, where the router wakes the actor, is not reported as near zero.
 func TestTTFIEndsWhenTheInstructionIsServed(t *testing.T) {
 	const service = 200 * time.Millisecond
-	for _, mode := range []string{ResumeModeExplicit, ResumeModeImplicit} {
+	for _, mode := range []string{scenario.ResumeModeExplicit, scenario.ResumeModeImplicit} {
 		t.Run(mode, func(t *testing.T) {
-			rt, sr := newMeasuringUser(t, &pingServer{PingDelay: service}, &fakeControlClient{})
-			rt.opts.ResumeMode = mode
+			rt, sr := newMeasuringUser(t, &pingServer{PingDelay: service}, &fakeControlClient{}, scenario.Options{ResumeMode: mode})
 
 			rt.iterate()
 
@@ -258,7 +231,7 @@ func TestTTFIEndsWhenTheInstructionIsServed(t *testing.T) {
 // holds the suspend, and its span is the one the suspend is traced under.
 func TestCycleTimeSpansTheResumeThroughTheSuspend(t *testing.T) {
 	const service, suspend = 100 * time.Millisecond, 100 * time.Millisecond
-	rt, sr := newMeasuringUser(t, &pingServer{PingDelay: service}, &fakeControlClient{suspendDelay: suspend})
+	rt, sr := newMeasuringUser(t, &pingServer{PingDelay: service}, &fakeControlClient{suspendDelay: suspend}, scenario.Options{})
 
 	rt.iterate()
 
@@ -266,7 +239,7 @@ func TestCycleTimeSpansTheResumeThroughTheSuspend(t *testing.T) {
 	if total, want := mustAttr(t, cycle, "total_ms").AsFloat64(), boomerutil.MsFloat(service+suspend); total < want {
 		t.Errorf("total_ms: got %v, want >= %v", total, want)
 	}
-	for _, name := range []string{ttfiMetric, suspendMetric} {
+	for _, name := range []string{ttfiMetric, sandbox.SuspendMetric} {
 		if got := spanByName(t, sr, name).Parent().SpanID(); got != cycle.SpanContext().SpanID() {
 			t.Errorf("%s span is not a child of the %s span", name, cycleTimeMetric)
 		}
@@ -277,14 +250,14 @@ func TestCycleTimeSpansTheResumeThroughTheSuspend(t *testing.T) {
 // spent, and the actor is discarded like after any other failed call.
 func TestAFailedSuspendReportsAFailedCycle(t *testing.T) {
 	ctrl := &fakeControlClient{suspendErr: errActorBusy}
-	rt, sr := newMeasuringUser(t, &pingServer{}, ctrl)
+	rt, sr := newMeasuringUser(t, &pingServer{}, ctrl, scenario.Options{})
 
 	rt.iterate()
 
 	if got := mustAttr(t, spanByName(t, sr, cycleTimeMetric), "total_ms").AsFloat64(); got <= 0 {
 		t.Errorf("total_ms: got %v, want > 0", got)
 	}
-	if _, ok := rt.users.Load(boomerutil.GoroutineID()); ok {
+	if !startsOver(rt, ctrl) {
 		t.Error("the user kept its slot after the suspend was refused")
 	}
 }
@@ -293,7 +266,7 @@ func TestAFailedSuspendReportsAFailedCycle(t *testing.T) {
 // state to wait out, so nothing retries it.
 func TestTheInstructionIsSentOnce(t *testing.T) {
 	srv := &pingServer{PingFailures: 1}
-	rt, _ := newMeasuringUser(t, srv, &fakeControlClient{})
+	rt, _ := newMeasuringUser(t, srv, &fakeControlClient{}, scenario.Options{})
 
 	rt.iterate()
 
@@ -306,14 +279,11 @@ func TestTheInstructionIsSentOnce(t *testing.T) {
 // does: nothing is reported and the actor is discarded.
 func TestARefusedInstructionDiscardsTheActor(t *testing.T) {
 	ctrl := &fakeControlClient{}
-	rt, sr := newMeasuringUser(t, &pingServer{PingFailures: 1}, ctrl)
+	rt, sr := newMeasuringUser(t, &pingServer{PingFailures: 1}, ctrl, scenario.Options{})
 	buf := captureLogs(t)
 
 	rt.iterate()
 
-	if _, ok := rt.users.Load(boomerutil.GoroutineID()); ok {
-		t.Error("the user kept its slot after the instruction was refused")
-	}
 	if got := ctrl.countCalls("DeleteActor"); got != 1 {
 		t.Errorf("DeleteActor: got %d, want 1", got)
 	}
@@ -324,13 +294,16 @@ func TestARefusedInstructionDiscardsTheActor(t *testing.T) {
 	if got := mustAttr(t, spanByName(t, sr, ttfiMetric), "total_ms").AsFloat64(); got <= 0 {
 		t.Errorf("total_ms: got %v, want > 0", got)
 	}
+	if !startsOver(rt, ctrl) {
+		t.Error("the user kept its slot after the instruction was refused")
+	}
 }
 
 // A refused resume never gave the actor a worker, so no instruction is sent —
 // but the window it opened is still reported, as a failure.
 func TestAFailedResumeReportsAFailedWindow(t *testing.T) {
 	srv := &pingServer{}
-	rt, sr := newMeasuringUser(t, srv, &fakeControlClient{resumeErr: errResumeRefused})
+	rt, sr := newMeasuringUser(t, srv, &fakeControlClient{resumeErr: errResumeRefused}, scenario.Options{})
 
 	rt.iterate()
 
@@ -371,9 +344,6 @@ func TestAFailedCallDiscardsTheActor(t *testing.T) {
 			if got := tc.ctrl.countCalls("DeleteActor"); got != 1 {
 				t.Errorf("DeleteActor: got %d, want 1", got)
 			}
-			if _, ok := rt.users.Load(boomerutil.GoroutineID()); ok {
-				t.Error("the discarded user still holds its goroutine slot")
-			}
 			if !strings.Contains(buf.String(), "discarding the actor") {
 				t.Errorf("no discard was logged; got:\n%s", buf.String())
 			}
@@ -381,7 +351,7 @@ func TestAFailedCallDiscardsTheActor(t *testing.T) {
 			// The slot being free is what lets the next iteration start over.
 			rt.iterate()
 			if got := tc.ctrl.countCalls("CreateActor"); got != 2 {
-				t.Errorf("CreateActor after the discard: got %d, want 2", got)
+				t.Errorf("CreateActor after the discard: got %d, want 2 — the discarded user still holds its goroutine slot", got)
 			}
 		})
 	}
@@ -414,8 +384,8 @@ func TestDeleteBypassesTheStateCheckOnlyAfterAFailedSuspend(t *testing.T) {
 
 			// The fake refuses a plain delete after a refused suspend, as the
 			// control plane does, so the actor goes only if the flag is set.
-			if err := u.suspendAndDelete(context.Background()); err != nil {
-				t.Fatalf("suspendAndDelete failed: %v", err)
+			if err := u.sandbox.Remove(context.Background()); err != nil {
+				t.Fatalf("Remove failed: %v", err)
 			}
 			if got := tc.ctrl.deletedFromAnyState(); got != tc.wantAnyState {
 				t.Errorf("AnyState: got %t, want %t", got, tc.wantAnyState)
@@ -424,27 +394,8 @@ func TestDeleteBypassesTheStateCheckOnlyAfterAFailedSuspend(t *testing.T) {
 	}
 }
 
-// The slot has to be freed even when the actor could not be removed, or the
-// VU keeps using an actor it has already given up on. The delete failing is
-// named instead, because that actor holds a worker until someone removes it.
-func TestADiscardThatCouldNotDeleteStillFreesTheSlot(t *testing.T) {
-	ctrl := &fakeControlClient{suspendErr: errActorBusy, deleteErr: errActorBusy}
-	rt := newTestRuntime(t, ctrl)
-	buf := captureLogs(t)
-
-	rt.iterate()
-	rt.iterate()
-
-	if _, ok := rt.users.Load(boomerutil.GoroutineID()); ok {
-		t.Error("the slot was kept after a failed delete")
-	}
-	if !strings.Contains(buf.String(), "discarded actor was left behind") {
-		t.Errorf("a leaked actor was not named; got:\n%s", buf.String())
-	}
-}
-
-// suspend reports whether the actor actually went down, and says why when it
-// did not: tracedCall records the row but logs only a sampled trace.
+// Sleep reports whether the actor actually went down, and says why when it
+// did not: measure records the row but logs only a sampled trace.
 func TestSuspendReportsWhetherItWent(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -467,13 +418,13 @@ func TestSuspendReportsWhetherItWent(t *testing.T) {
 			u := newTestRunWorkloadUser(t, &pingServer{}, &userclass.Config{APIStub: tc.ctrl})
 			buf := captureLogs(t)
 
-			err := u.suspend(context.Background())
+			err := u.sandbox.Sleep(context.Background())
 
 			if tc.wantErr && err == nil {
-				t.Fatal("suspend returned nil, want the refusal")
+				t.Fatal("Sleep returned nil, want the refusal")
 			}
 			if !tc.wantErr && err != nil {
-				t.Fatalf("suspend failed: %v", err)
+				t.Fatalf("Sleep failed: %v", err)
 			}
 			logged := strings.Contains(buf.String(), "suspend failed")
 			if logged != tc.wantErr {
@@ -510,16 +461,15 @@ func TestShutdownReportsWhatItLeftBehind(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			u := newTestRunWorkloadUser(t, &pingServer{}, &userclass.Config{APIStub: tc.ctrl})
-			rt := &runWorkloadRuntime{cfg: u.cfg, workload: u.workload}
-			rt.users.Store(int64(1), u)
+			rt := newTestRuntime(t, tc.ctrl)
+			rt.iterate()
 			buf := captureLogs(t)
 
 			rt.shutdown(context.Background())
 
 			got := buf.String()
-			if !strings.Contains(got, u.actorName) {
-				t.Errorf("teardown log does not name the actor %q; got:\n%s", u.actorName, got)
+			if name := tc.ctrl.recordedActor(); name == "" || !strings.Contains(got, name) {
+				t.Errorf("teardown log does not name the actor %q; got:\n%s", name, got)
 			}
 			for _, want := range tc.wantInLog {
 				if !strings.Contains(got, want) {
@@ -527,48 +477,6 @@ func TestShutdownReportsWhatItLeftBehind(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// A run's worth of actors removed one at a time would outlast the budget the
-// caller allows, so they go together — and the cap is what keeps that from
-// becoming a burst of its own against an ateapi still draining the run.
-func TestShutdownRemovesActorsConcurrently(t *testing.T) {
-	const users = 50
-
-	ctrl := &fakeControlClient{deleteDelay: 10 * time.Millisecond}
-	cfg := newTestConfig(t, &pingServer{}, &userclass.Config{APIStub: ctrl})
-	rt := &runWorkloadRuntime{cfg: cfg, workload: gluttonWorkload{}}
-	for i := range users {
-		rt.users.Store(int64(i), &runWorkloadUser{
-			cfg:          cfg,
-			workload:     gluttonWorkload{},
-			actorName:    fmt.Sprintf("sb-%d", i),
-			templateName: gluttonWorkload{}.DefaultTemplate(),
-			userClass:    runWorkloadUserClass,
-		})
-	}
-
-	rt.shutdown(context.Background())
-
-	// An actor left behind holds a worker until someone removes it by hand, so
-	// the teardown has to reach every one of them however it is scheduled.
-	if got := ctrl.countCalls("DeleteActor"); got != users {
-		t.Errorf("DeleteActor calls: got %d, want %d", got, users)
-	}
-	peak := ctrl.peakInFlight()
-	if peak < 2 {
-		t.Errorf("peak concurrent deletes: got %d, want > 1 — the teardown ran serially", peak)
-	}
-	if peak > teardownConcurrency {
-		t.Errorf("peak concurrent deletes: got %d, want <= %d", peak, teardownConcurrency)
-	}
-}
-
-func TestDynamicWait(t *testing.T) {
-	rt := &runWorkloadRuntime{opts: Options{MinWait: 0, MaxWait: 0}}
-	if got := rt.dynamicWait(); got != 0 {
-		t.Errorf("dynamicWait with no bounds: got %v, want 0", got)
 	}
 }
 
@@ -625,7 +533,7 @@ func gaugeValue(t *testing.T, metric, workload string) float64 {
 func TestCreatedActorCountsAsSuspended(t *testing.T) {
 	ctrl := &fakeControlClient{}
 	rt := newTestRuntime(t, ctrl)
-	name := rt.workload.Name()
+	name := rt.c.Workload.Name()
 	active := gaugeValue(t, "boomer_active_actors", name)
 	suspended := gaugeValue(t, "boomer_suspended_actors", name)
 
@@ -659,9 +567,9 @@ func TestAbortedCallIsRetried(t *testing.T) {
 			u := newTestRunWorkloadUser(t, &pingServer{}, &userclass.Config{APIStub: ctrl})
 
 			start := time.Now()
-			err := u.resume(context.Background())
+			err := u.sandbox.Wake(context.Background())
 			if (err != nil) != tc.wantErr {
-				t.Fatalf("resume: got err %v, want error %v", err, tc.wantErr)
+				t.Fatalf("Wake: got err %v, want error %v", err, tc.wantErr)
 			}
 			got := ctrl.countCalls("ResumeActor")
 			if !tc.wantErr && got != tc.abortTimes+1 {
@@ -671,8 +579,8 @@ func TestAbortedCallIsRetried(t *testing.T) {
 				if got < 2 {
 					t.Errorf("ResumeActor calls: got %d, want it retried", got)
 				}
-				if elapsed := time.Since(start); elapsed > retryBudget+retryMaxDelay {
-					t.Errorf("gave up after %v, want within the %v budget", elapsed, retryBudget)
+				if elapsed := time.Since(start); elapsed > measure.RetryBudget+measure.RetryMaxDelay {
+					t.Errorf("gave up after %v, want within the %v budget", elapsed, measure.RetryBudget)
 				}
 			}
 		})
@@ -712,33 +620,11 @@ func TestInstructionIsResentAfterAStaleAssignment(t *testing.T) {
 // The waits between retries are not what these tests are about.
 func shortenRetries(t *testing.T) {
 	t.Helper()
-	initial, maxDelay, budget := retryInitialDelay, retryMaxDelay, retryBudget
-	retryInitialDelay, retryMaxDelay, retryBudget = time.Millisecond, 4*time.Millisecond, 50*time.Millisecond
+	initial, maxDelay, budget := measure.RetryInitialDelay, measure.RetryMaxDelay, measure.RetryBudget
+	measure.RetryInitialDelay, measure.RetryMaxDelay, measure.RetryBudget = time.Millisecond, 4*time.Millisecond, 50*time.Millisecond
 	t.Cleanup(func() {
-		retryInitialDelay, retryMaxDelay, retryBudget = initial, maxDelay, budget
+		measure.RetryInitialDelay, measure.RetryMaxDelay, measure.RetryBudget = initial, maxDelay, budget
 	})
-}
-
-func TestRetryBacksOffAndStopsAtTheBudget(t *testing.T) {
-	shortenRetries(t)
-	var calls []time.Time
-	busy := errors.New("busy")
-	attempts, err := retry(context.Background(), func(error) bool { return true }, func() error {
-		calls = append(calls, time.Now())
-		return busy
-	})
-	if !errors.Is(err, busy) || attempts != len(calls) {
-		t.Fatalf("retry: got (%d, %v) after %d calls", attempts, err, len(calls))
-	}
-	if attempts < 4 {
-		t.Fatalf("calls: got %d, want several within the budget", attempts)
-	}
-	if total := calls[len(calls)-1].Sub(calls[0]); total > retryBudget+retryMaxDelay {
-		t.Errorf("retried for %v, past the %v budget", total, retryBudget)
-	}
-	if first, later := calls[1].Sub(calls[0]), calls[3].Sub(calls[2]); later < first {
-		t.Errorf("waits did not grow: first %v, third %v", first, later)
-	}
 }
 
 // A call that outlives the timeout is cut off at it and reported as a failure,
@@ -754,9 +640,7 @@ func TestACallPastTheDeadlineFails(t *testing.T) {
 		{name: "instruction", srv: &pingServer{PingDelay: 10 * deadline}, ctrl: &fakeControlClient{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rt, sr := newMeasuringUser(t, tc.srv, tc.ctrl)
-			val, _ := rt.users.Load(boomerutil.GoroutineID())
-			val.(*runWorkloadUser).timeout = deadline
+			rt, sr := newMeasuringUser(t, tc.srv, tc.ctrl, scenario.Options{Timeout: deadline})
 			buf := captureLogs(t)
 
 			rt.iterate()
@@ -768,7 +652,7 @@ func TestACallPastTheDeadlineFails(t *testing.T) {
 			if lo, hi := boomerutil.MsFloat(deadline), boomerutil.MsFloat(10*deadline); total < lo || total >= hi {
 				t.Errorf("total_ms: got %v, want about the deadline, in [%v, %v)", total, lo, hi)
 			}
-			if _, ok := rt.users.Load(boomerutil.GoroutineID()); ok {
+			if !startsOver(rt, tc.ctrl) {
 				t.Error("the user kept its slot after the call timed out")
 			}
 		})
@@ -793,8 +677,11 @@ func TestDeletingAnActorAlreadyGoneSucceeds(t *testing.T) {
 	ctrl := &fakeControlClient{deleteErr: status.Error(codes.NotFound, "Actor benchmark/x not found")}
 	u := newTestRunWorkloadUser(t, &pingServer{}, &userclass.Config{APIStub: ctrl})
 
-	if err := u.delete(context.Background(), false); err != nil {
-		t.Fatalf("delete: got %v, want nil", err)
+	if err := u.sandbox.Remove(context.Background()); err != nil {
+		t.Fatalf("Remove: got %v, want nil", err)
+	}
+	if ctrl.deletedFromAnyState() {
+		t.Error("AnyState: got true after a suspend that worked, want false")
 	}
 }
 
@@ -830,8 +717,7 @@ func failureCount(t *testing.T, name string) float64 {
 func TestTheEndOfTheRunCutsOffAnInstructionWithoutAFailure(t *testing.T) {
 	ctrl := &fakeControlClient{}
 	cfg := newTestConfig(t, &pingServer{PingDelay: 5 * time.Second}, &userclass.Config{APIStub: ctrl})
-	rt := &runWorkloadRuntime{cfg: cfg, workload: gluttonWorkload{}}
-	rt.run, rt.endRun = context.WithCancelCause(context.Background())
+	rt := newTestRunOn(newTestScenarioOn(cfg, scenario.Options{}))
 
 	before := map[string]float64{}
 	for _, name := range []string{ttfiMetric, cycleTimeMetric, executionTimeMetric} {

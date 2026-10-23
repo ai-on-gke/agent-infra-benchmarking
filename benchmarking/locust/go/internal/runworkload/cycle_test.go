@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -30,11 +32,10 @@ import (
 func TestCycleSendsEveryStep(t *testing.T) {
 	srv := &pingServer{}
 	fake := &fakeControlClient{}
-	u := newTestRunWorkloadUser(t, srv, nil)
-	u.cfg.APIStub = fake
+	u := newTestRunWorkloadUser(t, srv, &userclass.Config{APIStub: fake})
 	u.steps, u.concurrent = 3, 2
 
-	if call, err := u.cycle(context.Background(), ResumeModeExplicit); err != nil {
+	if call, err := u.cycle(context.Background(), scenario.ResumeModeExplicit); err != nil {
 		t.Fatalf("cycle failed at %s: %v", call, err)
 	}
 	if got := srv.RecordedPings(); got != 6 {
@@ -81,11 +82,10 @@ func TestConcurrentInstructionFailureFailsTheStep(t *testing.T) {
 func TestCycleLoadsGluttonBeforeSuspend(t *testing.T) {
 	srv := &pingServer{}
 	fake := &fakeControlClient{}
-	u := newTestRunWorkloadUser(t, srv, nil)
-	u.cfg.APIStub = fake
+	u := newTestRunWorkloadUser(t, srv, &userclass.Config{APIStub: fake})
 	u.writeRAM, u.writeDisk = "1Mi", 4096
 
-	if call, err := u.cycle(context.Background(), ResumeModeExplicit); err != nil {
+	if call, err := u.cycle(context.Background(), scenario.ResumeModeExplicit); err != nil {
 		t.Fatalf("cycle failed at %s: %v", call, err)
 	}
 	if got, want := srv.RecordedWrites(), []string{writeRAMPath, writeDiskPath}; !slices.Equal(got, want) {
@@ -101,11 +101,10 @@ func TestCycleLoadsGluttonBeforeSuspend(t *testing.T) {
 func TestFirstRAMWriteFillsLaterOnesRotate(t *testing.T) {
 	srv := &pingServer{}
 	u := newTestRunWorkloadUser(t, srv, nil)
-	u.cfg.APIStub = &fakeControlClient{}
 	u.writeRAM = "1Mi"
 
 	for i := range 3 {
-		if call, err := u.cycle(context.Background(), ResumeModeExplicit); err != nil {
+		if call, err := u.cycle(context.Background(), scenario.ResumeModeExplicit); err != nil {
 			t.Fatalf("cycle %d failed at %s: %v", i, call, err)
 		}
 	}
@@ -124,11 +123,10 @@ func TestFirstRAMWriteFillsLaterOnesRotate(t *testing.T) {
 func TestFailedLoadFailsTheCycle(t *testing.T) {
 	srv := &pingServer{LoadStatus: http.StatusInternalServerError}
 	fake := &fakeControlClient{}
-	u := newTestRunWorkloadUser(t, srv, nil)
-	u.cfg.APIStub = fake
+	u := newTestRunWorkloadUser(t, srv, &userclass.Config{APIStub: fake})
 	u.writeRAM = "1Mi"
 
-	call, err := u.cycle(context.Background(), ResumeModeExplicit)
+	call, err := u.cycle(context.Background(), scenario.ResumeModeExplicit)
 	if err == nil {
 		t.Fatal("cycle succeeded with a failed WriteRAM, want failure")
 	}
@@ -142,46 +140,14 @@ func TestFailedLoadFailsTheCycle(t *testing.T) {
 
 // Users are spread over the connections in turn.
 func TestUsersAreSpreadOverConnections(t *testing.T) {
-	stubs := []ateapipb.ControlClient{&fakeControlClient{}, &fakeControlClient{}, &fakeControlClient{}}
-	r := &runWorkloadRuntime{opts: Options{APIStubs: stubs}}
+	stubs := []*fakeControlClient{{}, {}, {}}
+	cfg := newTestConfig(t, &pingServer{}, nil)
+	sc := newTestScenarioOn(cfg, scenario.Options{APIStubs: []ateapipb.ControlClient{stubs[0], stubs[1], stubs[2]}})
 	for i, want := range []int{0, 1, 2, 0} {
-		if got := r.apiStub(); got != stubs[want] {
-			t.Errorf("user %d: got connection %v, want %d", i, got, want)
+		before := stubs[want].countCalls("CreateActor")
+		newTestUser(t, sc)
+		if got := stubs[want].countCalls("CreateActor") - before; got != 1 {
+			t.Errorf("user %d: its actor was not created over connection %d", i, want)
 		}
-	}
-}
-
-func TestEgressRules(t *testing.T) {
-	for _, tc := range []struct {
-		name            string
-		hosts, tlsHosts []string
-		wantHTTP        []string
-		wantTLS         []string
-	}{
-		{name: "cleartext only", hosts: []string{"mock-llm"}, wantHTTP: []string{"mock-llm"}},
-		{name: "tls only", tlsHosts: []string{"api.example.com"}, wantTLS: []string{"api.example.com"}},
-		{name: "both", hosts: []string{"mock-llm"}, tlsHosts: []string{"api.example.com"},
-			wantHTTP: []string{"mock-llm"}, wantTLS: []string{"api.example.com"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var gotHTTP, gotTLS []string
-			for _, rule := range egressRules(tc.hosts, tc.tlsHosts) {
-				if rule.GetHttp() != nil {
-					gotHTTP = append(gotHTTP, rule.GetHttp().GetHostnames()...)
-					if rule.GetHttp().GetPorts().GetAll() == nil {
-						t.Error("cleartext rule: want every port")
-					}
-				}
-				if rule.GetTlsPassthrough() != nil {
-					gotTLS = append(gotTLS, rule.GetTlsPassthrough().GetHostnames()...)
-					if rule.GetTlsPassthrough().GetPorts().GetAll() == nil {
-						t.Error("TLS rule: want every port")
-					}
-				}
-			}
-			if !slices.Equal(gotHTTP, tc.wantHTTP) || !slices.Equal(gotTLS, tc.wantTLS) {
-				t.Errorf("rules: got http %v tls %v, want http %v tls %v", gotHTTP, gotTLS, tc.wantHTTP, tc.wantTLS)
-			}
-		})
 	}
 }

@@ -28,6 +28,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// glutton's HTTP routes, as the glutton workload addresses them.
+const (
+	pingPath      = "/ping"
+	writeRAMPath  = "/writeram"
+	writeDiskPath = "/writedisk"
+)
+
 // pingServer is a stand-in for a glutton actor's /ping route — the one
 // instruction the benchmark times. It is deliberately not the shared glutton
 // fake: that double exists for the disk and RAM routes, and this benchmark

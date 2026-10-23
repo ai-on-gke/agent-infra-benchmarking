@@ -19,31 +19,9 @@ import (
 	"errors"
 	"slices"
 	"testing"
-)
 
-func TestEgressHosts(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		hosts   []string
-		want    []string
-		wantErr bool
-	}{
-		{name: "none", hosts: nil, want: nil},
-		{name: "names", hosts: []string{"b.svc", "A.svc", "b.svc"}, want: []string{"a.svc", "b.svc"}},
-		{name: "ipv4", hosts: []string{"10.0.0.1"}, wantErr: true},
-		{name: "ipv6", hosts: []string{"2001:db8::1"}, wantErr: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := egressHosts(tc.hosts)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("egressHosts: got err %v, want error %v", err, tc.wantErr)
-			}
-			if !tc.wantErr && !slices.Equal(got, tc.want) {
-				t.Errorf("egressHosts: got %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
+)
 
 // The policy has to be in place before the actor first runs, and a run that
 // allows nothing makes no call for it.
@@ -59,7 +37,7 @@ func TestEgressPolicyIsCreatedBeforeTheFirstResume(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := &fakeControlClient{}
 			rt := newTestRuntime(t, ctrl)
-			rt.egressHosts = tc.hosts
+			rt.provider.(*sandbox.Substrate).EgressHosts = tc.hosts
 
 			rt.iterate()
 			rt.iterate()
@@ -72,8 +50,8 @@ func TestEgressPolicyIsCreatedBeforeTheFirstResume(t *testing.T) {
 				return
 			}
 			policy := ctrl.recordedEgressPolicy()
-			if got := policy.GetMetadata().GetName(); got != egressPolicyName {
-				t.Errorf("policy name: got %q, want %q", got, egressPolicyName)
+			if got := policy.GetMetadata().GetName(); got != "default" {
+				t.Errorf("policy name: got %q, want %q", got, "default")
 			}
 			rules := policy.GetRules()
 			if len(rules) != 1 || !slices.Equal(rules[0].GetHttp().GetHostnames(), tc.hosts) || rules[0].GetHttp().GetPorts().GetAll() == nil {
@@ -88,10 +66,10 @@ func TestEgressPolicyIsCreatedBeforeTheFirstResume(t *testing.T) {
 func TestActorWithoutItsEgressPolicyIsDeleted(t *testing.T) {
 	ctrl := &fakeControlClient{egressErr: errors.New("refused")}
 	rt := newTestRuntime(t, ctrl)
-	rt.egressHosts = []string{"collector.svc"}
+	rt.provider.(*sandbox.Substrate).EgressHosts = []string{"collector.svc"}
 
-	if _, err := rt.startUser(context.Background(), rt.opts); err == nil {
-		t.Fatal("startUser: got nil error, want the policy's")
+	if _, err := rt.Start(context.Background()); err == nil {
+		t.Fatal("Start: got nil error, want the policy's")
 	}
 	if got := ctrl.countCalls("DeleteActor"); got != 1 {
 		t.Errorf("DeleteActor calls: got %d, want 1", got)

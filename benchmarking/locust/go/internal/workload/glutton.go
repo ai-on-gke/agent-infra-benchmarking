@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package runworkload
+package workload
 
 import (
 	"context"
 	"fmt"
 	"net/http"
 
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
@@ -29,7 +30,7 @@ import (
 // benchmark's load generator, so neither should have to depend on the other to
 // reach them.
 const (
-	gluttonWorkloadName = "glutton"
+	GluttonName = "glutton"
 
 	// The ActorTemplate scenario_runner/src/scenario_runner/workloads/ creates
 	// for glutton.
@@ -47,7 +48,7 @@ const (
 )
 
 func init() {
-	registerWorkload(gluttonWorkload{})
+	register(gluttonWorkload{})
 }
 
 // gluttonWorkload drives substrate's glutton actor. Its /ping route echoes the
@@ -56,14 +57,14 @@ func init() {
 // accepted the connection, which is the line a measurement window closes on.
 type gluttonWorkload struct{}
 
-func (gluttonWorkload) Name() string { return gluttonWorkloadName }
+func (gluttonWorkload) Name() string { return GluttonName }
 
 func (gluttonWorkload) DefaultTemplate() string { return gluttonTemplate }
 
 // SendInstruction POSTs one Ping and verifies the echo. A wrong echo is a
 // fault rather than a symptom of activation, so it is reported as
 // unretryable even though the actor answered.
-func (gluttonWorkload) SendInstruction(ctx context.Context, actor actorRef) (bool, error) {
+func (gluttonWorkload) SendInstruction(ctx context.Context, actor sandbox.Actor) (bool, error) {
 	message := uuid.NewString()
 	body, err := proto.Marshal(&gluttonpb.PingRequest{Message: message})
 	if err != nil {
@@ -91,7 +92,7 @@ func (gluttonWorkload) SendInstruction(ctx context.Context, actor actorRef) (boo
 // WriteRAM rewrites size of the actor's memory. The first call on an actor
 // allocates and fills the array, which rotating writes need to exist; later
 // ones move on through it rather than dirtying the same pages again.
-func (gluttonWorkload) WriteRAM(ctx context.Context, actor actorRef, size string, first bool) error {
+func (gluttonWorkload) WriteRAM(ctx context.Context, actor sandbox.Actor, size string, first bool) error {
 	mode := gluttonpb.WriteMode_WRITE_MODE_OVERWRITE_ROTATE
 	if first {
 		mode = gluttonpb.WriteMode_WRITE_MODE_TRUNCATE
@@ -114,7 +115,7 @@ func (gluttonWorkload) WriteRAM(ctx context.Context, actor actorRef, size string
 }
 
 // WriteDisk writes size new random bytes over the actor's file.
-func (gluttonWorkload) WriteDisk(ctx context.Context, actor actorRef, size int) error {
+func (gluttonWorkload) WriteDisk(ctx context.Context, actor sandbox.Actor, size int) error {
 	body, err := proto.Marshal(&gluttonpb.WriteDiskRequest{
 		Key:       loadKey,
 		Size:      int32(size),

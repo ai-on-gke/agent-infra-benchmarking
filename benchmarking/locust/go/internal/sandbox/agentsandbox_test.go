@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package runworkload
+package sandbox
 
 import (
 	"context"
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"go.opentelemetry.io/otel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -86,26 +87,25 @@ func TestClaimWarmSandboxLifecycle(t *testing.T) {
 		sandboxClaimsGVR: "SandboxClaimList",
 	})
 
-	wl, err := resolveWorkload(DefaultWorkload)
-	if err != nil {
-		t.Fatalf("resolveWorkload: %v", err)
-	}
-
-	u := &runWorkloadUser{
-		cfg: &userclass.Config{
-			Atespace: "benchmark-workloads",
-			Tracer:   otel.Tracer("test"),
+	p := &AgentSandbox{
+		Config: &userclass.Config{Atespace: "benchmark-workloads"},
+		Client: fakeDyn,
+		Rec: measure.Recorder{
+			Tracer:       otel.Tracer("test"),
+			UserClass:    "RunWorkloadUser",
+			Timeout:      5 * time.Second,
+			WindowMethod: "runworkload",
 		},
-		workload:     wl,
-		templateName: "glutton",
-		userClass:    runWorkloadUserClass,
-		provider:     "agent-sandbox",
-		warmPoolName: "glutton-warm-pool",
-		dynClient:    fakeDyn,
-		timeout:      5 * time.Second,
+		Workload: "glutton",
+		WarmPool: "glutton-warm-pool",
 	}
 
 	ctx := context.Background()
+	sb, err := p.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	s := sb.(*agentSandbox)
 
 	// In background, simulate controller updating claim to ready when created
 	go func() {
@@ -131,22 +131,42 @@ func TestClaimWarmSandboxLifecycle(t *testing.T) {
 		}
 	}()
 
-	err = u.claimWarmSandbox(ctx)
+	err = s.Wake(ctx)
 	if err != nil {
-		t.Fatalf("claimWarmSandbox failed: %v", err)
+		t.Fatalf("Wake failed: %v", err)
 	}
-	if u.actorName != "warm-sb-test" {
-		t.Fatalf("expected actorName=warm-sb-test, got %q", u.actorName)
+	if got := s.Actor().Name; got != "warm-sb-test" {
+		t.Fatalf("expected actor name warm-sb-test, got %q", got)
 	}
-	if !u.isActive {
-		t.Fatalf("expected u.isActive=true")
+	if !s.isActive {
+		t.Fatalf("expected s.isActive=true")
 	}
 
-	err = u.releaseClaim(ctx)
+	err = s.Sleep(ctx)
 	if err != nil {
-		t.Fatalf("releaseClaim failed: %v", err)
+		t.Fatalf("Sleep failed: %v", err)
 	}
-	if u.isActive {
-		t.Fatalf("expected u.isActive=false after release")
+	if s.isActive {
+		t.Fatalf("expected s.isActive=false after release")
+	}
+}
+
+// The router finds a claimed sandbox by these headers alone.
+func TestAgentSandboxActorHeaders(t *testing.T) {
+	s := &agentSandbox{
+		p:     &AgentSandbox{Config: &userclass.Config{Atespace: "benchmark-workloads"}},
+		name:  "warm-sb-test",
+		podIP: "10.0.0.1",
+	}
+	h := s.Actor().Header
+	for key, want := range map[string]string{
+		"X-Sandbox-ID":        "warm-sb-test",
+		"X-Sandbox-Port":      "80",
+		"X-Sandbox-Namespace": "benchmark-workloads",
+		"X-Sandbox-Pod-IP":    "10.0.0.1",
+	} {
+		if got := h.Get(key); got != want {
+			t.Errorf("%s: got %q, want %q", key, got, want)
+		}
 	}
 }

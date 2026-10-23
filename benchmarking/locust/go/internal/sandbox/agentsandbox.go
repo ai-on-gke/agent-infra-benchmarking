@@ -12,15 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package runworkload
+package sandbox
 
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,7 +41,8 @@ var sandboxClaimsGVR = schema.GroupVersionResource{
 	Resource: "sandboxclaims",
 }
 
-func initKubeDynamicClient() (dynamic.Interface, error) {
+// NewKubeDynamicClient is the client AgentSandbox makes its claims with.
+func NewKubeDynamicClient() (dynamic.Interface, error) {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
 		kubeconfig := os.Getenv("KUBECONFIG")
@@ -57,19 +61,64 @@ func initKubeDynamicClient() (dynamic.Interface, error) {
 	return dynamic.NewForConfig(cfg)
 }
 
-func (u *runWorkloadUser) claimWarmSandbox(ctx context.Context) error {
-	ctx, span := u.cfg.Tracer.Start(ctx, resumeMetric)
+// AgentSandbox claims each sandbox from a SandboxWarmPool on agent-sandbox:
+// Wake claims a warm one and Sleep releases the claim.
+type AgentSandbox struct {
+	// Config gives the namespace the claims are made in, and the router.
+	Config *userclass.Config
+	Client dynamic.Interface
+	Rec    measure.Recorder
+
+	// Workload labels the actor gauges, and WarmPool names the
+	// SandboxWarmPool claimed from.
+	Workload string
+	WarmPool string
+}
+
+// Create claims nothing: the first Wake does.
+func (p *AgentSandbox) Create(context.Context) (Sandbox, error) {
+	return &agentSandbox{p: p, name: "sb-" + uuid.NewString()}, nil
+}
+
+type agentSandbox struct {
+	p         *AgentSandbox
+	name      string
+	claimName string
+	podIP     string
+	isActive  bool
+}
+
+func (s *agentSandbox) Actor() Actor {
+	h := http.Header{}
+	h.Set("X-Sandbox-ID", s.name)
+	h.Set("X-Sandbox-Port", "80")
+	if s.p.Config.Atespace != "" {
+		h.Set("X-Sandbox-Namespace", s.p.Config.Atespace)
+	}
+	if s.podIP != "" {
+		h.Set("X-Sandbox-Pod-IP", s.podIP)
+	}
+	return Actor{
+		HTTPClient: s.p.Config.HTTPClient,
+		RouterURL:  s.p.Config.RouterURL,
+		Name:       s.name,
+		Header:     h,
+	}
+}
+
+func (s *agentSandbox) Wake(ctx context.Context) error {
+	ctx, span := s.p.Rec.Tracer.Start(ctx, ResumeMetric)
 	defer span.End()
 	span.SetAttributes(
-		attribute.String("warm_pool", u.warmPoolName),
-		attribute.String("workload", u.workload.Name()),
+		attribute.String("warm_pool", s.p.WarmPool),
+		attribute.String("workload", s.p.Workload),
 	)
 
 	start := time.Now()
 	claimName := "claim-" + uuid.NewString()
-	u.claimName = claimName
+	s.claimName = claimName
 
-	callCtx, cancel := u.callContext(ctx)
+	callCtx, cancel := s.p.Rec.Context(ctx)
 	defer cancel()
 
 	claim := &unstructured.Unstructured{
@@ -78,45 +127,45 @@ func (u *runWorkloadUser) claimWarmSandbox(ctx context.Context) error {
 			"kind":       "SandboxClaim",
 			"metadata": map[string]interface{}{
 				"name":      claimName,
-				"namespace": u.cfg.Atespace,
+				"namespace": s.p.Config.Atespace,
 				"labels": map[string]interface{}{
-					"benchmark-user": u.userClass,
+					"benchmark-user": s.p.Rec.UserClass,
 				},
 			},
 			"spec": map[string]interface{}{
 				"warmPoolRef": map[string]interface{}{
-					"name": u.warmPoolName,
+					"name": s.p.WarmPool,
 				},
 			},
 		},
 	}
 
-	_, err := u.dynClient.Resource(sandboxClaimsGVR).Namespace(u.cfg.Atespace).Create(callCtx, claim, metav1.CreateOptions{})
+	_, err := s.p.Client.Resource(sandboxClaimsGVR).Namespace(s.p.Config.Atespace).Create(callCtx, claim, metav1.CreateOptions{})
 	if err != nil {
-		u.recordWindow(ctx, span, resumeMetric, time.Since(start), err)
+		s.p.Rec.Window(ctx, span, ResumeMetric, time.Since(start), err)
 		return fmt.Errorf("failed to create sandbox claim %s: %w", claimName, err)
 	}
 
 	// Wait for claim to bind and become ready
-	sbName, podIP, err := u.waitForClaimReady(callCtx, claimName)
+	sbName, podIP, err := s.waitForClaimReady(callCtx, claimName)
 	if err != nil {
-		u.recordWindow(ctx, span, resumeMetric, time.Since(start), err)
+		s.p.Rec.Window(ctx, span, ResumeMetric, time.Since(start), err)
 		return err
 	}
 
-	u.actorName = sbName
-	u.podIP = podIP
-	u.isActive = true
-	activeActors.WithLabelValues(u.workload.Name()).Inc()
-	u.recordWindow(ctx, span, resumeMetric, time.Since(start), nil)
+	s.name = sbName
+	s.podIP = podIP
+	s.isActive = true
+	activeActors.WithLabelValues(s.p.Workload).Inc()
+	s.p.Rec.Window(ctx, span, ResumeMetric, time.Since(start), nil)
 	return nil
 }
 
-func (u *runWorkloadUser) waitForClaimReady(ctx context.Context, claimName string) (string, string, error) {
+func (s *agentSandbox) waitForClaimReady(ctx context.Context, claimName string) (string, string, error) {
 	// First do a fast poll: pre-warmed pools often resolve in single-digit ms
 	pollInterval := 25 * time.Millisecond
 	for i := 0; i < 4; i++ {
-		obj, err := u.dynClient.Resource(sandboxClaimsGVR).Namespace(u.cfg.Atespace).Get(ctx, claimName, metav1.GetOptions{})
+		obj, err := s.p.Client.Resource(sandboxClaimsGVR).Namespace(s.p.Config.Atespace).Get(ctx, claimName, metav1.GetOptions{})
 		if err == nil {
 			if sbName, podIP, ready := parseClaimStatus(obj); ready {
 				return sbName, podIP, nil
@@ -130,7 +179,7 @@ func (u *runWorkloadUser) waitForClaimReady(ctx context.Context, claimName strin
 	}
 
 	// Fallback to Watch
-	watcher, err := u.dynClient.Resource(sandboxClaimsGVR).Namespace(u.cfg.Atespace).Watch(ctx, metav1.ListOptions{
+	watcher, err := s.p.Client.Resource(sandboxClaimsGVR).Namespace(s.p.Config.Atespace).Watch(ctx, metav1.ListOptions{
 		FieldSelector: "metadata.name=" + claimName,
 	})
 	if err != nil {
@@ -189,32 +238,33 @@ func parseClaimStatus(obj *unstructured.Unstructured) (string, string, bool) {
 	return "", "", false
 }
 
-func (u *runWorkloadUser) releaseClaim(ctx context.Context) error {
-	ctx, span := u.cfg.Tracer.Start(ctx, suspendMetric)
+func (s *agentSandbox) Sleep(ctx context.Context) error {
+	ctx, span := s.p.Rec.Tracer.Start(ctx, SuspendMetric)
 	defer span.End()
 	span.SetAttributes(
-		attribute.String("claim", u.claimName),
-		attribute.String("workload", u.workload.Name()),
+		attribute.String("claim", s.claimName),
+		attribute.String("workload", s.p.Workload),
 	)
 
 	start := time.Now()
-	err := u.deleteClaim(ctx)
-	if u.isActive {
-		activeActors.WithLabelValues(u.workload.Name()).Dec()
-		u.isActive = false
+	err := s.Remove(ctx)
+	if s.isActive {
+		activeActors.WithLabelValues(s.p.Workload).Dec()
+		s.isActive = false
 	}
-	u.recordWindow(ctx, span, suspendMetric, time.Since(start), err)
+	s.p.Rec.Window(ctx, span, SuspendMetric, time.Since(start), err)
 	return err
 }
 
-func (u *runWorkloadUser) deleteClaim(ctx context.Context) error {
-	if u.claimName == "" {
+// Remove deletes the claim, if the sandbox holds one.
+func (s *agentSandbox) Remove(ctx context.Context) error {
+	if s.claimName == "" {
 		return nil
 	}
-	callCtx, cancel := u.callContext(ctx)
+	callCtx, cancel := s.p.Rec.Context(ctx)
 	defer cancel()
 
-	err := u.dynClient.Resource(sandboxClaimsGVR).Namespace(u.cfg.Atespace).Delete(callCtx, u.claimName, metav1.DeleteOptions{})
-	u.claimName = ""
+	err := s.p.Client.Resource(sandboxClaimsGVR).Namespace(s.p.Config.Atespace).Delete(callCtx, s.claimName, metav1.DeleteOptions{})
+	s.claimName = ""
 	return err
 }

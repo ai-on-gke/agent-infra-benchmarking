@@ -21,6 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/harness"
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/workload"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -69,8 +72,10 @@ type fakeControlClient struct {
 	// deleteAnyState is the AnyState flag from the most recent DeleteActor.
 	deleteAnyState bool
 	calls          []string
-	// template is the ActorTemplate name from the last CreateActor.
+	// template and actor are the ActorTemplate and actor names from the last
+	// CreateActor.
 	template string
+	actor    string
 	// egressPolicy is the policy from the last CreateActorEgressPolicy.
 	egressPolicy *ateapipb.EgressPolicy
 }
@@ -100,6 +105,7 @@ func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.Create
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "CreateActor")
 	f.template = in.GetActor().GetActorTemplate().GetName()
+	f.actor = in.GetActor().GetMetadata().GetName()
 	return &ateapipb.Actor{}, nil
 }
 
@@ -128,6 +134,13 @@ func (f *fakeControlClient) recordedTemplate() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.template
+}
+
+// recordedActor returns the name of the actor the most recent CreateActor made.
+func (f *fakeControlClient) recordedActor() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.actor
 }
 
 func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
@@ -237,14 +250,59 @@ func newTestConfig(t *testing.T, srv *pingServer, cfg *userclass.Config) *usercl
 	return cfg
 }
 
+// newTestScenarioOn builds a glutton scenario on cfg for opts, its actors
+// created on substrate.
+func newTestScenarioOn(cfg *userclass.Config, opts scenario.Options) *runWorkloadScenario {
+	wl, err := workload.Resolve(workload.GluttonName)
+	if err != nil {
+		panic(err)
+	}
+	return newTestScenarioRunning(cfg, opts, wl)
+}
+
+// newTestScenarioRunning builds a scenario on cfg for opts that runs wl.
+func newTestScenarioRunning(cfg *userclass.Config, opts scenario.Options, wl workload.Workload) *runWorkloadScenario {
+	opts.Config = cfg
+	c := Config{Common: scenario.Common{Options: opts, Workload: wl}}
+	provider, err := c.NewProvider(recorder(c), false)
+	if err != nil {
+		panic(err)
+	}
+	return &runWorkloadScenario{c: c, provider: provider}
+}
+
+// testRun is a scenario running on the harness, as New starts it.
+type testRun struct {
+	*runWorkloadScenario
+	iterate  func()
+	shutdown func(context.Context)
+}
+
+// newTestRunOn runs s on the harness, with no user started yet.
+func newTestRunOn(s *runWorkloadScenario) *testRun {
+	task, shutdown := harness.New(s, harness.Options{Name: Name, UserClass: UserClass})
+	return &testRun{runWorkloadScenario: s, iterate: task, shutdown: shutdown}
+}
+
+// startsOver reports whether the next iteration on this goroutine creates a
+// new actor, which it does only once the VU's slot has been freed.
+func startsOver(rt *testRun, ctrl *fakeControlClient) bool {
+	before := ctrl.countCalls("CreateActor")
+	rt.iterate()
+	return ctrl.countCalls("CreateActor") == before+1
+}
+
+// newTestUser starts a user on s, its actor created and still suspended.
+func newTestUser(t *testing.T, s *runWorkloadScenario) *runWorkloadUser {
+	t.Helper()
+	sess, err := s.Start(context.Background())
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	return sess.(*runWorkloadUser)
+}
+
 func newTestRunWorkloadUser(t *testing.T, srv *pingServer, cfg *userclass.Config) *runWorkloadUser {
 	t.Helper()
-	c := newTestConfig(t, srv, cfg)
-	return &runWorkloadUser{
-		cfg:          c,
-		workload:     gluttonWorkload{},
-		actorName:    "runworkloadactor",
-		templateName: gluttonWorkload{}.DefaultTemplate(),
-		userClass:    runWorkloadUserClass,
-	}
+	return newTestUser(t, newTestScenarioOn(newTestConfig(t, srv, cfg), scenario.Options{}))
 }

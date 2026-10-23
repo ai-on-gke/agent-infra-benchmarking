@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package runworkload
+package harness
 
 import (
 	"context"
@@ -27,9 +27,9 @@ import (
 // that cancellation only at the top of its loop — before the task function
 // rather than during it. An iteration already inside the task therefore runs
 // to completion after boomer.Run has returned, with nothing tracking it. The
-// teardown that follows would otherwise walk the user map while a goroutine is
-// still adding to it, and an actor created after that walk is never suspended
-// or deleted: it holds a worker until someone removes it by hand.
+// teardown that follows would otherwise walk the session map while a goroutine
+// is still adding to it, and a session started after that walk is never
+// closed: an actor it holds keeps a worker until someone removes it by hand.
 //
 // A bare WaitGroup cannot express this. The VU goroutines are still looping,
 // so one can call Add after Wait has begun and after the counter has
