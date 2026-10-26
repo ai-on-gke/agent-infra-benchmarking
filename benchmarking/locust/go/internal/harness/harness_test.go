@@ -39,7 +39,9 @@ type fakeScenario struct {
 	iterateErr error
 	// iterateUntilDone holds each iteration until its context ends.
 	iterateUntilDone bool
-	closeErr         error
+	// recoverErr fails every Recover, so a failed iteration discards.
+	recoverErr error
+	closeErr   error
 	// closeDelay holds each Close open, so a teardown test can see how many
 	// run at once.
 	closeDelay time.Duration
@@ -95,6 +97,8 @@ func (s *fakeSession) Iterate(ctx context.Context) (string, error) {
 	}
 	return "", nil
 }
+
+func (s *fakeSession) Recover(context.Context) error { return s.f.recoverErr }
 
 func (s *fakeSession) Close(context.Context) error {
 	f := s.f
@@ -189,11 +193,37 @@ func TestTaskIsGatedByTheTeardownDrain(t *testing.T) {
 	}
 }
 
-// A failed iteration leaves the session in a state nothing reconciles, so it
-// is closed and the goroutine's slot freed. The next iteration starts a new
-// session instead of working against the broken one for the rest of the run.
-func TestAFailedIterationDiscardsTheSession(t *testing.T) {
+// A session that recovers from a failed iteration is kept: the next iteration
+// runs on it rather than on a fresh one, as a client retries its own sandbox.
+func TestAFailedIterationKeepsASessionThatRecovers(t *testing.T) {
 	f := &fakeScenario{iterateErr: errIterate}
+	task, _ := newTestTask(f)
+	buf := captureLogs(t)
+
+	task() // starts
+	task() // fails, recovers
+
+	if _, _, closes := f.counts(); closes != 0 {
+		t.Errorf("closes: got %d, want 0", closes)
+	}
+	got := buf.String()
+	for _, want := range []string{"kept the session after a failed call", `"actor":"actor-1"`, `"call":"FakeCall"`, errIterate.Error()} {
+		if !strings.Contains(got, want) {
+			t.Errorf("log missing %q; got:\n%s", want, got)
+		}
+	}
+
+	task()
+	if starts, iterations, _ := f.counts(); starts != 1 || iterations != 2 {
+		t.Errorf("after the recovery: got %d starts and %d iterations, want 1 and 2", starts, iterations)
+	}
+}
+
+// A session that does not recover is closed and the goroutine's slot freed.
+// The next iteration starts a new session instead of working against the
+// broken one for the rest of the run.
+func TestAFailedIterationDiscardsASessionThatDoesNotRecover(t *testing.T) {
+	f := &fakeScenario{iterateErr: errIterate, recoverErr: errClose}
 	task, _ := newTestTask(f)
 	buf := captureLogs(t)
 
@@ -204,7 +234,7 @@ func TestAFailedIterationDiscardsTheSession(t *testing.T) {
 		t.Errorf("closes: got %d, want 1", closes)
 	}
 	got := buf.String()
-	for _, want := range []string{"discarding the session after a failed call", `"actor":"actor-1"`, `"call":"FakeCall"`, errIterate.Error()} {
+	for _, want := range []string{"discarding the session after a failed call", `"actor":"actor-1"`, `"call":"FakeCall"`, errIterate.Error(), `"recover_err":"` + errClose.Error()} {
 		if !strings.Contains(got, want) {
 			t.Errorf("discard log missing %q; got:\n%s", want, got)
 		}
@@ -221,7 +251,7 @@ func TestAFailedIterationDiscardsTheSession(t *testing.T) {
 // VU keeps using an actor it has already given up on. The close failing is
 // named instead, because that actor holds a worker until someone removes it.
 func TestADiscardThatCouldNotCloseStillFreesTheSlot(t *testing.T) {
-	f := &fakeScenario{iterateErr: errIterate, closeErr: errClose}
+	f := &fakeScenario{iterateErr: errIterate, recoverErr: errClose, closeErr: errClose}
 	task, _ := newTestTask(f)
 	buf := captureLogs(t)
 

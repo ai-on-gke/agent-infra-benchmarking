@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -247,7 +248,7 @@ func TestCycleTimeSpansTheResumeThroughTheSuspend(t *testing.T) {
 }
 
 // A refused suspend still reports the cycle, as a failure over the time it
-// spent, and the actor is discarded like after any other failed call.
+// spent.
 func TestAFailedSuspendReportsAFailedCycle(t *testing.T) {
 	ctrl := &fakeControlClient{suspendErr: errActorBusy}
 	rt, sr := newMeasuringUser(t, &pingServer{}, ctrl, scenario.Options{})
@@ -256,9 +257,6 @@ func TestAFailedSuspendReportsAFailedCycle(t *testing.T) {
 
 	if got := mustAttr(t, spanByName(t, sr, cycleTimeMetric), "total_ms").AsFloat64(); got <= 0 {
 		t.Errorf("total_ms: got %v, want > 0", got)
-	}
-	if !startsOver(rt, ctrl) {
-		t.Error("the user kept its slot after the suspend was refused")
 	}
 }
 
@@ -276,26 +274,19 @@ func TestTheInstructionIsSentOnce(t *testing.T) {
 }
 
 // A refused instruction ends the cycle the same way any other failed call
-// does: nothing is reported and the actor is discarded.
-func TestARefusedInstructionDiscardsTheActor(t *testing.T) {
+// does: the window is reported as a failure, and the actor, which settles,
+// is kept for the next cycle.
+func TestARefusedInstructionEndsTheCycle(t *testing.T) {
 	ctrl := &fakeControlClient{}
 	rt, sr := newMeasuringUser(t, &pingServer{PingFailures: 1}, ctrl, scenario.Options{})
-	buf := captureLogs(t)
 
 	rt.iterate()
 
-	if got := ctrl.countCalls("DeleteActor"); got != 1 {
-		t.Errorf("DeleteActor: got %d, want 1", got)
-	}
-	if !strings.Contains(buf.String(), "discarding the session") {
-		t.Errorf("no discard was logged; got:\n%s", buf.String())
-	}
-	// The window is still reported, as a failure over the wait it spent.
 	if got := mustAttr(t, spanByName(t, sr, ttfiMetric), "total_ms").AsFloat64(); got <= 0 {
 		t.Errorf("total_ms: got %v, want > 0", got)
 	}
-	if !startsOver(rt, ctrl) {
-		t.Error("the user kept its slot after the instruction was refused")
+	if startsOver(rt, ctrl) {
+		t.Error("the user replaced an actor that settled after the instruction was refused")
 	}
 }
 
@@ -315,43 +306,90 @@ func TestAFailedResumeReportsAFailedWindow(t *testing.T) {
 	}
 }
 
-// A failed call leaves the actor in a state nothing reconciles, so it is
-// deleted and the goroutine's slot freed. The next iteration builds a new
-// actor instead of working against the broken one for the rest of the run.
-func TestAFailedCallDiscardsTheActor(t *testing.T) {
+// A failed call can leave the actor mid transition, a suspend that timed out
+// still snapshotting on the server, so the actor is polled until it settles.
+// One that settles SUSPENDED, or RUNNING and is then suspended, is kept for the
+// next cycle; one that crashed, is gone or stays in transition is deleted and
+// the goroutine's slot freed, for the next iteration to build a new one. The
+// Recover row counts the two: a success kept the actor, a failure replaced it.
+func TestAFailedCallKeepsAnActorThatSettlesAndReplacesOneThatDoesNot(t *testing.T) {
 	tests := []struct {
-		name string
-		ctrl *fakeControlClient
+		name         string
+		ctrl         *fakeControlClient
+		wantReplaced bool
+		// wantSuspends is the unmetered SuspendActor calls the settle makes.
+		wantSuspends int
 	}{
 		{
-			name: "a refused suspend",
-			ctrl: &fakeControlClient{suspendErr: errActorBusy},
+			name: "a suspend that finishes on the server",
+			ctrl: &fakeControlClient{suspendErr: errActorBusy, states: []ateapipb.ActorState{
+				ateapipb.ActorState_ACTOR_STATE_SUSPENDING, ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			}},
 		},
 		{
-			name: "a refused resume",
-			ctrl: &fakeControlClient{resumeErr: errResumeRefused},
+			name:         "a refused instruction on a running actor",
+			ctrl:         &fakeControlClient{states: []ateapipb.ActorState{ateapipb.ActorState_ACTOR_STATE_RUNNING}},
+			wantSuspends: 1,
+		},
+		{
+			name:         "a crashed actor",
+			ctrl:         &fakeControlClient{resumeErr: errResumeRefused, states: []ateapipb.ActorState{ateapipb.ActorState_ACTOR_STATE_CRASHED}},
+			wantReplaced: true,
+		},
+		{
+			name:         "an actor that stays suspending",
+			ctrl:         &fakeControlClient{suspendErr: errActorBusy, states: []ateapipb.ActorState{ateapipb.ActorState_ACTOR_STATE_SUSPENDING}},
+			wantReplaced: true,
+		},
+		{
+			name:         "an actor already gone",
+			ctrl:         &fakeControlClient{resumeErr: errResumeRefused, getActorErr: status.Error(codes.NotFound, "Actor benchmark/x not found")},
+			wantReplaced: true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rt := newTestRuntime(t, tc.ctrl)
+			shortenSettle(t)
+			srv := &pingServer{}
+			if tc.wantSuspends > 0 {
+				srv.PingFailures = 1
+			}
+			cfg := newTestConfig(t, srv, &userclass.Config{APIStub: tc.ctrl})
+			rt := newTestRunOn(newTestScenarioOn(cfg, scenario.Options{}))
+			kept, replaced := requestCount(t, recoverMetric, "success"), requestCount(t, recoverMetric, "failure")
 			buf := captureLogs(t)
 
 			rt.iterate() // creates
-			rt.iterate() // fails, discards
+			rt.iterate() // fails, settles
 
-			if got := tc.ctrl.countCalls("DeleteActor"); got != 1 {
-				t.Errorf("DeleteActor: got %d, want 1", got)
+			wantDeletes, wantLog := 0, "kept the session after a failed call"
+			if tc.wantReplaced {
+				wantDeletes, wantLog = 1, "discarding the session after a failed call"
 			}
-			if !strings.Contains(buf.String(), "discarding the session") {
-				t.Errorf("no discard was logged; got:\n%s", buf.String())
+			if got := tc.ctrl.countCalls("DeleteActor"); got != wantDeletes {
+				t.Errorf("DeleteActor: got %d, want %d", got, wantDeletes)
+			}
+			if !strings.Contains(buf.String(), wantLog) {
+				t.Errorf("log missing %q; got:\n%s", wantLog, buf.String())
+			}
+			// The cycle's own suspend never ran after a refused instruction, so
+			// the only one is the settle's.
+			if tc.wantSuspends > 0 {
+				if got := tc.ctrl.countCalls("SuspendActor"); got != tc.wantSuspends {
+					t.Errorf("SuspendActor: got %d, want %d", got, tc.wantSuspends)
+				}
+			}
+			gotKept := requestCount(t, recoverMetric, "success") - kept
+			gotReplaced := requestCount(t, recoverMetric, "failure") - replaced
+			if tc.wantReplaced && (gotKept != 0 || gotReplaced != 1) || !tc.wantReplaced && (gotKept != 1 || gotReplaced != 0) {
+				t.Errorf("Recover rows: got %v kept and %v replaced, want the actor replaced %t", gotKept, gotReplaced, tc.wantReplaced)
 			}
 
-			// The slot being free is what lets the next iteration start over.
-			rt.iterate()
-			if got := tc.ctrl.countCalls("CreateActor"); got != 2 {
-				t.Errorf("CreateActor after the discard: got %d, want 2 — the discarded user still holds its goroutine slot", got)
+			// A replaced actor's slot being free is what lets the next
+			// iteration start over; a kept one cycles on.
+			if got := startsOver(rt, tc.ctrl); got != tc.wantReplaced {
+				t.Errorf("next iteration created an actor: got %t, want %t", got, tc.wantReplaced)
 			}
 		})
 	}
@@ -628,7 +666,7 @@ func shortenRetries(t *testing.T) {
 }
 
 // A call that outlives the timeout is cut off at it and reported as a failure,
-// and the actor is discarded like after any other failed call.
+// and the actor, which settles, is kept like after any other failed call.
 func TestACallPastTheDeadlineFails(t *testing.T) {
 	const deadline = 50 * time.Millisecond
 	for _, tc := range []struct {
@@ -652,8 +690,8 @@ func TestACallPastTheDeadlineFails(t *testing.T) {
 			if lo, hi := boomerutil.MsFloat(deadline), boomerutil.MsFloat(10*deadline); total < lo || total >= hi {
 				t.Errorf("total_ms: got %v, want about the deadline, in [%v, %v)", total, lo, hi)
 			}
-			if !startsOver(rt, tc.ctrl) {
-				t.Error("the user kept its slot after the call timed out")
+			if startsOver(rt, tc.ctrl) {
+				t.Error("the user replaced an actor that settled after the call timed out")
 			}
 		})
 	}
@@ -689,6 +727,13 @@ func TestDeletingAnActorAlreadyGoneSucceeds(t *testing.T) {
 // summed over every user class. The counter is a package global.
 func failureCount(t *testing.T, name string) float64 {
 	t.Helper()
+	return requestCount(t, name, "failure")
+}
+
+// requestCount is how many requests of the name with the status, success or
+// failure, have been recorded, summed over every user class.
+func requestCount(t *testing.T, name, status string) float64 {
+	t.Helper()
 	families, err := prometheus.DefaultGatherer.Gather()
 	if err != nil {
 		t.Fatalf("gather: %v", err)
@@ -703,7 +748,7 @@ func failureCount(t *testing.T, name string) float64 {
 			for _, l := range m.GetLabel() {
 				labels[l.GetName()] = l.GetValue()
 			}
-			if labels["name"] == name && labels["status"] == "failure" {
+			if labels["name"] == name && labels["status"] == status {
 				total += m.GetCounter().GetValue()
 			}
 		}

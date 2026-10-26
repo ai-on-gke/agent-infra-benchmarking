@@ -43,6 +43,11 @@ class Render(unittest.TestCase):
         self.assertEqual(order, sorted(order))
         self.assertIn("1234.5", text)
 
+    def test_actors_kept_and_replaced_after_a_failed_cycle(self):
+        recover = {"Name": "Recover", "Request Count": "5", "Failure Count": "2"}
+        self.assertIn("3 actor(s) settled and were kept, 2 replaced", readme.render(self.info(), [*ROWS, recover]))
+        self.assertNotIn("settled and were kept", readme.render(self.info(), ROWS))
+
     def test_openclaw_is_compared_on_resume_and_suspend(self):
         self.assertIn("Compare sandboxes on `Resume` and `Suspend`", readme.render(self.info("openclaw"), ROWS))
         self.assertNotIn("Compare sandboxes", readme.render(self.info(), ROWS))

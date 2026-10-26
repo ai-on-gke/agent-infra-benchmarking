@@ -59,9 +59,10 @@ const (
 	executionTimeMetric = "ExecutionTime"
 	writeRAMMetric      = "WriteRAM"
 	writeDiskMetric     = "WriteDisk"
+	recoverMetric       = "Recover"
 
-	// Transport label for TTFI and CycleTime. Their windows span gRPC calls and
-	// an HTTP instruction, so neither transport label describes them.
+	// Transport label for TTFI, CycleTime and Recover. Their windows span
+	// several calls, so no one transport label describes them.
 	runWorkloadMethod = "runworkload"
 )
 
@@ -176,6 +177,19 @@ type runWorkloadUser struct {
 // actor sits suspended through the think time between iterations.
 func (u *runWorkloadUser) Iterate(ctx context.Context) (string, error) {
 	return u.cycle(ctx, u.resumeMode)
+}
+
+// Recover waits for the actor to settle after a failed cycle and reports the
+// wait as the Recover row: a success keeps the actor, and a failure, which
+// says why, has it replaced. The row counts the two apart.
+func (u *runWorkloadUser) Recover(ctx context.Context) error {
+	ctx, span := u.rec.Tracer.Start(ctx, recoverMetric)
+	defer span.End()
+
+	start := time.Now()
+	err := u.sandbox.Settle(ctx)
+	u.rec.Window(ctx, span, recoverMetric, time.Since(start), err)
+	return err
 }
 
 // Close removes the actor.

@@ -15,8 +15,9 @@
 // Package harness is the VU runtime a user class runs on, whatever its VUs do
 // per iteration: each VU starts a session on its first iteration and runs one
 // iteration of it per call after that, with think time in between. A session
-// whose iteration failed is discarded and the next iteration starts a fresh
-// one; at teardown every session the run still holds is closed.
+// whose iteration failed is kept if it recovers, and otherwise discarded for
+// the next iteration to start a fresh one; at teardown every session the run
+// still holds is closed.
 package harness
 
 import (
@@ -59,9 +60,13 @@ type Scenario interface {
 
 // Session is one VU's state between iterations.
 type Session interface {
-	// Iterate runs one task iteration; a non-nil error discards the session
-	// and names the call that failed.
+	// Iterate runs one task iteration; a non-nil error names the call that
+	// failed, and the session is kept only if Recover then succeeds.
 	Iterate(ctx context.Context) (call string, err error)
+
+	// Recover brings the session back to where the next iteration can start
+	// after a failed one. An error discards it.
+	Recover(ctx context.Context) error
 
 	// Close removes what the session holds; called on discard and at teardown.
 	Close(ctx context.Context) error
@@ -168,12 +173,30 @@ func (r *runtime) iterate() {
 		if measure.CutOff(ctx, err) {
 			return
 		}
-		r.discard(ctx, gid, s, call, err)
+		r.keepOrDiscard(ctx, gid, s, call, err)
 		time.Sleep(r.dynamicWait())
 		return
 	}
 
 	time.Sleep(r.dynamicWait())
+}
+
+// keepOrDiscard keeps a session whose iteration failed if it recovers, and
+// discards it otherwise. Recovering keeps the run on the sessions it started,
+// as a client would retry its own sandbox, so a failure that sticks to one
+// shows as that rather than as a fresh session each time.
+func (r *runtime) keepOrDiscard(ctx context.Context, gid int64, s Session, call string, cause error) {
+	err := s.Recover(ctx)
+	// The teardown, which cut it off, closes the session itself.
+	if measure.CutOff(ctx, err) {
+		return
+	}
+	attrs := slices.Concat(s.LogAttrs(), []slog.Attr{slog.String("call", call), slog.String("err", cause.Error())})
+	if err == nil {
+		slog.LogAttrs(ctx, slog.LevelInfo, "kept the session after a failed call", attrs...)
+		return
+	}
+	r.discard(ctx, gid, s, append(attrs, slog.String("recover_err", err.Error())))
 }
 
 func (r *runtime) start(ctx context.Context) (Session, error) {
@@ -186,18 +209,15 @@ func (r *runtime) start(ctx context.Context) (Session, error) {
 	return s, nil
 }
 
-// discard throws away a session whose state is no longer known. Any failed
-// call can leave what it holds mid transition and nothing reconciles it, so
-// the session is closed and the goroutine's slot freed; the next iteration
-// starts a fresh one rather than working against a broken one for the rest of
-// the run.
+// discard throws away a session that did not recover: it is closed and the
+// goroutine's slot freed, and the next iteration starts a fresh one rather
+// than working against a broken one for the rest of the run.
 //
 // The slot is freed whether or not the close worked, because a VU that cannot
 // get rid of its session still has to stop using it. A close that failed is
 // named, since what the session held stays until someone removes it.
-func (r *runtime) discard(ctx context.Context, gid int64, s Session, call string, cause error) {
-	slog.LogAttrs(ctx, slog.LevelWarn, "discarding the session after a failed call",
-		slices.Concat(s.LogAttrs(), []slog.Attr{slog.String("call", call), slog.String("err", cause.Error())})...)
+func (r *runtime) discard(ctx context.Context, gid int64, s Session, attrs []slog.Attr) {
+	slog.LogAttrs(ctx, slog.LevelWarn, "discarding the session after a failed call", attrs...)
 
 	if err := s.Close(ctx); err != nil {
 		slog.LogAttrs(ctx, slog.LevelWarn, "discarded session was left behind", leftBehind(s, err)...)

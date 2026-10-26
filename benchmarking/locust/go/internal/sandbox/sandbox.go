@@ -46,6 +46,11 @@ type Sandbox interface {
 	// and nothing reconciles it, so the caller decides what happens next.
 	Sleep(ctx context.Context) error
 
+	// Settle, after a failed call, waits for the sandbox to come out of the
+	// transition the call left it in and leaves it asleep for the next Wake.
+	// An error means it cannot be cycled again and is to be removed.
+	Settle(ctx context.Context) error
+
 	// Remove gets rid of the sandbox whatever state it is in. A nil return
 	// means it is gone.
 	Remove(ctx context.Context) error

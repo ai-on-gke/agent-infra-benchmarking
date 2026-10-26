@@ -252,6 +252,10 @@ func (s *agentSandbox) Sleep(ctx context.Context) error {
 	return err
 }
 
+// Settle gives up the claim a failed call may have left, so the next Wake
+// claims a warm sandbox afresh, as every Wake does.
+func (s *agentSandbox) Settle(ctx context.Context) error { return s.Remove(ctx) }
+
 // Remove deletes the claim, if the sandbox holds one. The gauge drops whether
 // or not the delete works, since the sandbox is not used again either way.
 func (s *agentSandbox) Remove(ctx context.Context) error {

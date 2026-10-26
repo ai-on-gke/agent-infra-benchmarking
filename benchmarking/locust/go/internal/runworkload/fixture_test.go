@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/harness"
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
 	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
 	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/workload"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
@@ -64,6 +65,10 @@ type fakeControlClient struct {
 	// deleteDelay holds each DeleteActor open, so a teardown test can see how
 	// many run at once.
 	deleteDelay time.Duration
+	// states are what GetActor reports in turn, the last one from then on;
+	// none is SUSPENDED. getActorErr, when set, fails every GetActor instead.
+	states      []ateapipb.ActorState
+	getActorErr error
 
 	mu sync.Mutex
 	// inFlight and peak track overlapping DeleteActor calls.
@@ -141,6 +146,23 @@ func (f *fakeControlClient) recordedActor() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.actor
+}
+
+func (f *fakeControlClient) GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "GetActor")
+	if f.getActorErr != nil {
+		return nil, f.getActorErr
+	}
+	state := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+	if len(f.states) > 0 {
+		state = f.states[0]
+		if len(f.states) > 1 {
+			f.states = f.states[1:]
+		}
+	}
+	return &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: state}}, nil
 }
 
 func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
@@ -282,6 +304,15 @@ type testRun struct {
 func newTestRunOn(s *runWorkloadScenario) *testRun {
 	task, shutdown := harness.New(s, harness.Options{Name: Name, UserClass: UserClass})
 	return &testRun{runWorkloadScenario: s, iterate: task, shutdown: shutdown}
+}
+
+// shortenSettle bounds Settle's wait for an actor to leave a transitional
+// state to a few polls, for one test.
+func shortenSettle(t *testing.T) {
+	t.Helper()
+	timeout, poll := sandbox.SettleTimeout, sandbox.SettlePoll
+	sandbox.SettleTimeout, sandbox.SettlePoll = 50*time.Millisecond, time.Millisecond
+	t.Cleanup(func() { sandbox.SettleTimeout, sandbox.SettlePoll = timeout, poll })
 }
 
 // startsOver reports whether the next iteration on this goroutine creates a

@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
 	"github.com/agent-substrate/substrate/internal/atenet"
@@ -277,12 +278,26 @@ func (s *substrateSandbox) Wake(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	s.markActive()
+	return nil
+}
+
+// markActive and markSuspended move the actor between the gauges, once per
+// transition however often the state is reported.
+func (s *substrateSandbox) markActive() {
 	if !s.isActive {
 		suspendedActors.WithLabelValues(s.p.Workload).Dec()
 		activeActors.WithLabelValues(s.p.Workload).Inc()
 		s.isActive = true
 	}
-	return nil
+}
+
+func (s *substrateSandbox) markSuspended() {
+	if s.isActive {
+		activeActors.WithLabelValues(s.p.Workload).Dec()
+		suspendedActors.WithLabelValues(s.p.Workload).Inc()
+		s.isActive = false
+	}
 }
 
 // Sleep suspends the actor and reports whether it went.
@@ -305,11 +320,69 @@ func (s *substrateSandbox) Sleep(ctx context.Context) error {
 			slog.String("err", err.Error()))
 		return err
 	}
-	if s.isActive {
-		activeActors.WithLabelValues(s.p.Workload).Dec()
-		suspendedActors.WithLabelValues(s.p.Workload).Inc()
-		s.isActive = false
+	s.markSuspended()
+	return nil
+}
+
+// SettleTimeout bounds how long Settle waits for an actor to leave a
+// transitional state, and SettlePoll is how often it looks. Exported variables
+// so that tests of the packages using this one can shorten them.
+var (
+	SettleTimeout = time.Minute
+	SettlePoll    = time.Second
+)
+
+// Settle polls the actor until it leaves the transitional state a failed call
+// can leave it in: a suspend that timed out on the client keeps snapshotting
+// on the server. A SUSPENDED actor is kept as it is, and a RUNNING one is
+// suspended, unmetered like Remove's, or left running when suspends are
+// disabled. A CRASHED, PAUSED or deleted actor, or one still in transition
+// after SettleTimeout, is not cycled again, and the error says which.
+func (s *substrateSandbox) Settle(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, SettleTimeout)
+	defer cancel()
+	for {
+		actor, err := s.api.GetActor(ctx, &ateapipb.GetActorRequest{Actor: s.ref()})
+		state := actor.GetStatus().GetState()
+		switch {
+		case status.Code(err) == codes.NotFound:
+			return fmt.Errorf("actor is gone: %w", err)
+		case err != nil:
+			// Tried again until the bound, as a refused read says nothing
+			// about the actor.
+		case state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
+			s.markSuspended()
+			return nil
+		case state == ateapipb.ActorState_ACTOR_STATE_RUNNING:
+			return s.settleRunning(ctx)
+		case state == ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			state == ateapipb.ActorState_ACTOR_STATE_PAUSED,
+			state == ateapipb.ActorState_ACTOR_STATE_DELETING:
+			return fmt.Errorf("actor is %s", state)
+		}
+
+		select {
+		case <-ctx.Done():
+			if err != nil {
+				return fmt.Errorf("actor state unknown after %v: %w", SettleTimeout, err)
+			}
+			return fmt.Errorf("actor still %s after %v", state, SettleTimeout)
+		case <-time.After(SettlePoll):
+		}
 	}
+}
+
+func (s *substrateSandbox) settleRunning(ctx context.Context) error {
+	if s.p.SuspendDisabled {
+		s.markActive()
+		return nil
+	}
+	callCtx, cancel := s.p.Rec.Context(ctx)
+	defer cancel()
+	if _, err := s.api.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{Actor: s.ref()}); err != nil {
+		return fmt.Errorf("suspending the running actor: %w", err)
+	}
+	s.markSuspended()
 	return nil
 }
 
@@ -327,10 +400,8 @@ func (s *substrateSandbox) Remove(ctx context.Context) error {
 		Actor: s.ref(),
 	})
 	cancel()
-	if suspendErr == nil && s.isActive {
-		activeActors.WithLabelValues(s.p.Workload).Dec()
-		suspendedActors.WithLabelValues(s.p.Workload).Inc()
-		s.isActive = false
+	if suspendErr == nil {
+		s.markSuspended()
 	}
 
 	// A failed suspend leaves the actor in a state the delete precondition

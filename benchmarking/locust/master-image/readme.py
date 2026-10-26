@@ -233,6 +233,9 @@ def _header(info: dict) -> str:
 
 # The per-run results table: the request names in a cycle's order.
 RESULT_ROWS = ("Resume", "ExecutionTime", "TTFI", "Suspend", "CycleTime")
+# The worker's row for an actor after a failed cycle: a success kept it, a
+# failure replaced it.
+RECOVER_ROW = "Recover"
 # Workloads whose instruction takes long enough to dominate TTFI and CycleTime,
 # so that only Resume and Suspend say much about the sandbox itself.
 SLOW_INSTRUCTION_WORKLOADS = ("openclaw",)
@@ -250,6 +253,15 @@ def _results(info: dict, stats: list[dict], stats_file: str | None) -> str:
             table.append([f"`{name}`", row.get("Request Count", UNKNOWN), row.get("Failure Count", UNKNOWN),
                           *(_ms(row.get(stat)) for stat in ("50%", "90%", "99%", "Max Response Time"))])  # fmt: skip
     lines += _table(["Request", "Count", "Failed", "p50", "p90", "p99", "Max"], table)
+    recovered = rows.get(RECOVER_ROW)
+    if recovered:
+        try:
+            replaced = int(recovered.get("Failure Count"))
+            kept = int(recovered.get("Request Count")) - replaced
+            lines += ["", f"After a failed cycle, {kept:,} actor(s) settled and were kept, {replaced:,} replaced"
+                          f" (`{RECOVER_ROW}`; why in `locust_failures.csv`)."]  # fmt: skip
+        except (TypeError, ValueError):
+            pass
     case = _locust(info.get("case") if isinstance(info.get("case"), dict) else {})
     worker = case.get("worker") if isinstance(case.get("worker"), dict) else {}
     workload = worker.get("workload-name") or worker.get("workload-template")
