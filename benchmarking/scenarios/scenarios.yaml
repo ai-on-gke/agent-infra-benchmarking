@@ -272,16 +272,24 @@ cases:
         workload-template: glutton
 
   # 100 workers on 10 nodes, suspended between instructions, at 100, 250 and
-  # 500 VUs against a baseline of 100 that never suspend. The density user
-  # class paces each actor to be in a cycle for its `duty-cycle` share of the
-  # time, so every variant keeps about 80 actors active at once, VUs × duty
-  # cycle, whatever the workload's turn takes, and only the actors they are
-  # shared among grows. Each worker has room for one of the workload's actors,
-  # its default actor-memory, so the actors share the 100 workers rather than
-  # pile onto them.
+  # 500 VUs, the variants named for their actors per node, against a baseline
+  # of 100 that never suspend. The density user class paces each actor to be
+  # in a cycle for `active-actors` over the VUs of its time, so every variant
+  # that suspends keeps 80 actors active at once, whatever the workload's turn
+  # takes, and only the actors they are shared among grows; while the VUs ramp
+  # up to 80, every one of them is in a cycle all along. Each worker has room
+  # for one actor, its actor-memory, so the actors share the 100 workers
+  # rather than pile onto them.
+  #
+  # The variants differ in their VUs alone, and in the spawn rate that grows
+  # with them, so each ramps up in 100s. Every variant of either workload then
+  # runs on the same times: a warm-up of 2m, longer than a turn openclaw's own
+  # timeout, 100s, cuts off, and a steady window of 580s, so their percentiles
+  # rest on about as many cycles.
   "{workload}-density":
     locust:
       user-class: density
+      actor-memory: "{actor-memory}"
       install:
         substrate:
           sandbox-class: gvisor
@@ -292,53 +300,49 @@ cases:
       workers:
         count: 100
         limits:
-          memory: "{worker-memory}"
+          memory: "{actor-memory}"
       master:
-        run-time: "{run-time}"
-        spawn-rate: "{spawn-rate}"
+        run-time: 13m20s
+        spawn-rate: 1
+        warm-up: 2m
       worker:
         resume-mode: explicit
         suspend-disabled: false
+        active-actors: 80
         workload-name: "{workload}"
         workload-template: "{workload}"
         workload-timeout: "{workload-timeout}"
         actor-egress-allow: "{actor-egress-allow}"
     variants:
+      # Paced as if its cycles took the resume and suspend they skip, so it
+      # sends instructions at the rate of 10.
       baseline:
         locust:
-          master: {users: 100, spawn-rate: 10}
-          worker: {suspend-disabled: true, duty-cycle: 0.8}
+          master: {users: 100}
+          worker: {suspend-disabled: true, skipped-resume-suspend: "{skipped-resume-suspend}"}
       "10":
         locust:
           master: {users: 100}
-          worker: {duty-cycle: 0.8}
       "25":
         locust:
-          master: {users: 250, run-time: "{run-time-25}"}
-          worker: {duty-cycle: 0.32}
+          master: {users: 250, spawn-rate: 2.5}
       "50":
         locust:
-          master: {users: 500, run-time: "{run-time-50}"}
-          worker: {duty-cycle: 0.16}
+          master: {users: 500, spawn-rate: 5}
     parameters:
       workload:
+      # Its median Resume and Suspend, 290ms and 460ms, on
+      # glutton-substrate-gvisor.
       - workload: glutton
-        worker-memory: 256Mi
-        spawn-rate: 10
-        run-time: 3m
-        run-time-25: 3m
-        run-time-50: 3m
-      # Its VUs spawned one a second: each one's first cycle runs as it
-      # spawns, before its wait spreads the cycles out.
+        actor-memory: 256Mi
+        skipped-resume-suspend: 750ms
+      # No skipped-resume-suspend until a run has measured them: its turn makes
+      # up most of its cycle.
       - workload: openclaw
-        worker-memory: 2Gi
+        actor-memory: 2Gi
         configuration: openclaw
         workload-timeout: 120s
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
-        spawn-rate: 1
-        run-time: 5m
-        run-time-25: 12m
-        run-time-50: 20m
 
   # glutton woken by its instruction, through the router, rather than by a
   # ResumeActor first: TTFI is then the router's wake.

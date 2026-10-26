@@ -113,8 +113,10 @@ func main() {
 			"runworkload only: whether to skip the suspend phase during the benchmark.")
 
 		// density runs runworkload's cycle, so it reads the flags above too.
-		dutyCycle = flag.Float64("duty-cycle", 0,
-			"density only: share of its time each actor spends in a cycle, above 0 and at most 1. It sets the wait after each cycle in place of --min-wait and --max-wait, which then only follow a failed start.")
+		activeActors = flag.Int("active-actors", 0,
+			"density only: how many of this worker's actors are in a cycle at once, at least 1. Each actor waits after a cycle so that it spends this over the worker's users of its time in one, in place of --min-wait and --max-wait, which then only follow a failed start.")
+		skippedResumeSuspend = flag.Duration("skipped-resume-suspend", 0,
+			"density with --suspend-disabled only: the resume and suspend each cycle skips, which the pacing counts as if it ran, so the actors send instructions at the rate of ones that suspend.")
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
@@ -235,7 +237,11 @@ func main() {
 		taskFn, shutdownFn = runworkload.New(cycle())
 		taskName = runworkload.UserClass
 	case density.Name:
-		taskFn, shutdownFn = density.New(density.Config{Cycle: cycle(), DutyCycle: *dutyCycle})
+		taskFn, shutdownFn = density.New(density.Config{
+			Cycle:                cycle(),
+			ActiveActors:         *activeActors,
+			SkippedResumeSuspend: *skippedResumeSuspend,
+		})
 		taskName = density.UserClass
 	default:
 		entry, ok := userclass.Lookup(class)

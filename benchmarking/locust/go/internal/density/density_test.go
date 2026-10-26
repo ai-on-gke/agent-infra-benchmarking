@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/harness"
+	"github.com/myzhan/boomer"
 )
 
 var errCycle = errors.New("resume refused")
@@ -41,7 +42,45 @@ func (f *fakeSession) Iterate(context.Context) (string, error) {
 }
 
 func newPaced(dutyCycle, random float64) *pacedSession {
-	return &pacedSession{dutyCycle: dutyCycle, random: func() float64 { return random }}
+	return &pacedSession{dutyCycle: func() float64 { return dutyCycle }, random: func() float64 { return random }}
+}
+
+// The VUs are the count of the last spawn boomer publishes.
+func TestUsersFollowTheSpawns(t *testing.T) {
+	s := &densityScenario{active: 80}
+	if err := s.followSpawns(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, users := range []int{10, 250} {
+		boomer.Events.Publish(boomer.EVENT_SPAWN, users, float64(users))
+		if got := s.users.Load(); got != int64(users) {
+			t.Errorf("after a spawn of %d: got %d", users, got)
+		}
+	}
+}
+
+// The duty cycle is the active actors over the VUs locust last spawned, so it
+// follows them while they ramp up, and every actor cycles all of its time
+// while they are no more than the active ones.
+func TestTheDutyCycleIsTheActiveActorsOverTheVUs(t *testing.T) {
+	s := &densityScenario{active: 80}
+	for _, tc := range []struct {
+		users int64
+		want  float64
+	}{
+		{0, 1},
+		{40, 1},
+		{80, 1},
+		{100, 0.8},
+		{250, 0.32},
+		{500, 0.16},
+	} {
+		s.users.Store(tc.users)
+		if got := s.dutyCycle(); got != tc.want {
+			t.Errorf("80 active actors among %d VUs: got %v, want %v", tc.users, got, tc.want)
+		}
+	}
 }
 
 // The first wait is a random share of one whole period, so that VUs spawned
@@ -61,6 +100,18 @@ func TestNextStaggersTheFirstWaitThenKeepsTheDutyCycle(t *testing.T) {
 	}
 }
 
+// An actor that never suspends is paced as if its cycle took the resume and
+// suspend it skips: the skipped time is waited out as part of its period.
+func TestNextCountsTheSkippedResumeAndSuspend(t *testing.T) {
+	s := newPaced(0.5, 0)
+	s.skipped = 750 * time.Millisecond
+	s.next(250 * time.Millisecond)
+
+	if got, want := s.next(250*time.Millisecond), 1750*time.Millisecond; got != want {
+		t.Errorf("got %v, want %v, the rest of a 2s period, (250ms + 750ms) / 0.5", got, want)
+	}
+}
+
 // At a duty cycle of 1 the actor is always in a cycle, so after the first
 // there is no wait.
 func TestAFullDutyCycleDoesNotWait(t *testing.T) {
@@ -75,7 +126,8 @@ func TestAFullDutyCycleDoesNotWait(t *testing.T) {
 // paced on the time that cycle took.
 func TestIterateSetsTheWaitAfterTheCycle(t *testing.T) {
 	inner := &fakeSession{busy: 20 * time.Millisecond}
-	s := &pacedSession{Session: inner, dutyCycle: 0.5, random: func() float64 { return 0 }, staggered: true}
+	s := newPaced(0.5, 0)
+	s.Session, s.staggered = inner, true
 
 	if got := s.Wait(); got != 0 {
 		t.Fatalf("before the first cycle: got %v, want 0", got)
