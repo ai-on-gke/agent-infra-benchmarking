@@ -20,10 +20,11 @@ import (
 )
 
 // A retried call waits RetryInitialDelay, doubling up to RetryMaxDelay, until
-// RetryBudget is spent. The refusals worth retrying clear once another
-// operation on the same actor lands, which can take seconds when that
-// operation takes a snapshot. Exported variables so that tests of the packages
-// using this one can shorten them.
+// RetryBudget is spent, or a call waiting for room until its timeout is. The
+// refusals worth retrying clear once another operation on the same actor
+// lands, which can take seconds when that operation takes a snapshot.
+// Exported variables so that tests of the packages using this one can shorten
+// them.
 var (
 	RetryInitialDelay = 100 * time.Millisecond
 	RetryMaxDelay     = time.Second
@@ -31,14 +32,14 @@ var (
 )
 
 // retry calls do until it returns an error retryable does not accept, nil,
-// or RetryBudget runs out, and returns how many calls it made and the last
-// error. A cancelled ctx ends the wait between calls.
-func retry(ctx context.Context, retryable func(error) bool, do func() error) (int, error) {
+// or budget runs out, and returns how many calls it made and the last error.
+// A budget of zero is unbounded. A cancelled ctx ends the wait between calls.
+func retry(ctx context.Context, budget time.Duration, retryable func(error) bool, do func() error) (int, error) {
 	start := time.Now()
 	delay := RetryInitialDelay
 	for attempt := 1; ; attempt++ {
 		err := do()
-		if err == nil || !retryable(err) || time.Since(start)+delay > RetryBudget {
+		if err == nil || !retryable(err) || (budget > 0 && time.Since(start)+delay > budget) {
 			return attempt, err
 		}
 		select {

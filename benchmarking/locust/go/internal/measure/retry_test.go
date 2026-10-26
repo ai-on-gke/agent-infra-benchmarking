@@ -30,7 +30,7 @@ func TestRetryBacksOffAndStopsAtTheBudget(t *testing.T) {
 
 	var calls []time.Time
 	busy := errors.New("busy")
-	attempts, err := retry(context.Background(), func(error) bool { return true }, func() error {
+	attempts, err := retry(context.Background(), RetryBudget, func(error) bool { return true }, func() error {
 		calls = append(calls, time.Now())
 		return busy
 	})

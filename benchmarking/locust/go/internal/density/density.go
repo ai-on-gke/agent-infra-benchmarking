@@ -31,6 +31,11 @@
 // baseline of them is paced as if its cycle took the resume and suspend it
 // skips too, and sends instructions at the rate of the actors it is compared
 // with.
+//
+// A resume that finds every worker full waits for one to free up, as the
+// router waits with a request, rather than fail the cycle. The wait is part of
+// TTFI and is reported on its own as SlotWait, so its count is how many cycles
+// waited and its percentiles how long.
 package density
 
 import (
@@ -87,6 +92,7 @@ func New(c Config) (task func(), shutdown func(context.Context)) {
 	if c.Cycle.Config.Tracer == nil {
 		c.Cycle.Config.Tracer = otel.Tracer("substrate-boomer/density")
 	}
+	c.Cycle.WaitForWorker = true
 	s := &densityScenario{
 		cycle:   runworkload.NewScenario(c.Cycle, UserClass),
 		active:  c.ActiveActors,
@@ -149,21 +155,34 @@ type pacedSession struct {
 
 	staggered bool
 	wait      time.Duration
+
+	// full is how long the last cycle that went through took.
+	full time.Duration
 }
 
-// Iterate runs one cycle and sets the wait after it from how long it took.
+// Iterate runs one cycle and sets the wait after it from how long it took. A
+// failed one is paced as if it took at least as long as the last that went
+// through: a refused call ends it in milliseconds, and the VU would otherwise
+// try again almost at once.
 func (s *pacedSession) Iterate(ctx context.Context) (string, error) {
 	start := time.Now()
 	call, err := s.Session.Iterate(ctx)
-	s.wait = s.next(time.Since(start))
+	busy := time.Since(start)
+	paced := busy
+	if err == nil {
+		s.full = busy
+	} else {
+		paced = max(busy, s.full)
+	}
+	s.wait = s.next(paced, busy)
 	return call, err
 }
 
-// next is the wait after a cycle that took busy: the rest of its period,
-// (busy + skipped) / dutyCycle, or after the VU's first cycle a random share
-// of a whole one.
-func (s *pacedSession) next(busy time.Duration) time.Duration {
-	period := time.Duration(float64(busy+s.skipped) / s.dutyCycle())
+// next is the wait after a cycle that took busy, paced as one that took paced:
+// the rest of its period, (paced + skipped) / dutyCycle, or after the VU's
+// first cycle a random share of a whole one.
+func (s *pacedSession) next(paced, busy time.Duration) time.Duration {
+	period := time.Duration(float64(paced+s.skipped) / s.dutyCycle())
 	if !s.staggered {
 		s.staggered = true
 		return time.Duration(s.random() * float64(period))

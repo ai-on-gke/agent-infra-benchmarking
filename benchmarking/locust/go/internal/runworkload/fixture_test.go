@@ -78,7 +78,7 @@ type fakeControlClient struct {
 	deleteAnyState bool
 	// suspendsCut counts the SuspendActor calls whose context ended first.
 	suspendsCut int
-	calls          []string
+	calls       []string
 	// template and actor are the ActorTemplate and actor names from the last
 	// CreateActor.
 	template string
@@ -306,7 +306,7 @@ func newTestScenarioOn(cfg *userclass.Config, opts scenario.Options) *runWorkloa
 func newTestScenarioRunning(cfg *userclass.Config, opts scenario.Options, wl workload.Workload) *runWorkloadScenario {
 	opts.Config = cfg
 	c := Config{Common: scenario.Common{Options: opts, Workload: wl}}
-	provider, err := c.NewProvider(recorder(c, UserClass), false)
+	provider, err := c.NewProvider(recorder(c, UserClass), false, false)
 	if err != nil {
 		panic(err)
 	}

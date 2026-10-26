@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -622,6 +623,176 @@ func TestAbortedCallIsRetried(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// errNoRoom is the refusal of a resume while every worker is full.
+var errNoRoom = status.Error(codes.ResourceExhausted, "no worker has room for the actor")
+
+// waitForWorker has rt's resumes wait for a free worker, as density's do.
+func waitForWorker(rt *testRun) { rt.provider.(*sandbox.Substrate).WaitForWorker = true }
+
+// rowCounts is how many rows of each name and status have been recorded, to
+// tell what one iteration added.
+func rowCounts(t *testing.T) map[string]float64 {
+	t.Helper()
+	counts := map[string]float64{}
+	for _, name := range []string{sandbox.ResumeMetric, sandbox.SlotWaitMetric, ttfiMetric} {
+		for _, status := range []string{"success", "failure"} {
+			counts[name+" "+status] = requestCount(t, name, status)
+		}
+	}
+	return counts
+}
+
+// rowsAdded is what rowCounts gained since before, leaving out what did not
+// change.
+func rowsAdded(t *testing.T, before map[string]float64) map[string]float64 {
+	t.Helper()
+	added := map[string]float64{}
+	for key, n := range rowCounts(t) {
+		if n != before[key] {
+			added[key] = n - before[key]
+		}
+	}
+	return added
+}
+
+// A resume refused for want of a free worker is made again until one frees up,
+// and the cycle goes on: the refusals report no Resume rows of their own, and
+// the wait is one SlotWait row, inside TTFI.
+func TestANoRoomResumeWaitsForAWorker(t *testing.T) {
+	shortenRetries(t)
+	srv := &pingServer{}
+	ctrl := &fakeControlClient{resumeErr: errNoRoom, resumeErrTimes: 3}
+	rt, sr := newMeasuringUser(t, srv, ctrl, scenario.Options{})
+	waitForWorker(rt)
+	before := rowCounts(t)
+
+	rt.iterate()
+
+	if got := ctrl.countCalls("ResumeActor"); got != 4 {
+		t.Errorf("ResumeActor calls: got %d, want 4", got)
+	}
+	if got := srv.RecordedPings(); got != 1 {
+		t.Errorf("instructions: got %d, want the cycle's 1", got)
+	}
+	want := map[string]float64{"Resume success": 1, "SlotWait success": 1, "TTFI success": 1}
+	if got := rowsAdded(t, before); !maps.Equal(got, want) {
+		t.Errorf("rows: got %v, want %v", got, want)
+	}
+	wait := mustAttr(t, spanByName(t, sr, sandbox.SlotWaitMetric), "total_ms").AsFloat64()
+	ttfi := mustAttr(t, spanByName(t, sr, ttfiMetric), "total_ms").AsFloat64()
+	if wait <= 0 || wait > ttfi {
+		t.Errorf("SlotWait total_ms: got %v, want above 0 and within TTFI's %v", wait, ttfi)
+	}
+}
+
+// A resume that goes through at once waited for nothing and reports no
+// SlotWait row; and without the wait turned on, a refused one fails the cycle
+// at once, as a run that is not about density wants.
+func TestOnlyARefusedResumeWaits(t *testing.T) {
+	shortenRetries(t)
+	for _, tc := range []struct {
+		name        string
+		ctrl        *fakeControlClient
+		wait        bool
+		wantResumes int
+		want        map[string]float64
+	}{
+		{
+			name:        "not refused",
+			ctrl:        &fakeControlClient{},
+			wait:        true,
+			wantResumes: 1,
+			want:        map[string]float64{"Resume success": 1, "TTFI success": 1},
+		},
+		{
+			name:        "not waiting",
+			ctrl:        &fakeControlClient{resumeErr: errNoRoom, resumeErrTimes: 3},
+			wantResumes: 1,
+			want:        map[string]float64{"Resume failure": 1, "TTFI failure": 1},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt, _ := newMeasuringUser(t, &pingServer{}, tc.ctrl, scenario.Options{})
+			if tc.wait {
+				waitForWorker(rt)
+			}
+			before := rowCounts(t)
+
+			rt.iterate()
+
+			if got := tc.ctrl.countCalls("ResumeActor"); got != tc.wantResumes {
+				t.Errorf("ResumeActor calls: got %d, want %d", got, tc.wantResumes)
+			}
+			if got := rowsAdded(t, before); !maps.Equal(got, tc.want) {
+				t.Errorf("rows: got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A worker that does not free up within the timeout fails the cycle, with one
+// failed Resume row for the last refusal and a failed SlotWait over the wait.
+func TestAWaitForAWorkerEndsAtTheTimeout(t *testing.T) {
+	shortenRetries(t)
+	const deadline = 50 * time.Millisecond
+	ctrl := &fakeControlClient{resumeErr: errNoRoom}
+	srv := &pingServer{}
+	rt, sr := newMeasuringUser(t, srv, ctrl, scenario.Options{Timeout: deadline})
+	waitForWorker(rt)
+	before := rowCounts(t)
+
+	start := time.Now()
+	rt.iterate()
+
+	if got := ctrl.countCalls("ResumeActor"); got < 3 {
+		t.Errorf("ResumeActor calls: got %d, want several", got)
+	}
+	if got := srv.RecordedPings(); got != 0 {
+		t.Errorf("instructions: got %d, want none", got)
+	}
+	want := map[string]float64{"Resume failure": 1, "SlotWait failure": 1, "TTFI failure": 1}
+	if got := rowsAdded(t, before); !maps.Equal(got, want) {
+		t.Errorf("rows: got %v, want %v", got, want)
+	}
+	if elapsed := time.Since(start); elapsed > 10*deadline {
+		t.Errorf("gave up after %v, want about the %v timeout", elapsed, deadline)
+	}
+	if got := mustAttr(t, spanByName(t, sr, sandbox.SlotWaitMetric), "total_ms").AsFloat64(); got <= 0 {
+		t.Errorf("SlotWait total_ms: got %v, want > 0", got)
+	}
+}
+
+// The end of the run ends a wait for a worker without a failure, however long
+// the timeout would have let it go on.
+func TestTheEndOfTheRunEndsAWaitForAWorker(t *testing.T) {
+	shortenRetries(t)
+	ctrl := &fakeControlClient{resumeErr: errNoRoom}
+	rt := newTestRuntime(t, ctrl)
+	waitForWorker(rt)
+	before := rowCounts(t)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.iterate()
+		rt.iterate()
+	}()
+	for ctrl.countCalls("ResumeActor") < 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	start := time.Now()
+	rt.shutdown(context.Background())
+	<-done
+
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("teardown took %v; the wait should have ended with the run", elapsed)
+	}
+	if got := rowsAdded(t, before); len(got) != 0 {
+		t.Errorf("rows: got %v, want none", got)
 	}
 }
 

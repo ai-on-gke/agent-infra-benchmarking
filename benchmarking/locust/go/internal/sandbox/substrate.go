@@ -74,6 +74,11 @@ type Substrate struct {
 	// SuspendDisabled skips the suspend phase during the benchmark.
 	SuspendDisabled bool
 
+	// WaitForWorker has Wake wait out a ResumeActor refused for want of a free
+	// worker, as the router does a request, rather than fail; the wait counts
+	// toward the call's timeout and is reported as SlotWait.
+	WaitForWorker bool
+
 	// Counts the actors created, to spread them over APIStubs.
 	started atomic.Int64
 
@@ -269,18 +274,27 @@ func (s *substrateSandbox) Wake(ctx context.Context) error {
 		return nil
 	}
 
-	err := s.p.Rec.GRPC(ctx, ResumeMetric, func(callCtx context.Context, tr *metadata.MD) error {
+	resume := func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := s.api.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
 			Actor: s.ref(),
 		}, grpc.Trailer(tr))
 		return err
-	})
+	}
+	var err error
+	if s.p.WaitForWorker {
+		err = s.p.Rec.GRPCWaiting(ctx, ResumeMetric, SlotWaitMetric, noRoom, resume)
+	} else {
+		err = s.p.Rec.GRPC(ctx, ResumeMetric, resume)
+	}
 	if err != nil {
 		return err
 	}
 	s.markActive()
 	return nil
 }
+
+// noRoom is a ResumeActor refused because no worker has room for the actor.
+func noRoom(err error) bool { return status.Code(err) == codes.ResourceExhausted }
 
 // markActive and markSuspended move the actor between the gauges, once per
 // transition however often the state is reported.

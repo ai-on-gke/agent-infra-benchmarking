@@ -74,7 +74,7 @@ func TestNewProviderDefaultsToSubstrate(t *testing.T) {
 	})
 	rec := measure.Recorder{UserClass: "SomeUser"}
 
-	p, err := c.NewProvider(rec, true)
+	p, err := c.NewProvider(rec, true, true)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -91,7 +91,8 @@ func TestNewProviderDefaultsToSubstrate(t *testing.T) {
 	if !slices.Equal(s.EgressHosts, c.EgressAllow) {
 		t.Errorf("egress hosts: got %v, want %v", s.EgressHosts, c.EgressAllow)
 	}
-	if !s.ImplicitResume || !s.SuspendDisabled {
-		t.Errorf("ImplicitResume and SuspendDisabled: got %t and %t, want both", s.ImplicitResume, s.SuspendDisabled)
+	if !s.ImplicitResume || !s.SuspendDisabled || !s.WaitForWorker {
+		t.Errorf("ImplicitResume, SuspendDisabled and WaitForWorker: got %t, %t and %t, want all",
+			s.ImplicitResume, s.SuspendDisabled, s.WaitForWorker)
 	}
 }

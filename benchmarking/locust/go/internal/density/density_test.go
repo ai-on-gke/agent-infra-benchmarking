@@ -89,13 +89,13 @@ func TestTheDutyCycleIsTheActiveActorsOverTheVUs(t *testing.T) {
 func TestNextStaggersTheFirstWaitThenKeepsTheDutyCycle(t *testing.T) {
 	s := newPaced(0.25, 0.5)
 
-	if got, want := s.next(time.Second), 2*time.Second; got != want {
+	if got, want := s.next(time.Second, time.Second), 2*time.Second; got != want {
 		t.Errorf("first wait: got %v, want %v, half of a 4s period", got, want)
 	}
-	if got, want := s.next(time.Second), 3*time.Second; got != want {
+	if got, want := s.next(time.Second, time.Second), 3*time.Second; got != want {
 		t.Errorf("second wait: got %v, want %v, the rest of a 4s period", got, want)
 	}
-	if got, want := s.next(2*time.Second), 6*time.Second; got != want {
+	if got, want := s.next(2*time.Second, 2*time.Second), 6*time.Second; got != want {
 		t.Errorf("after a 2s cycle: got %v, want %v, the rest of an 8s period", got, want)
 	}
 }
@@ -105,9 +105,9 @@ func TestNextStaggersTheFirstWaitThenKeepsTheDutyCycle(t *testing.T) {
 func TestNextCountsTheSkippedResumeAndSuspend(t *testing.T) {
 	s := newPaced(0.5, 0)
 	s.skipped = 750 * time.Millisecond
-	s.next(250 * time.Millisecond)
+	s.next(250*time.Millisecond, 250*time.Millisecond)
 
-	if got, want := s.next(250*time.Millisecond), 1750*time.Millisecond; got != want {
+	if got, want := s.next(250*time.Millisecond, 250*time.Millisecond), 1750*time.Millisecond; got != want {
 		t.Errorf("got %v, want %v, the rest of a 2s period, (250ms + 750ms) / 0.5", got, want)
 	}
 }
@@ -116,14 +116,14 @@ func TestNextCountsTheSkippedResumeAndSuspend(t *testing.T) {
 // there is no wait.
 func TestAFullDutyCycleDoesNotWait(t *testing.T) {
 	s := newPaced(1, 0)
-	s.next(time.Second)
-	if got := s.next(time.Second); got != 0 {
+	s.next(time.Second, time.Second)
+	if got := s.next(time.Second, time.Second); got != 0 {
 		t.Errorf("got %v, want 0", got)
 	}
 }
 
-// Wait is none before the first cycle, and after each cycle, failed or not,
-// paced on the time that cycle took.
+// Wait is none before the first cycle, and after each cycle paced on the time
+// it took.
 func TestIterateSetsTheWaitAfterTheCycle(t *testing.T) {
 	inner := &fakeSession{busy: 20 * time.Millisecond}
 	s := newPaced(0.5, 0)
@@ -145,6 +145,29 @@ func TestIterateSetsTheWaitAfterTheCycle(t *testing.T) {
 	}
 	if got := s.Wait(); got < inner.busy {
 		t.Errorf("after a failed cycle: got %v, want it paced on the %v it took", got, inner.busy)
+	}
+}
+
+// A cycle a refused resume ends at once is paced on the last full one's
+// period, so the VU does not try again at once; before any has gone through,
+// it is paced on its own.
+func TestAFailedCycleIsPacedOnTheLastFullOne(t *testing.T) {
+	const full = 40 * time.Millisecond
+	inner := &fakeSession{err: errCycle}
+	s := newPaced(0.5, 0)
+	s.Session, s.staggered = inner, true
+
+	s.Iterate(context.Background())
+	if got := s.Wait(); got > full/2 {
+		t.Errorf("a failed first cycle: got %v, want it paced on the moment it took", got)
+	}
+
+	inner.busy, inner.err = full, nil
+	s.Iterate(context.Background())
+	inner.busy, inner.err = 0, errCycle
+	s.Iterate(context.Background())
+	if got, want := s.Wait(), 2*full; got < want-full/2 || got > want+full/2 {
+		t.Errorf("a failed cycle after a %v one at half duty: got %v, want about its %v period", full, got, want)
 	}
 }
 

@@ -74,6 +74,10 @@ type Config struct {
 	// SuspendDisabled controls whether the suspend phase is skipped during the benchmark.
 	SuspendDisabled bool
 
+	// WaitForWorker has a resume that finds no free worker wait for one, the
+	// wait part of TTFI and reported as SlotWait, rather than fail the cycle.
+	WaitForWorker bool
+
 	// InstructionsPerCycle is how many instructions each cycle sends between
 	// its resume and its suspend, the first one closing TTFI; below 1 is 1.
 	// More model a session of several turns per wake.
@@ -117,7 +121,7 @@ func NewScenario(c Config, userClass string) harness.Scenario {
 			slog.String("workload", c.Workload.Name()))
 		os.Exit(1)
 	}
-	provider, err := c.NewProvider(recorder(c, userClass), c.SuspendDisabled)
+	provider, err := c.NewProvider(recorder(c, userClass), c.SuspendDisabled, c.WaitForWorker)
 	if err != nil {
 		slog.Error("fatal: cannot initialize k8s client for agent-sandbox", slog.String("err", err.Error()))
 		os.Exit(1)

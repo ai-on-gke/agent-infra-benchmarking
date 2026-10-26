@@ -25,10 +25,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// The rows Wake and Sleep report.
+// The rows Wake and Sleep report. SlotWait is a Wake's wait for a free worker,
+// for a provider that waits for one.
 const (
-	ResumeMetric  = "Resume"
-	SuspendMetric = "Suspend"
+	ResumeMetric   = "Resume"
+	SuspendMetric  = "Suspend"
+	SlotWaitMetric = "SlotWait"
 )
 
 // Provider creates the sandboxes of a run on one infrastructure provider.

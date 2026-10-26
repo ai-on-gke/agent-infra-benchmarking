@@ -104,30 +104,87 @@ func (r Recorder) GRPC(ctx context.Context, name string, do func(context.Context
 	callCtx, cancel := r.ControlContext(ctx)
 	defer cancel()
 
-	start := time.Now()
-	var tr metadata.MD
-	attempts, err := retry(callCtx, func(err error) bool { return status.Code(err) == codes.Aborted }, func() error {
-		tr = nil
-		return do(callCtx, &tr)
-	})
-	clientLatency := time.Since(start)
+	return r.reportGRPC(ctx, span, name, attemptGRPC(callCtx, do))
+}
 
-	latency, source := boomerutil.ElapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, clientLatency)
-	// The server's elapsed trailer is the last attempt's alone, and would hide
-	// the conflicts the client waited through before it.
+// GRPCWaiting is GRPC for a call the server refuses while it has no room for
+// it yet, which waitable tells apart from other errors: refused that way, the
+// call is made again, backing off, until it goes through or the timeout runs
+// out, and stops waiting when the run ends. The row is the last attempt's
+// alone.
+//
+// A call refused at first also reports the wait as the window waitName, from
+// the first attempt's start to the last one's, or as a failure over the time
+// spent when it ran out.
+func (r Recorder) GRPCWaiting(ctx context.Context, name, waitName string, waitable func(error) bool, do func(context.Context, *metadata.MD) error) error {
+	ctx, span := r.Tracer.Start(ctx, name)
+	defer span.End()
+	callCtx, cancel := r.ControlContext(ctx)
+	defer cancel()
+	// The calls are let finish when the run ends, but the waits between them
+	// are not.
+	waitCtx, cancelWait := r.Context(ctx)
+	defer cancelWait()
+
+	start := time.Now()
+	var last attempt
+	var lastStart time.Time
+	attempts, _ := retry(waitCtx, r.Timeout, waitable, func() error {
+		lastStart = time.Now()
+		last = attemptGRPC(callCtx, do)
+		return last.err
+	})
 	if attempts > 1 {
-		latency, source = clientLatency, boomerutil.SourceClient
+		wait, err := lastStart.Sub(start), error(nil)
+		if waitable(last.err) {
+			wait, err = time.Since(start), last.err
+		}
+		_, waitSpan := r.Tracer.Start(ctx, waitName, trace.WithTimestamp(start))
+		r.Window(ctx, waitSpan, waitName, wait, err)
+		waitSpan.End(trace.WithTimestamp(start.Add(wait)))
+	}
+	return r.reportGRPC(ctx, span, name, last)
+}
+
+// attempt is one gRPC call as its row reports it: the trailer of its last
+// try, how many tries it took, and its client wall clock over all of them.
+type attempt struct {
+	tr      metadata.MD
+	tries   int
+	latency time.Duration
+	err     error
+}
+
+// attemptGRPC makes the call, again while it is refused with Aborted.
+func attemptGRPC(callCtx context.Context, do func(context.Context, *metadata.MD) error) attempt {
+	start := time.Now()
+	var a attempt
+	a.tries, a.err = retry(callCtx, RetryBudget, func(err error) bool { return status.Code(err) == codes.Aborted }, func() error {
+		a.tr = nil
+		return do(callCtx, &a.tr)
+	})
+	a.latency = time.Since(start)
+	return a
+}
+
+// reportGRPC reports a as name's row under span.
+func (r Recorder) reportGRPC(ctx context.Context, span trace.Span, name string, a attempt) error {
+	latency, source := boomerutil.ElapsedFromMD(a.tr, ateinterceptors.ServerElapsedTrailer, a.latency)
+	// The server's elapsed trailer is the last try's alone, and would hide the
+	// conflicts the client waited through before it.
+	if a.tries > 1 {
+		latency, source = a.latency, boomerutil.SourceClient
 	}
 	if source == boomerutil.SourceServer {
 		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(latency)))
 	}
-	if CutOff(ctx, err) {
-		return err
+	if CutOff(ctx, a.err) {
+		return a.err
 	}
-	boomerutil.LogSampledTrace(span, name, latency, source, err)
-	if err != nil {
-		recordFailure("grpc", name, r.UserClass, latency, err.Error())
-		return err
+	boomerutil.LogSampledTrace(span, name, latency, source, a.err)
+	if a.err != nil {
+		recordFailure("grpc", name, r.UserClass, latency, a.err.Error())
+		return a.err
 	}
 	recordSuccess("grpc", name, r.UserClass, latency)
 	return nil
@@ -145,7 +202,7 @@ func (r Recorder) HTTP(ctx context.Context, name string, retryable func(error) b
 		retryable = func(error) bool { return false }
 	}
 	start := time.Now()
-	_, err := retry(ctx, retryable, func() error { return do(ctx) })
+	_, err := retry(ctx, RetryBudget, retryable, func() error { return do(ctx) })
 	latency := time.Since(start)
 
 	if CutOff(ctx, err) {

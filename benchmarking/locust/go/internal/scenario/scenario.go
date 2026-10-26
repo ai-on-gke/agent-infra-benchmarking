@@ -134,8 +134,9 @@ func (c Common) ActorTemplate() string {
 }
 
 // NewProvider makes the run's sandboxes on the provider c names, their calls
-// reported through rec. suspendDisabled has substrate skip the suspend phase.
-func (c Common) NewProvider(rec measure.Recorder, suspendDisabled bool) (sandbox.Provider, error) {
+// reported through rec. suspendDisabled has substrate skip the suspend phase,
+// and waitForWorker wait for a free worker on a resume that finds none.
+func (c Common) NewProvider(rec measure.Recorder, suspendDisabled, waitForWorker bool) (sandbox.Provider, error) {
 	if c.Provider == "agent-sandbox" {
 		dc, err := sandbox.NewKubeDynamicClient()
 		if err != nil {
@@ -159,5 +160,6 @@ func (c Common) NewProvider(rec measure.Recorder, suspendDisabled bool) (sandbox
 		EgressTLSHosts:  c.EgressAllowTLS,
 		ImplicitResume:  c.ResumeMode == ResumeModeImplicit,
 		SuspendDisabled: suspendDisabled,
+		WaitForWorker:   waitForWorker,
 	}, nil
 }
