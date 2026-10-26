@@ -159,6 +159,14 @@ variable "nested_virtualization" {
   default     = false
 }
 
+# A case's infra.cluster.gke-sandbox: for agent-sandbox's pods, which ask for
+# runtimeClassName gvisor. Substrate's atelet does not run on such a pool.
+variable "gke_sandbox" {
+  description = "Whether the sandboxed node pool runs GKE Sandbox, gVisor for the pods with runtimeClassName gvisor."
+  type        = bool
+  default     = false
+}
+
 # Every node pool's ate.dev/substrate-version label, which has to be the
 # version hack/install-ate.sh stamps on the atelet DaemonSet: a worker pod
 # schedules only onto a node whose label matches the dataplane's. The

@@ -48,6 +48,11 @@ output "sandboxed_kvm" {
   value       = var.nested_virtualization || local.sandboxed_bare_metal
 }
 
+output "sandboxed_gke_sandbox" {
+  description = "Whether the sandboxed node pool runs GKE Sandbox, which agent-sandbox's gvisor pods run in."
+  value       = var.gke_sandbox
+}
+
 output "network_name" {
   description = "Name of the VPC network the cluster is on: the dedicated one, or var.existing_network's."
   value       = reverse(split("/", local.network))[0]

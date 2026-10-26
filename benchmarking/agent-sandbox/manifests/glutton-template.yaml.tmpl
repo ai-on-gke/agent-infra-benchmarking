@@ -7,7 +7,7 @@ spec:
   networkPolicyManagement: Unmanaged
   podTemplate:
     spec:
-      ${RUNTIME_CLASS}
+      runtimeClassName: ${RUNTIME_CLASS}
       dnsPolicy: ClusterFirst
       nodeSelector:
         benchmarking-worker: "true"

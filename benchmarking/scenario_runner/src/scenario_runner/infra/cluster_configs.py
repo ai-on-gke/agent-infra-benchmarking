@@ -83,7 +83,8 @@ class ClusterConfig:
     CONFIG: ClassVar[Path]
     # The fields a case's infra.cluster may give.
     INPUTS: ClassVar[tuple[str, ...]] = (
-        "sandboxed_nodes", "sandboxed_max_nodes", "sandboxed_machine_type", "zone", "nested_virtualization"
+        "sandboxed_nodes", "sandboxed_max_nodes", "sandboxed_machine_type", "zone", "nested_virtualization",
+        "gke_sandbox",
     )
 
     sandboxed_nodes: int = 1
@@ -92,6 +93,8 @@ class ClusterConfig:
     zone: str | None = None
     # /dev/kvm off bare metal, which microvm's guests boot on.
     nested_virtualization: bool = False
+    # GKE Sandbox on the sandboxed pool, for agent-sandbox's gvisor pods.
+    gke_sandbox: bool = False
 
     def __post_init__(self) -> None:
         for name in ("sandboxed_nodes", "sandboxed_max_nodes"):
@@ -106,8 +109,9 @@ class ClusterConfig:
             value = getattr(self, name)
             if value is not None and not (isinstance(value, str) and value):
                 raise ValueError(f"`{kebab(name)}` must be a non-empty string, got {value!r}")
-        if not isinstance(self.nested_virtualization, bool):
-            raise ValueError(f"`nested-virtualization` must be true or false, got {self.nested_virtualization!r}")
+        for name in ("nested_virtualization", "gke_sandbox"):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"`{kebab(name)}` must be true or false, got {getattr(self, name)!r}")
 
     @classmethod
     def from_yaml(cls, given: dict | None) -> Self:
@@ -141,6 +145,7 @@ class ClusterConfig:
     def sandboxed_pool(self) -> dict:
         variables = {
             "nested_virtualization": self.nested_virtualization,
+            "gke_sandbox": self.gke_sandbox,
             "sandboxed_machine_type": self.sandboxed_machine_type,
             "sandboxed_node_count": self.sandboxed_nodes,
             "sandboxed_min_node_count": self.sandboxed_nodes,

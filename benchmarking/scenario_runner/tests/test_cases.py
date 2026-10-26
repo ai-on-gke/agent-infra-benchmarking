@@ -120,6 +120,8 @@ class ShippedCases(unittest.TestCase):
             self.assertEqual(pair["locust"].pop("install"), on("gvisor")["install"])
             mine = copy.deepcopy(cases[name])
             self.assertEqual(mine["locust"].pop("install"), {"agent-sandbox": {"sandbox-class": "gvisor"}})
+            # Its pods' gVisor is GKE Sandbox's.
+            self.assertIs(mine["locust"]["infra"]["cluster"].pop("gke-sandbox"), True)
             self.assertEqual(mine, pair, f"{name} differs from its substrate case in more than the control plane")
 
     def test_shared_workers_is_glutton_on_fewer_bounded_workers(self):
@@ -223,6 +225,15 @@ class CaseChecks(unittest.TestCase):
         noop = load({"n": {"noop": None}})["n"]
         self.assertEqual((noop["type"], noop["noop"]), ("noop", {}))
 
+    def test_gke_sandbox_is_for_agent_sandbox_and_needed_by_it(self):
+        agent_sandbox = {"install": {"agent-sandbox": {"sandbox-class": "gvisor"}}}
+        with self.assertRaisesRegex(ValueError, "set its `locust.infra.cluster.gke-sandbox: true`"):
+            load({"c": glutton(agent_sandbox)})
+        with self.assertRaisesRegex(ValueError, "`locust.infra.cluster.gke-sandbox` is only for cases on agent-sandbox"):
+            load({"c": glutton({"infra": {"cluster": {"gke-sandbox": True}}})})
+        case = load({"c": glutton({**agent_sandbox, "infra": {"cluster": {"gke-sandbox": True}}})})["c"]
+        self.assertIs(benchmarks.cluster_config("c", case).gke_sandbox, True)
+
     def test_load_fills_in_how_a_case_is_sampled(self):
         self.assertEqual(load({"c": GLUTTON})["c"]["repeats"], {"count": 1, "warmups": 1, "cluster": "shared"})
         case = load({"c": {**GLUTTON, "repeats": {"count": 3, "cluster": "per-repeat"}}})["c"]
@@ -260,6 +271,9 @@ class CaseChecks(unittest.TestCase):
             glutton({"install": {"substrate": {"sandbox-class": "gvisor", "x": 1}}}),
             glutton({"install": {**on("gvisor")["install"], "agent-sandbox": {"sandbox-class": "gvisor"}}}),
             glutton({"install": {"agent-sandbox": {"sandbox-class": "microvm"}}}),
+            glutton({"install": {"agent-sandbox": {"sandbox-class": "gvisor"}}}),
+            glutton({"infra": {"cluster": {"gke-sandbox": True}}}),
+            {"noop": {"infra": {"cluster": {"gke-sandbox": True}}}},
             {"noop": {"install": {"substrate": {}}}},
         ):
             with self.subTest(case=case), self.assertRaises(ValueError):
@@ -379,8 +393,10 @@ class Parameters(unittest.TestCase):
         self.assertEqual(cases["c"]["repeats"]["count"], 2)
 
     def test_a_key_takes_its_text(self):
-        case = glutton({"install": {"{plane}": {"sandbox-class": "{class}"}}}, name="{plane}-{class}")
-        parameters = {"p": [{"plane": "substrate", "class": "microvm"}, {"plane": "agent-sandbox", "class": "gvisor"}]}
+        install = {"install": {"{plane}": {"sandbox-class": "{class}"}}, "infra": {"cluster": {"gke-sandbox": "{gke}"}}}
+        case = glutton(install, name="{plane}-{class}")
+        agent_sandbox = {"plane": "agent-sandbox", "class": "gvisor", "gke": True}
+        parameters = {"p": [{"plane": "substrate", "class": "microvm"}, agent_sandbox]}
         cases = self.expand(case, parameters)
         self.assertEqual(cases["substrate-microvm"]["locust"]["install"], on("microvm")["install"])
         self.assertEqual(

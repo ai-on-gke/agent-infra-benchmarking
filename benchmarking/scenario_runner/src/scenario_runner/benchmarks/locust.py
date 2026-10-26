@@ -337,6 +337,11 @@ def run(
         raise LocustError(
             f"case {name} is microvm, but cluster {cluster.name}'s sandboxed pool has no /dev/kvm for its guests"
         )
+    if control_plane(case) == AGENT_SANDBOX and not cluster.sandboxed_gke_sandbox:
+        raise LocustError(
+            f"case {name} is on agent-sandbox, but cluster {cluster.name}'s sandboxed pool runs no GKE Sandbox for its"
+            " pods' gVisor"
+        )
     run_id = run_id or f"{datetime.now(timezone.utc):%Y%m%dt%H%M%Sz}-{images.commit()[:12]}"
     if not LABEL_RE.fullmatch(run_id):
         raise ValueError(f"run id {run_id!r} is not a valid label value")
@@ -367,7 +372,7 @@ def run(
                 cluster, workload, options["workers"]["count"], image_repo, sandbox_class(case)
             )
         else:
-            agent_sandbox.recreate_warm_pool(cluster, workload, options["workers"]["count"])
+            agent_sandbox.recreate_warm_pool(cluster, workload, options["workers"]["count"], sandbox_class(case))
         options = {
             **options,
             "worker": {

@@ -20,6 +20,7 @@ agent-sandbox/manifests/."""
 from __future__ import annotations
 
 import functools
+import json
 import os
 import re
 import subprocess
@@ -29,7 +30,7 @@ from string import Template
 from .. import LABEL_RE, RUNNER_DIR, git, images
 from ..infra.cluster import Cluster
 from ..log import log
-from ..process import retry, stream
+from ..process import output, retry, stream
 from ..workloads import openclaw
 
 AGENT_SANDBOX_DIR = RUNNER_DIR.parent.parent / "dependency-repos" / "agent-sandbox"
@@ -56,6 +57,10 @@ WORKLOADS_NAMESPACE = openclaw.NAMESPACE
 # The image of workloads.json each workload's template runs.
 WORKLOAD_IMAGES = {"glutton": "glutton", "openclaw": "openclaw-workload"}
 ROLLOUT_TIMEOUT_SECS = 180
+# Each sandbox class's RuntimeClass, GKE Sandbox's, whose nodes carry
+# GKE_SANDBOX_LABEL with it (infra.cluster.gke-sandbox).
+RUNTIME_CLASSES = {"gvisor": "gvisor"}
+GKE_SANDBOX_LABEL = "sandbox.gke.io/runtime"
 
 
 class AgentSandboxError(RuntimeError):
@@ -156,6 +161,8 @@ def deploy_workload_and_pool(
 ) -> None:
     if workload_name not in WORKLOAD_IMAGES:
         raise AgentSandboxError(f"no agent-sandbox template of {workload_name}; there are {', '.join(WORKLOAD_IMAGES)}")
+    if sandbox_class not in RUNTIME_CLASSES:
+        raise AgentSandboxError(f"agent-sandbox runs only {', '.join(RUNTIME_CLASSES)}, not {sandbox_class}")
     cluster.apply_namespace(WORKLOADS_NAMESPACE)
     if workload_name == "openclaw":
         openclaw.deploy_mock_llm(cluster, image_repo, timeout)
@@ -164,17 +171,62 @@ def deploy_workload_and_pool(
         NAME=workload_name,
         NAMESPACE=WORKLOADS_NAMESPACE,
         IMAGE=images.pin(images.image_ref(images.WORKLOADS_IMAGES, image_repo, WORKLOAD_IMAGES[workload_name])),
-        RUNTIME_CLASS="runtimeClassName: kata" if sandbox_class == "microvm" else "",
+        RUNTIME_CLASS=RUNTIME_CLASSES[sandbox_class],
     )
     log(f"agent-sandbox: deploying SandboxTemplate {workload_name}")
     apply(cluster, template)
     apply_warm_pool(cluster, workload_name, worker_count, timeout)
+    check_isolated(cluster, RUNTIME_CLASSES[sandbox_class])
 
 
-def recreate_warm_pool(cluster: Cluster, workload_name: str, worker_count: int, timeout: int = 300) -> None:
+def recreate_warm_pool(
+    cluster: Cluster, workload_name: str, worker_count: int, sandbox_class: str = "gvisor", timeout: int = 300
+) -> None:
     delete = ["delete", "sandboxwarmpool", warm_pool_name(workload_name), "--ignore-not-found"]
     stream(cluster.kubectl(*delete, namespace=WORKLOADS_NAMESPACE))
     apply_warm_pool(cluster, workload_name, worker_count, timeout)
+    check_isolated(cluster, RUNTIME_CLASSES[sandbox_class])
+
+
+def check_isolated(cluster: Cluster, runtime_class: str) -> None:
+    """Raises AgentSandboxError unless every sandbox's pod asks for
+    runtime_class and is on a node GKE Sandbox runs it on."""
+    pods = json.loads(output(cluster.kubectl("get", "pods", "-o", "json", namespace=WORKLOADS_NAMESPACE)))["items"]
+    nodes = json.loads(output(cluster.kubectl("get", "nodes", "-o", "json")))["items"]
+    problems = isolation_problems(pods, nodes, runtime_class)
+    if problems:
+        raise AgentSandboxError("sandboxes not isolated: " + "; ".join(problems))
+    count = sum(map(is_sandbox_pod, pods))
+    log(f"agent-sandbox: all {count} sandbox pods run with RuntimeClass {runtime_class} on GKE Sandbox nodes")
+
+
+def is_sandbox_pod(pod: dict) -> bool:
+    """A sandbox's pod, not one a pool recreated is still deleting."""
+    meta = pod["metadata"]
+    owned = any(ref.get("kind") == "Sandbox" for ref in meta.get("ownerReferences", []))
+    return owned and "deletionTimestamp" not in meta
+
+
+def isolation_problems(pods: list[dict], nodes: list[dict], runtime_class: str) -> list[str]:
+    """What in pods and nodes, as kubectl gets them, leaves a sandbox's pod
+    out of runtime_class, or that there is no sandbox pod to tell."""
+    sandboxed = {
+        node["metadata"]["name"]
+        for node in nodes
+        if node["metadata"].get("labels", {}).get(GKE_SANDBOX_LABEL) == runtime_class
+    }
+    problems = []
+    for pod in filter(is_sandbox_pod, pods):
+        name = pod["metadata"]["name"]
+        have = pod["spec"].get("runtimeClassName")
+        if have != runtime_class:
+            problems.append(f"pod {name} has runtimeClassName {have!r}, not {runtime_class!r}")
+        elif pod["spec"].get("nodeName") not in sandboxed:
+            node = pod["spec"].get("nodeName")
+            problems.append(f"pod {name} is on node {node}, which is not {GKE_SANDBOX_LABEL}={runtime_class}")
+    if not any(map(is_sandbox_pod, pods)):
+        problems.append("no sandbox pods to check")
+    return problems
 
 
 def apply_warm_pool(cluster: Cluster, workload_name: str, worker_count: int, timeout: int) -> None:
