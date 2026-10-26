@@ -170,23 +170,23 @@ cases:
   # compare.
   "{workload}-{control-plane}-{sandbox-class}":
     repeats:
-      count: "{count}"
+      count: 1
     locust:
       install:
         "{control-plane}":
           sandbox-class: "{sandbox-class}"
       infra:
         cluster:
-          sandboxed-nodes: 1
+          sandboxed-nodes: 30
           configuration: "{configuration}"
           nested-virtualization: "{nested-virtualization}"
       workers:
-        count: 10
+        count: 300
       master:
-        run-time: "{run-time}"
-        users: "{users}"
+        run-time: "4m"
+        users: 300
         spawn-rate: 10
-        warm-up: 10s
+        warm-up: 1m
       worker:
         resume-mode: explicit
         workload-name: "{workload}"
@@ -197,15 +197,15 @@ cases:
       workload:
       # 10 VUs for 5 minutes, measured three times.
       - workload: glutton
-        count: 3
-        run-time: 5m
-        users: 10
+        # count: 3
+        # run-time: 5m
+        # users: 10
       # 3 VUs for 2 minutes, on the cluster with mock-llm.
       - workload: openclaw
-        count: 1
+        # count: 1
         configuration: openclaw
-        run-time: 2m
-        users: 3
+        # run-time: 2m
+        # users: 3
         # Above the template's OPENCLAW_TIMEOUT_SECS (100), so the actor's own
         # timeout reports a slow turn first.
         workload-timeout: 120s
@@ -302,9 +302,9 @@ cases:
         limits:
           memory: "{actor-memory}"
       master:
-        run-time: 13m20s
+        run-time: 5m20s
         spawn-rate: 1
-        warm-up: 2m
+        warm-up: 1m
       worker:
         resume-mode: explicit
         suspend-disabled: false
