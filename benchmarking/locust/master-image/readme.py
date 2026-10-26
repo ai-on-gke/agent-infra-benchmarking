@@ -373,9 +373,12 @@ def _workers(info: dict, golden: bool = True) -> str:
         spec, status = pool.get("spec") or {}, pool.get("status") or {}
         ready = status.get('readyReplicas', 0)
         replicas = spec.get('replicas', UNKNOWN)
+        # A list of them now, one sandboxClass before.
+        classes = [c.get("name") for c in spec.get("sandboxClasses") or [] if isinstance(c, dict) and c.get("name")]
+        classes = classes or [spec.get("sandboxClass") or UNKNOWN]
         lines.append(
             f"WorkerPool: {ready}/{replicas} workers ready, "
-            f"sandbox class {spec.get('sandboxClass') or UNKNOWN}."
+            f"sandbox class {', '.join(classes)}."
         )
         case = _locust(info.get("case") or {})
         users = (case.get("master") or {}).get("users")

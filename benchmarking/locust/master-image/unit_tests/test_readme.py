@@ -93,6 +93,12 @@ class Render(unittest.TestCase):
         self.assertIn("| density | 5x (500 actors / 100 workers) |", text)
         self.assertIn("Density: 5x (500 actors / 100 workers, 50 actors/node).", text)
 
+    def test_the_worker_pools_sandbox_classes_now_and_before_they_were_a_list(self):
+        for spec, want in (({"sandboxClasses": [{"name": "gvisor"}, {"name": "microvm"}]}, "gvisor, microvm"),
+                           ({"sandboxClass": "gvisor"}, "gvisor"), ({}, "-")):  # fmt: skip
+            info = {**self.info(), "worker_pool": {"spec": {"replicas": 10, **spec}, "status": {"readyReplicas": 10}}}
+            self.assertIn(f"WorkerPool: 10/10 workers ready, sandbox class {want}.", readme.render(info))
+
     def test_no_cycles(self):
         failures = {"cycles": 0, "failed_cycles": 0, "failed_starts": 0, "ratio": None}
         self.assertEqual(readme._failures(failures, 0.01), "none; the run completed no cycle")
