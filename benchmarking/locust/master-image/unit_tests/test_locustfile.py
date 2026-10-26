@@ -51,6 +51,18 @@ class Runworkload(unittest.TestCase):
         self.assertNotIn("RunWorkloadUser", listed.stdout)
 
 
+class Density(unittest.TestCase):
+    def test_loads_the_master_s_listeners_and_declares_its_user(self):
+        listed = list_users(TESTS_DIR / "density.py", "--warm-up", "10s")
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertIn("DensityUser", listed.stdout)
+
+    def test_the_gate_leaves_out_the_user_but_not_the_listeners(self):
+        listed = list_users(TESTS_DIR / "density.py", "--warm-up", "10s", LOCUST_NO_DENSITY_USER="1")
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertNotIn("DensityUser", listed.stdout)
+
+
 class Master(unittest.TestCase):
     def test_is_not_a_locustfile_of_the_directory(self):
         paths = [Path(path).name for path in parse_locustfile_paths([str(TESTS_DIR)])]

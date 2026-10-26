@@ -98,19 +98,7 @@ func New(c Config) (task func(), shutdown func(context.Context)) {
 	if c.Config.Tracer == nil {
 		c.Config.Tracer = otel.Tracer("substrate-boomer/runworkload")
 	}
-	c.InstructionsPerCycle = max(c.InstructionsPerCycle, 1)
-	c.ConcurrentInstructions = max(c.ConcurrentInstructions, 1)
-	if (c.GluttonWriteRAM != "" || c.GluttonWriteDisk > 0) && c.Workload.Name() != workload.GluttonName {
-		slog.Error("fatal: --glutton-write-ram and --glutton-write-disk are for the glutton workload only",
-			slog.String("workload", c.Workload.Name()))
-		os.Exit(1)
-	}
-	provider, err := c.NewProvider(recorder(c), c.SuspendDisabled)
-	if err != nil {
-		slog.Error("fatal: cannot initialize k8s client for agent-sandbox", slog.String("err", err.Error()))
-		os.Exit(1)
-	}
-	return harness.New(&runWorkloadScenario{c: c, provider: provider}, harness.Options{
+	return harness.New(NewScenario(c, UserClass), harness.Options{
 		Name:      Name,
 		UserClass: UserClass,
 		MinWait:   c.MinWait,
@@ -118,11 +106,30 @@ func New(c Config) (task func(), shutdown func(context.Context)) {
 	})
 }
 
+// NewScenario is the scenario New runs, its rows reported under userClass,
+// for a user class that runs the same cycle on a pacing of its own. c's
+// Tracer has to be set.
+func NewScenario(c Config, userClass string) harness.Scenario {
+	c.InstructionsPerCycle = max(c.InstructionsPerCycle, 1)
+	c.ConcurrentInstructions = max(c.ConcurrentInstructions, 1)
+	if (c.GluttonWriteRAM != "" || c.GluttonWriteDisk > 0) && c.Workload.Name() != workload.GluttonName {
+		slog.Error("fatal: --glutton-write-ram and --glutton-write-disk are for the glutton workload only",
+			slog.String("workload", c.Workload.Name()))
+		os.Exit(1)
+	}
+	provider, err := c.NewProvider(recorder(c, userClass), c.SuspendDisabled)
+	if err != nil {
+		slog.Error("fatal: cannot initialize k8s client for agent-sandbox", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	return &runWorkloadScenario{c: c, userClass: userClass, provider: provider}
+}
+
 // recorder reports the run's calls, the sandboxes' and the users' alike.
-func recorder(c Config) measure.Recorder {
+func recorder(c Config, userClass string) measure.Recorder {
 	return measure.Recorder{
 		Tracer:       c.Config.Tracer,
-		UserClass:    UserClass,
+		UserClass:    userClass,
 		Timeout:      c.Timeout,
 		WindowMethod: runWorkloadMethod,
 	}
@@ -130,8 +137,9 @@ func recorder(c Config) measure.Recorder {
 
 // runWorkloadScenario starts each VU's user on an actor of its own.
 type runWorkloadScenario struct {
-	c        Config
-	provider sandbox.Provider
+	c         Config
+	userClass string
+	provider  sandbox.Provider
 }
 
 func (s *runWorkloadScenario) Start(ctx context.Context) (harness.Session, error) {
@@ -140,7 +148,7 @@ func (s *runWorkloadScenario) Start(ctx context.Context) (harness.Session, error
 		return nil, err
 	}
 	return &runWorkloadUser{
-		rec:          recorder(s.c),
+		rec:          recorder(s.c, s.userClass),
 		sandbox:      sb,
 		workload:     s.c.Workload,
 		templateName: s.c.ActorTemplate(),

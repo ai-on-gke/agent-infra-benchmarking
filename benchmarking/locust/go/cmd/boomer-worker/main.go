@@ -38,6 +38,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/myzhan/boomer"
 
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/density"
 	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/runworkload"
 	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
 	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/workload"
@@ -110,6 +111,10 @@ func main() {
 			"runworkload with glutton only: bytes of a file each cycle rewrites in the actor before its suspend. Zero writes none.")
 		suspendDisabled = flag.Bool("suspend-disabled", false,
 			"runworkload only: whether to skip the suspend phase during the benchmark.")
+
+		// density runs runworkload's cycle, so it reads the flags above too.
+		dutyCycle = flag.Float64("duty-cycle", 0,
+			"density only: share of its time each actor spends in a cycle, above 0 and at most 1. It sets the wait after each cycle in place of --min-wait and --max-wait, which then only follow a failed start.")
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
@@ -195,16 +200,10 @@ func main() {
 			slog.Duration("workload_timeout", *workloadTimeout))
 		os.Exit(1)
 	}
-	// runworkload is built here, from the flags, rather than looked up: the
-	// registry hands an Init nothing but cfg.
-	var (
-		taskFn     func()
-		shutdownFn func(context.Context)
-		taskName   string
-	)
-	switch class {
-	case runworkload.Name:
-		taskFn, shutdownFn = runworkload.New(runworkload.Config{
+	// runworkload and density are built here, from the flags, rather than
+	// looked up: the registry hands an Init nothing but cfg.
+	cycle := func() runworkload.Config {
+		return runworkload.Config{
 			Common: scenario.Setup(scenario.Options{
 				Config:         cfg,
 				Provider:       *provider,
@@ -224,8 +223,20 @@ func main() {
 			ConcurrentInstructions: *concurrentInstructions,
 			GluttonWriteRAM:        *gluttonWriteRAM,
 			GluttonWriteDisk:       *gluttonWriteDisk,
-		})
+		}
+	}
+	var (
+		taskFn     func()
+		shutdownFn func(context.Context)
+		taskName   string
+	)
+	switch class {
+	case runworkload.Name:
+		taskFn, shutdownFn = runworkload.New(cycle())
 		taskName = runworkload.UserClass
+	case density.Name:
+		taskFn, shutdownFn = density.New(density.Config{Cycle: cycle(), DutyCycle: *dutyCycle})
+		taskName = density.UserClass
 	default:
 		entry, ok := userclass.Lookup(class)
 		if !ok {
@@ -281,9 +292,9 @@ func main() {
 }
 
 // userClasses are the --user-class values: the upstream ones registered with
-// userclass, and runworkload.
+// userclass, runworkload and density.
 func userClasses() []string {
-	names := append(userclass.Names(), runworkload.Name)
+	names := append(userclass.Names(), runworkload.Name, density.Name)
 	slices.Sort(names)
 	return names
 }

@@ -272,9 +272,16 @@ cases:
         workload-template: glutton
 
   # 100 workers on 10 nodes, suspended between instructions, at 100, 250 and
-  # 500 VUs against a baseline of 100 that never suspend.
+  # 500 VUs against a baseline of 100 that never suspend. The density user
+  # class paces each actor to be in a cycle for its `duty-cycle` share of the
+  # time, so every variant keeps about 80 actors active at once, VUs × duty
+  # cycle, whatever the workload's turn takes, and only the actors they are
+  # shared among grows. Each worker has room for one of the workload's actors,
+  # its default actor-memory, so the actors share the 100 workers rather than
+  # pile onto them.
   "{workload}-density":
     locust:
+      user-class: density
       install:
         substrate:
           sandbox-class: gvisor
@@ -284,6 +291,8 @@ cases:
           configuration: "{configuration}"
       workers:
         count: 100
+        limits:
+          memory: "{worker-memory}"
       master:
         run-time: "{run-time}"
         spawn-rate: "{spawn-rate}"
@@ -298,31 +307,31 @@ cases:
       baseline:
         locust:
           master: {users: 100, spawn-rate: 10}
-          worker: {suspend-disabled: true}
+          worker: {suspend-disabled: true, duty-cycle: 0.8}
       "10":
         locust:
           master: {users: 100}
-          worker: {min-wait: "{wait-10}", max-wait: "{wait-10}"}
+          worker: {duty-cycle: 0.8}
       "25":
         locust:
           master: {users: 250, run-time: "{run-time-25}"}
-          worker: {min-wait: "{wait-25}", max-wait: "{wait-25}"}
+          worker: {duty-cycle: 0.32}
       "50":
         locust:
           master: {users: 500, run-time: "{run-time-50}"}
-          worker: {min-wait: "{wait-50}", max-wait: "{wait-50}"}
+          worker: {duty-cycle: 0.16}
     parameters:
       workload:
       - workload: glutton
+        worker-memory: 256Mi
         spawn-rate: 10
         run-time: 3m
         run-time-25: 3m
         run-time-50: 3m
-        wait-10: 6000ms
-        wait-25: 6000ms
-        wait-50: 6000ms
-      # Its VUs spawned one a second, spread over its wait.
+      # Its VUs spawned one a second: each one's first cycle runs as it
+      # spawns, before its wait spreads the cycles out.
       - workload: openclaw
+        worker-memory: 2Gi
         configuration: openclaw
         workload-timeout: 120s
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
@@ -330,9 +339,6 @@ cases:
         run-time: 5m
         run-time-25: 12m
         run-time-50: 20m
-        wait-10: 106000ms
-        wait-25: 212000ms
-        wait-50: 424000ms
 
   # glutton woken by its instruction, through the router, rather than by a
   # ResumeActor first: TTFI is then the router's wake.

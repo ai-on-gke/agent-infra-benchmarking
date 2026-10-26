@@ -19,11 +19,12 @@ import (
 	"testing"
 )
 
-// runworkload is built by main rather than registered with userclass, but
-// --user-class still has to offer it beside the upstream classes.
+// runworkload and density are built by main rather than registered with
+// userclass, but --user-class still has to offer them beside the upstream
+// classes.
 func TestUserClassesListRunworkload(t *testing.T) {
 	names := userClasses()
-	for _, want := range []string{"runworkload", "glutton"} {
+	for _, want := range []string{"runworkload", "density", "glutton"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("user classes: got %v, want %q among them", names, want)
 		}

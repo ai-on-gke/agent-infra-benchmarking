@@ -79,6 +79,13 @@ type Session interface {
 	LeftBehindAttrs() []slog.Attr
 }
 
+// Pacer is a Session that sets its own think time, in place of Options'
+// MinWait and MaxWait.
+type Pacer interface {
+	// Wait is the think time before the session's next iteration.
+	Wait() time.Duration
+}
+
 // Options are the runtime's settings.
 type Options struct {
 	// Name is the user class's registered name, which log lines give it by.
@@ -129,6 +136,15 @@ func (r *runtime) dynamicWait() time.Duration {
 	return r.opts.MinWait + time.Duration(rand.Float64()*float64(jitter))
 }
 
+// wait is the think time before s's next iteration: its own if it paces
+// itself, the dynamic one otherwise.
+func (r *runtime) wait(s Session) time.Duration {
+	if p, ok := s.(Pacer); ok {
+		return p.Wait()
+	}
+	return r.dynamicWait()
+}
+
 // iterate is the task function boomer calls in a loop on each VU goroutine.
 // The first call on a goroutine starts the session; every later one runs one
 // iteration of it.
@@ -163,7 +179,7 @@ func (r *runtime) iterate() {
 			_ = s.Close(ctx)
 			bmetrics.UpdateUsers(r.opts.UserClass, -1)
 		}
-		time.Sleep(r.dynamicWait())
+		time.Sleep(r.wait(s))
 		return
 	}
 	s := val.(Session)
@@ -173,30 +189,33 @@ func (r *runtime) iterate() {
 		if measure.CutOff(ctx, err) {
 			return
 		}
-		r.keepOrDiscard(ctx, gid, s, call, err)
-		time.Sleep(r.dynamicWait())
-		return
+		if !r.keepOrDiscard(ctx, gid, s, call, err) {
+			time.Sleep(r.dynamicWait())
+			return
+		}
 	}
 
-	time.Sleep(r.dynamicWait())
+	time.Sleep(r.wait(s))
 }
 
 // keepOrDiscard keeps a session whose iteration failed if it recovers, and
-// discards it otherwise. Recovering keeps the run on the sessions it started,
-// as a client would retry its own sandbox, so a failure that sticks to one
-// shows as that rather than as a fresh session each time.
-func (r *runtime) keepOrDiscard(ctx context.Context, gid int64, s Session, call string, cause error) {
+// discards it otherwise, reporting whether it was kept. Recovering keeps the
+// run on the sessions it started, as a client would retry its own sandbox, so
+// a failure that sticks to one shows as that rather than as a fresh session
+// each time.
+func (r *runtime) keepOrDiscard(ctx context.Context, gid int64, s Session, call string, cause error) bool {
 	err := s.Recover(ctx)
 	// The teardown, which cut it off, closes the session itself.
 	if measure.CutOff(ctx, err) {
-		return
+		return false
 	}
 	attrs := slices.Concat(s.LogAttrs(), []slog.Attr{slog.String("call", call), slog.String("err", cause.Error())})
 	if err == nil {
 		slog.LogAttrs(ctx, slog.LevelInfo, "kept the session after a failed call", attrs...)
-		return
+		return true
 	}
 	r.discard(ctx, gid, s, append(attrs, slog.String("recover_err", err.Error())))
+	return false
 }
 
 func (r *runtime) start(ctx context.Context) (Session, error) {

@@ -270,6 +270,45 @@ func TestADiscardThatCouldNotCloseStillFreesTheSlot(t *testing.T) {
 	}
 }
 
+// pacedScenario starts f's sessions as ones that pace themselves with no
+// think time.
+type pacedScenario struct{ *fakeScenario }
+
+func (p pacedScenario) Start(ctx context.Context) (Session, error) {
+	s, err := p.fakeScenario.Start(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return pacedSession{s.(*fakeSession)}, nil
+}
+
+type pacedSession struct{ *fakeSession }
+
+func (pacedSession) Wait() time.Duration { return 0 }
+
+// A session that paces itself sets its own think time, after its start and
+// after an iteration, failed and recovered or not, so the run's MinWait, an
+// hour here, never holds it up.
+func TestAPacerSetsItsOwnThinkTime(t *testing.T) {
+	for _, iterateErr := range []error{nil, errIterate} {
+		f := &fakeScenario{iterateErr: iterateErr}
+		task, _ := New(pacedScenario{f}, Options{Name: "fake", UserClass: "FakeUser", MinWait: time.Hour})
+		captureLogs(t)
+
+		done := make(chan struct{})
+		go func() {
+			task()
+			task()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("iterateErr %v: the VU waited the run's MinWait rather than the session's own", iterateErr)
+		}
+	}
+}
+
 // An actor that outlives the run is invisible until someone goes looking for
 // it, so teardown has to say which ones it could not remove and why.
 func TestShutdownReportsWhatItLeftBehind(t *testing.T) {

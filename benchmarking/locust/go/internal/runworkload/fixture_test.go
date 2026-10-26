@@ -306,11 +306,11 @@ func newTestScenarioOn(cfg *userclass.Config, opts scenario.Options) *runWorkloa
 func newTestScenarioRunning(cfg *userclass.Config, opts scenario.Options, wl workload.Workload) *runWorkloadScenario {
 	opts.Config = cfg
 	c := Config{Common: scenario.Common{Options: opts, Workload: wl}}
-	provider, err := c.NewProvider(recorder(c), false)
+	provider, err := c.NewProvider(recorder(c, UserClass), false)
 	if err != nil {
 		panic(err)
 	}
-	return &runWorkloadScenario{c: c, provider: provider}
+	return &runWorkloadScenario{c: c, userClass: UserClass, provider: provider}
 }
 
 // testRun is a scenario running on the harness, as New starts it.

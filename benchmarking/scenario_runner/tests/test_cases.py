@@ -235,8 +235,8 @@ class CaseChecks(unittest.TestCase):
         self.assertEqual(master[:2], ["-f", "/app/tests/other.py"])
         self.assertIn("--user-class=other", locust.worker_args(options))
 
-    def test_the_master_has_a_locustfile_for_runworkload_alone(self):
-        self.assertEqual(locust.user_classes(), ["runworkload"])
+    def test_the_master_has_a_locustfile_for_density_and_runworkload(self):
+        self.assertEqual(locust.user_classes(), ["density", "runworkload"])
 
     def test_flags(self):
         self.assertEqual(locust.flags({"a": True, "b": 2, "c": "x", "d": False}), ["--a", "--b=2", "--c=x", "--d=false"])
