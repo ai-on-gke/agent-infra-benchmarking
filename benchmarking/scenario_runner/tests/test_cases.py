@@ -122,21 +122,20 @@ class ShippedCases(unittest.TestCase):
             self.assertEqual(mine["locust"].pop("install"), {"agent-sandbox": {"sandbox-class": "gvisor"}})
             self.assertEqual(mine, pair, f"{name} differs from its substrate case in more than the control plane")
 
-    def test_shared_workers_is_glutton_on_fewer_bounded_workers(self):
-        # So it compares, and runs on glutton-substrate-gvisor's dev infra.
+    def test_shared_workers_is_glutton_single_on_fewer_bounded_workers(self):
+        # So it compares, and runs on glutton-single's dev infra.
         cases = copy.deepcopy(SHIPPED.cases)
-        mine, pair = cases["glutton-shared-workers"], cases["glutton-substrate-gvisor"]
+        mine, pair = cases["glutton-shared-workers"], cases["glutton-single"]
         self.assertEqual(mine["locust"].pop("workers"), {"count": 2, "limits": {"memory": "1536Mi"}})
         pair["locust"].pop("workers")
-        mine.pop("repeats"), pair.pop("repeats")
         self.assertEqual(mine, pair)
 
     def test_each_case_asks_for_its_cluster(self):
         cases = SHIPPED.cases
         clusters = {name: benchmarks.cluster_config(name, case) for name, case in cases.items()}
-        self.assertEqual(clusters["glutton-substrate-gvisor"], CommonCluster(sandboxed_nodes=1))
+        self.assertEqual(clusters["glutton-substrate-gvisor"], CommonCluster(sandboxed_nodes=30))
         self.assertEqual(
-            clusters["glutton-substrate-microvm"], CommonCluster(sandboxed_nodes=1, nested_virtualization=True)
+            clusters["glutton-substrate-microvm"], CommonCluster(sandboxed_nodes=30, nested_virtualization=True)
         )
         self.assertEqual(clusters["openclaw-density-baseline"], OpenclawCluster(sandboxed_nodes=10))
         self.assertEqual(

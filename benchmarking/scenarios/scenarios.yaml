@@ -163,11 +163,11 @@ suites:
   - glutton-single
 
 cases:
-  # Each workload on 10 workers on one node, its VUs (virtual users) started
-  # 10 a second and each actor woken by a ResumeActor first: on substrate's
-  # gvisor, on its microvm with the nested virtualization it boots its guests
-  # on, and on agent-sandbox, all alike but for what they run on, so they
-  # compare.
+  # Each workload at 300 VUs (virtual users) on 300 workers over 30 nodes for
+  # 4m, measured once, its VUs started 10 a second and each actor woken by a
+  # ResumeActor first: on substrate's gvisor, on its microvm with the nested
+  # virtualization it boots its guests on, and on agent-sandbox, all alike but
+  # for what they run on, so they compare.
   "{workload}-{control-plane}-{sandbox-class}":
     repeats:
       count: 1
@@ -195,17 +195,10 @@ cases:
         actor-egress-allow: "{actor-egress-allow}"
     parameters:
       workload:
-      # 10 VUs for 5 minutes, measured three times.
       - workload: glutton
-        # count: 3
-        # run-time: 5m
-        # users: 10
-      # 3 VUs for 2 minutes, on the cluster with mock-llm.
+      # On the cluster with mock-llm.
       - workload: openclaw
-        # count: 1
         configuration: openclaw
-        # run-time: 2m
-        # users: 3
         # Above the template's OPENCLAW_TIMEOUT_SECS (100), so the actor's own
         # timeout reports a slow turn first.
         workload-timeout: 120s
@@ -220,8 +213,8 @@ cases:
       - control-plane: agent-sandbox
         sandbox-class: gvisor
 
-  # glutton once rather than three times, with no warm-up, for a quicker check
-  # of the path.
+  # glutton at 10 VUs on 10 workers on one node, once with no warm-up, for a
+  # quicker check of the path.
   glutton-single:
     repeats:
       warmups: 0
@@ -244,9 +237,9 @@ cases:
         workload-name: glutton
         workload-template: glutton
 
-  # glutton-substrate-gvisor's load and cluster, so it runs on the same dev
-  # infra, on 2 workers rather than 10, each with room for 6 of its 256Mi
-  # actors: its 10 VUs' actors can only all be placed by sharing them.
+  # glutton-single's load and cluster, so it runs on the same dev infra, on 2
+  # workers rather than 10, each with room for 6 of its 256Mi actors: its 10
+  # VUs' actors can only all be placed by sharing them.
   glutton-shared-workers:
     repeats:
       warmups: 0
@@ -283,9 +276,10 @@ cases:
   #
   # The variants differ in their VUs alone, and in the spawn rate that grows
   # with them, so each ramps up in 100s. Every variant of either workload then
-  # runs on the same times: a warm-up of 2m, longer than a turn openclaw's own
-  # timeout, 100s, cuts off, and a steady window of 580s, so their percentiles
-  # rest on about as many cycles.
+  # runs on the same times: a warm-up of 1m after the last VU starts, and a
+  # steady window of the 160s left, so their percentiles rest on about as many
+  # cycles. The warm-up is shorter than a turn openclaw's own timeout, 100s,
+  # cuts off, so its window may start with turns begun during the ramp.
   "{workload}-density":
     locust:
       user-class: density
