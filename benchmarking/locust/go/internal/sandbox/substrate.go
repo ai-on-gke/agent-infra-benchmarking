@@ -377,7 +377,7 @@ func (s *substrateSandbox) settleRunning(ctx context.Context) error {
 		s.markActive()
 		return nil
 	}
-	callCtx, cancel := s.p.Rec.Context(ctx)
+	callCtx, cancel := s.p.Rec.ControlContext(ctx)
 	defer cancel()
 	if _, err := s.api.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{Actor: s.ref()}); err != nil {
 		return fmt.Errorf("suspending the running actor: %w", err)
@@ -395,7 +395,7 @@ func (s *substrateSandbox) settleRunning(ctx context.Context) error {
 // suspend rides along as context: the two fail together when the actor is
 // still in a transitional state, and the pair is what names that cause.
 func (s *substrateSandbox) Remove(ctx context.Context) error {
-	suspendCtx, cancel := s.p.Rec.Context(ctx)
+	suspendCtx, cancel := s.p.Rec.ControlContext(ctx)
 	_, suspendErr := s.api.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{
 		Actor: s.ref(),
 	})

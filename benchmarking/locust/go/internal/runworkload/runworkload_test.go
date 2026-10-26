@@ -756,6 +756,45 @@ func requestCount(t *testing.T, name, status string) float64 {
 	return total
 }
 
+// A suspend still in flight when the run ends is let finish, because ateapi
+// abandons the checkpoint of one cut off and crashes the actor. The teardown
+// then finds the actor SUSPENDED and deletes it under the state check.
+func TestTheEndOfTheRunLetsASuspendFinish(t *testing.T) {
+	const delay = 200 * time.Millisecond
+	ctrl := &fakeControlClient{suspendDelay: delay}
+	rt := newTestRuntime(t, ctrl)
+	before := failureCount(t, sandbox.SuspendMetric)
+
+	// Users are keyed by goroutine, so both iterations run on this one: the
+	// first creates the actor, the second cycles it into the slow suspend.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.iterate()
+		rt.iterate()
+	}()
+	for ctrl.countCalls("SuspendActor") == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	start := time.Now()
+	rt.shutdown(context.Background())
+	<-done
+
+	if got := ctrl.cutSuspends(); got != 0 {
+		t.Errorf("suspends cut off: got %d, want none", got)
+	}
+	if elapsed := time.Since(start); elapsed < delay {
+		t.Errorf("teardown took %v; it should have waited for the %v suspend", elapsed, delay)
+	}
+	if got := failureCount(t, sandbox.SuspendMetric) - before; got != 0 {
+		t.Errorf("Suspend failures: got %v more, want none", got)
+	}
+	if ctrl.deletedFromAnyState() {
+		t.Error("the teardown deleted from any state; want the actor SUSPENDED first")
+	}
+}
+
 // An instruction still in flight when the run ends is cut off, not waited for,
 // and is neither a failure nor a reason to discard the actor: the teardown
 // removes it.

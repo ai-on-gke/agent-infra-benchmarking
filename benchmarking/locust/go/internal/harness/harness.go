@@ -247,6 +247,8 @@ func (r *runtime) shutdown(ctx context.Context) {
 	// In-flight calls are cut off first, so the drain waits seconds rather than
 	// the rest of an iteration: an openclaw turn takes far longer than the
 	// teardown has. What they were doing is not recorded; see measure.CutOff.
+	// Control-plane calls are let finish instead, so the actors are not left
+	// mid transition; see measure.ControlContext.
 	r.endRun(measure.ErrRunEnded)
 
 	// The drain takes a slice of the caller's budget rather than all of it, so

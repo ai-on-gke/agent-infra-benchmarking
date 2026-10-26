@@ -68,9 +68,31 @@ func (r Recorder) Context(ctx context.Context) (context.Context, context.CancelF
 	return context.WithTimeout(ctx, r.Timeout)
 }
 
+// ControlContext bounds one control-plane call like Context, but lets it
+// finish when the run ends rather than cutting it off. ateapi runs a call's
+// workflow on the call's own context, so cancelling a suspend mid-flight kills
+// its checkpoint and crashes the actor, and a cancelled resume leaves it
+// RESUMING; the teardown that follows could then only delete it from any
+// state. The call still ends at the timeout, inside the teardown's drain, and
+// with ctx when ctx ends for any other reason, such as the teardown's budget.
+func (r Recorder) ControlContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	callCtx, cancelTimeout := r.Context(context.WithoutCancel(ctx))
+	callCtx, cancel := context.WithCancelCause(callCtx)
+	stop := context.AfterFunc(ctx, func() {
+		if cause := context.Cause(ctx); !errors.Is(cause, ErrRunEnded) {
+			cancel(cause)
+		}
+	})
+	return callCtx, func() {
+		stop()
+		cancel(nil)
+		cancelTimeout()
+	}
+}
+
 // GRPC wraps a unary gRPC call with a span and its row. The latency reported
 // is the server's own elapsed trailer when it sent one, and client wall clock
-// otherwise.
+// otherwise. The call is let finish when the run ends; see ControlContext.
 //
 // A call refused with Aborted is retried: it is a lost race with another
 // operation on the same object, which clears once that lands, and upstream's
@@ -78,14 +100,15 @@ func (r Recorder) Context(ctx context.Context) (context.Context, context.CancelF
 func (r Recorder) GRPC(ctx context.Context, name string, do func(context.Context, *metadata.MD) error) error {
 	ctx, span := r.Tracer.Start(ctx, name)
 	defer span.End()
-	ctx, cancel := r.Context(ctx)
+	// ctx stays the run's, which CutOff reads; callCtx no longer ends with it.
+	callCtx, cancel := r.ControlContext(ctx)
 	defer cancel()
 
 	start := time.Now()
 	var tr metadata.MD
-	attempts, err := retry(ctx, func(err error) bool { return status.Code(err) == codes.Aborted }, func() error {
+	attempts, err := retry(callCtx, func(err error) bool { return status.Code(err) == codes.Aborted }, func() error {
 		tr = nil
-		return do(ctx, &tr)
+		return do(callCtx, &tr)
 	})
 	clientLatency := time.Since(start)
 

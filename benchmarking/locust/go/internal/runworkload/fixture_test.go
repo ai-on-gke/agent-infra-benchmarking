@@ -76,6 +76,8 @@ type fakeControlClient struct {
 	peak     int
 	// deleteAnyState is the AnyState flag from the most recent DeleteActor.
 	deleteAnyState bool
+	// suspendsCut counts the SuspendActor calls whose context ended first.
+	suspendsCut int
 	calls          []string
 	// template and actor are the ActorTemplate and actor names from the last
 	// CreateActor.
@@ -183,13 +185,31 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 
 func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, "SuspendActor")
-	time.Sleep(f.suspendDelay)
-	if f.suspendErr != nil {
-		return nil, f.suspendErr
+	delay, suspendErr := f.suspendDelay, f.suspendErr
+	f.mu.Unlock()
+
+	// Outside the lock, so a test can see the suspend in flight. One cut off
+	// here is a checkpoint the server abandons, which crashes the actor.
+	select {
+	case <-time.After(delay):
+	case <-ctx.Done():
+		f.mu.Lock()
+		f.suspendsCut++
+		f.mu.Unlock()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
+	if suspendErr != nil {
+		return nil, suspendErr
 	}
 	return &ateapipb.SuspendActorResponse{}, nil
+}
+
+// cutSuspends is how many SuspendActor calls ended with their context.
+func (f *fakeControlClient) cutSuspends() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.suspendsCut
 }
 
 func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
