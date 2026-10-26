@@ -450,6 +450,61 @@ cases:
         workload-name: glutton
         workload-template: glutton
 
+  # glutton at scale with 500 workers: 500 users on 500 workers over 25
+  # sandboxed nodes, the load spread over four boomer pods.
+  glutton-500:
+    repeats:
+      count: 1
+    locust:
+      install:
+        substrate:
+          sandbox-class: gvisor
+      infra:
+        cluster:
+          zone: us-east4-a
+          sandboxed-nodes: 25
+      workers:
+        count: 500
+      locust-workers: 1
+      master:
+        run-time: 10m
+        users: 500
+        spawn-rate: 10
+        warm-up: 10s
+      worker:
+        resume-mode: explicit
+        workload-name: glutton
+        workload-template: glutton
+
+  # glutton at scale with 1000 workers: 1000 users on 1000 workers over 25
+  # sandboxed nodes, the load spread over four boomer pods.
+  glutton-1000:
+    repeats:
+      count: 1
+    locust:
+      install:
+        substrate:
+          sandbox-class: gvisor
+      infra:
+        cluster:
+          zone: us-east4-a
+          sandboxed-nodes: 50          # or 25
+          sandboxed-machine-type: n2-standard-16
+          default-machine-type: n2-standard-16
+      workers:
+        count: 1000
+      locust-workers: 4              # 4 pods recommended for 1000 users (250 users/pod)
+      master:
+        run-time: 5m
+        users: 1000
+        spawn-rate: 10
+        warm-up: 10s
+      worker:
+        resume-mode: explicit
+        workload-name: glutton
+        workload-template: glutton
+
+
   # substrate against the cloud providers, and the sandbox cost sheet from
   # their suspend and resume overheads. The sandboxes that can be sized are
   # alike, 2 vCPU and 2 GiB; those that cannot say so. local, no sandbox at
