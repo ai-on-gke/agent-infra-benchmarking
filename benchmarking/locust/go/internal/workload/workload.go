@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package runworkload
+// Package workload holds the actor-side applications a run can drive, the
+// registry --workload-name selects one from, and the HTTP path to an actor
+// they share.
+package workload
 
 import (
 	"bytes"
@@ -20,16 +23,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 )
 
-// workload is the actor-side application a measurement window drives. It owns
+// Workload is the actor-side application a measurement window drives. It owns
 // the two things that differ per workload — which ActorTemplate deploys it,
 // and what counts as an instruction it has demonstrably run — and nothing
 // else. The windows, the retry loop, the spans and the rows belong to the
@@ -37,8 +41,8 @@ import (
 // keeps a measurement from one workload comparable to one from another.
 //
 // glutton and openclaw are the implementations today. Another one is a file
-// that implements this interface and calls registerWorkload in its init.
-type workload interface {
+// that implements this interface and calls register in its init.
+type Workload interface {
 	// Name is the --workload-name value that selects this workload.
 	Name() string
 
@@ -55,57 +59,43 @@ type workload interface {
 	// retry reports whether a real client would try again: true while the
 	// actor may still be activating, false for a fault that waiting cannot
 	// fix. It is consulted only when err is non-nil.
-	SendInstruction(ctx context.Context, actor actorRef) (retry bool, err error)
+	SendInstruction(ctx context.Context, actor sandbox.Actor) (retry bool, err error)
 }
 
-// actorRef is the handle a workload needs to reach one actor. It carries what
-// substrate requires to route a request and nothing about the measurement, so
-// an implementation cannot accidentally depend on benchmark state.
-// loader is a workload whose actors can be made to change their memory and
+// Loader is a workload whose actors can be made to change their memory and
 // disk on request, which a cycle can do before its suspend so the snapshot
 // holds that much changed state.
-type loader interface {
+type Loader interface {
 	// WriteRAM rewrites size (a quantity such as "64Mi") of the actor's
 	// memory, first on an actor not yet written to, and WriteDisk size bytes
 	// of a file on its disk.
-	WriteRAM(ctx context.Context, actor actorRef, size string, first bool) error
-	WriteDisk(ctx context.Context, actor actorRef, size int) error
+	WriteRAM(ctx context.Context, actor sandbox.Actor, size string, first bool) error
+	WriteDisk(ctx context.Context, actor sandbox.Actor, size int) error
 }
 
-type actorRef struct {
-	HTTPClient *http.Client
-	RouterURL  string
-	Atespace   string
-	Name       string
-	PodIP      string
-	Provider   string
-}
+// Default is the workload Resolve selects when no name is given.
+const Default = GluttonName
 
-// target is the value atenet resolves the actor from.
-func (a actorRef) target() string {
-	return a.Atespace + "/" + a.Name
-}
+var workloads = map[string]Workload{}
 
-var workloads = map[string]workload{}
-
-// registerWorkload adds w to the set --workload-name can select. It
+// register adds w to the set --workload-name can select. It
 // panics on a duplicate name, which can only be a build-time mistake,
 // mirroring how upstream's userclass registry treats the same error.
-func registerWorkload(w workload) {
+func register(w Workload) {
 	if _, exists := workloads[w.Name()]; exists {
 		panic(fmt.Sprintf("runworkload: duplicate workload registration for %q", w.Name()))
 	}
 	workloads[w.Name()] = w
 }
 
-func lookupWorkload(name string) (workload, bool) {
+func lookup(name string) (Workload, bool) {
 	w, ok := workloads[name]
 	return w, ok
 }
 
-// workloadNames returns the registered names, sorted so an error message
+// registeredNames returns the registered names, sorted so an error message
 // listing them reads the same on every run.
-func workloadNames() []string {
+func registeredNames() []string {
 	names := make([]string, 0, len(workloads))
 	for name := range workloads {
 		names = append(names, name)
@@ -114,25 +104,25 @@ func workloadNames() []string {
 	return names
 }
 
-// resolveWorkload picks the workload a run drives. An unknown name is an error
-// rather than a fallback to DefaultWorkload: the operator asked for a
+// Resolve picks the workload a run drives, Default when name is empty. An
+// unknown name is an error rather than a fallback to Default: the operator asked for a
 // particular workload, and silently measuring a different one produces a row
 // that reads as valid while answering the wrong question.
-func resolveWorkload(name string) (workload, error) {
+func Resolve(name string) (Workload, error) {
 	if name == "" {
-		name = DefaultWorkload
+		name = Default
 	}
-	w, ok := lookupWorkload(name)
+	w, ok := lookup(name)
 	if !ok {
-		return nil, fmt.Errorf("unknown --workload-name %q; known: %s", name, strings.Join(workloadNames(), ", "))
+		return nil, fmt.Errorf("unknown --workload-name %q; known: %s", name, strings.Join(registeredNames(), ", "))
 	}
 	return w, nil
 }
 
-// errStaleAssignment marks a 421 from the actor's worker: the router sent the
+// ErrStaleAssignment marks a 421 from the actor's worker: the router sent the
 // request to a worker the actor had already left. The next request is routed
 // afresh, so unlike other failures it is worth sending again at once.
-var errStaleAssignment = errors.New("stale worker assignment")
+var ErrStaleAssignment = errors.New("stale worker assignment")
 
 // httpInstruction is one request a workload sends through the router, together
 // with the check that decides whether the answer proves the sandbox ran it.
@@ -153,26 +143,12 @@ type httpInstruction struct {
 // rather than in each workload because they describe substrate's ingress path,
 // not any one application: a workload that got them wrong would change what
 // the benchmark measures instead of what it drives.
-func sendHTTPInstruction(ctx context.Context, actor actorRef, inst httpInstruction) (retry bool, err error) {
+func sendHTTPInstruction(ctx context.Context, actor sandbox.Actor, inst httpInstruction) (retry bool, err error) {
 	httpReq, err := http.NewRequestWithContext(ctx, inst.Method, actor.RouterURL+inst.Path, bytes.NewReader(inst.Body))
 	if err != nil {
 		return false, err
 	}
-	if actor.Provider == "agent-sandbox" {
-		httpReq.Header.Set("X-Sandbox-ID", actor.Name)
-		httpReq.Header.Set("X-Sandbox-Port", "80")
-		if actor.Atespace != "" {
-			httpReq.Header.Set("X-Sandbox-Namespace", actor.Atespace)
-		}
-		if actor.PodIP != "" {
-			httpReq.Header.Set("X-Sandbox-Pod-IP", actor.PodIP)
-		}
-	} else {
-		// The router resolves the actor from this header alone — atenet's ingress
-		// handler parses it and 404s with "invalid actor reference" when it is
-		// absent, regardless of the request's Host.
-		httpReq.Header.Set(atenet.TargetActorHeader, actor.target())
-	}
+	maps.Copy(httpReq.Header, actor.Header)
 	if inst.ContentType != "" {
 		httpReq.Header.Set("Content-Type", inst.ContentType)
 	}
@@ -194,7 +170,7 @@ func sendHTTPInstruction(ctx context.Context, actor actorRef, inst httpInstructi
 	if resp.StatusCode >= 400 {
 		httpErr := fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		if resp.StatusCode == http.StatusMisdirectedRequest {
-			return true, fmt.Errorf("%w: %w", errStaleAssignment, httpErr)
+			return true, fmt.Errorf("%w: %w", ErrStaleAssignment, httpErr)
 		}
 		return resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests, httpErr
 	}

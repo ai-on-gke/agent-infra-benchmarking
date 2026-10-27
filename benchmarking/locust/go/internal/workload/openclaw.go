@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package runworkload
+package workload
 
 import (
 	"context"
@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
 	"github.com/google/uuid"
 )
 
@@ -48,7 +49,7 @@ const (
 )
 
 func init() {
-	registerWorkload(openclawWorkload{})
+	register(openclawWorkload{})
 }
 
 // openclawWorkload drives the openclaw actor from
@@ -74,7 +75,7 @@ func (openclawWorkload) DefaultTemplate() string { return openclawTemplate }
 // SendInstruction sends a prompt carrying a fresh nonce, which mock-llm puts
 // in its last answer, so a reply counts only if it is this turn's: one that
 // openclaw printed from an earlier turn, or without reaching the LLM, fails.
-func (openclawWorkload) SendInstruction(ctx context.Context, actor actorRef) (bool, error) {
+func (openclawWorkload) SendInstruction(ctx context.Context, actor sandbox.Actor) (bool, error) {
 	nonce := uuid.NewString()
 	want := openclawReplyFor(nonce)
 	return sendHTTPInstruction(ctx, actor, httpInstruction{

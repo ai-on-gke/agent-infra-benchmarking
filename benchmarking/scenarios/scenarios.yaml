@@ -30,7 +30,9 @@
 # actors leave room for its own limits. A worker without them has room for any
 # number. `actor-memory` is the actors' memory limit, which on microvm is
 # the guest's RAM: 256Mi by default, 2Gi for openclaw. `locust-workers` is how
-# many boomer worker pods share the users, 1 by default.
+# many boomer worker pods share the users, 1 by default. `user-class` is the
+# load they put on, runworkload by default: the master's
+# locust/master-image/tests/<user-class>.py and the worker's --user-class.
 # For sandbox-benchmark: `tests` names ai-sandbox-benchmark's tests by function
 # name, run `runs` times each. `provider.name` runs them on substrate, the
 # default, local, e2b, daytona, modal, anthropic or openai. The cloud ones need
@@ -161,30 +163,30 @@ suites:
   - glutton-single
 
 cases:
-  # Each workload on 10 workers on one node, its VUs (virtual users) started
-  # 10 a second and each actor woken by a ResumeActor first: on substrate's
-  # gvisor, on its microvm with the nested virtualization it boots its guests
-  # on, and on agent-sandbox, all alike but for what they run on, so they
-  # compare.
+  # Each workload at 300 VUs (virtual users) on 300 workers over 30 nodes for
+  # 4m, measured once, its VUs started 10 a second and each actor woken by a
+  # ResumeActor first: on substrate's gvisor, on its microvm with the nested
+  # virtualization it boots its guests on, and on agent-sandbox, all alike but
+  # for what they run on, so they compare.
   "{workload}-{control-plane}-{sandbox-class}":
     repeats:
-      count: "{count}"
+      count: 1
     locust:
       install:
         "{control-plane}":
           sandbox-class: "{sandbox-class}"
       infra:
         cluster:
-          sandboxed-nodes: 1
+          sandboxed-nodes: 30
           configuration: "{configuration}"
           nested-virtualization: "{nested-virtualization}"
       workers:
-        count: 10
+        count: 300
       master:
-        run-time: "{run-time}"
-        users: "{users}"
+        run-time: "4m"
+        users: 300
         spawn-rate: 10
-        warm-up: 10s
+        warm-up: 1m
       worker:
         resume-mode: explicit
         workload-name: "{workload}"
@@ -193,17 +195,10 @@ cases:
         actor-egress-allow: "{actor-egress-allow}"
     parameters:
       workload:
-      # 10 VUs for 5 minutes, measured three times.
       - workload: glutton
-        count: 3
-        run-time: 5m
-        users: 10
-      # 3 VUs for 2 minutes, on the cluster with mock-llm.
+      # On the cluster with mock-llm.
       - workload: openclaw
-        count: 1
         configuration: openclaw
-        run-time: 2m
-        users: 3
         # Above the template's OPENCLAW_TIMEOUT_SECS (100), so the actor's own
         # timeout reports a slow turn first.
         workload-timeout: 120s
@@ -218,8 +213,8 @@ cases:
       - control-plane: agent-sandbox
         sandbox-class: gvisor
 
-  # glutton once rather than three times, with no warm-up, for a quicker check
-  # of the path.
+  # glutton at 10 VUs on 10 workers on one node, once with no warm-up, for a
+  # quicker check of the path.
   glutton-single:
     repeats:
       warmups: 0
@@ -242,9 +237,9 @@ cases:
         workload-name: glutton
         workload-template: glutton
 
-  # glutton-substrate-gvisor's load and cluster, so it runs on the same dev
-  # infra, on 2 workers rather than 10, each with room for 6 of its 256Mi
-  # actors: its 10 VUs' actors can only all be placed by sharing them.
+  # glutton-single's load and cluster, so it runs on the same dev infra, on 2
+  # workers rather than 10, each with room for 6 of its 256Mi actors: its 10
+  # VUs' actors can only all be placed by sharing them.
   glutton-shared-workers:
     repeats:
       warmups: 0
@@ -270,9 +265,25 @@ cases:
         workload-template: glutton
 
   # 100 workers on 10 nodes, suspended between instructions, at 100, 250 and
-  # 500 VUs against a baseline of 100 that never suspend.
+  # 500 VUs, the variants named for their actors per node, against a baseline
+  # of 100 that never suspend. The density user class paces each actor to be
+  # in a cycle for `active-actors` over the VUs of its time, so every variant
+  # that suspends keeps 80 actors active at once, whatever the workload's turn
+  # takes, and only the actors they are shared among grows; while the VUs ramp
+  # up to 80, every one of them is in a cycle all along. Each worker has room
+  # for one actor, its actor-memory, so the actors share the 100 workers
+  # rather than pile onto them.
+  #
+  # The variants differ in their VUs alone, and in the spawn rate that grows
+  # with them, so each ramps up in 100s. Every variant of either workload then
+  # runs on the same times: a warm-up of 1m after the last VU starts, and a
+  # steady window of the 160s left, so their percentiles rest on about as many
+  # cycles. The warm-up is shorter than a turn openclaw's own timeout, 100s,
+  # cuts off, so its window may start with turns begun during the ramp.
   "{workload}-density":
     locust:
+      user-class: density
+      actor-memory: "{actor-memory}"
       install:
         substrate:
           sandbox-class: gvisor
@@ -282,55 +293,50 @@ cases:
           configuration: "{configuration}"
       workers:
         count: 100
+        limits:
+          memory: "{actor-memory}"
       master:
-        run-time: "{run-time}"
-        spawn-rate: "{spawn-rate}"
+        run-time: 5m20s
+        spawn-rate: 1
+        warm-up: 1m
       worker:
         resume-mode: explicit
         suspend-disabled: false
+        active-actors: 80
         workload-name: "{workload}"
         workload-template: "{workload}"
         workload-timeout: "{workload-timeout}"
         actor-egress-allow: "{actor-egress-allow}"
     variants:
+      # Paced as if its cycles took the resume and suspend they skip, so it
+      # sends instructions at the rate of 10.
       baseline:
         locust:
-          master: {users: 100, spawn-rate: 10}
-          worker: {suspend-disabled: true}
+          master: {users: 100}
+          worker: {suspend-disabled: true, skipped-resume-suspend: "{skipped-resume-suspend}"}
       "10":
         locust:
           master: {users: 100}
-          worker: {min-wait: "{wait-10}", max-wait: "{wait-10}"}
       "25":
         locust:
-          master: {users: 250, run-time: "{run-time-25}"}
-          worker: {min-wait: "{wait-25}", max-wait: "{wait-25}"}
+          master: {users: 250, spawn-rate: 2.5}
       "50":
         locust:
-          master: {users: 500, run-time: "{run-time-50}"}
-          worker: {min-wait: "{wait-50}", max-wait: "{wait-50}"}
+          master: {users: 500, spawn-rate: 5}
     parameters:
       workload:
+      # Its median Resume and Suspend, 290ms and 460ms, on
+      # glutton-substrate-gvisor.
       - workload: glutton
-        spawn-rate: 10
-        run-time: 3m
-        run-time-25: 3m
-        run-time-50: 3m
-        wait-10: 6000ms
-        wait-25: 6000ms
-        wait-50: 6000ms
-      # Its VUs spawned one a second, spread over its wait.
+        actor-memory: 256Mi
+        skipped-resume-suspend: 750ms
+      # No skipped-resume-suspend until a run has measured them: its turn makes
+      # up most of its cycle.
       - workload: openclaw
+        actor-memory: 2Gi
         configuration: openclaw
         workload-timeout: 120s
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
-        spawn-rate: 1
-        run-time: 5m
-        run-time-25: 12m
-        run-time-50: 20m
-        wait-10: 106000ms
-        wait-25: 212000ms
-        wait-50: 424000ms
 
   # glutton woken by its instruction, through the router, rather than by a
   # ResumeActor first: TTFI is then the router's wake.

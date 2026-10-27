@@ -122,21 +122,20 @@ class ShippedCases(unittest.TestCase):
             self.assertEqual(mine["locust"].pop("install"), {"agent-sandbox": {"sandbox-class": "gvisor"}})
             self.assertEqual(mine, pair, f"{name} differs from its substrate case in more than the control plane")
 
-    def test_shared_workers_is_glutton_on_fewer_bounded_workers(self):
-        # So it compares, and runs on glutton-substrate-gvisor's dev infra.
+    def test_shared_workers_is_glutton_single_on_fewer_bounded_workers(self):
+        # So it compares, and runs on glutton-single's dev infra.
         cases = copy.deepcopy(SHIPPED.cases)
-        mine, pair = cases["glutton-shared-workers"], cases["glutton-substrate-gvisor"]
+        mine, pair = cases["glutton-shared-workers"], cases["glutton-single"]
         self.assertEqual(mine["locust"].pop("workers"), {"count": 2, "limits": {"memory": "1536Mi"}})
         pair["locust"].pop("workers")
-        mine.pop("repeats"), pair.pop("repeats")
         self.assertEqual(mine, pair)
 
     def test_each_case_asks_for_its_cluster(self):
         cases = SHIPPED.cases
         clusters = {name: benchmarks.cluster_config(name, case) for name, case in cases.items()}
-        self.assertEqual(clusters["glutton-substrate-gvisor"], CommonCluster(sandboxed_nodes=1))
+        self.assertEqual(clusters["glutton-substrate-gvisor"], CommonCluster(sandboxed_nodes=30))
         self.assertEqual(
-            clusters["glutton-substrate-microvm"], CommonCluster(sandboxed_nodes=1, nested_virtualization=True)
+            clusters["glutton-substrate-microvm"], CommonCluster(sandboxed_nodes=30, nested_virtualization=True)
         )
         self.assertEqual(clusters["openclaw-density-baseline"], OpenclawCluster(sandboxed_nodes=10))
         self.assertEqual(
@@ -179,6 +178,9 @@ class CaseChecks(unittest.TestCase):
             ("workers", {"limits": {"cpu": 2}}),
             ("workers", {"limits": {"memory": "lots"}}),
             ("users", 10),
+            ("user-class", "glutton"),
+            ("user-class", "_master"),
+            ("user-class", None),
         ]:
             with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 check("c", glutton({key: value}))
@@ -205,6 +207,35 @@ class CaseChecks(unittest.TestCase):
         case = check("c", glutton({"locust-workers": 3}))
         args = locust.master_args(case["locust"])
         self.assertEqual(args[args.index("--expect-workers") + 1], "3")
+
+    def test_runworkload_by_default(self):
+        options = check("c", GLUTTON)["locust"]
+        self.assertEqual(options["user-class"], "runworkload")
+        self.assertEqual(
+            locust.master_args(options),
+            ["-f", "/app/tests/runworkload.py", "--headless", "--master", "--expect-workers", "1",
+             "--expect-workers-max-wait", "300", "--exit-code-on-error", "0",
+             "--run-time=1m", "--users=10", "--spawn-rate=10"],
+        )  # fmt: skip
+        self.assertEqual(
+            locust.worker_args(options),
+            [f"--master-host={locust.MASTER_HOST}", "--user-class=runworkload",
+             "--workload-name=glutton", "--workload-template=glutton"],
+        )  # fmt: skip
+
+    def test_the_user_class_picks_the_master_s_locustfile_and_the_worker_s_class(self):
+        tests = Path(tempfile.mkdtemp())
+        for locustfile in ("runworkload.py", "other.py", "_master.py"):
+            (tests / locustfile).touch()
+        with mock.patch.object(locust, "LOCUSTFILES_DIR", tests):
+            self.assertEqual(locust.user_classes(), ["other", "runworkload"])
+            options = check("c", glutton({"user-class": "other"}))["locust"]
+        master = locust.master_args(options)
+        self.assertEqual(master[:2], ["-f", "/app/tests/other.py"])
+        self.assertIn("--user-class=other", locust.worker_args(options))
+
+    def test_the_master_has_a_locustfile_for_density_and_runworkload(self):
+        self.assertEqual(locust.user_classes(), ["density", "runworkload"])
 
     def test_flags(self):
         self.assertEqual(locust.flags({"a": True, "b": 2, "c": "x", "d": False}), ["--a", "--b=2", "--c=x", "--d=false"])

@@ -21,6 +21,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/harness"
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/workload"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -61,6 +65,10 @@ type fakeControlClient struct {
 	// deleteDelay holds each DeleteActor open, so a teardown test can see how
 	// many run at once.
 	deleteDelay time.Duration
+	// states are what GetActor reports in turn, the last one from then on;
+	// none is SUSPENDED. getActorErr, when set, fails every GetActor instead.
+	states      []ateapipb.ActorState
+	getActorErr error
 
 	mu sync.Mutex
 	// inFlight and peak track overlapping DeleteActor calls.
@@ -68,9 +76,13 @@ type fakeControlClient struct {
 	peak     int
 	// deleteAnyState is the AnyState flag from the most recent DeleteActor.
 	deleteAnyState bool
-	calls          []string
-	// template is the ActorTemplate name from the last CreateActor.
+	// suspendsCut counts the SuspendActor calls whose context ended first.
+	suspendsCut int
+	calls       []string
+	// template and actor are the ActorTemplate and actor names from the last
+	// CreateActor.
 	template string
+	actor    string
 	// egressPolicy is the policy from the last CreateActorEgressPolicy.
 	egressPolicy *ateapipb.EgressPolicy
 }
@@ -100,6 +112,7 @@ func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.Create
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "CreateActor")
 	f.template = in.GetActor().GetActorTemplate().GetName()
+	f.actor = in.GetActor().GetMetadata().GetName()
 	return &ateapipb.Actor{}, nil
 }
 
@@ -130,6 +143,30 @@ func (f *fakeControlClient) recordedTemplate() string {
 	return f.template
 }
 
+// recordedActor returns the name of the actor the most recent CreateActor made.
+func (f *fakeControlClient) recordedActor() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.actor
+}
+
+func (f *fakeControlClient) GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "GetActor")
+	if f.getActorErr != nil {
+		return nil, f.getActorErr
+	}
+	state := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+	if len(f.states) > 0 {
+		state = f.states[0]
+		if len(f.states) > 1 {
+			f.states = f.states[1:]
+		}
+	}
+	return &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: state}}, nil
+}
+
 func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 	if f.resumeHang {
 		<-ctx.Done()
@@ -148,13 +185,31 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 
 func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, "SuspendActor")
-	time.Sleep(f.suspendDelay)
-	if f.suspendErr != nil {
-		return nil, f.suspendErr
+	delay, suspendErr := f.suspendDelay, f.suspendErr
+	f.mu.Unlock()
+
+	// Outside the lock, so a test can see the suspend in flight. One cut off
+	// here is a checkpoint the server abandons, which crashes the actor.
+	select {
+	case <-time.After(delay):
+	case <-ctx.Done():
+		f.mu.Lock()
+		f.suspendsCut++
+		f.mu.Unlock()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
+	if suspendErr != nil {
+		return nil, suspendErr
 	}
 	return &ateapipb.SuspendActorResponse{}, nil
+}
+
+// cutSuspends is how many SuspendActor calls ended with their context.
+func (f *fakeControlClient) cutSuspends() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.suspendsCut
 }
 
 func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
@@ -237,14 +292,68 @@ func newTestConfig(t *testing.T, srv *pingServer, cfg *userclass.Config) *usercl
 	return cfg
 }
 
+// newTestScenarioOn builds a glutton scenario on cfg for opts, its actors
+// created on substrate.
+func newTestScenarioOn(cfg *userclass.Config, opts scenario.Options) *runWorkloadScenario {
+	wl, err := workload.Resolve(workload.GluttonName)
+	if err != nil {
+		panic(err)
+	}
+	return newTestScenarioRunning(cfg, opts, wl)
+}
+
+// newTestScenarioRunning builds a scenario on cfg for opts that runs wl.
+func newTestScenarioRunning(cfg *userclass.Config, opts scenario.Options, wl workload.Workload) *runWorkloadScenario {
+	opts.Config = cfg
+	c := Config{Common: scenario.Common{Options: opts, Workload: wl}}
+	provider, err := c.NewProvider(recorder(c, UserClass), false, false)
+	if err != nil {
+		panic(err)
+	}
+	return &runWorkloadScenario{c: c, userClass: UserClass, provider: provider}
+}
+
+// testRun is a scenario running on the harness, as New starts it.
+type testRun struct {
+	*runWorkloadScenario
+	iterate  func()
+	shutdown func(context.Context)
+}
+
+// newTestRunOn runs s on the harness, with no user started yet.
+func newTestRunOn(s *runWorkloadScenario) *testRun {
+	task, shutdown := harness.New(s, harness.Options{Name: Name, UserClass: UserClass})
+	return &testRun{runWorkloadScenario: s, iterate: task, shutdown: shutdown}
+}
+
+// shortenSettle bounds Settle's wait for an actor to leave a transitional
+// state to a few polls, for one test.
+func shortenSettle(t *testing.T) {
+	t.Helper()
+	timeout, poll := sandbox.SettleTimeout, sandbox.SettlePoll
+	sandbox.SettleTimeout, sandbox.SettlePoll = 50*time.Millisecond, time.Millisecond
+	t.Cleanup(func() { sandbox.SettleTimeout, sandbox.SettlePoll = timeout, poll })
+}
+
+// startsOver reports whether the next iteration on this goroutine creates a
+// new actor, which it does only once the VU's slot has been freed.
+func startsOver(rt *testRun, ctrl *fakeControlClient) bool {
+	before := ctrl.countCalls("CreateActor")
+	rt.iterate()
+	return ctrl.countCalls("CreateActor") == before+1
+}
+
+// newTestUser starts a user on s, its actor created and still suspended.
+func newTestUser(t *testing.T, s *runWorkloadScenario) *runWorkloadUser {
+	t.Helper()
+	sess, err := s.Start(context.Background())
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	return sess.(*runWorkloadUser)
+}
+
 func newTestRunWorkloadUser(t *testing.T, srv *pingServer, cfg *userclass.Config) *runWorkloadUser {
 	t.Helper()
-	c := newTestConfig(t, srv, cfg)
-	return &runWorkloadUser{
-		cfg:          c,
-		workload:     gluttonWorkload{},
-		actorName:    "runworkloadactor",
-		templateName: gluttonWorkload{}.DefaultTemplate(),
-		userClass:    runWorkloadUserClass,
-	}
+	return newTestUser(t, newTestScenarioOn(newTestConfig(t, srv, cfg), scenario.Options{}))
 }

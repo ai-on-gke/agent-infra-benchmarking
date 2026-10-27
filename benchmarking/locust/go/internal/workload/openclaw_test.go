@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package runworkload
+package workload
 
 import (
 	"context"
@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
 )
 
 // openclawServer is a stand-in for
@@ -99,13 +101,12 @@ func (s *openclawServer) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 // newOpenclawActor returns the actor handle addressing srv.
-func newOpenclawActor(t *testing.T, srv *openclawServer) actorRef {
+func newOpenclawActor(t *testing.T, srv *openclawServer) sandbox.Actor {
 	t.Helper()
 	ts := srv.Start(t)
-	return actorRef{
+	return sandbox.Actor{
 		HTTPClient: ts.Client(),
 		RouterURL:  ts.URL,
-		Atespace:   "benchmark",
 		Name:       "openclawactor",
 	}
 }
@@ -189,9 +190,9 @@ func TestOpenclawRetriesWhileActivating(t *testing.T) {
 }
 
 func TestOpenclawIsSelectable(t *testing.T) {
-	w, err := resolveWorkload(openclawWorkloadName)
+	w, err := Resolve(openclawWorkloadName)
 	if err != nil {
-		t.Fatalf("resolveWorkload(%q) failed: %v", openclawWorkloadName, err)
+		t.Fatalf("Resolve(%q) failed: %v", openclawWorkloadName, err)
 	}
 	if _, ok := w.(openclawWorkload); !ok {
 		t.Fatalf("workload: got %T, want openclawWorkload", w)

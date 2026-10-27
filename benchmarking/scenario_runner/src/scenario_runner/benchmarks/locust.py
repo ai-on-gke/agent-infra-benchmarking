@@ -38,12 +38,17 @@ from ..scenarios.install import AGENT_SANDBOX, INSTALL, SUBSTRATE, control_plane
 from . import jobs
 
 MANIFESTS_DIR = RUNNER_DIR.parent / "locust" / "manifests"
+# The master image's tests/: a locustfile per user class, and the modules they
+# share, named with a leading underscore.
+LOCUSTFILES_DIR = RUNNER_DIR.parent / "locust" / "master-image" / "tests"
 # Have to match metadata.name and namespace in the manifests.
 MASTER_JOB = "locust-master"
 WORKER_JOB = "boomer-worker"
 NAMESPACE = jobs.NAMESPACE
 MASTER_HOST = f"{MASTER_JOB}.{NAMESPACE}.svc.cluster.local"
-USER_CLASS = "runworkload"
+# The user class a case runs unless it states its own `user-class`: the
+# master's locustfile and the worker's --user-class.
+DEFAULT_USER_CLASS = "runworkload"
 POD_START_TIMEOUT_SECS = 300
 WAIT_TIMEOUT_SECS = 3600
 # How long the Jobs' status may be unreadable before the run is given up on;
@@ -61,7 +66,17 @@ DEFAULT_MAX_FAILURE_RATIO = 0.01
 ACTOR_ATESPACE = "benchmark"
 # The case's mapping of its type, and what it may state.
 TYPE = "locust"
-KEYS = {"infra", INSTALL, "workers", "locust-workers", "actor-memory", "max-failure-ratio", "master", "worker"}
+KEYS = {
+    "infra",
+    INSTALL,
+    "user-class",
+    "workers",
+    "locust-workers",
+    "actor-memory",
+    "max-failure-ratio",
+    "master",
+    "worker",
+}
 # What `workers` may state: the pool's replicas and each one's limits.
 WORKERS_KEYS = {"count", "limits"}
 WORKER_LIMITS = ("cpu", "memory")
@@ -88,6 +103,11 @@ def missing_requirements() -> list[str]:
     return list(dict.fromkeys(missing + workloads.missing_requirements()))
 
 
+def user_classes() -> list[str]:
+    """The user classes the master has a locustfile for."""
+    return sorted(path.stem for path in LOCUSTFILES_DIR.glob("*.py") if not path.name.startswith("_"))
+
+
 def flag_value(value: object) -> str:
     # As jq's string interpolation spells it: false, null, compact JSON.
     return value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
@@ -109,6 +129,12 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
         raise ValueError(f"case {name}'s `{TYPE}` has unknown {', '.join(sorted(unknown))}")
     if control_plane(case) is None:
         raise ValueError(f"case {name}'s `{TYPE}.{INSTALL}` must name {SUBSTRATE} or {AGENT_SANDBOX}, which run it")
+    user_class = options.get("user-class", DEFAULT_USER_CLASS)
+    if user_class not in user_classes():
+        raise ValueError(
+            f"case {name}'s `{TYPE}.user-class` must be one the master has a locustfile for,"
+            f" {' or '.join(user_classes())}, got {user_class!r}"
+        )
     master, worker = options.get("master"), options.get("worker")
     if worker is None:
         worker = {}
@@ -151,6 +177,7 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     return {
         **case,
         TYPE: {
+            "user-class": DEFAULT_USER_CLASS,
             "max-failure-ratio": DEFAULT_MAX_FAILURE_RATIO,
             "locust-workers": 1,
             **options,
@@ -207,7 +234,7 @@ def master_args(options: dict) -> list[str]:
     """The master's arguments, of the case's checked `locust`."""
     return [
         "-f",
-        f"/app/tests/{USER_CLASS}.py",
+        f"/app/tests/{options['user-class']}.py",
         "--headless",
         "--master",
         "--expect-workers",
@@ -222,7 +249,7 @@ def master_args(options: dict) -> list[str]:
 
 
 def worker_args(options: dict) -> list[str]:
-    return [f"--master-host={MASTER_HOST}", f"--user-class={USER_CLASS}", *flags(options["worker"])]
+    return [f"--master-host={MASTER_HOST}", f"--user-class={options['user-class']}", *flags(options["worker"])]
 
 
 def apply(cluster: Cluster, manifest: str) -> None:

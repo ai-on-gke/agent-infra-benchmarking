@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// boomer-worker is the Go re-implementation of the GluttonUser locust test.
+// boomer-worker runs this repo's locust user classes, and upstream's, in Go.
 // It speaks the locust worker protocol via myzhan/boomer, so it appears as a
 // regular worker to the Python locust master while sidestepping gevent's
 // scheduling tax.
@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -37,10 +38,12 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/myzhan/boomer"
 
-	// Imported for the user class each registers via init(). runworkload is
-	// named rather than blank because its settings are declared here, as
-	// flags, and handed over with runworkload.SetOptions.
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/density"
 	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/runworkload"
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
+	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/workload"
+
+	// Imported for the user classes it registers via init().
 	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
 )
 
@@ -63,34 +66,41 @@ func main() {
 		routerURL   = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "atenet HTTP router base URL (no trailing slash).")
 		atespace    = flag.String("atespace", "benchmark", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
 		promAddr    = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
-		userClass   = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
+		userClass   = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userClasses(), "|")))
 
 		// Settings a run holds from start to end. They were fetched from the
 		// locust master's /boomer-config while the web UI could change them
 		// mid-run; nothing in this repo does, so they are flags.
 		minWait          = flag.Duration("min-wait", 0, "Lower bound on the think time between iterations.")
 		maxWait          = flag.Duration("max-wait", 500*time.Millisecond, "Upper bound on the think time between iterations. At or below --min-wait waits exactly that.")
-		resumeMode       = flag.String("resume-mode", runworkload.ResumeModeExplicit, fmt.Sprintf("How an actor is woken: %s issues ResumeActor before the instruction, %s leaves the wake to the router.", runworkload.ResumeModeExplicit, runworkload.ResumeModeImplicit))
+		resumeMode       = flag.String("resume-mode", scenario.ResumeModeExplicit, fmt.Sprintf("How an actor is woken: %s issues ResumeActor before the instruction, %s leaves the wake to the router.", scenario.ResumeModeExplicit, scenario.ResumeModeImplicit))
 		traceProbability = flag.Float64("trace-probability", 0, "Fraction of iterations to sample a trace for, 0 to 1.")
 
 		httpMaxIdleConnsPerHost = flag.Int("http-max-idle-conns-per-host", 10000, "Idle HTTP connections the router client keeps per host. Set it to at least the number of users this worker runs, so each VU reuses its connection to the router across wakes instead of opening a new one per request.")
 
-		// runworkload settings. Declared here with every other flag, so
-		// --help is the whole command line rather than one list per user
-		// class, and read only when --user-class selects runworkload. The
-		// defaults are left empty so that the package resolves them: the
-		// template's follows from the workload, which is the only place that
-		// knows what it can address.
+		// Settings of every user class this repo builds on harness, which
+		// scenario.Setup resolves; upstream's user classes read none of them.
+		// Declared here with every other flag, so --help is the whole command
+		// line rather than one list per user class. The defaults are left
+		// empty so that scenario.Setup resolves them: the template's follows
+		// from the workload, which is the only place that knows what it can
+		// address.
 		workloadName = flag.String("workload-name", "",
-			fmt.Sprintf("runworkload only: the workload a RunWorkloadUser drives. Unset selects %s.", runworkload.DefaultWorkload))
+			fmt.Sprintf("The workload the actors run. Unset selects %s.", workload.Default))
 		workloadTemplate = flag.String("workload-template", "",
-			"runworkload only: the ActorTemplate the workload is measured on. Unset selects the workload's own.")
+			"The ActorTemplate the workload is measured on. Unset selects the workload's own.")
 		workloadTimeout = flag.Duration("workload-timeout", 0,
-			fmt.Sprintf("runworkload only: deadline on each control-plane call and instruction; one that runs past it counts as a failure. Unset selects %s.", runworkload.DefaultTimeout))
+			fmt.Sprintf("Deadline on each control-plane call and instruction; one that runs past it counts as a failure. Unset selects %s.", scenario.DefaultTimeout))
 		actorEgressAllow = flag.String("actor-egress-allow", "",
-			"runworkload only: comma-separated hostnames every actor may reach over cleartext HTTP or gRPC, on any port, each as the actor dials it. Unset, with --actor-egress-allow-tls unset too, gives actors no egress policy, so they can reach nothing.")
+			"agent-substrate only: comma-separated hostnames every actor may reach over cleartext HTTP or gRPC, on any port, each as the actor dials it. Unset, with --actor-egress-allow-tls unset too, gives actors no egress policy, so they can reach nothing.")
 		actorEgressAllowTLS = flag.String("actor-egress-allow-tls", "",
-			"runworkload only: comma-separated hostnames every actor may reach over TLS, such as an https:// endpoint, on any port, passed through undecrypted. A cleartext rule does not let TLS through.")
+			"agent-substrate only: comma-separated hostnames every actor may reach over TLS, such as an https:// endpoint, on any port, passed through undecrypted. A cleartext rule does not let TLS through.")
+		apiConnections = flag.Int("api-connections", 1,
+			"Connections to ateapi this worker spreads its users over.")
+		provider     = flag.String("provider", "agent-substrate", "Provider: agent-substrate or agent-sandbox.")
+		warmPoolName = flag.String("warm-pool-name", "", "agent-sandbox only: name of the SandboxWarmPool to claim from.")
+
+		// runworkload's own settings, read only when --user-class selects it.
 		instructionsPerCycle = flag.Int("instructions-per-cycle", 1,
 			"runworkload only: instructions each cycle sends between its resume and its suspend; the first closes TTFI.")
 		concurrentInstructions = flag.Int("concurrent-instructions", 1,
@@ -99,12 +109,14 @@ func main() {
 			"runworkload with glutton only: memory each cycle rewrites in the actor before its suspend, such as 64Mi. Unset writes none.")
 		gluttonWriteDisk = flag.Int("glutton-write-disk", 0,
 			"runworkload with glutton only: bytes of a file each cycle rewrites in the actor before its suspend. Zero writes none.")
-		apiConnections = flag.Int("api-connections", 1,
-			"Connections to ateapi this worker spreads its users over.")
-		provider        = flag.String("provider", "agent-substrate", "Provider: agent-substrate or agent-sandbox.")
-		warmPoolName    = flag.String("warm-pool-name", "", "agent-sandbox only: name of the SandboxWarmPool to claim from.")
 		suspendDisabled = flag.Bool("suspend-disabled", false,
 			"runworkload only: whether to skip the suspend phase during the benchmark.")
+
+		// density runs runworkload's cycle, so it reads the flags above too.
+		activeActors = flag.Int("active-actors", 0,
+			"density only: how many of this worker's actors are in a cycle at once, at least 1. Each actor waits after a cycle so that it spends this over the worker's users of its time in one, in place of --min-wait and --max-wait, which then only follow a failed start.")
+		skippedResumeSuspend = flag.Duration("skipped-resume-suspend", 0,
+			"density with --suspend-disabled only: the resume and suspend each cycle skips, which the pacing counts as if it ran, so the actors send instructions at the rate of ones that suspend.")
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
@@ -115,11 +127,11 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	switch *resumeMode {
-	case runworkload.ResumeModeExplicit, runworkload.ResumeModeImplicit:
+	case scenario.ResumeModeExplicit, scenario.ResumeModeImplicit:
 	default:
 		slog.Error("fatal: unknown --resume-mode value",
 			slog.String("resume_mode", *resumeMode),
-			slog.String("known", runworkload.ResumeModeExplicit+","+runworkload.ResumeModeImplicit))
+			slog.String("known", scenario.ResumeModeExplicit+","+scenario.ResumeModeImplicit))
 		os.Exit(1)
 	}
 
@@ -174,7 +186,7 @@ func main() {
 		HTTPClient: httpClient,
 		RouterURL:  *routerURL,
 		Atespace:   *atespace,
-		// runworkload reads the flags above through SetOptions; this is for
+		// runworkload takes the flags above through runworkload.New; this is for
 		// the upstream user classes, which take the same values off the
 		// holder that userclass.Config requires.
 		Dyn: dynconfig.NewHolder(dynconfig.Config{
@@ -190,39 +202,61 @@ func main() {
 			slog.Duration("workload_timeout", *workloadTimeout))
 		os.Exit(1)
 	}
-	// Unconditional, and inert unless the lookup below selects runworkload:
-	// only that entry's Init reads these, so a run of another user class
-	// carries them without ever looking at them.
-	runworkload.SetOptions(runworkload.Options{
-		Provider:               *provider,
-		WarmPoolName:           *warmPoolName,
-		Workload:               *workloadName,
-		Template:               *workloadTemplate,
-		Timeout:                *workloadTimeout,
-		MinWait:                *minWait,
-		MaxWait:                *maxWait,
-		ResumeMode:             *resumeMode,
-		EgressAllow:            splitList(*actorEgressAllow),
-		EgressAllowTLS:         splitList(*actorEgressAllowTLS),
-		InstructionsPerCycle:   *instructionsPerCycle,
-		ConcurrentInstructions: *concurrentInstructions,
-		GluttonWriteRAM:        *gluttonWriteRAM,
-		GluttonWriteDisk:       *gluttonWriteDisk,
-		APIStubs:               apiStubs,
-		SuspendDisabled:        *suspendDisabled,
-	})
-
-	entry, ok := userclass.Lookup(class)
-	if !ok {
-		slog.Error("fatal: unknown --user-class value",
-			slog.String("user_class", *userClass),
-			slog.String("known", strings.Join(userclass.Names(), ",")))
-		os.Exit(1)
+	// runworkload and density are built here, from the flags, rather than
+	// looked up: the registry hands an Init nothing but cfg.
+	cycle := func() runworkload.Config {
+		return runworkload.Config{
+			Common: scenario.Setup(scenario.Options{
+				Config:         cfg,
+				Provider:       *provider,
+				WarmPoolName:   *warmPoolName,
+				APIStubs:       apiStubs,
+				WorkloadName:   *workloadName,
+				Template:       *workloadTemplate,
+				Timeout:        *workloadTimeout,
+				MinWait:        *minWait,
+				MaxWait:        *maxWait,
+				ResumeMode:     *resumeMode,
+				EgressAllow:    splitList(*actorEgressAllow),
+				EgressAllowTLS: splitList(*actorEgressAllowTLS),
+			}),
+			SuspendDisabled:        *suspendDisabled,
+			InstructionsPerCycle:   *instructionsPerCycle,
+			ConcurrentInstructions: *concurrentInstructions,
+			GluttonWriteRAM:        *gluttonWriteRAM,
+			GluttonWriteDisk:       *gluttonWriteDisk,
+		}
 	}
-	taskFn, shutdownFn := entry.Init(cfg)
+	var (
+		taskFn     func()
+		shutdownFn func(context.Context)
+		taskName   string
+	)
+	switch class {
+	case runworkload.Name:
+		taskFn, shutdownFn = runworkload.New(cycle())
+		taskName = runworkload.UserClass
+	case density.Name:
+		taskFn, shutdownFn = density.New(density.Config{
+			Cycle:                cycle(),
+			ActiveActors:         *activeActors,
+			SkippedResumeSuspend: *skippedResumeSuspend,
+		})
+		taskName = density.UserClass
+	default:
+		entry, ok := userclass.Lookup(class)
+		if !ok {
+			slog.Error("fatal: unknown --user-class value",
+				slog.String("user_class", *userClass),
+				slog.String("known", strings.Join(userClasses(), ",")))
+			os.Exit(1)
+		}
+		taskFn, shutdownFn = entry.Init(cfg)
+		taskName = entry.UserClass
+	}
 
 	slog.Info("registered boomer task",
-		slog.String("user_class", entry.UserClass),
+		slog.String("user_class", taskName),
 		slog.String("user_class_flag", class),
 	)
 
@@ -240,7 +274,7 @@ func main() {
 		shutdownFn(ctx)
 	})
 
-	// The master sends this stop before it quits (master-image/tests/runworkload.py) and
+	// The master sends this stop before it quits (master-image/tests/_master.py) and
 	// waits for it. Boomer reports stats only until the handler returns, so it
 	// holds on until the teardown's rows have gone out.
 	boomer.Events.Subscribe("boomer:stop", func() {
@@ -252,7 +286,7 @@ func main() {
 	// Blocks until SIGINT/SIGTERM or master quit. Boomer registers its own
 	// signal handlers; we do cleanup after it returns.
 	boomer.Run(&boomer.Task{
-		Name:   entry.UserClass,
+		Name:   taskName,
 		Weight: 1,
 		Fn:     taskFn,
 	})
@@ -261,6 +295,14 @@ func main() {
 	teardown()
 	slog.Info("boomer exited; waiting for the final scrape", slog.Duration("wait", finalScrapeWait))
 	time.Sleep(finalScrapeWait)
+}
+
+// userClasses are the --user-class values: the upstream ones registered with
+// userclass, runworkload and density.
+func userClasses() []string {
+	names := append(userclass.Names(), runworkload.Name, density.Name)
+	slices.Sort(names)
+	return names
 }
 
 // splitList splits a comma-separated flag value, dropping empty entries.
