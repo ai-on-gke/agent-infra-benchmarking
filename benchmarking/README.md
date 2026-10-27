@@ -393,7 +393,10 @@ rather than editing an existing one, so results stay tied to the case name
 they were recorded under. To compare gVisor and microvm, add both, the same
 but for `locust.install.substrate.sandbox-class` and the microvm one's
 `infra.cluster.nested-virtualization: true`, which off bare metal gives its
-guests `/dev/kvm`.
+guests `/dev/kvm`. A case on agent-sandbox needs
+`infra.cluster.gke-sandbox: true`: its pods ask for the `gvisor` RuntimeClass,
+which GKE Sandbox on the sandboxed pool runs them in, and the run fails if any
+of them is not.
 
 Besides the load, a case can shape each cycle with the worker's options:
 

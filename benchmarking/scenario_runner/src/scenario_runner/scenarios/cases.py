@@ -23,7 +23,7 @@ from .. import LABEL_RE, benchmarks
 from ..benchmarks import noop
 from . import bare_metal
 from .bare_metal import BARE_METAL
-from .install import INSTALL, check_install
+from .install import AGENT_SANDBOX, INSTALL, check_install, control_plane
 from .repeats import REPEATS, check_repeats, run_names
 from .variants import VARIANT, with_variants
 
@@ -70,10 +70,26 @@ def checked(where: str, name: str, case: dict) -> dict:
     case = {**case, "type": kind, kind: options, REPEATS: repeats}
     try:
         benchmarks.check(name, case)
+        check_gke_sandbox(name, case)
     except ValueError as exc:
         raise ValueError(f"{where}: {exc}") from None
     check_records(where, name, case)
     return case
+
+
+def check_gke_sandbox(name: str, case: dict) -> None:
+    """Refuses a case on agent-sandbox whose sandboxed pool runs no GKE
+    Sandbox, which its pods' gVisor is, and any other on one: substrate's
+    atelet does not run there."""
+    kind = case["type"]
+    gke_sandbox = benchmarks.cluster_config(name, case).gke_sandbox
+    if control_plane(case) == AGENT_SANDBOX and not gke_sandbox:
+        raise ValueError(
+            f"case {name} installs {AGENT_SANDBOX}, whose pods run in gVisor through GKE Sandbox: set its"
+            f" `{kind}.infra.cluster.gke-sandbox: true`"
+        )
+    if control_plane(case) != AGENT_SANDBOX and gke_sandbox:
+        raise ValueError(f"case {name}'s `{kind}.infra.cluster.gke-sandbox` is only for cases on {AGENT_SANDBOX}")
 
 
 def check_records(where: str, name: str, case: dict) -> None:

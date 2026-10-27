@@ -93,12 +93,13 @@
 # It names one control plane at most:
 #   substrate      `sandbox-class`, gvisor or microvm, which substrate is
 #                  installed with and the case's workers run on
-#   agent-sandbox  `sandbox-class`, gvisor only, which here picks just the
-#                  sandboxed pool, as the SandboxTemplate sets no
-#                  runtimeClassName
+#   agent-sandbox  `sandbox-class`, gvisor only, the RuntimeClass its pods ask
+#                  for, which GKE Sandbox runs them in
 # locust runs on either, sandbox-benchmark's substrate provider on substrate,
 # and its others on any. microvm's guests boot on /dev/kvm, which the cluster
 # has with `infra.cluster.nested-virtualization: true` or on bare metal.
+# agent-sandbox's pods need `infra.cluster.gke-sandbox: true`, and the
+# scenario-runner fails the run if any of them is not in gVisor.
 #
 # `infra.cluster`, in the type's mapping, is the cluster the case runs on: its
 # `configuration` and that configuration's inputs, which
@@ -117,6 +118,9 @@
 #   nested-virtualization   true for /dev/kvm on the sandboxed pool off bare
 #                           metal, which a microvm case's guests boot on; off by
 #                           default, and only on Intel machine families
+#   gke-sandbox             true for GKE Sandbox on the sandboxed pool, for an
+#                           agent-sandbox case only, and needed by one; off by
+#                           default
 #   default-machine-type    common's and openclaw's default pool's,
 #                           c2-standard-16 by default
 # locust runs on common or openclaw, sandbox-benchmark on common, and a noop on
@@ -180,6 +184,7 @@ cases:
           sandboxed-nodes: 30
           configuration: "{configuration}"
           nested-virtualization: "{nested-virtualization}"
+          gke-sandbox: "{gke-sandbox}"
       workers:
         count: 300
       master:
@@ -212,6 +217,7 @@ cases:
         nested-virtualization: true
       - control-plane: agent-sandbox
         sandbox-class: gvisor
+        gke-sandbox: true
 
   # glutton at 10 VUs on 10 workers on one node, once with no warm-up, for a
   # quicker check of the path.

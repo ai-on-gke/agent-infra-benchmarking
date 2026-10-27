@@ -99,6 +99,12 @@ class Cluster:
         state applied before the output existed had it for microvm only."""
         return self.outputs.get("sandboxed_kvm", self.outputs.get("sandbox_class") == "microvm")
 
+    @property
+    def sandboxed_gke_sandbox(self) -> bool:
+        """Whether the sandboxed pool runs GKE Sandbox, which agent-sandbox's
+        gvisor pods need; none before the output existed."""
+        return self.outputs.get("sandboxed_gke_sandbox", False)
+
     def kubectl_flags(self, namespace: str | None = None) -> list[str]:
         flags = [f"--kubeconfig={self.kubeconfig}"]
         return flags + [f"--namespace={namespace}"] if namespace else flags

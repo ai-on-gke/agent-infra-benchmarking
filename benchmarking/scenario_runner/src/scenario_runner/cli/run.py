@@ -459,6 +459,11 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
                 f"case {name} is microvm, but dev infra {args.dev_infra}'s sandboxed pool has no /dev/kvm for its"
                 " guests; use a dev infra of its own"
             )
+        if config.gke_sandbox != current.gke_sandbox:
+            fail(
+                f"case {name}'s sandboxed pool {'runs' if config.gke_sandbox else 'does not run'} GKE Sandbox, but dev"
+                f" infra {args.dev_infra}'s {'does not' if config.gke_sandbox else 'does'}; use a dev infra of its own"
+            )
         # Its records say which it ran on.
         if case[BARE_METAL] != record.get("bare_metal", False):
             fail(

@@ -60,6 +60,12 @@ variable "nested_virtualization" {
   default     = false
 }
 
+variable "gke_sandbox" {
+  description = "Unused; taken as common takes it."
+  type        = bool
+  default     = false
+}
+
 variable "sandboxed_node_count" {
   description = "Number of fake nodes in the sandboxed pool."
   type        = number

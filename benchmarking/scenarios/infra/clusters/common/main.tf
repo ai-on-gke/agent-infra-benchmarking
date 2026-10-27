@@ -100,6 +100,7 @@ module "cluster" {
       labels         = merge(local.substrate_version_label, { "benchmarking-worker" = "true" })
       # The microvm guests boot on /dev/kvm.
       enable_nested_virtualization = var.nested_virtualization && !local.sandboxed_bare_metal
+      sandbox_gvisor               = var.gke_sandbox
       # worker-pool.yaml.tmpl's WorkerPool already tolerates this taint; without
       # it actually applied to the nodes, nothing stops substrate's own
       # control-plane pods (and anything else) from also landing here
