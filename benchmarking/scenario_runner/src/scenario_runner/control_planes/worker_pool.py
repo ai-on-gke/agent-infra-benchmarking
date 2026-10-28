@@ -32,7 +32,7 @@ MANIFEST = RUNNER_DIR.parent / "workloads" / "manifests" / "worker-pool.yaml.tmp
 # Have to match the WorkerPool in the manifest.
 NAME = "benchmark-ateom"
 NAMESPACE = "benchmark-workloads"
-DEFAULT_TIMEOUT_SECS = 300
+DEFAULT_TIMEOUT_SECS = 600
 
 
 def missing_requirements() -> list[str]:
