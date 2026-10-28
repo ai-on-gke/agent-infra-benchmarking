@@ -45,17 +45,14 @@ TEMPLATE_IMAGES = {"openclaw": "openclaw-workload"}
 # The templates whose actors call mock-llm rather than a real LLM, which needs
 # a node pool of its own (cluster_configs.MOCK_LLM_POOL).
 MOCK_LLM_TEMPLATES = {"openclaw"}
-# Pinned rather than defaulted, so a stale SandboxConfig fails loudly. The
-# templates take the class as its proto enum.
-SANDBOX_CONFIGS = {
-    "gvisor": ("gvisor-default", "SANDBOX_CLASS_GVISOR"),
-    "microvm": ("microvm", "SANDBOX_CLASS_MICROVM"),
-}
 # The smallest microvm admits, so actors don't get kata's 2 GiB and its page
 # cache in every snapshot.
 DEFAULT_ACTOR_MEMORY = "256Mi"
 # A case's `actor-memory` unless it states one, by workload.
 DEFAULT_ACTOR_MEMORY_BY_WORKLOAD = {"openclaw": "2Gi"}
+# Every actor's cpu limit, which substrate requires; one vCPU is what a microvm
+# guest got before it did.
+ACTOR_CPU = "1"
 # The least memory a workload's actors can do their work in, by workload and
 # sandbox class. openclaw's Node.js agent is OOM-killed at 256Mi under gVisor,
 # and at 1Gi in a microvm, whose guest gets the limit less the VMM's share.
@@ -154,18 +151,12 @@ def check_worker_pool(cluster: Cluster, sandbox_class: str, timeout: int) -> Non
     stream(cluster.kubectl(*rollout, namespace=NAMESPACE))
 
 
-def render_template(
-    cluster: Cluster, name: str, sandbox_class: str, actor_memory: str, otlp: str, image_repo: str
-) -> str:
-    config_name, class_enum = SANDBOX_CONFIGS[sandbox_class]
+def render_template(cluster: Cluster, name: str, actor_memory: str, otlp: str, image_repo: str) -> str:
     values = {
-        "BUCKET_NAME": cluster.bucket,
         "PROJECT_ID": cluster.project_id,
-        "SANDBOX_CLASS": sandbox_class,
-        "SANDBOX_CLASS_ENUM": class_enum,
-        "SANDBOX_CONFIG_NAME": config_name,
         "OTLP_ENDPOINT": otlp,
-        "ACTOR_MEMORY": actor_memory,
+        "ACTOR_MEMORY_BYTES": memory_bytes(actor_memory),
+        "ACTOR_CPU_MILLICORES": cpu_millicores(ACTOR_CPU),
     }
     if name in TEMPLATE_IMAGES:
         values["IMAGE_WITH_DIGEST"] = pinned_image(image_repo, TEMPLATE_IMAGES[name])
@@ -256,12 +247,12 @@ def deploy(
     check_templates(names)
     check_worker_pool(cluster, sandbox_class, timeout)
     otlp = otlp or otlp_endpoint(cluster)
-    # A template that sets its own limit, as openclaw's does, ignores actor_memory.
-    sized = [n for n in names if "${ACTOR_MEMORY}" in (MANIFESTS_DIR / f"{n}-template.yaml.tmpl").read_text()]
+    # A template that sets its own limit ignores actor_memory.
+    sized = [n for n in names if "${ACTOR_MEMORY_BYTES}" in (MANIFESTS_DIR / f"{n}-template.yaml.tmpl").read_text()]
     log(
         f"workloads: deploying {', '.join(names)} (sandbox_class={sandbox_class},"
-        f" actor_memory={actor_memory} for {', '.join(sized) or 'none of them'},"
-        f" otlp_endpoint={otlp}, bucket=gs://{cluster.bucket}/{ATESPACE}/, substrate={substrate.revision()})"
+        f" actor_memory={actor_memory} for {', '.join(sized) or 'none of them'}, actor_cpu={ACTOR_CPU},"
+        f" otlp_endpoint={otlp}, snapshots=gs://{cluster.bucket}/{substrate.SNAPSHOT_PREFIX}/, substrate={substrate.revision()})"
     )
     if MOCK_LLM_TEMPLATES & set(names):
         openclaw.deploy_mock_llm(cluster, image_repo, timeout)
@@ -272,7 +263,7 @@ def deploy(
             # Templates are immutable, and the endpoint and class change between
             # runs. Deleting one also deletes its golden actor and snapshot.
             delete_template(ate, name)
-            manifest = render_template(cluster, name, sandbox_class, actor_memory, otlp, image_repo)
+            manifest = render_template(cluster, name, actor_memory, otlp, image_repo)
             stream(ate("create", "actor-template", "-f", "-"), input=substrate.resolve(cluster, manifest))
         for i, name in enumerate(names, 1):
             log(f"workloads: [{i}/{len(names)}] waiting for the {ATESPACE}/{name} golden snapshot (timeout {timeout}s)")
@@ -313,25 +304,29 @@ def memory_mib(quantity: str) -> float | None:
     return float(match[1]) * QUANTITY_UNITS[match[2]] / 2**20
 
 
+def memory_bytes(quantity: str) -> int:
+    """A Kubernetes memory quantity in bytes, as ActorTemplates take it."""
+    return round(memory_mib(quantity) * 2**20)
+
+
+def cpu_millicores(quantity: str) -> int:
+    """A Kubernetes cpu quantity in millicores, as ActorTemplates take it."""
+    return round(cpu_cores(quantity) * 1000)
+
+
 def cpu_cores(quantity: str) -> float:
     """A Kubernetes cpu quantity, such as "2" or "1500m", in cores."""
     return int(quantity[:-1]) / 1000 if quantity.endswith("m") else float(quantity)
 
 
-def check_deployed(template: dict, name: str, sandbox_class: str, workload: str, actor_memory: str) -> None:
-    """Refuses a deployed template the case cannot run on: one of another
-    sandbox class, whose actors never schedule on the case's pool, or with
-    less memory than the workload needs. Matters when the templates were not
-    deployed by this run (--no-deploy-workloads)."""
-    want = SANDBOX_CONFIGS[sandbox_class][1]
-    have = (template.get("sandboxConfig") or {}).get("sandboxClass")
-    if have != want:
-        raise WorkloadError(f"actor template {ATESPACE}/{name} is {have or 'of no sandbox class'}, not {want}; deploy it again")
-    limits = (template.get("resources") or {}).get("limits") or []
-    quantity = next((limit.get("quantity") for limit in limits if limit.get("name") == "memory"), None)
-    if quantity and memory_mib(quantity) != memory_mib(actor_memory):
+def check_deployed(template: dict, name: str, actor_memory: str) -> None:
+    """Refuses a deployed template whose memory limit is not the case's
+    actor-memory. Matters when the templates were not deployed by this run
+    (--no-deploy-workloads)."""
+    have = ((template.get("resources") or {}).get("limits") or {}).get("memoryBytes")
+    if have and int(have) != memory_bytes(actor_memory):
         raise WorkloadError(
-            f"actor template {ATESPACE}/{name} limits actors to {quantity}, but the case's actor-memory is"
+            f"actor template {ATESPACE}/{name} limits actors to {int(have)} bytes, but the case's actor-memory is"
             f" {actor_memory}; deploy it again"
         )
 

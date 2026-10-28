@@ -20,8 +20,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
 	"github.com/google/uuid"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
 )
 
 // The openclaw actor's surface, mirrored from

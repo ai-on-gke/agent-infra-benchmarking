@@ -21,11 +21,10 @@ from scenario_runner import workloads
 from scenario_runner.control_planes import worker_pool
 
 
-def template(*urls: str, memory: str = "256Mi", enum: str = "SANDBOX_CLASS_GVISOR") -> dict:
+def template(*urls: str, memory_bytes: str = "268435456") -> dict:
     return {
         "containers": [{"env": [{"name": f"E{i}", "value": url} for i, url in enumerate(urls)]}],
-        "resources": {"limits": [{"name": "memory", "quantity": memory}]},
-        "sandboxConfig": {"sandboxClass": enum},
+        "resources": {"limits": {"cpuMillicores": "1000", "memoryBytes": memory_bytes}},
     }
 
 
@@ -51,12 +50,17 @@ class Memory(unittest.TestCase):
         self.assertEqual(workloads.min_actor_memory_mib("openclaw", "gvisor"), 1024)
         self.assertIsNone(workloads.min_actor_memory_mib("glutton", "microvm"))
 
+    def test_as_actor_templates_take_them(self):
+        self.assertEqual(workloads.memory_bytes("256Mi"), 268435456)
+        self.assertEqual(workloads.memory_bytes("2Gi"), 2147483648)
+        self.assertEqual(workloads.cpu_millicores("1"), 1000)
+        self.assertEqual(workloads.cpu_millicores("1500m"), 1500)
+        self.assertEqual(workloads.cpu_millicores("0.25"), 250)
+
     def test_a_deployed_template_has_to_match_the_case(self):
-        workloads.check_deployed(template(), "glutton", "gvisor", "glutton", "256Mi")
-        with self.assertRaisesRegex(workloads.WorkloadError, "not SANDBOX_CLASS_MICROVM"):
-            workloads.check_deployed(template(), "glutton", "microvm", "glutton", "256Mi")
+        workloads.check_deployed(template(), "glutton", "256Mi")
         with self.assertRaisesRegex(workloads.WorkloadError, "actor-memory is 512Mi"):
-            workloads.check_deployed(template(), "glutton", "gvisor", "glutton", "512Mi")
+            workloads.check_deployed(template(), "glutton", "512Mi")
 
 
 class WorkerPool(unittest.TestCase):
@@ -78,3 +82,8 @@ class WorkerPool(unittest.TestCase):
 
     def test_no_limits_no_resources(self):
         self.assertEqual(self.deployed(10, "gvisor")["spec"]["template"]["resources"], {})
+
+    def test_the_pool_names_its_class_s_sandbox_config(self):
+        for sandbox_class, config in worker_pool.SANDBOX_CONFIGS.items():
+            pool = self.deployed(1, sandbox_class)
+            self.assertEqual(pool["spec"]["sandboxClasses"], [{"name": sandbox_class, "configRef": {"name": config}}])

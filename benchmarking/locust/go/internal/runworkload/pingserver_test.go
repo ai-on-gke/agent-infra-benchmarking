@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
-	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
+	"go.ate.dev/substrate/internal/atenet"
+	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
 	"google.golang.org/protobuf/proto"
 )
 

@@ -26,7 +26,12 @@ SUBNETWORK = "projects/p/regions/us-central1/subnetworks/runs"
 
 
 def applied_variables(**env: str | None) -> dict:
-    unset = {"NODE_SERVICE_ACCOUNT": None, "CLUSTER_NETWORK": None, "CLUSTER_SUBNETWORK": None}
+    unset = {
+        "NODE_SERVICE_ACCOUNT": None,
+        "SNAPSHOT_TRANSFER_SERVICE_ACCOUNT": None,
+        "CLUSTER_NETWORK": None,
+        "CLUSTER_SUBNETWORK": None,
+    }
     with mock.patch.multiple(cluster_configs, **{**unset, **env}):
         return cluster_configs.CommonCluster().variables(cluster_configs.execution({}))
 
@@ -41,6 +46,11 @@ class Network(unittest.TestCase):
         variables = applied_variables(NODE_SERVICE_ACCOUNT="nodes@p.iam.gserviceaccount.com")
         self.assertEqual(variables["node_service_account"], "nodes@p.iam.gserviceaccount.com")
         self.assertNotIn("node_service_account", applied_variables())
+
+    def test_a_cloud_run_job_s_snapshots_move_as_its_account(self):
+        variables = applied_variables(SNAPSHOT_TRANSFER_SERVICE_ACCOUNT="xfer@p.iam.gserviceaccount.com")
+        self.assertEqual(variables["snapshot_transfer_service_account"], "xfer@p.iam.gserviceaccount.com")
+        self.assertNotIn("snapshot_transfer_service_account", applied_variables())
 
     def test_elsewhere_a_cluster_gets_a_network_of_its_own(self):
         variables = applied_variables(CLUSTER_NETWORK=None, CLUSTER_SUBNETWORK=None)

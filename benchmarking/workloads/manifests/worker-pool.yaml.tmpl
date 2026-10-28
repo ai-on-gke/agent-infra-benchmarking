@@ -25,7 +25,7 @@ metadata:
 
 ---
 
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: WorkerPool
 metadata:
   name: benchmark-ateom
@@ -36,7 +36,9 @@ spec:
   replicas: ${WORKER_COUNT}
   sandboxClasses:
   - name: ${SANDBOX_CLASS}
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-${SANDBOX_CLASS}
+    configRef:
+      name: ${SANDBOX_CONFIG}
+  workerImage: ko://go.ate.dev/substrate/cmd/ateworker-${SANDBOX_CLASS}
   template:
     nodeSelector:
       benchmarking-worker: "true"

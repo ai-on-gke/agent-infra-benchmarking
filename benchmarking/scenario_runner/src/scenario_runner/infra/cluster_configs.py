@@ -34,6 +34,10 @@ CLUSTERS_DIR = SCENARIOS_DIR / "infra" / "clusters"
 # as, which its deployment created with the project roles nodes need, so the
 # job neither creates one per run nor grants it those.
 NODE_SERVICE_ACCOUNT = os.environ.get("NODE_SERVICE_ACCOUNT")
+# Set by automation-infra's Cloud Run job: the account substrate moves its
+# clusters' snapshots as, which its deployment created and let ate-api-server
+# impersonate, so the job creates none per run.
+SNAPSHOT_TRANSFER_SERVICE_ACCOUNT = os.environ.get("SNAPSHOT_TRANSFER_SERVICE_ACCOUNT")
 # Set by automation-infra's Cloud Run job, which runs inside this network: its
 # clusters go into the subnetwork, with an internal endpoint only.
 CLUSTER_NETWORK = os.environ.get("CLUSTER_NETWORK")
@@ -65,12 +69,17 @@ class Execution:
     # internal endpoint only.
     node_service_account: str | None = None
     network: dict | None = None
+    # Set on automation-infra's Cloud Run job: the account substrate moves
+    # snapshots as.
+    snapshot_transfer_service_account: str | None = None
 
 
 def execution(named: dict, image_repository: str | None = None, substrate_version: str | None = None) -> Execution:
     """The Execution of named, with what automation-infra's Cloud Run job sets."""
     network = {"network": CLUSTER_NETWORK, "subnetwork": CLUSTER_SUBNETWORK} if CLUSTER_SUBNETWORK else None
-    return Execution(named, image_repository, substrate_version, NODE_SERVICE_ACCOUNT, network)
+    return Execution(
+        named, image_repository, substrate_version, NODE_SERVICE_ACCOUNT, network, SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+    )
 
 
 @dataclass(frozen=True)
@@ -191,6 +200,8 @@ class CommonCluster(ClusterConfig):
             variables["substrate_version"] = execution.substrate_version
         if execution.node_service_account:
             variables["node_service_account"] = execution.node_service_account
+        if execution.snapshot_transfer_service_account:
+            variables["snapshot_transfer_service_account"] = execution.snapshot_transfer_service_account
         if execution.network:
             variables["existing_network"] = execution.network
             variables["enable_private_endpoint"] = True

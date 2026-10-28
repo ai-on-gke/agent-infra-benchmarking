@@ -46,9 +46,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/harness"
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/runworkload"
 	"github.com/myzhan/boomer"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/harness"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/runworkload"
 	"go.opentelemetry.io/otel"
 )
 

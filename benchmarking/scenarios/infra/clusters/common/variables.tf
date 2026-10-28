@@ -24,7 +24,7 @@ variable "default_resource_name" {
 }
 
 variable "short_resource_name" {
-  description = "Name for the resources whose names are capped below var.default_resource_name's: the node service account, <name>-node, so at most 25 characters. Defaults to var.default_resource_name, cut to fit, when empty."
+  description = "Name for the resources whose names are capped below var.default_resource_name's: the node service account, <name>-node, and the snapshot transfer one, <name>-xfer, so at most 25 characters. Defaults to var.default_resource_name, cut to fit, when empty."
   type        = string
   default     = ""
 }
@@ -192,6 +192,12 @@ variable "image_repository" {
 # and grant it project roles.
 variable "node_service_account" {
   description = "Email of an existing service account for the node pools, which holds the project roles GKE nodes need (logging.logWriter, monitoring.metricWriter, monitoring.viewer, stackdriver.resourceMetadata.writer) already. Empty creates one for this deployment and grants it those."
+  type        = string
+  default     = ""
+}
+
+variable "snapshot_transfer_service_account" {
+  description = "Email of an existing service account for substrate's snapshot transfers, in this project, on which ate-api-server's Workload Identity principal holds roles/iam.serviceAccountTokenCreator already. Empty creates one for this deployment and grants that. Either way it gets objectAdmin and bucketViewer on this deployment's bucket."
   type        = string
   default     = ""
 }

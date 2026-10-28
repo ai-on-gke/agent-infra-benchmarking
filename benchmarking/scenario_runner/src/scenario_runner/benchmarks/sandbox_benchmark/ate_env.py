@@ -127,7 +127,7 @@ def render_stack(cli: AteEnv, cluster: Cluster, sandbox_class: str, worker_count
             f"--template={TEMPLATE}",
             f"--api-image={api_image}",
             # substrate.resolve pins it to its image in the repository.
-            f"--worker-image=ko://github.com/agent-substrate/substrate/cmd/ateom-{sandbox_class}",
+            f"--worker-image=ko://go.ate.dev/substrate/cmd/ateworker-{sandbox_class}",
             f"--replicas={worker_count}",
         )
     )
@@ -135,7 +135,7 @@ def render_stack(cli: AteEnv, cluster: Cluster, sandbox_class: str, worker_count
     pool = next(doc for doc in docs if doc["kind"] == "WorkerPool")
     pool["metadata"].setdefault("labels", {}).update(POOL_LABELS)
     # env's pool is gvisor-default's alone.
-    config_name, _ = workloads.SANDBOX_CONFIGS[sandbox_class]
+    config_name = worker_pool.SANDBOX_CONFIGS[sandbox_class]
     pool["spec"]["sandboxClasses"] = [{"name": sandbox_class, "configRef": {"name": config_name}}]
     # env's workers go on any node; the sandboxed nodes are the benchmarking
     # workers, tainted for any class, as in worker-pool.yaml.tmpl.
@@ -169,12 +169,13 @@ def render_template(
         )
     )
     template = yaml.safe_load(manifest)
-    config_name, class_enum = workloads.SANDBOX_CONFIGS[sandbox_class]
-    template["sandboxConfig"] = {"sandboxClass": class_enum, "configName": config_name}
+    template.pop("sandboxConfig", None)
     template["workerSelector"] = {"matchLabels": POOL_LABELS}
-    # Unset, microvm gives every actor 2 GiB, and gVisor no cpu limit at all.
     template["resources"] = {
-        "limits": [{"name": "cpu", "quantity": actor_cpu}, {"name": "memory", "quantity": actor_memory}]
+        "limits": {
+            "cpuMillicores": str(workloads.cpu_millicores(actor_cpu)),
+            "memoryBytes": str(workloads.memory_bytes(actor_memory)),
+        }
     }
     return yaml.safe_dump(template, sort_keys=False)
 

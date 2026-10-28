@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/harness"
 	"github.com/myzhan/boomer"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/harness"
 )
 
 var errCycle = errors.New("resume refused")

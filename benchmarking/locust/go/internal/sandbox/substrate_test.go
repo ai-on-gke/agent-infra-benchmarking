@@ -18,8 +18,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
+	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 )
 
 // The target header is the only thing atenet resolves an actor from, so its

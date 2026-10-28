@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the glutton
+# ActorTemplate (protojson-shaped ateapi.ActorTemplate) for the glutton
 # benchmark workload, created through the ate API by
-# scenario_runner/src/scenario_runner/workloads/. The sandbox class must
-# match the WorkerPool's so snapshots stay within a class.
+# scenario_runner/src/scenario_runner/workloads/. Its actors take the sandbox
+# class of the WorkerPool its workerSelector picks.
 metadata:
   atespace: benchmark-workloads
   name: glutton
@@ -24,9 +24,9 @@ workerSelector:
     workload: benchmark-ateom
 containers:
 - name: glutton
-  image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/glutton
+  image: ko://go.ate.dev/substrate/cmd/benchmarking/glutton
   # Port 80 is the only inbound port nftables forwards from the worker pod
-  # into the actor sandbox (see cmd/ateom-gvisor/main.go). HTTP/1.1 mode
+  # into the actor sandbox (see cmd/ateworker-gvisor/main.go). HTTP/1.1 mode
   # lets the atenet router (which forwards HTTP/1.1 upstream) reach Ping.
   command:
   - "/ko-app/glutton"
@@ -52,16 +52,11 @@ containers:
     httpGet:
       path: /readyz
       port: 80
-# Unset means the 2 GiB microvm default, which the benchmarks should not
-# silently inherit. A case sets it with `actor-memory`, raised for the ones
-# that exercise glutton's WriteRAM path.
+# Substrate requires both. A case sets the memory with `actor-memory`, raised
+# for the ones that exercise glutton's WriteRAM path.
 resources:
   limits:
-  - name: memory
-    quantity: ${ACTOR_MEMORY}
+    cpuMillicores: "${ACTOR_CPU_MILLICORES}"
+    memoryBytes: "${ACTOR_MEMORY_BYTES}"
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
-  storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton/
-sandboxConfig:
-  sandboxClass: ${SANDBOX_CLASS_ENUM}
-  configName: ${SANDBOX_CONFIG_NAME}

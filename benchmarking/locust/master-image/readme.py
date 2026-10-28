@@ -388,19 +388,22 @@ def _workers(info: dict, golden: bool = True) -> str:
             sandboxed = ((info.get("nodes") or {}).get("sandboxed") or {}).get("count")
             node_desc = f", {users / sandboxed:g} actors/node" if sandboxed else ""
             lines.append(f"Density: {density:g}x ({users} actors / {workers} workers{node_desc}).")
+    # The pool's, as its controller resolved them; before substrate moved the
+    # class to the pool, the template's.
+    pool_configs = [
+        (c.get("configRef") or {}).get("name")
+        for c in ((pool or {}).get("status") or {}).get("sandboxClasses") or []
+        if isinstance(c, dict)
+    ]
     for name, tmpl in templates.items():
         if not isinstance(tmpl, dict):
             continue
-        sandbox = tmpl.get("sandboxConfig") or {}
-        config_name = sandbox.get("configName")
+        config_name = next(filter(None, pool_configs), None) or (tmpl.get("sandboxConfig") or {}).get("configName")
         parts = [f"sandbox config `{config_name or UNKNOWN}`"]
         runtime = _sandbox_assets(configs.get(config_name), info.get("bucket"))
         if runtime:
             parts.append(f"runtime {runtime}")
-        memory = [
-            r.get("quantity") for r in (tmpl.get("resources") or {}).get("limits") or [] if r.get("name") == "memory"
-        ]
-        parts.append(f"memory limit {memory[0] if memory else 'unset'}")
+        parts += _limits(tmpl.get("resources") or {})
         # The scope of every snapshot of an actor, on pause and on suspend.
         snapshots = tmpl.get("snapshotConfig") or {}
         if snapshots.get("onCommit"):
@@ -411,6 +414,20 @@ def _workers(info: dict, golden: bool = True) -> str:
         lines.append("")
         lines.append(f"ActorTemplate `{name}`: " + ", ".join(parts) + ".")
     return "\n".join(lines)
+
+
+def _limits(resources: dict) -> list[str]:
+    """The template's cpu and memory limits, as ActorTemplates now give them
+    or, before, as a list of quantities."""
+    limits = resources.get("limits") or {}
+    if isinstance(limits, list):
+        memory = [r.get("quantity") for r in limits if r.get("name") == "memory"]
+        return [f"memory limit {memory[0] if memory else 'unset'}"]
+    cpu, memory = limits.get("cpuMillicores"), limits.get("memoryBytes")
+    return [
+        f"cpu limit {int(cpu) / 1000:g}" if cpu else "cpu limit unset",
+        f"memory limit {int(memory) / 2**20:g}Mi" if memory else "memory limit unset",
+    ]
 
 
 def _versions(info: dict) -> str:

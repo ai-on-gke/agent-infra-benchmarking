@@ -20,6 +20,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -30,21 +31,21 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
-	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
-	btrace "github.com/agent-substrate/substrate/internal/benchmarking/boomer/trace"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/myzhan/boomer"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
+	bmetrics "go.ate.dev/substrate/internal/benchmarking/boomer/metrics"
+	btrace "go.ate.dev/substrate/internal/benchmarking/boomer/trace"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/density"
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/runworkload"
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/workload"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/density"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/runworkload"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/workload"
 
 	// Imported for the user classes it registers via init().
-	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
+	_ "go.ate.dev/substrate/internal/benchmarking/boomer/glutton"
 )
 
 const (
@@ -63,7 +64,7 @@ const (
 func main() {
 	var (
 		apiEndpoint = flag.String("api-endpoint", "k8s:///api.ate-system.svc.cluster.local:443", "ateapi gRPC dial target.")
-		routerURL   = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "atenet HTTP router base URL (no trailing slash).")
+		routerURL   = flag.String("router-url", boomerutil.DefaultRouterURL, "Router base URL (no trailing slash): atenet-router's, which takes mutual TLS, or agent-sandbox's.")
 		atespace    = flag.String("atespace", "benchmark", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
 		promAddr    = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
 		userClass   = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userClasses(), "|")))
@@ -74,6 +75,7 @@ func main() {
 		minWait          = flag.Duration("min-wait", 0, "Lower bound on the think time between iterations.")
 		maxWait          = flag.Duration("max-wait", 500*time.Millisecond, "Upper bound on the think time between iterations. At or below --min-wait waits exactly that.")
 		resumeMode       = flag.String("resume-mode", scenario.ResumeModeExplicit, fmt.Sprintf("How an actor is woken: %s issues ResumeActor before the instruction, %s leaves the wake to the router.", scenario.ResumeModeExplicit, scenario.ResumeModeImplicit))
+		suspendMode      = flag.String("suspend-mode", scenario.SuspendModeAsync, fmt.Sprintf("agent-substrate only: when SuspendActor returns: %s once the snapshot is on the node, uploading it in the background; %s once it is uploaded.", scenario.SuspendModeAsync, scenario.SuspendModeSync))
 		traceProbability = flag.Float64("trace-probability", 0, "Fraction of iterations to sample a trace for, 0 to 1.")
 
 		httpMaxIdleConnsPerHost = flag.Int("http-max-idle-conns-per-host", 10000, "Idle HTTP connections the router client keeps per host. Set it to at least the number of users this worker runs, so each VU reuses its connection to the router across wakes instead of opening a new one per request.")
@@ -134,6 +136,14 @@ func main() {
 			slog.String("known", scenario.ResumeModeExplicit+","+scenario.ResumeModeImplicit))
 		os.Exit(1)
 	}
+	switch *suspendMode {
+	case scenario.SuspendModeAsync, scenario.SuspendModeSync:
+	default:
+		slog.Error("fatal: unknown --suspend-mode value",
+			slog.String("suspend_mode", *suspendMode),
+			slog.String("known", scenario.SuspendModeAsync+","+scenario.SuspendModeSync))
+		os.Exit(1)
+	}
 
 	ctx := context.Background()
 	sampler := btrace.NewUpdatableSampler(*traceProbability)
@@ -155,9 +165,9 @@ func main() {
 	}
 	// Each its own HTTP/2 connection, so the users' calls are not all
 	// multiplexed over one. agent-sandbox calls no ateapi.
-	var apiStubs []ateapipb.ControlClient
+	var apiStubs []ateapi.ControlClient
 	if *provider == "agent-substrate" {
-		apiStubs = make([]ateapipb.ControlClient, *apiConnections)
+		apiStubs = make([]ateapi.ControlClient, *apiConnections)
 		for i := range apiStubs {
 			conn, stub, err := boomerutil.DialControl(*apiEndpoint)
 			if err != nil {
@@ -168,7 +178,7 @@ func main() {
 			apiStubs[i] = stub
 		}
 	}
-	var apiStub ateapipb.ControlClient
+	var apiStub ateapi.ControlClient
 	if len(apiStubs) > 0 {
 		apiStub = apiStubs[0]
 	}
@@ -176,6 +186,17 @@ func main() {
 	// Upstream's tuning. Every VU calls the one router host, and the default two
 	// idle connections per host would put a TCP connect in most ExecutionTime rows.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if *provider == "agent-substrate" {
+		routerTLS, err := boomerutil.RouterTLSConfig()
+		if err != nil {
+			slog.Error("failed to configure router TLS", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+		transport.TLSClientConfig = routerTLS
+		// One HTTP/1.1 connection per VU, as over cleartext, rather than all
+		// of them multiplexed on one HTTP/2 connection.
+		transport.ForceAttemptHTTP2 = false
+	}
 	transport.MaxIdleConns = 0 // no total cap; the per-host cap governs
 	transport.MaxIdleConnsPerHost = *httpMaxIdleConnsPerHost
 	transport.IdleConnTimeout = 5 * time.Minute
@@ -186,15 +207,9 @@ func main() {
 		HTTPClient: httpClient,
 		RouterURL:  *routerURL,
 		Atespace:   *atespace,
-		// runworkload takes the flags above through runworkload.New; this is for
-		// the upstream user classes, which take the same values off the
-		// holder that userclass.Config requires.
-		Dyn: dynconfig.NewHolder(dynconfig.Config{
-			MinWait:          *minWait,
-			MaxWait:          *maxWait,
-			ResumeMode:       *resumeMode,
-			TraceProbability: *traceProbability,
-		}),
+		// runworkload takes the flags above through runworkload.New, so its
+		// holder carries nothing; an upstream user class gets its own below.
+		Dyn: dynconfig.NewHolder(nil),
 	}
 
 	if *workloadTimeout < 0 {
@@ -217,6 +232,7 @@ func main() {
 				MinWait:        *minWait,
 				MaxWait:        *maxWait,
 				ResumeMode:     *resumeMode,
+				SuspendMode:    *suspendMode,
 				EgressAllow:    splitList(*actorEgressAllow),
 				EgressAllowTLS: splitList(*actorEgressAllowTLS),
 			}),
@@ -251,6 +267,24 @@ func main() {
 				slog.String("known", strings.Join(userClasses(), ",")))
 			os.Exit(1)
 		}
+		// The upstream user classes take the same values off their holder, as
+		// the keys their codec reads; a key a class does not have is ignored.
+		cfg.Dyn = dynconfig.NewHolder(entry.Config)
+		payload, err := json.Marshal(map[string]any{
+			"min_wait_time":     dynconfig.Seconds(*minWait),
+			"max_wait_time":     dynconfig.Seconds(*maxWait),
+			"resume_mode":       *resumeMode,
+			"lifecycle_mode":    *suspendMode,
+			"trace_probability": *traceProbability,
+		})
+		if err == nil {
+			_, _, err = cfg.Dyn.Apply(payload)
+		}
+		if err != nil {
+			slog.Error("fatal: the user class refused its settings",
+				slog.String("user_class", class), slog.String("err", err.Error()))
+			os.Exit(1)
+		}
 		taskFn, shutdownFn = entry.Init(cfg)
 		taskName = entry.UserClass
 	}
@@ -278,7 +312,7 @@ func main() {
 	// waits for it. Boomer reports stats only until the handler returns, so it
 	// holds on until the teardown's rows have gone out.
 	boomer.Events.Subscribe("boomer:stop", func() {
-		slog.Info("boomer:stop event received; suspending+deleting actors")
+		slog.Info("boomer:stop event received; deleting actors")
 		teardown()
 		time.Sleep(statsReportWait)
 	})

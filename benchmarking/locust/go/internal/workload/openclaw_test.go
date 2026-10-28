@@ -23,7 +23,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
 )
 
 // openclawServer is a stand-in for

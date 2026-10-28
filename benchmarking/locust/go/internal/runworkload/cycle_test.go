@@ -21,10 +21,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
+	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
 )
 
 // A cycle of several steps sends each step's instructions between its one
@@ -142,7 +142,7 @@ func TestFailedLoadFailsTheCycle(t *testing.T) {
 func TestUsersAreSpreadOverConnections(t *testing.T) {
 	stubs := []*fakeControlClient{{}, {}, {}}
 	cfg := newTestConfig(t, &pingServer{}, nil)
-	sc := newTestScenarioOn(cfg, scenario.Options{APIStubs: []ateapipb.ControlClient{stubs[0], stubs[1], stubs[2]}})
+	sc := newTestScenarioOn(cfg, scenario.Options{APIStubs: []ateapi.ControlClient{stubs[0], stubs[1], stubs[2]}})
 	for i, want := range []int{0, 1, 2, 0} {
 		before := stubs[want].countCalls("CreateActor")
 		newTestUser(t, sc)

@@ -28,13 +28,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -323,23 +323,23 @@ func TestAFailedCallKeepsAnActorThatSettlesAndReplacesOneThatDoesNot(t *testing.
 	}{
 		{
 			name: "a suspend that finishes on the server",
-			ctrl: &fakeControlClient{suspendErr: errActorBusy, states: []ateapipb.ActorState{
-				ateapipb.ActorState_ACTOR_STATE_SUSPENDING, ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			ctrl: &fakeControlClient{suspendErr: errActorBusy, states: []ateapi.ActorState{
+				ateapi.ActorState_ACTOR_STATE_SUSPENDING, ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 			}},
 		},
 		{
 			name:         "a refused instruction on a running actor",
-			ctrl:         &fakeControlClient{states: []ateapipb.ActorState{ateapipb.ActorState_ACTOR_STATE_RUNNING}},
+			ctrl:         &fakeControlClient{states: []ateapi.ActorState{ateapi.ActorState_ACTOR_STATE_RUNNING}},
 			wantSuspends: 1,
 		},
 		{
 			name:         "a crashed actor",
-			ctrl:         &fakeControlClient{resumeErr: errResumeRefused, states: []ateapipb.ActorState{ateapipb.ActorState_ACTOR_STATE_CRASHED}},
+			ctrl:         &fakeControlClient{resumeErr: errResumeRefused, states: []ateapi.ActorState{ateapi.ActorState_ACTOR_STATE_CRASHED}},
 			wantReplaced: true,
 		},
 		{
 			name:         "an actor that stays suspending",
-			ctrl:         &fakeControlClient{suspendErr: errActorBusy, states: []ateapipb.ActorState{ateapipb.ActorState_ACTOR_STATE_SUSPENDING}},
+			ctrl:         &fakeControlClient{suspendErr: errActorBusy, states: []ateapi.ActorState{ateapi.ActorState_ACTOR_STATE_SUSPENDING}},
 			wantReplaced: true,
 		},
 		{
@@ -396,38 +396,46 @@ func TestAFailedCallKeepsAnActorThatSettlesAndReplacesOneThatDoesNot(t *testing.
 	}
 }
 
-// The control plane only deletes a SUSPENDED or CRASHED actor unless the
-// request asks for any state. A refused suspend is exactly the case that
-// leaves the actor outside those two, so that delete asks — and a suspend
-// that worked does not, keeping the precondition as a check on the rest.
-func TestDeleteBypassesTheStateCheckOnlyAfterAFailedSuspend(t *testing.T) {
+// DeleteActor removes an actor in any state, so Remove does not suspend it
+// first, not even when a suspend would be refused.
+func TestRemoveDeletesWithoutSuspending(t *testing.T) {
+	ctrl := &fakeControlClient{suspendErr: errActorBusy}
+	u := newTestRunWorkloadUser(t, &pingServer{}, &userclass.Config{APIStub: ctrl})
+
+	if err := u.sandbox.Remove(context.Background()); err != nil {
+		t.Fatalf("Remove failed: %v", err)
+	}
+	if got := ctrl.countCalls("SuspendActor"); got != 0 {
+		t.Errorf("SuspendActor calls: got %d, want none", got)
+	}
+	if got := ctrl.countCalls("DeleteActor"); got != 1 {
+		t.Errorf("DeleteActor calls: got %d, want 1", got)
+	}
+}
+
+// Sleep asks for the suspend mode the scenario names, and leaves it to
+// substrate when it names none.
+func TestSuspendAsksForTheSuspendMode(t *testing.T) {
 	tests := []struct {
-		name         string
-		ctrl         *fakeControlClient
-		wantAnyState bool
+		mode string
+		want ateapi.DurabilityMode
 	}{
-		{
-			name: "the suspend worked",
-			ctrl: &fakeControlClient{},
-		},
-		{
-			name:         "the suspend was refused",
-			ctrl:         &fakeControlClient{suspendErr: errActorBusy},
-			wantAnyState: true,
-		},
+		{mode: scenario.SuspendModeAsync, want: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+		{mode: scenario.SuspendModeSync, want: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+		{mode: "", want: ateapi.DurabilityMode_DURABILITY_MODE_UNSPECIFIED},
 	}
 
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			u := newTestRunWorkloadUser(t, &pingServer{}, &userclass.Config{APIStub: tc.ctrl})
+		t.Run(tc.mode, func(t *testing.T) {
+			ctrl := &fakeControlClient{}
+			cfg := newTestConfig(t, &pingServer{}, &userclass.Config{APIStub: ctrl})
+			u := newTestUser(t, newTestScenarioOn(cfg, scenario.Options{SuspendMode: tc.mode}))
 
-			// The fake refuses a plain delete after a refused suspend, as the
-			// control plane does, so the actor goes only if the flag is set.
-			if err := u.sandbox.Remove(context.Background()); err != nil {
-				t.Fatalf("Remove failed: %v", err)
+			if err := u.sandbox.Sleep(context.Background()); err != nil {
+				t.Fatalf("Sleep failed: %v", err)
 			}
-			if got := tc.ctrl.deletedFromAnyState(); got != tc.wantAnyState {
-				t.Errorf("AnyState: got %t, want %t", got, tc.wantAnyState)
+			if got := ctrl.recordedSuspendModes(); len(got) != 1 || got[0] != tc.want {
+				t.Errorf("suspend modes: got %v, want [%v]", got, tc.want)
 			}
 		})
 	}
@@ -490,11 +498,9 @@ func TestShutdownReportsWhatItLeftBehind(t *testing.T) {
 			wantInLog: []string{"teardown closed a session", `"left":0`, `"removed":1`},
 		},
 		{
-			name: "an actor still in a transitional state",
-			ctrl: &fakeControlClient{suspendErr: errActorBusy, deleteErr: errActorBusy},
-			// The suspend failure rides along, because the delete failing on
-			// its own means something else entirely.
-			wantInLog: []string{"teardown left a session behind", "after suspend", `"left":1`},
+			name:      "a delete the control plane refused",
+			ctrl:      &fakeControlClient{deleteErr: errActorBusy},
+			wantInLog: []string{"teardown left a session behind", errActorBusy.Error(), `"left":1`},
 		},
 	}
 
@@ -889,9 +895,6 @@ func TestDeletingAnActorAlreadyGoneSucceeds(t *testing.T) {
 	if err := u.sandbox.Remove(context.Background()); err != nil {
 		t.Fatalf("Remove: got %v, want nil", err)
 	}
-	if ctrl.deletedFromAnyState() {
-		t.Error("AnyState: got true after a suspend that worked, want false")
-	}
 }
 
 // failureCount is how many failures of the named request have been recorded,
@@ -929,7 +932,7 @@ func requestCount(t *testing.T, name, status string) float64 {
 
 // A suspend still in flight when the run ends is let finish, because ateapi
 // abandons the checkpoint of one cut off and crashes the actor. The teardown
-// then finds the actor SUSPENDED and deletes it under the state check.
+// then deletes the actor.
 func TestTheEndOfTheRunLetsASuspendFinish(t *testing.T) {
 	const delay = 200 * time.Millisecond
 	ctrl := &fakeControlClient{suspendDelay: delay}
@@ -938,6 +941,7 @@ func TestTheEndOfTheRunLetsASuspendFinish(t *testing.T) {
 
 	// Users are keyed by goroutine, so both iterations run on this one: the
 	// first creates the actor, the second cycles it into the slow suspend.
+	start := time.Now()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -948,7 +952,6 @@ func TestTheEndOfTheRunLetsASuspendFinish(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	start := time.Now()
 	rt.shutdown(context.Background())
 	<-done
 
@@ -960,9 +963,6 @@ func TestTheEndOfTheRunLetsASuspendFinish(t *testing.T) {
 	}
 	if got := failureCount(t, sandbox.SuspendMetric) - before; got != 0 {
 		t.Errorf("Suspend failures: got %v more, want none", got)
-	}
-	if ctrl.deletedFromAnyState() {
-		t.Error("the teardown deleted from any state; want the actor SUSPENDED first")
 	}
 }
 

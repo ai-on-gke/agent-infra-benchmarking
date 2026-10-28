@@ -20,7 +20,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
 )
 
 // The policy has to be in place before the actor first runs, and a run that

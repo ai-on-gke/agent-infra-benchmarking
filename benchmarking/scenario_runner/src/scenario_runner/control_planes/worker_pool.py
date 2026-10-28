@@ -33,6 +33,9 @@ MANIFEST = RUNNER_DIR.parent / "workloads" / "manifests" / "worker-pool.yaml.tmp
 NAME = "benchmark-ateom"
 NAMESPACE = "benchmark-workloads"
 DEFAULT_TIMEOUT_SECS = 300
+# The SandboxConfig of each class, which the WorkerPools name rather than take
+# the class default, so a stale one fails loudly.
+SANDBOX_CONFIGS = {"gvisor": "gvisor-default", "microvm": "microvm"}
 
 
 def missing_requirements() -> list[str]:
@@ -68,7 +71,10 @@ def deploy(
     log(f"worker pool: deploying {NAME} (replicas={worker_count}, sandbox_class={sandbox_class}, limits={limits or {}})")
     resources = json.dumps({"limits": limits} if limits else {})
     manifest = Template(MANIFEST.read_text()).substitute(
-        WORKER_COUNT=worker_count, SANDBOX_CLASS=sandbox_class, WORKER_RESOURCES=resources
+        WORKER_COUNT=worker_count,
+        SANDBOX_CLASS=sandbox_class,
+        SANDBOX_CONFIG=SANDBOX_CONFIGS[sandbox_class],
+        WORKER_RESOURCES=resources,
     )
     resolved = substrate.resolve(cluster, manifest)
     log(output(cluster.kubectl("apply", "-f", "-", namespace=NAMESPACE), input=resolved).strip())

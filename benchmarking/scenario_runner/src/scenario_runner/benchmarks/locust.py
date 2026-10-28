@@ -64,6 +64,9 @@ DEFAULT_MAX_FAILURE_RATIO = 0.01
 # The worker's --atespace default, which its actors are created in unless the
 # case's `worker` sets `atespace`.
 ACTOR_ATESPACE = "benchmark"
+# The worker's --suspend-mode values on substrate, the first unless the case's
+# `worker` sets one, so the run records it.
+SUSPEND_MODES = ("async", "sync")
 # The case's mapping of its type, and what it may state.
 TYPE = "locust"
 KEYS = {
@@ -166,6 +169,15 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
             f"case {name}'s `{TYPE}.actor-memory` {memory} is less than {workload} needs on {on}, {need}Mi"
         )
     workers = check_workers(name, options.get("workers"), memory, control_plane(case))
+    if control_plane(case) == SUBSTRATE:
+        worker = {"suspend-mode": SUSPEND_MODES[0], **worker}
+        if worker["suspend-mode"] not in SUSPEND_MODES:
+            raise ValueError(
+                f"case {name}'s `{TYPE}.worker.suspend-mode` must be {' or '.join(SUSPEND_MODES)},"
+                f" got {worker['suspend-mode']!r}"
+            )
+    elif "suspend-mode" in worker:
+        raise ValueError(f"case {name}'s `{TYPE}.worker.suspend-mode` is substrate's, and {control_plane(case)} has none")
     config = cluster_config(name, case)
     # mock-llm's pods select and tolerate only its pool, and stay pending without it.
     if template in workloads.MOCK_LLM_TEMPLATES and not isinstance(config, OpenclawCluster):
@@ -433,7 +445,7 @@ roleRef:
             workloads.deploy(cluster, [template_name], sandbox_class(case), image_repo, options["actor-memory"])
         if template_name:
             template = workloads.deployed_template(cluster, template_name)
-            workloads.check_deployed(template, template_name, sandbox_class(case), workload, options["actor-memory"])
+            workloads.check_deployed(template, template_name, options["actor-memory"])
             # A case may state its own allow-lists; otherwise the actors may call
             # what their template is configured to, and nothing else.
             cleartext, tls = workloads.egress_hosts(template)

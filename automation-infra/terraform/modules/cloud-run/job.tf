@@ -76,6 +76,23 @@ resource "google_service_account_iam_member" "job_act_as_nodes" {
   member             = "serviceAccount:${google_service_account.job.email}"
 }
 
+# The account substrate moves every run's snapshots as
+# (SNAPSHOT_TRANSFER_SERVICE_ACCOUNT): each run's cluster config grants it its
+# bucket, and ate-api-server, whose principal is the same in every cluster in
+# the project, impersonates it. The namespace and account are the cluster
+# config's atelet_namespace and ate_api_server_ksa_name defaults.
+resource "google_service_account" "snapshot_transfer" {
+  project      = var.project_id
+  account_id   = "${substr(var.default_resource_name, 0, 24)}-xfer"
+  display_name = "Substrate snapshot transfers of ${var.default_resource_name}'s runs"
+}
+
+resource "google_service_account_iam_member" "ate_api_server_snapshot_transfer" {
+  service_account_id = google_service_account.snapshot_transfer.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/ate-system/sa/ate-api-server"
+}
+
 # The runs' buckets, and creating them, which is checked on the project.
 resource "google_project_iam_member" "job_run_buckets" {
   project = var.project_id
@@ -177,10 +194,11 @@ resource "google_cloud_run_v2_job" "job" {
         # the scheduler's run overrides with scheduled.
         dynamic "env" {
           for_each = merge({
-            BENCHMARK_TRIGGER    = "manual"
-            NODE_SERVICE_ACCOUNT = google_service_account.nodes.email
-            CLUSTER_NETWORK      = google_compute_network.runs.id
-            CLUSTER_SUBNETWORK   = google_compute_subnetwork.runs.id
+            BENCHMARK_TRIGGER                 = "manual"
+            NODE_SERVICE_ACCOUNT              = google_service_account.nodes.email
+            SNAPSHOT_TRANSFER_SERVICE_ACCOUNT = google_service_account.snapshot_transfer.email
+            CLUSTER_NETWORK                   = google_compute_network.runs.id
+            CLUSTER_SUBNETWORK                = google_compute_subnetwork.runs.id
           }, var.env)
           content {
             name  = env.key

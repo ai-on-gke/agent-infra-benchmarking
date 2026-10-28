@@ -1,19 +1,21 @@
-module github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go
+module go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go
 
 go 1.27.0
 
-replace github.com/agent-substrate/substrate => ../../../dependency-repos/substrate
+replace go.ate.dev/substrate => ../../../dependency-repos/substrate
 
 require (
-	github.com/agent-substrate/substrate v0.1.0
 	github.com/google/uuid v1.6.0
 	github.com/myzhan/boomer v1.6.1-0.20250711115830-8a2c7ce4c7b1
 	github.com/prometheus/client_golang v1.24.1
+	go.ate.dev/substrate v0.1.0
 	go.opentelemetry.io/otel v1.45.0
 	go.opentelemetry.io/otel/sdk v1.45.0
 	go.opentelemetry.io/otel/trace v1.45.0
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
+	k8s.io/apimachinery v0.37.0
+	k8s.io/client-go v0.37.0
 )
 
 require (
@@ -23,6 +25,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.6.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/distribution/reference v0.6.0 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
@@ -60,6 +63,7 @@ require (
 	github.com/olekukonko/tablewriter v1.0.8 // indirect
 	github.com/onsi/ginkgo/v2 v2.27.4 // indirect
 	github.com/onsi/gomega v1.39.0 // indirect
+	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.70.1 // indirect
@@ -92,8 +96,6 @@ require (
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	k8s.io/api v0.37.0 // indirect
-	k8s.io/apimachinery v0.37.0 // indirect
-	k8s.io/client-go v0.37.0 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad // indirect
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd // indirect

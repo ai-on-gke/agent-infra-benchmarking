@@ -403,12 +403,14 @@ Besides the load, a case can shape each cycle with the worker's options:
 | `locust.worker` key | What each cycle does |
 |---|---|
 | `resume-mode: implicit` | no `ResumeActor`: the instruction wakes the actor through the router (`glutton-implicit`) |
+| `suspend-mode: sync` | `SuspendActor` returns once the snapshot is uploaded, rather than once it is on the node with the upload left to the background (`async`, the default on substrate) |
 | `instructions-per-cycle: N` | N instructions between the resume and the suspend, the first closing TTFI (`glutton-session`) |
 | `concurrent-instructions: N` | N instructions at once at each of those steps (`glutton-concurrent`) |
 | `glutton-write-ram: SIZE`, `glutton-write-disk: BYTES` | rewrites that much of the actor's memory and a file on its disk before the suspend, as `WriteRAM` and `WriteDisk` rows, so the snapshot holds changed state (`glutton-load`, with `actor-memory: 512Mi`) |
 
 In the case's `locust`, `actor-memory` sets the actors' memory limit, which
-on `microvm` is the guest's RAM, and `locust-workers` runs that many boomer
+on `microvm` is the guest's RAM; every actor's cpu limit is 1, as substrate
+requires one. `locust-workers` runs that many boomer
 worker pods, each with its own connections to substrate, for loads one pod
 cannot drive (`glutton-large`).
 
@@ -510,7 +512,7 @@ times the pieces. The request names in the CSVs are:
 | `ExecutionTime` | Each instruction's round trip to the actor on its own. |
 | `CycleTime` | The whole cycle: `TTFI`, any further instructions and load, and then the suspend. |
 | `WriteRAM` / `WriteDisk` | A `glutton-write-ram` / `glutton-write-disk` cycle's load, before its suspend. |
-| `Resume` / `Suspend` | The `ResumeActor` / `SuspendActor` calls on their own. |
+| `Resume` / `Suspend` | The `ResumeActor` / `SuspendActor` calls on their own. An asynchronous `Suspend` ends once the snapshot is on the node, so it leaves out the upload. |
 | `CreateActor` / `CreateActorEgressPolicy` / `CreateAtespace` / `DeleteActor` | The lifecycle calls. `CreateAtespace` is once per run; `DeleteActor` is mostly the teardown. |
 | `ActiveActors` / `IdleActors` | Gauges in `custom_stats_history.csv`: actors resumed and actors suspended. |
 

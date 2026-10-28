@@ -14,7 +14,7 @@
 
 """Installs substrate on a case's cluster from the submodule's images, which
 builder.py pushes ahead of the run, with its hack/install-ate.sh
---deploy-ate-system, and hack/install-microvm-deps.sh --install for a microvm
+deploy ate-system, and hack/install-microvm-deps.sh --install for a microvm
 case, configured from the cluster's Terraform outputs. The gVisor SandboxConfig's assets are then
 mirrored into the cluster's bucket."""
 
@@ -41,26 +41,31 @@ SUBSTRATE_PATH = SUBSTRATE_DIR.relative_to(images.ROOT).as_posix()
 # What a pre-built install takes: images.Components in
 # cmd/ate-setup/internal/images, less the demos.
 SUBSTRATE_PACKAGES = [
+    "./cmd/ate-idp-server",
     "./cmd/ateapi",
     "./cmd/atecontroller",
     "./cmd/atelet",
     "./cmd/atenet",
     "./cmd/credential-provider/kubernetes-secrets",
     "./cmd/podcertcontroller",
-    "./cmd/snapshot-plugin",
-    "./cmd/ateom-gvisor",
-    "./cmd/ateom-microvm",
+    "./cmd/objectstore-plugin",
+    "./cmd/ateworker-gvisor",
+    "./cmd/ateworker-microvm",
 ]
 # What workloads/manifests name by ko:// reference that a pre-built install
 # doesn't take.
 WORKLOAD_PACKAGES = ["./cmd/benchmarking/glutton"]
-KO_REF = re.compile(r"ko://github\.com/agent-substrate/substrate/([^\s\"',\]}]+)")
+KO_REF = re.compile(r"ko://go\.ate\.dev/substrate/([^\s\"',\]}]+)")
 ENVOY_DATAPLANE_DIR = f"{SUBSTRATE_PATH}/cmd/dataplane/envoy"
 ENVOY_DATAPLANE = images.Image(
     name="envoy-dataplane", dockerfile=f"{ENVOY_DATAPLANE_DIR}/Dockerfile", context=ENVOY_DATAPLANE_DIR
 )
+# Where the benchmark's Jobs run, as benchmarks/jobs.py names it.
+RUNNER_NAMESPACE = "benchmarking"
 # The SandboxConfig install-ate.sh lays down.
 GVISOR_CONFIG = "gvisor-default"
+# Where in the cluster's bucket substrate stores every snapshot.
+SNAPSHOT_PREFIX = "snapshots"
 # Where in the cluster's bucket its assets are mirrored to, clear of the
 # snapshot locations the object-store plugin refuses assets under.
 ASSET_MIRROR_PREFIX = "sandbox-assets"
@@ -183,7 +188,14 @@ def install_microvm(cluster: Cluster) -> None:
 
 
 def install_env(cluster: Cluster) -> dict[str, str]:
+    if not cluster.snapshot_transfer_gsa:
+        raise SubstrateError(
+            f"cluster {cluster.name} has no snapshot transfer account, which substrate requires; apply its"
+            " infra again (a dev infra with --dev-infra-update)"
+        )
     return {
+        "SNAPSHOT_TRANSFER_GSA_NAME": cluster.snapshot_transfer_gsa,
+        "SNAPSHOT_LOCATION": f"gs://{cluster.bucket}/{SNAPSHOT_PREFIX}/",
         "PROJECT_ID": cluster.project_id,
         "CLUSTER_NAME": cluster.name,
         "CLUSTER_LOCATION": cluster.location,
@@ -205,9 +217,19 @@ def install_once(cluster: Cluster, microvm: bool) -> None:
     cluster.get_credentials()
     env = install_env(cluster)
     log(f"substrate: installing on cluster {cluster.name}")
-    # Egress credential injection is off: no workload needs the bundled
-    # provider, and the installer requires a choice either way.
-    install_ate = [str(SUBSTRATE_DIR / "hack" / "install-ate.sh"), "--deploy-ate-system", '--credential-provider={"enabled":false}']
+    # The benchmark's pods call ateapi and atenet-router as this identity.
+    runner = f"spiffe://cluster.local/ns/{RUNNER_NAMESPACE}/sa/{cluster.runner_ksa}"
+    install_ate = [
+        str(SUBSTRATE_DIR / "hack" / "install-ate.sh"),
+        "deploy",
+        "ate-system",
+        # Egress credential injection is off: no workload needs the bundled
+        # provider, and the installer requires a choice either way.
+        '--credential-provider={"enabled":false}',
+        f"--ingress-allowed-spiffe-ids={runner}",
+        # kubectl-ate's own, which the runner deploys the templates with.
+        f"--ateapi-authz-bootstrap-owners=system:serviceaccount:ate-system:ate-client,{runner}",
+    ]
     stream(install_ate, env=env, cwd=SUBSTRATE_DIR)
     mirror_gvisor_assets(cluster)
     # install-ate.sh lays down only the gVisor SandboxConfig. This one needs

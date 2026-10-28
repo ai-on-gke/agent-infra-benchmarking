@@ -94,6 +94,12 @@ class Cluster:
         return self.outputs.get("benchmark_runner_ksa_name", "benchmark-runner")
 
     @property
+    def snapshot_transfer_gsa(self) -> str | None:
+        """The account substrate moves snapshots as, without its domain; None
+        for a state applied before the output existed."""
+        return self.outputs.get("snapshot_transfer_gsa_name")
+
+    @property
     def sandboxed_kvm(self) -> bool:
         """Whether the sandboxed pool has /dev/kvm, which microvm needs. A
         state applied before the output existed had it for microvm only."""
