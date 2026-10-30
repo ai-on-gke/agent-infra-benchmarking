@@ -99,6 +99,19 @@ def substrate_version(name: str) -> str | None:
     return json.loads(variables.read_text()).get("substrate_version") if variables.exists() else None
 
 
+def is_complete(record: dict) -> bool:
+    """Whether every infra of the dev infra is applied and not destroyed."""
+    if not record.get("complete"):
+        return False
+    name = record.get("name")
+    if not name:
+        return True
+    for infra in INFRAS:
+        if deployment(name, infra).destroyed:
+            return False
+    return True
+
+
 def apply(record: dict, json_output: bool = False, update: bool = False) -> dict:
     """Applies every infra of the dev infra, which is complete only once all
     of them are, and returns its record. An infra created by an earlier apply

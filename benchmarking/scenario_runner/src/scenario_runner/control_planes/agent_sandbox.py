@@ -55,7 +55,11 @@ NAMESPACE = "agent-sandbox-system"
 # template's MOCK_LLM_BASE_URL names.
 WORKLOADS_NAMESPACE = openclaw.NAMESPACE
 # The image of workloads.json each workload's template runs.
-WORKLOAD_IMAGES = {"glutton": "glutton", "openclaw": "openclaw-workload"}
+WORKLOAD_IMAGES = {
+    "glutton": "glutton",
+    "openclaw": "openclaw-workload",
+    "rl-rollout": "rl-rollout",
+}
 ROLLOUT_TIMEOUT_SECS = 180
 # Each sandbox class's RuntimeClass, GKE Sandbox's, whose nodes carry
 # GKE_SANDBOX_LABEL with it (infra.cluster.gke-sandbox).

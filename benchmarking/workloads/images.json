@@ -13,5 +13,10 @@
     "description": "The glutton echo workload container for agent-sandbox.",
     "dockerfile": "benchmarking/workloads/images/glutton/Dockerfile",
     "context": "dependency-repos/substrate"
+  },
+  "rl-rollout": {
+    "description": "Reinforcement Learning rollout environment actor for agent-substrate.",
+    "dockerfile": "benchmarking/workloads/images/rl-rollout/Dockerfile",
+    "context": "benchmarking/workloads/images/rl-rollout"
   }
 }

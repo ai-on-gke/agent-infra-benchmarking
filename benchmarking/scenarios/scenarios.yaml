@@ -209,6 +209,8 @@ cases:
         workload-timeout: 120s
         # Without an egress policy the actors can't reach mock-llm.
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
+      - workload: rl-rollout
+        workload-timeout: 60s
       class:
       - control-plane: substrate
         sandbox-class: gvisor
@@ -242,6 +244,32 @@ cases:
         resume-mode: explicit
         workload-name: glutton
         workload-template: glutton
+
+  # rl-rollout at 10 VUs on 10 workers on one node, for Reinforcement Learning
+  # rollout workloads on Agent Substrate on GKE.
+  rl-rollout-single:
+    repeats:
+      warmups: 0
+    locust:
+      install:
+        substrate:
+          sandbox-class: gvisor
+      infra:
+        cluster:
+          sandboxed-nodes: 1
+      workers:
+        count: 10
+      actor-memory: 512Mi
+      master:
+        run-time: 5m
+        users: 10
+        spawn-rate: 10
+        warm-up: 10s
+      worker:
+        resume-mode: explicit
+        workload-name: rl-rollout
+        workload-template: rl-rollout
+        workload-timeout: 60s
 
   # glutton-single's load and cluster, so it runs on the same dev infra, on 2
   # workers rather than 10, each with room for 6 of its 256Mi actors: its 10

@@ -480,7 +480,7 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
     if args.dev_infra_update:
         log(f"run: updating dev infra {args.dev_infra} from the source")
         record = dev_infra.apply(record, json_output, update=True)
-    elif not record.get("complete"):
+    elif not dev_infra.is_complete(record):
         log(f"run: applying dev infra {args.dev_infra}, which is not complete")
         record = dev_infra.apply(record, json_output)
     return record

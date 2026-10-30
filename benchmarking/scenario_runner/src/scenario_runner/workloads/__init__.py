@@ -41,7 +41,7 @@ MANIFESTS_DIR = RUNNER_DIR.parent / "workloads" / "manifests"
 NAMESPACE = worker_pool.NAMESPACE
 ATESPACE = "benchmark-workloads"
 # The templates whose image is neither ko:// nor a literal, but one of ours.
-TEMPLATE_IMAGES = {"openclaw": "openclaw-workload"}
+TEMPLATE_IMAGES = {"openclaw": "openclaw-workload", "rl-rollout": "rl-rollout"}
 # The templates whose actors call mock-llm rather than a real LLM, which needs
 # a node pool of its own (cluster_configs.MOCK_LLM_POOL).
 MOCK_LLM_TEMPLATES = {"openclaw"}
@@ -55,11 +55,14 @@ SANDBOX_CONFIGS = {
 # cache in every snapshot.
 DEFAULT_ACTOR_MEMORY = "256Mi"
 # A case's `actor-memory` unless it states one, by workload.
-DEFAULT_ACTOR_MEMORY_BY_WORKLOAD = {"openclaw": "2Gi"}
+DEFAULT_ACTOR_MEMORY_BY_WORKLOAD = {"openclaw": "2Gi", "rl-rollout": "512Mi"}
 # The least memory a workload's actors can do their work in, by workload and
 # sandbox class. openclaw's Node.js agent is OOM-killed at 256Mi under gVisor,
 # and at 1Gi in a microvm, whose guest gets the limit less the VMM's share.
-MIN_ACTOR_MEMORY_MIB = {"openclaw": {"gvisor": 1024, "microvm": 2048}}
+MIN_ACTOR_MEMORY_MIB = {
+    "openclaw": {"gvisor": 1024, "microvm": 2048},
+    "rl-rollout": {"gvisor": 256, "microvm": 512},
+}
 # Kubernetes quantity suffixes, in bytes.
 # A Kubernetes cpu quantity as a case quotes it, such as "2" or "1500m".
 CPU_RE = re.compile(r"[1-9][0-9]*m?|[0-9]*\.[0-9]+")
