@@ -113,9 +113,10 @@ class Variables(unittest.TestCase):
 class FromYaml(unittest.TestCase):
     def test_kebab_case_inputs_are_the_fields(self):
         given = {"sandboxed-nodes": 2, "sandboxed-max-nodes": 4, "sandboxed-machine-type": "n2-standard-16",
-                 "zone": "us-central1-c", "nested-virtualization": True, "gke-sandbox": True}  # fmt: skip
+                 "zone": "us-central1-c", "nested-virtualization": True, "gke-sandbox": True,
+                 "sandboxed-disk-size-gb": 500}  # fmt: skip
         self.assertEqual(
-            CommonCluster.from_yaml(given), CommonCluster(2, 4, "n2-standard-16", "us-central1-c", True, True)
+            CommonCluster.from_yaml(given), CommonCluster(2, 4, "n2-standard-16", "us-central1-c", True, True, 500)
         )
 
     def test_none_is_every_default(self):

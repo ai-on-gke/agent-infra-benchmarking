@@ -114,6 +114,8 @@
 #                           is pinned at
 #   sandboxed-max-nodes     the most it autoscales up to, if it does
 #   sandboxed-machine-type  its machine type, c2-standard-16 by default
+#   sandboxed-disk-size-gb  its nodes' boot disk in GB, 100 by default, where
+#                           substrate writes snapshots
 #   zone                    the zone of every pool, the config's by default
 #   nested-virtualization   true for /dev/kvm on the sandboxed pool off bare
 #                           metal, which a microvm case's guests boot on; off by
@@ -182,6 +184,8 @@ cases:
       infra:
         cluster:
           sandboxed-nodes: 30
+          # openclaw's 2Gi snapshots saturate a 100GB disk's writes on microvm.
+          sandboxed-disk-size-gb: 1000
           configuration: "{configuration}"
           nested-virtualization: "{nested-virtualization}"
           gke-sandbox: "{gke-sandbox}"

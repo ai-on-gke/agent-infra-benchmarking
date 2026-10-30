@@ -135,9 +135,12 @@ class ShippedCases(unittest.TestCase):
     def test_each_case_asks_for_its_cluster(self):
         cases = SHIPPED.cases
         clusters = {name: benchmarks.cluster_config(name, case) for name, case in cases.items()}
-        self.assertEqual(clusters["glutton-substrate-gvisor"], CommonCluster(sandboxed_nodes=30))
         self.assertEqual(
-            clusters["glutton-substrate-microvm"], CommonCluster(sandboxed_nodes=30, nested_virtualization=True)
+            clusters["glutton-substrate-gvisor"], CommonCluster(sandboxed_nodes=30, sandboxed_disk_size_gb=1000)
+        )
+        self.assertEqual(
+            clusters["glutton-substrate-microvm"],
+            CommonCluster(sandboxed_nodes=30, nested_virtualization=True, sandboxed_disk_size_gb=1000),
         )
         self.assertEqual(clusters["openclaw-density-baseline"], OpenclawCluster(sandboxed_nodes=10))
         self.assertEqual(
