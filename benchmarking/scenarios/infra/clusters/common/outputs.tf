@@ -87,6 +87,11 @@ output "atelet_wi_principal" {
   value       = local.atelet_wi_principal
 }
 
+output "snapshot_transfer_gsa_name" {
+  description = "Name, without the domain, of the service account ate-api-server moves snapshots as; null when this config grants substrate nothing on the bucket."
+  value       = var.enable_atelet_bucket_iam ? split("@", local.snapshot_transfer_service_account)[0] : null
+}
+
 output "node_service_account" {
   description = "Service account the node pools run as. Holds the GKE minimum at project level, and read on this deployment's bucket, and on var.image_repository when this config created it. An image this deployment's pods have to pull belongs in that repository, or this account needs naming on whatever holds it instead."
   value       = local.node_service_account

@@ -19,9 +19,9 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
-	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 	"github.com/google/uuid"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
+	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
 	"google.golang.org/protobuf/proto"
 )
 

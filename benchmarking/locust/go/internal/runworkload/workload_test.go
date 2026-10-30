@@ -20,10 +20,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/workload"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/workload"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.opentelemetry.io/otel"
 )
 

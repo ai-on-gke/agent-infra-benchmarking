@@ -99,6 +99,16 @@ class Render(unittest.TestCase):
             info = {**self.info(), "worker_pool": {"spec": {"replicas": 10, **spec}, "status": {"readyReplicas": 10}}}
             self.assertIn(f"WorkerPool: 10/10 workers ready, sandbox class {want}.", readme.render(info))
 
+    def test_the_actor_template_with_the_pool_s_sandbox_config_and_its_limits(self):
+        info = {
+            **self.info(),
+            "worker_pool": {"spec": {"replicas": 1}, "status": {"sandboxClasses": [{"configRef": {"name": "gvisor-default"}}]}},
+            "actor_templates": {"glutton": {"resources": {"limits": {"cpuMillicores": "1000", "memoryBytes": "268435456"}}}},
+        }  # fmt: skip
+        self.assertIn(
+            "ActorTemplate `glutton`: sandbox config `gvisor-default`, cpu limit 1, memory limit 256Mi.", readme.render(info)
+        )
+
     def test_no_cycles(self):
         failures = {"cycles": 0, "failed_cycles": 0, "failed_starts": 0, "ratio": None}
         self.assertEqual(readme._failures(failures, 0.01), "none; the run completed no cycle")

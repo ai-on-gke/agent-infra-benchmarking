@@ -26,11 +26,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -54,7 +54,7 @@ type Substrate struct {
 
 	// APIStubs are the connections to substrate's API the actors are spread
 	// over, one each in turn.
-	APIStubs []ateapipb.ControlClient
+	APIStubs []ateapi.ControlClient
 
 	// Workload labels the actor gauges, and Template is the ActorTemplate the
 	// actors are created from.
@@ -73,6 +73,11 @@ type Substrate struct {
 
 	// SuspendDisabled skips the suspend phase during the benchmark.
 	SuspendDisabled bool
+
+	// SuspendMode is when SuspendActor returns: once the snapshot is on the
+	// node (asynchronous) or once it is uploaded (synchronous). Unspecified
+	// leaves it to substrate, which suspends asynchronously.
+	SuspendMode ateapi.DurabilityMode
 
 	// WaitForWorker has Wake wait out a ResumeActor refused for want of a free
 	// worker, as the router does a request, rather than fail; the wait counts
@@ -100,8 +105,7 @@ func (p *Substrate) Create(ctx context.Context) (Sandbox, error) {
 	}
 	if len(p.EgressHosts)+len(p.EgressTLSHosts) > 0 {
 		if err := s.allowEgress(ctx); err != nil {
-			// Not yet resumed, so still SUSPENDED and deletable as it is.
-			if delErr := s.delete(ctx, false); delErr != nil {
+			if delErr := s.delete(ctx); delErr != nil {
 				slog.Warn("actor without an egress policy was left behind",
 					slog.String("actor", s.name),
 					slog.String("err", delErr.Error()))
@@ -113,7 +117,7 @@ func (p *Substrate) Create(ctx context.Context) (Sandbox, error) {
 }
 
 // apiStub is the connection the next actor created calls substrate over.
-func (p *Substrate) apiStub() ateapipb.ControlClient {
+func (p *Substrate) apiStub() ateapi.ControlClient {
 	if len(p.APIStubs) == 0 {
 		return p.Config.APIStub
 	}
@@ -139,7 +143,7 @@ func (p *Substrate) ensureAtespace(ctx context.Context, s *substrateSandbox) err
 type substrateSandbox struct {
 	p *Substrate
 	// api is the connection to substrate's API this actor's calls go over.
-	api  ateapipb.ControlClient
+	api  ateapi.ControlClient
 	name string
 
 	// Track the state of the actor so we don't double-count metrics if
@@ -148,8 +152,16 @@ type substrateSandbox struct {
 	isCreated bool
 }
 
-func (s *substrateSandbox) ref() *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Atespace: s.p.Config.Atespace, Name: s.name}
+func (s *substrateSandbox) ref() *ateapi.ObjectRef {
+	return &ateapi.ObjectRef{Atespace: s.p.Config.Atespace, Name: s.name}
+}
+
+func (s *substrateSandbox) suspendRequest() *ateapi.SuspendActorRequest {
+	req := &ateapi.SuspendActorRequest{Actor: s.ref()}
+	if s.p.SuspendMode != ateapi.DurabilityMode_DURABILITY_MODE_UNSPECIFIED {
+		req.Options = &ateapi.SuspendOptions{Mode: s.p.SuspendMode}
+	}
+	return req
 }
 
 func (s *substrateSandbox) Actor() Actor {
@@ -168,9 +180,9 @@ func (s *substrateSandbox) Actor() Actor {
 
 func (s *substrateSandbox) ensureAtespace(ctx context.Context) error {
 	return s.p.Rec.GRPC(ctx, "CreateAtespace", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := s.api.CreateAtespace(callCtx, &ateapipb.CreateAtespaceRequest{
-			Atespace: &ateapipb.Atespace{
-				Metadata: &ateapipb.ResourceMetadata{Name: s.p.Config.Atespace},
+		_, err := s.api.CreateAtespace(callCtx, &ateapi.CreateAtespaceRequest{
+			Atespace: &ateapi.Atespace{
+				Metadata: &ateapi.ResourceMetadata{Name: s.p.Config.Atespace},
 			},
 		}, grpc.Trailer(tr))
 		if err == nil {
@@ -185,10 +197,10 @@ func (s *substrateSandbox) ensureAtespace(ctx context.Context) error {
 
 func (s *substrateSandbox) create(ctx context.Context) error {
 	err := s.p.Rec.GRPC(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := s.api.CreateActor(callCtx, &ateapipb.CreateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: s.p.Config.Atespace, Name: s.name},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: s.p.Template},
+		_, err := s.api.CreateActor(callCtx, &ateapi.CreateActorRequest{
+			Actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: s.p.Config.Atespace, Name: s.name},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: templateAtespace, Name: s.p.Template},
 			},
 		}, grpc.Trailer(tr))
 		return err
@@ -220,18 +232,18 @@ func EgressHosts(hosts []string) ([]string, error) {
 // egressRules allows hosts over cleartext HTTP, gRPC included, and tlsHosts
 // over TLS, each on any port. TLS is passed through rather than intercepted,
 // so the actor needs no trust in the gateway's CA.
-func egressRules(hosts, tlsHosts []string) []*ateapipb.EgressRule {
-	var rules []*ateapipb.EgressRule
+func egressRules(hosts, tlsHosts []string) []*ateapi.EgressRule {
+	var rules []*ateapi.EgressRule
 	if len(hosts) > 0 {
-		rules = append(rules, &ateapipb.EgressRule{Http: &ateapipb.HTTPRule{
+		rules = append(rules, &ateapi.EgressRule{Http: &ateapi.HttpRule{
 			Hostnames: hosts,
-			Ports:     &ateapipb.Ports{All: &ateapipb.AllPorts{}},
+			Ports:     &ateapi.Ports{All: &ateapi.AllPorts{}},
 		}})
 	}
 	if len(tlsHosts) > 0 {
-		rules = append(rules, &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TLSPassthroughRule{
+		rules = append(rules, &ateapi.EgressRule{TlsPassthrough: &ateapi.TlsPassthroughRule{
 			Hostnames: tlsHosts,
-			Ports:     &ateapipb.Ports{All: &ateapipb.AllPorts{}},
+			Ports:     &ateapi.Ports{All: &ateapi.AllPorts{}},
 		}})
 	}
 	return rules
@@ -249,10 +261,10 @@ func egressRules(hosts, tlsHosts []string) []*ateapipb.EgressRule {
 // soon as it runs. The policy is deleted with the actor.
 func (s *substrateSandbox) allowEgress(ctx context.Context) error {
 	return s.p.Rec.GRPC(ctx, "CreateActorEgressPolicy", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := s.api.CreateActorEgressPolicy(callCtx, &ateapipb.CreateActorEgressPolicyRequest{
+		_, err := s.api.CreateActorEgressPolicy(callCtx, &ateapi.CreateActorEgressPolicyRequest{
 			Actor: s.ref(),
-			EgressPolicy: &ateapipb.EgressPolicy{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: s.p.Config.Atespace, Name: egressPolicyName},
+			EgressPolicy: &ateapi.EgressPolicy{
+				Metadata: &ateapi.ResourceMetadata{Atespace: s.p.Config.Atespace, Name: egressPolicyName},
 				Rules:    egressRules(s.p.EgressHosts, s.p.EgressTLSHosts),
 			},
 		}, grpc.Trailer(tr))
@@ -275,7 +287,7 @@ func (s *substrateSandbox) Wake(ctx context.Context) error {
 	}
 
 	resume := func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := s.api.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
+		_, err := s.api.ResumeActor(callCtx, &ateapi.ResumeActorRequest{
 			Actor: s.ref(),
 		}, grpc.Trailer(tr))
 		return err
@@ -321,9 +333,7 @@ func (s *substrateSandbox) Sleep(ctx context.Context) error {
 	}
 
 	err := s.p.Rec.GRPC(ctx, SuspendMetric, func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := s.api.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
-			Actor: s.ref(),
-		}, grpc.Trailer(tr))
+		_, err := s.api.SuspendActor(callCtx, s.suspendRequest(), grpc.Trailer(tr))
 		return err
 	})
 	if err != nil {
@@ -349,14 +359,14 @@ var (
 // Settle polls the actor until it leaves the transitional state a failed call
 // can leave it in: a suspend that timed out on the client keeps snapshotting
 // on the server. A SUSPENDED actor is kept as it is, and a RUNNING one is
-// suspended, unmetered like Remove's, or left running when suspends are
-// disabled. A CRASHED, PAUSED or deleted actor, or one still in transition
-// after SettleTimeout, is not cycled again, and the error says which.
+// suspended, unmetered, or left running when suspends are disabled. A CRASHED
+// or deleted actor, or one still in transition after SettleTimeout, is not
+// cycled again, and the error says which.
 func (s *substrateSandbox) Settle(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, SettleTimeout)
 	defer cancel()
 	for {
-		actor, err := s.api.GetActor(ctx, &ateapipb.GetActorRequest{Actor: s.ref()})
+		actor, err := s.api.GetActor(ctx, &ateapi.GetActorRequest{Actor: s.ref()})
 		state := actor.GetStatus().GetState()
 		switch {
 		case status.Code(err) == codes.NotFound:
@@ -364,14 +374,13 @@ func (s *substrateSandbox) Settle(ctx context.Context) error {
 		case err != nil:
 			// Tried again until the bound, as a refused read says nothing
 			// about the actor.
-		case state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
+		case state == ateapi.ActorState_ACTOR_STATE_SUSPENDED:
 			s.markSuspended()
 			return nil
-		case state == ateapipb.ActorState_ACTOR_STATE_RUNNING:
+		case state == ateapi.ActorState_ACTOR_STATE_RUNNING:
 			return s.settleRunning(ctx)
-		case state == ateapipb.ActorState_ACTOR_STATE_CRASHED,
-			state == ateapipb.ActorState_ACTOR_STATE_PAUSED,
-			state == ateapipb.ActorState_ACTOR_STATE_DELETING:
+		case state == ateapi.ActorState_ACTOR_STATE_CRASHED,
+			state == ateapi.ActorState_ACTOR_STATE_DELETING:
 			return fmt.Errorf("actor is %s", state)
 		}
 
@@ -393,54 +402,26 @@ func (s *substrateSandbox) settleRunning(ctx context.Context) error {
 	}
 	callCtx, cancel := s.p.Rec.ControlContext(ctx)
 	defer cancel()
-	if _, err := s.api.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{Actor: s.ref()}); err != nil {
+	if _, err := s.api.SuspendActor(callCtx, s.suspendRequest()); err != nil {
 		return fmt.Errorf("suspending the running actor: %w", err)
 	}
 	s.markSuspended()
 	return nil
 }
 
-// Remove suspends the actor before deleting it. DeleteActor requires
-// SUSPENDED or CRASHED; deleting a running actor leaks it. The suspend is
-// unmetered (teardown precondition, not benchmark latency), while the delete
-// is metered so true leaks still surface.
-//
-// A nil return means the actor is gone, so the delete decides it and a failed
-// suspend rides along as context: the two fail together when the actor is
-// still in a transitional state, and the pair is what names that cause.
+// Remove deletes the actor, which DeleteActor does in any state, so a running
+// or stuck one frees its worker too. The delete is metered so true leaks still
+// surface.
 func (s *substrateSandbox) Remove(ctx context.Context) error {
-	suspendCtx, cancel := s.p.Rec.ControlContext(ctx)
-	_, suspendErr := s.api.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{
-		Actor: s.ref(),
-	})
-	cancel()
-	if suspendErr == nil {
-		s.markSuspended()
+	if err := s.delete(ctx); err != nil {
+		return fmt.Errorf("delete: %w", err)
 	}
-
-	// A failed suspend leaves the actor in a state the delete precondition
-	// refuses, and it is the case where leaving it behind costs a worker for
-	// the rest of the run, so that delete is the one allowed from any state.
-	deleteErr := s.delete(ctx, suspendErr != nil)
-	if deleteErr == nil {
-		return nil
-	}
-	if suspendErr != nil {
-		return fmt.Errorf("delete: %w (after suspend: %v)", deleteErr, suspendErr)
-	}
-	return fmt.Errorf("delete: %w", deleteErr)
+	return nil
 }
 
-// delete removes the actor. anyState relaxes the SUSPENDED-or-CRASHED
-// precondition the control plane otherwise enforces; the rest of the teardown
-// (atelet termination, volume detach, worker release) runs either way, so it
-// frees the worker rather than only dropping the record.
-func (s *substrateSandbox) delete(ctx context.Context, anyState bool) error {
+func (s *substrateSandbox) delete(ctx context.Context) error {
 	err := s.p.Rec.GRPC(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := s.api.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
-			Actor:    s.ref(),
-			AnyState: anyState,
-		}, grpc.Trailer(tr))
+		_, err := s.api.DeleteActor(callCtx, &ateapi.DeleteActorRequest{Actor: s.ref()}, grpc.Trailer(tr))
 		// Already gone, which is what the call is for: the teardown and a VU
 		// discarding the same actor can both get to it.
 		if status.Code(err) == codes.NotFound {

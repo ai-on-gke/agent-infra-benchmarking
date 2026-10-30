@@ -199,6 +199,17 @@ class CaseChecks(unittest.TestCase):
             check("c", glutton({"actor-memory": "512Mi", "workers": {"limits": {"memory": "256Mi"}}}))
         check("c", glutton({"actor-memory": "512Mi", "workers": {"limits": {"memory": "512Mi"}}}))
 
+    def test_substrate_suspends_asynchronously_unless_the_case_says(self):
+        self.assertEqual(check("c", GLUTTON)["locust"]["worker"]["suspend-mode"], "async")
+        sync = check("c", glutton({"worker": {"workload-name": "glutton", "suspend-mode": "sync"}}))
+        self.assertEqual(sync["locust"]["worker"]["suspend-mode"], "sync")
+        with self.assertRaisesRegex(ValueError, "must be async or sync, got 'pause'"):
+            check("c", glutton({"worker": {"workload-name": "glutton", "suspend-mode": "pause"}}))
+        agent_sandbox = {"install": {"agent-sandbox": {"sandbox-class": "gvisor"}}}
+        self.assertNotIn("suspend-mode", check("c", glutton(agent_sandbox))["locust"]["worker"])
+        with self.assertRaisesRegex(ValueError, "suspend-mode` is substrate's"):
+            check("c", glutton({**agent_sandbox, "worker": {"workload-name": "glutton", "suspend-mode": "sync"}}))
+
     def test_worker_limits_are_substrate_s(self):
         agent_sandbox = {"install": {"agent-sandbox": {"sandbox-class": "gvisor"}}}
         with self.assertRaisesRegex(ValueError, "agent-sandbox has none"):
@@ -221,7 +232,7 @@ class CaseChecks(unittest.TestCase):
         )  # fmt: skip
         self.assertEqual(
             locust.worker_args(options),
-            [f"--master-host={locust.MASTER_HOST}", "--user-class=runworkload",
+            [f"--master-host={locust.MASTER_HOST}", "--user-class=runworkload", "--suspend-mode=async",
              "--workload-name=glutton", "--workload-template=glutton"],
         )  # fmt: skip
 

@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.opentelemetry.io/otel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"

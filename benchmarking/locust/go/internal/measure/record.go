@@ -17,7 +17,7 @@ package measure
 import (
 	"time"
 
-	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
+	bmetrics "go.ate.dev/substrate/internal/benchmarking/boomer/metrics"
 )
 
 // recordSuccess and recordFailure report a row to boomer and Prometheus.

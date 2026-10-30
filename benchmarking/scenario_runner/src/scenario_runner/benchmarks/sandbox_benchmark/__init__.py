@@ -45,7 +45,7 @@ from ... import LABEL_RE, RUNNER_DIR, git, images, reports, workloads
 from ...infra.cluster import Cluster
 from ...infra.cluster_configs import CommonCluster, from_infra
 from ...log import ON_CLOUD_RUN, log
-from ...process import stream
+from ...process import output, stream
 from ...reports import run_info
 from ...scenarios.install import INSTALL, SANDBOX_CLASS, SUBSTRATE, control_plane, sandbox_class
 from ...scenarios.variants import VARIANT, group_record
@@ -327,13 +327,15 @@ def run_provider(
                 cluster, image_repo, sandbox_class(case), env["env-worker-count"], env["actor-memory"], env["actor-cpu"]
             )
         template = workloads.deployed_template(cluster, ate_env.TEMPLATE, ate_env.ENV_ATESPACE)
-        # Matters when the template was not deployed by this run (--no-deploy-workloads).
-        want = workloads.SANDBOX_CONFIGS[sandbox_class(case)][1]
-        have = (template.get("sandboxConfig") or {}).get("sandboxClass")
-        if have != want:
+        # Matters when the pool was not deployed by this run (--no-deploy-workloads).
+        pool = cluster.kubectl(
+            "get", "workerpool", ate_env.POOL, "-o=jsonpath={.spec.sandboxClasses[*].name}", namespace=ate_env.NAMESPACE
+        )
+        have = output(pool).strip()
+        if have != sandbox_class(case):
             raise SandboxBenchmarkError(
-                f"actor template {ate_env.ENV_ATESPACE}/{ate_env.TEMPLATE} is {have or 'of no sandbox class'},"
-                f" not {want}; deploy it again"
+                f"worker pool {ate_env.NAMESPACE}/{ate_env.POOL} is {have or 'of no sandbox class'},"
+                f" not {sandbox_class(case)}; deploy it again"
             )
 
     info = run_info.collect(

@@ -29,9 +29,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
-	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
+	bmetrics "go.ate.dev/substrate/internal/benchmarking/boomer/metrics"
 )
 
 const (

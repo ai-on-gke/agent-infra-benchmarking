@@ -35,7 +35,7 @@ GROUPS = ("substrate", "env", "agent-sandbox", "benchmark")
 # The ko substrate's hack/tools/ko pins.
 KO = "github.com/google/ko@v0.19.1"
 # Where ko stamps substrate's build version, as ate-setup's ko runner does.
-VERSION_PKG = "github.com/agent-substrate/substrate/internal/version"
+VERSION_PKG = "go.ate.dev/substrate/internal/version"
 
 
 def missing_requirements(groups: list[str]) -> list[str]:

@@ -24,11 +24,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/workload"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/workload"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 )
 
 // DefaultTimeout is the per-call deadline when Options sets none. Exported
@@ -41,6 +41,18 @@ const (
 	ResumeModeExplicit = "explicit"
 	ResumeModeImplicit = "implicit"
 )
+
+// Suspend modes. Async has SuspendActor return once the snapshot is on the
+// node and upload it in the background; sync once it is uploaded.
+const (
+	SuspendModeAsync = "async"
+	SuspendModeSync  = "sync"
+)
+
+var suspendModes = map[string]ateapi.DurabilityMode{
+	SuspendModeAsync: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
+	SuspendModeSync:  ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS,
+}
 
 // Options are the settings every scenario takes. The zero value asks for the
 // defaults.
@@ -58,7 +70,7 @@ type Options struct {
 
 	// APIStubs are the connections to substrate's API the users are spread
 	// over, one each in turn. Empty uses the Config's one.
-	APIStubs []ateapipb.ControlClient
+	APIStubs []ateapi.ControlClient
 
 	// WorkloadName names a registered workload (see internal/workload). Empty
 	// selects workload.Default.
@@ -80,6 +92,10 @@ type Options struct {
 	// ResumeMode is ResumeModeExplicit or ResumeModeImplicit; empty selects
 	// explicit.
 	ResumeMode string
+
+	// SuspendMode is SuspendModeAsync or SuspendModeSync; empty leaves it to
+	// substrate, which suspends asynchronously.
+	SuspendMode string
 
 	// EgressAllow names the hosts every actor may connect to over cleartext
 	// HTTP, and EgressAllowTLS the ones it may reach over TLS, such as an
@@ -160,6 +176,7 @@ func (c Common) NewProvider(rec measure.Recorder, suspendDisabled, waitForWorker
 		EgressTLSHosts:  c.EgressAllowTLS,
 		ImplicitResume:  c.ResumeMode == ResumeModeImplicit,
 		SuspendDisabled: suspendDisabled,
+		SuspendMode:     suspendModes[c.SuspendMode],
 		WaitForWorker:   waitForWorker,
 	}, nil
 }

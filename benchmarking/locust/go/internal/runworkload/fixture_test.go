@@ -21,13 +21,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/harness"
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
-	"github.com/agent-substrate/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/workload"
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/harness"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/workload"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -44,7 +44,7 @@ var (
 )
 
 type fakeControlClient struct {
-	ateapipb.ControlClient
+	ateapi.ControlClient
 	// Each, when set, fails every call of its name.
 	resumeErr  error
 	suspendErr error
@@ -67,15 +67,16 @@ type fakeControlClient struct {
 	deleteDelay time.Duration
 	// states are what GetActor reports in turn, the last one from then on;
 	// none is SUSPENDED. getActorErr, when set, fails every GetActor instead.
-	states      []ateapipb.ActorState
+	states      []ateapi.ActorState
 	getActorErr error
 
 	mu sync.Mutex
 	// inFlight and peak track overlapping DeleteActor calls.
 	inFlight int
 	peak     int
-	// deleteAnyState is the AnyState flag from the most recent DeleteActor.
-	deleteAnyState bool
+	// suspendModes are the durability modes the SuspendActor calls asked for,
+	// in order, unspecified for one that set no options.
+	suspendModes []ateapi.DurabilityMode
 	// suspendsCut counts the SuspendActor calls whose context ended first.
 	suspendsCut int
 	calls       []string
@@ -84,7 +85,7 @@ type fakeControlClient struct {
 	template string
 	actor    string
 	// egressPolicy is the policy from the last CreateActorEgressPolicy.
-	egressPolicy *ateapipb.EgressPolicy
+	egressPolicy *ateapi.EgressPolicy
 }
 
 // setTrailer fills the caller's grpc.Trailer destination so a faked call can
@@ -100,23 +101,23 @@ func (f *fakeControlClient) setTrailer(opts []grpc.CallOption) {
 	}
 }
 
-func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
+func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapi.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapi.Atespace, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "CreateAtespace")
-	return &ateapipb.Atespace{}, nil
+	return &ateapi.Atespace{}, nil
 }
 
-func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.CreateActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapi.CreateActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "CreateActor")
 	f.template = in.GetActor().GetActorTemplate().GetName()
 	f.actor = in.GetActor().GetMetadata().GetName()
-	return &ateapipb.Actor{}, nil
+	return &ateapi.Actor{}, nil
 }
 
-func (f *fakeControlClient) CreateActorEgressPolicy(ctx context.Context, in *ateapipb.CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+func (f *fakeControlClient) CreateActorEgressPolicy(ctx context.Context, in *ateapi.CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapi.EgressPolicy, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "CreateActorEgressPolicy")
@@ -129,7 +130,7 @@ func (f *fakeControlClient) CreateActorEgressPolicy(ctx context.Context, in *ate
 
 // recordedEgressPolicy returns the policy the most recent
 // CreateActorEgressPolicy carried.
-func (f *fakeControlClient) recordedEgressPolicy() *ateapipb.EgressPolicy {
+func (f *fakeControlClient) recordedEgressPolicy() *ateapi.EgressPolicy {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.egressPolicy
@@ -150,24 +151,24 @@ func (f *fakeControlClient) recordedActor() string {
 	return f.actor
 }
 
-func (f *fakeControlClient) GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) GetActor(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "GetActor")
 	if f.getActorErr != nil {
 		return nil, f.getActorErr
 	}
-	state := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+	state := ateapi.ActorState_ACTOR_STATE_SUSPENDED
 	if len(f.states) > 0 {
 		state = f.states[0]
 		if len(f.states) > 1 {
 			f.states = f.states[1:]
 		}
 	}
-	return &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: state}}, nil
+	return &ateapi.Actor{Status: &ateapi.ActorStatus{State: state}}, nil
 }
 
-func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 	if f.resumeHang {
 		<-ctx.Done()
 		return nil, status.FromContextError(ctx.Err()).Err()
@@ -180,12 +181,13 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 	if f.resumeErr != nil && (f.resumeErrTimes == 0 || f.resumeCalls <= f.resumeErrTimes) {
 		return nil, f.resumeErr
 	}
-	return &ateapipb.ResumeActorResponse{}, nil
+	return &ateapi.ResumeActorResponse{}, nil
 }
 
-func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
+func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapi.SuspendActorRequest, opts ...grpc.CallOption) (*ateapi.SuspendActorResponse, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, "SuspendActor")
+	f.suspendModes = append(f.suspendModes, in.GetOptions().GetMode())
 	delay, suspendErr := f.suspendDelay, f.suspendErr
 	f.mu.Unlock()
 
@@ -202,7 +204,7 @@ func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.Suspe
 	if suspendErr != nil {
 		return nil, suspendErr
 	}
-	return &ateapipb.SuspendActorResponse{}, nil
+	return &ateapi.SuspendActorResponse{}, nil
 }
 
 // cutSuspends is how many SuspendActor calls ended with their context.
@@ -212,13 +214,12 @@ func (f *fakeControlClient) cutSuspends() int {
 	return f.suspendsCut
 }
 
-func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapi.DeleteActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, "DeleteActor")
-	f.deleteAnyState = in.GetAnyState()
 	f.inFlight++
 	f.peak = max(f.peak, f.inFlight)
-	anyState, suspendErr, deleteErr := in.GetAnyState(), f.suspendErr, f.deleteErr
+	deleteErr := f.deleteErr
 	f.mu.Unlock()
 
 	// Outside the lock, so concurrent callers actually overlap here.
@@ -227,15 +228,10 @@ func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.Delete
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inFlight--
-	// Mirrors ensureMarkedDeleting: a refused suspend leaves the actor in a
-	// state only an any-state delete may remove.
-	if suspendErr != nil && !anyState {
-		return nil, errActorBusy
-	}
 	if deleteErr != nil {
 		return nil, deleteErr
 	}
-	return &ateapipb.Actor{}, nil
+	return &ateapi.Actor{}, nil
 }
 
 // peakInFlight is the most DeleteActor calls that overlapped.
@@ -245,12 +241,10 @@ func (f *fakeControlClient) peakInFlight() int {
 	return f.peak
 }
 
-// deletedFromAnyState reports whether the most recent DeleteActor asked to
-// bypass the state precondition.
-func (f *fakeControlClient) deletedFromAnyState() bool {
+func (f *fakeControlClient) recordedSuspendModes() []ateapi.DurabilityMode {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.deleteAnyState
+	return append([]ateapi.DurabilityMode(nil), f.suspendModes...)
 }
 
 func (f *fakeControlClient) recordedCalls() []string {

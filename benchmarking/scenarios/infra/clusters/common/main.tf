@@ -253,6 +253,26 @@ resource "google_storage_bucket_iam_member" "atelet_bucket_viewer" {
   member = local.atelet_wi_principal
 }
 
+# Substrate's install-microvm-deps.sh uploads the microvm assets to
+# <bucket>-assets, which atelet reads them from.
+resource "google_storage_bucket" "assets" {
+  project  = var.project_id
+  name     = "${local.bucket_name}-assets"
+  location = local.bucket_location
+
+  force_destroy               = var.bucket_force_destroy
+  uniform_bucket_level_access = true
+
+  depends_on = [google_project_service.this]
+}
+
+resource "google_storage_bucket_iam_member" "atelet_assets_viewer" {
+  count  = var.enable_atelet_bucket_iam ? 1 : 0
+  bucket = google_storage_bucket.assets.name
+  role   = "roles/storage.objectViewer"
+  member = local.atelet_wi_principal
+}
+
 # ate-api-server is a separate KSA from atelet (though typically in the same
 # namespace) - it also needs bucket access for actor SuspendActor/ResumeActor
 # calls, but no project-level grants.
@@ -270,8 +290,36 @@ resource "google_storage_bucket_iam_member" "ate_api_server_bucket_viewer" {
   member = local.ate_api_server_wi_principal
 }
 
+# ate-api-server moves snapshots on tokens of this account, which it
+# impersonates and downscopes to each actor.
+resource "google_service_account" "snapshot_transfer" {
+  count = var.enable_atelet_bucket_iam && var.snapshot_transfer_service_account == "" ? 1 : 0
+
+  project      = var.project_id
+  account_id   = var.short_resource_name != "" ? "${var.short_resource_name}-xfer" : substr("${var.default_resource_name}-xfer", 0, 30)
+  display_name = "Substrate snapshot transfers for ${var.default_resource_name}"
+
+  depends_on = [google_project_service.this]
+}
+
+resource "google_storage_bucket_iam_member" "snapshot_transfer_bucket" {
+  for_each = var.enable_atelet_bucket_iam ? toset(["roles/storage.objectAdmin", "roles/storage.bucketViewer"]) : toset([])
+  bucket   = google_storage_bucket.this.name
+  role     = each.value
+  member   = "serviceAccount:${local.snapshot_transfer_service_account}"
+}
+
+# An existing var.snapshot_transfer_service_account has this already.
+resource "google_service_account_iam_member" "ate_api_server_snapshot_transfer" {
+  count              = length(google_service_account.snapshot_transfer)
+  service_account_id = google_service_account.snapshot_transfer[0].name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = local.ate_api_server_wi_principal
+}
+
 locals {
-  node_service_account = var.node_service_account != "" ? var.node_service_account : google_service_account.node[0].email
+  node_service_account              = var.node_service_account != "" ? var.node_service_account : google_service_account.node[0].email
+  snapshot_transfer_service_account = var.snapshot_transfer_service_account != "" ? var.snapshot_transfer_service_account : one(google_service_account.snapshot_transfer[*].email)
 }
 
 moved {

@@ -240,12 +240,14 @@ def collect(
     WorkerPool the run's actors run on."""
     pool_namespace = pool[0]
     errors: dict[str, str] = {}
-    sandbox_configs = {}
-    config_name = ((template or {}).get("sandboxConfig") or {}).get("configName")
-    if config_name:
-        config = _read("sandbox config", lambda: _kubectl_json(cluster, "sandboxconfig", config_name), errors)
-        sandbox_configs = {config_name: (config or {}).get("spec")}
     pool_info = actors_pool(cluster, case, template_name, pool, errors)
+    sandbox_configs = {}
+    # The ones the pool's workers run, as its controller resolved them.
+    for sandbox_class in ((pool_info or {}).get("status") or {}).get("sandboxClasses") or []:
+        config_name = (sandbox_class.get("configRef") or {}).get("name")
+        if config_name:
+            config = _read("sandbox config", lambda: _kubectl_json(cluster, "sandboxconfig", config_name), errors)
+            sandbox_configs[config_name] = (config or {}).get("spec")
     dirty = _read("repo state", lambda: bool(output(["git", "status", "--porcelain"], cwd=images.ROOT).strip()), errors)
     info = {
         "case": case,
