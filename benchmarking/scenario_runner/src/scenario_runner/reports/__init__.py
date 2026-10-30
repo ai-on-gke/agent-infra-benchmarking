@@ -89,7 +89,7 @@ def record_cleanup(cluster: Cluster, atespace: str, bucket: str, report_prefix: 
             left = record["left"] = actors()
             record["listed"] = True
             for actor in left:
-                proc = subprocess.run(ate("delete", "actor", actor["name"], "-a", atespace, "--any-state"),
+                proc = subprocess.run(ate("delete", "actor", actor["name"], "-a", atespace),
                                       capture_output=True, text=True)  # fmt: skip
                 if proc.returncode:
                     record["delete_failed"][actor["name"]] = proc.stderr.strip()
