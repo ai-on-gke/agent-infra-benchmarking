@@ -53,6 +53,9 @@ DEFAULT_ACTOR_MEMORY_BY_WORKLOAD = {"openclaw": "2Gi"}
 # Every actor's cpu limit, which substrate requires; one vCPU is what a microvm
 # guest got before it did.
 ACTOR_CPU = "1"
+# An actor's cpu limit, by workload. openclaw's agent turn is CPU-bound, and on
+# one vCPU it runs past its own timeout once nodes are full.
+ACTOR_CPU_BY_WORKLOAD = {"openclaw": "2"}
 # The least memory a workload's actors can do their work in, by workload and
 # sandbox class. openclaw's Node.js agent is OOM-killed at 256Mi under gVisor,
 # and at 1Gi in a microvm, whose guest gets the limit less the VMM's share.
@@ -96,6 +99,10 @@ def kubectl_ate(cluster: Cluster) -> Iterator[KubectlAte]:
         binary = f"{tmp}/kubectl-ate"
         stream(["go", "build", "-o", binary, "./cmd/kubectl-ate"], cwd=substrate.SUBSTRATE_DIR)
         yield lambda *args: [binary, *args, f"--kubeconfig={cluster.kubeconfig}"]
+
+
+def actor_cpu(workload: str) -> str:
+    return ACTOR_CPU_BY_WORKLOAD.get(workload, ACTOR_CPU)
 
 
 def default_actor_memory(workload: str | None) -> str:
@@ -156,7 +163,7 @@ def render_template(cluster: Cluster, name: str, actor_memory: str, otlp: str, i
         "PROJECT_ID": cluster.project_id,
         "OTLP_ENDPOINT": otlp,
         "ACTOR_MEMORY_BYTES": memory_bytes(actor_memory),
-        "ACTOR_CPU_MILLICORES": cpu_millicores(ACTOR_CPU),
+        "ACTOR_CPU_MILLICORES": cpu_millicores(actor_cpu(name)),
     }
     if name in TEMPLATE_IMAGES:
         values["IMAGE_WITH_DIGEST"] = pinned_image(image_repo, TEMPLATE_IMAGES[name])
@@ -251,7 +258,8 @@ def deploy(
     sized = [n for n in names if "${ACTOR_MEMORY_BYTES}" in (MANIFESTS_DIR / f"{n}-template.yaml.tmpl").read_text()]
     log(
         f"workloads: deploying {', '.join(names)} (sandbox_class={sandbox_class},"
-        f" actor_memory={actor_memory} for {', '.join(sized) or 'none of them'}, actor_cpu={ACTOR_CPU},"
+        f" actor_memory={actor_memory} for {', '.join(sized) or 'none of them'},"
+        f" actor_cpu={', '.join(f'{n}={actor_cpu(n)}' for n in names)},"
         f" otlp_endpoint={otlp}, snapshots=gs://{cluster.bucket}/{substrate.SNAPSHOT_PREFIX}/, substrate={substrate.revision()})"
     )
     if MOCK_LLM_TEMPLATES & set(names):
