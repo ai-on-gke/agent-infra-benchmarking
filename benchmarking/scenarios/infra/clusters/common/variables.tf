@@ -151,6 +151,14 @@ variable "sandboxed_machine_type" {
   }
 }
 
+# A case's infra.cluster.sandboxed-disk-size-gb. Substrate writes snapshots to
+# the boot disk, and a pd-balanced disk's throughput grows with its size.
+variable "sandboxed_disk_size_gb" {
+  description = "Boot disk size of the sandboxed node pool's nodes, in GB."
+  type        = number
+  default     = 100
+}
+
 # A case's infra.cluster.nested-virtualization: for /dev/kvm, which microvm's
 # guests boot on.
 variable "nested_virtualization" {

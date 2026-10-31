@@ -18,7 +18,8 @@ from unittest import mock
 import yaml
 
 from scenario_runner import workloads
-from scenario_runner.control_planes import worker_pool
+from scenario_runner.control_planes import agent_sandbox, worker_pool
+from scenario_runner.workloads import openclaw
 
 
 def template(*urls: str, memory_bytes: str = "268435456") -> dict:
@@ -61,6 +62,34 @@ class Memory(unittest.TestCase):
         workloads.check_deployed(template(), "glutton", "256Mi")
         with self.assertRaisesRegex(workloads.WorkloadError, "actor-memory is 512Mi"):
             workloads.check_deployed(template(), "glutton", "512Mi")
+
+
+class OpenclawTimeout(unittest.TestCase):
+    def test_the_actor_ends_a_turn_before_the_worker_does(self):
+        for workload_timeout, secs in [("120s", 100), ("240s", 220), ("4m", 220), ("1m30s", 70), ("1.5m", 70)]:
+            with self.subTest(workload_timeout=workload_timeout):
+                self.assertEqual(openclaw.exec_timeout_secs(workload_timeout), secs)
+
+    def test_no_workload_timeout_keeps_the_actor_s_default(self):
+        for workload_timeout in (None, "", "0"):
+            self.assertEqual(openclaw.exec_timeout_secs(workload_timeout), openclaw.DEFAULT_EXEC_TIMEOUT_SECS)
+
+    def test_bad_or_too_short_timeouts_are_refused(self):
+        for workload_timeout in ("120", "2 m", "abc", "20s", "10s"):
+            with self.subTest(workload_timeout=workload_timeout), self.assertRaises(ValueError):
+                openclaw.exec_timeout_secs(workload_timeout)
+
+    def test_both_templates_take_it(self):
+        cluster = mock.Mock(project_id="p")
+        with mock.patch.object(workloads, "pinned_image", return_value="i"):
+            rendered = yaml.safe_load(workloads.render_template(cluster, "openclaw", "2Gi", "o", "r", "240s"))
+        env = {e["name"]: e["value"] for e in rendered["containers"][0]["env"]}
+        self.assertEqual(env["OPENCLAW_TIMEOUT_SECS"], "220")
+        manifest = agent_sandbox.render(
+            "openclaw-template.yaml.tmpl", NAME="openclaw", NAMESPACE="n", IMAGE="i", RUNTIME_CLASS="gvisor",
+            OPENCLAW_TIMEOUT_SECS=openclaw.exec_timeout_secs("240s"),
+        )  # fmt: skip
+        self.assertIn('value: "220"', manifest)
 
 
 class WorkerPool(unittest.TestCase):

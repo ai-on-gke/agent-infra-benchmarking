@@ -93,7 +93,7 @@ class ClusterConfig:
     # The fields a case's infra.cluster may give.
     INPUTS: ClassVar[tuple[str, ...]] = (
         "sandboxed_nodes", "sandboxed_max_nodes", "sandboxed_machine_type", "zone", "nested_virtualization",
-        "gke_sandbox",
+        "gke_sandbox", "sandboxed_disk_size_gb",
     )
 
     sandboxed_nodes: int = 1
@@ -104,9 +104,11 @@ class ClusterConfig:
     nested_virtualization: bool = False
     # GKE Sandbox on the sandboxed pool, for agent-sandbox's gvisor pods.
     gke_sandbox: bool = False
+    # Snapshots are written to the boot disk, whose throughput grows with its size.
+    sandboxed_disk_size_gb: int = 100
 
     def __post_init__(self) -> None:
-        for name in ("sandboxed_nodes", "sandboxed_max_nodes"):
+        for name in ("sandboxed_nodes", "sandboxed_max_nodes", "sandboxed_disk_size_gb"):
             value = getattr(self, name)
             if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
                 raise ValueError(f"`{kebab(name)}` must be a whole number from 1, got {value!r}")
@@ -156,6 +158,7 @@ class ClusterConfig:
             "nested_virtualization": self.nested_virtualization,
             "gke_sandbox": self.gke_sandbox,
             "sandboxed_machine_type": self.sandboxed_machine_type,
+            "sandboxed_disk_size_gb": self.sandboxed_disk_size_gb,
             "sandboxed_node_count": self.sandboxed_nodes,
             "sandboxed_min_node_count": self.sandboxed_nodes,
             "sandboxed_max_node_count": self.sandboxed_max_nodes or self.sandboxed_nodes,

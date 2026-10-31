@@ -13,10 +13,9 @@ containers:
     value: "true"
   - name: MOCK_LLM_BASE_URL
     value: "http://mock-llm.benchmark-workloads.svc.cluster.local/v1"
-  # Below the openclaw case's workload-timeout in scenarios.yaml, so a slow
-  # turn ends in the actor with a 504 rather than at the worker's deadline.
+  # The case's workload-timeout less 20s (workloads/openclaw.py).
   - name: OPENCLAW_TIMEOUT_SECS
-    value: "100"
+    value: "${OPENCLAW_TIMEOUT_SECS}"
   wakeupProbe:
     httpGet:
       path: /readyz

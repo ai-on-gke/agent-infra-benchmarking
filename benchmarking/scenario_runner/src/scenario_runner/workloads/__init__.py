@@ -151,16 +151,21 @@ def check_worker_pool(cluster: Cluster, sandbox_class: str, timeout: int) -> Non
     stream(cluster.kubectl(*rollout, namespace=NAMESPACE))
 
 
-def render_template(cluster: Cluster, name: str, actor_memory: str, otlp: str, image_repo: str) -> str:
+def render_template(
+    cluster: Cluster, name: str, actor_memory: str, otlp: str, image_repo: str, workload_timeout: str | None = None
+) -> str:
+    text = (MANIFESTS_DIR / f"{name}-template.yaml.tmpl").read_text()
     values = {
         "PROJECT_ID": cluster.project_id,
         "OTLP_ENDPOINT": otlp,
         "ACTOR_MEMORY_BYTES": memory_bytes(actor_memory),
         "ACTOR_CPU_MILLICORES": cpu_millicores(ACTOR_CPU),
     }
+    if "${OPENCLAW_TIMEOUT_SECS}" in text:
+        values["OPENCLAW_TIMEOUT_SECS"] = openclaw.exec_timeout_secs(workload_timeout)
     if name in TEMPLATE_IMAGES:
         values["IMAGE_WITH_DIGEST"] = pinned_image(image_repo, TEMPLATE_IMAGES[name])
-    return Template((MANIFESTS_DIR / f"{name}-template.yaml.tmpl").read_text()).substitute(values)
+    return Template(text).substitute(values)
 
 
 def ensure_atespace(ate: KubectlAte, atespace: str) -> None:
@@ -239,9 +244,10 @@ def deploy(
     actor_memory: str = DEFAULT_ACTOR_MEMORY,
     otlp: str | None = None,
     timeout: int = DEFAULT_TIMEOUT_SECS,
+    workload_timeout: str | None = None,
 ) -> None:
     """image_repo holds the workload images built from this tree. otlp is where an instrumented actor sends its telemetry; by
-    default the control plane's endpoint."""
+    default the control plane's endpoint. workload_timeout is the case's, which openclaw's actors end a turn before."""
     if not names:
         raise ValueError("no workload template to deploy")
     check_templates(names)
@@ -263,7 +269,7 @@ def deploy(
             # Templates are immutable, and the endpoint and class change between
             # runs. Deleting one also deletes its golden actor and snapshot.
             delete_template(ate, name)
-            manifest = render_template(cluster, name, actor_memory, otlp, image_repo)
+            manifest = render_template(cluster, name, actor_memory, otlp, image_repo, workload_timeout)
             stream(ate("create", "actor-template", "-f", "-"), input=substrate.resolve(cluster, manifest))
         for i, name in enumerate(names, 1):
             log(f"workloads: [{i}/{len(names)}] waiting for the {ATESPACE}/{name} golden snapshot (timeout {timeout}s)")
