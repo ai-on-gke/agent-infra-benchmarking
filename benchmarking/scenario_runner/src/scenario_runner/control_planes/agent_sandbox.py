@@ -158,6 +158,7 @@ def deploy_workload_and_pool(
     image_repo: str,
     sandbox_class: str = "gvisor",
     timeout: int = 300,
+    workload_timeout: str | None = None,
 ) -> None:
     if workload_name not in WORKLOAD_IMAGES:
         raise AgentSandboxError(f"no agent-sandbox template of {workload_name}; there are {', '.join(WORKLOAD_IMAGES)}")
@@ -166,12 +167,14 @@ def deploy_workload_and_pool(
     cluster.apply_namespace(WORKLOADS_NAMESPACE)
     if workload_name == "openclaw":
         openclaw.deploy_mock_llm(cluster, image_repo, timeout)
+    values = {"OPENCLAW_TIMEOUT_SECS": openclaw.exec_timeout_secs(workload_timeout)} if workload_name == "openclaw" else {}
     template = render(
         f"{workload_name}-template.yaml.tmpl",
         NAME=workload_name,
         NAMESPACE=WORKLOADS_NAMESPACE,
         IMAGE=images.pin(images.image_ref(images.WORKLOADS_IMAGES, image_repo, WORKLOAD_IMAGES[workload_name])),
         RUNTIME_CLASS=RUNTIME_CLASSES[sandbox_class],
+        **values,
     )
     log(f"agent-sandbox: deploying SandboxTemplate {workload_name}")
     apply(cluster, template)

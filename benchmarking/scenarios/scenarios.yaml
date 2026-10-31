@@ -208,9 +208,10 @@ cases:
       # On the cluster with mock-llm.
       - workload: openclaw
         configuration: openclaw
-        # Above the template's OPENCLAW_TIMEOUT_SECS (100), so the actor's own
-        # timeout reports a slow turn first.
-        workload-timeout: 120s
+        # The actors end a turn 20s sooner, at 220s. A turn takes about twice as
+        # long with 10 actors on a node as on an idle one, and on microvm runs
+        # past 100s.
+        workload-timeout: 240s
         # Without an egress policy the actors can't reach mock-llm.
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
       class:

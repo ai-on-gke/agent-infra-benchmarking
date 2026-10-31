@@ -408,8 +408,9 @@ def run(
     if provider == AGENT_SANDBOX:
         if deploy_workloads:
             agent_sandbox.deploy_workload_and_pool(
-                cluster, workload, options["workers"]["count"], image_repo, sandbox_class(case)
-            )
+                cluster, workload, options["workers"]["count"], image_repo, sandbox_class(case),
+                workload_timeout=options["worker"].get("workload-timeout"),
+            )  # fmt: skip
         else:
             agent_sandbox.recreate_warm_pool(cluster, workload, options["workers"]["count"], sandbox_class(case))
         options = {
@@ -442,7 +443,8 @@ roleRef:
         )
         # The golden snapshot is taken on the pool just deployed.
         if deploy_workloads:
-            workloads.deploy(cluster, [template_name], sandbox_class(case), image_repo, options["actor-memory"])
+            workloads.deploy(cluster, [template_name], sandbox_class(case), image_repo, options["actor-memory"],
+                             workload_timeout=options["worker"].get("workload-timeout"))  # fmt: skip
         if template_name:
             template = workloads.deployed_template(cluster, template_name)
             workloads.check_deployed(template, template_name, options["actor-memory"])
