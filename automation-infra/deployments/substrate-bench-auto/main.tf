@@ -48,9 +48,9 @@ module "cloud_run" {
   # runner image rather than with an apply here.
   args = ["--suite=nightly"]
 
-  # Daily, so an execution ends before the next starts rather than running
-  # beside it.
-  schedule = "0 3 * * *"
+  # Every 6 hours: an execution takes about 3, so it ends before the next starts
+  # rather than running beside it.
+  schedule = "0 3,9,15,21 * * *"
 }
 
 output "cloud_run" {

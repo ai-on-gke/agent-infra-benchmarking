@@ -2,8 +2,8 @@
 
 Runs the cases of
 [`scenarios.yaml`](../../../benchmarking/scenarios/scenarios.yaml) that `args`
-in [`main.tf`](main.tf) names, the gVisor and microvm pairs, once a day,
-at 3am UTC, in the GCP project `akvelon-gke-aieco` (`us-central1`). Each
+in [`main.tf`](main.tf) names, the gVisor and microvm pairs, every 6 hours
+from 3am UTC, in the GCP project `akvelon-gke-aieco` (`us-central1`). Each
 execution runs the latest commit pushed to the `main` branch, and each
 repeat of a case gets a cluster of its own, destroyed after it.
 
@@ -33,7 +33,7 @@ names to differ:
 | What | Name |
 |---|---|
 | Cloud Run job | `substrate-bench-auto` |
-| Cloud Scheduler job that starts it, daily at 03:00 UTC | `substrate-bench-auto` |
+| Cloud Scheduler job that starts it, at 03:00, 09:00, 15:00 and 21:00 UTC | `substrate-bench-auto` |
 | Cloud Run job, and its scheduler, that destroys what a killed execution left (`tools/destroy-leftovers`), daily at 15:00 UTC | `substrate-bench-auto-cleanup` |
 | Alert policy on a failed execution of either job | `substrate-bench-auto: failed execution` |
 | Artifact Registry repository of the job's image and the images its runs pull, which the Publish workflow pushes to | `substrate-bench-auto` |
