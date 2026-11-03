@@ -163,10 +163,11 @@ suites:
   - openclaw-substrate-microvm
   - dummy
   # substrate-bench-staging's: dummy, which creates no cluster, and
-  # glutton-single, one glutton run.
+  # glutton-single, one glutton run, on substrate and on agent-sandbox.
   staging:
   - dummy
   - glutton-single
+  - glutton-single-agent-sandbox
 
 cases:
   # Each workload at 300 VUs (virtual users) on 300 workers over 30 nodes for
@@ -236,6 +237,31 @@ cases:
       infra:
         cluster:
           sandboxed-nodes: 1
+      workers:
+        count: 10
+      master:
+        run-time: 5m
+        users: 10
+        spawn-rate: 10
+        warm-up: 10s
+      worker:
+        resume-mode: explicit
+        workload-name: glutton
+        workload-template: glutton
+
+  # glutton-single on agent-sandbox, its pods in gVisor through GKE Sandbox,
+  # alike but for the control plane, so the two compare.
+  glutton-single-agent-sandbox:
+    repeats:
+      warmups: 0
+    locust:
+      install:
+        agent-sandbox:
+          sandbox-class: gvisor
+      infra:
+        cluster:
+          sandboxed-nodes: 1
+          gke-sandbox: true
       workers:
         count: 10
       master:

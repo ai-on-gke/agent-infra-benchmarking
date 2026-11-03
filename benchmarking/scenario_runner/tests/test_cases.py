@@ -124,6 +124,14 @@ class ShippedCases(unittest.TestCase):
             self.assertIs(mine["locust"]["infra"]["cluster"].pop("gke-sandbox"), True)
             self.assertEqual(mine, pair, f"{name} differs from its substrate case in more than the control plane")
 
+    def test_glutton_single_agent_sandbox_is_glutton_single_on_agent_sandbox(self):
+        cases = copy.deepcopy(SHIPPED.cases)
+        mine, pair = cases["glutton-single-agent-sandbox"], cases["glutton-single"]
+        self.assertEqual(pair["locust"].pop("install"), on("gvisor")["install"])
+        self.assertEqual(mine["locust"].pop("install"), {"agent-sandbox": {"sandbox-class": "gvisor"}})
+        self.assertIs(mine["locust"]["infra"]["cluster"].pop("gke-sandbox"), True)
+        self.assertEqual(mine, pair)
+
     def test_shared_workers_is_glutton_single_on_fewer_bounded_workers(self):
         # So it compares, and runs on glutton-single's dev infra.
         cases = copy.deepcopy(SHIPPED.cases)
