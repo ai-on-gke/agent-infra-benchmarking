@@ -158,12 +158,25 @@ def image_ref(file: Path, repo: str, name: str) -> str:
 
 
 def digest(image: str) -> str | None:
-    """The digest the registry serves for image, or None if it has none or
-    gcloud's account cannot read it."""
-    describe = ["gcloud", "artifacts", "docker", "images", "describe", image, "--format=value(image_summary.digest)"]
-    proc = subprocess.run(describe, capture_output=True, text=True)
-    value = proc.stdout.strip()
-    return value if not proc.returncode and value.startswith("sha256:") else None
+    """The digest the registry serves for image's tag, or None if it has no
+    such tag or image; raises ImageError with gcloud's error if gcloud fails
+    otherwise, as when its account cannot read the repository."""
+    name, _, image_tag = image.rpartition(":")
+    if not name or "/" in image_tag:
+        raise ImageError(f"{image} has no tag")
+    # Not images describe, which also reads the image's Container Analysis
+    # occurrences once that API is on, and fails without permission to.
+    tags = ["gcloud", "artifacts", "docker", "tags", "list", name, "--format=value(tag.basename(),version.basename())"]
+    proc = subprocess.run(tags, capture_output=True, text=True)
+    if proc.returncode:
+        if "NOT_FOUND" in proc.stderr:
+            return None
+        raise ImageError(f"cannot look up {image}: {proc.stderr.strip()}")
+    for line in proc.stdout.splitlines():
+        listed, _, value = line.partition("\t")
+        if listed == image_tag and value.startswith("sha256:"):
+            return value
+    return None
 
 
 def refs(repo: str, files: list[Path]) -> list[str]:
@@ -172,7 +185,7 @@ def refs(repo: str, files: list[Path]) -> list[str]:
 
 
 def missing(image_refs: list[str]) -> list[str]:
-    """The images the registry has no digest for, or gcloud's account cannot read."""
+    """The images the registry has no digest for."""
     return [image for image in image_refs if digest(image) is None]
 
 
@@ -181,7 +194,7 @@ def pin(image: str) -> str:
     what reads it and what runs it are the same bits even if the tag moves."""
     image_digest = digest(image)
     if image_digest is None:
-        raise ImageError(f"cannot resolve {image} to a digest; is it pushed, and can gcloud's account read it?")
+        raise ImageError(f"cannot resolve {image} to a digest; is it pushed?")
     # Only the last path segment can carry a tag, which leaves a registry port alone.
     head, _, last = image.split("@", 1)[0].rpartition("/")
     return f"{head}/{last.split(':', 1)[0]}@{image_digest}"
