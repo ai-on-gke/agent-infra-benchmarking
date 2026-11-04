@@ -77,12 +77,16 @@ class Tag(unittest.TestCase):
         self.assertLessEqual(len(tag), 63)
 
 
-def described(digests: dict[str, str]):
-    """gcloud artifacts docker images describe, serving digests by image."""
+def described(digests: dict[str, str], stderr: str = ""):
+    """gcloud artifacts docker tags list, serving digests by image, or failing
+    with stderr."""
 
     def run(cmd, **kwargs):
-        value = digests.get(cmd[5], "")
-        return subprocess.CompletedProcess(cmd, 0 if value else 1, stdout=value + "\n", stderr="")
+        if stderr:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=stderr)
+        listed = [image.rpartition(":") for image in digests]
+        lines = [f"{tag}\t{digests[f'{name}:{tag}']}\n" for name, _, tag in listed if name == cmd[5]]
+        return subprocess.CompletedProcess(cmd, 0, stdout="".join(lines), stderr="")
 
     return mock.patch.object(images.subprocess, "run", side_effect=run)
 
@@ -95,6 +99,25 @@ class Refs(unittest.TestCase):
     def test_pin_refuses_what_it_cannot_resolve(self):
         with described({}), self.assertRaises(images.ImageError):
             images.pin("us-docker.pkg.dev/p/r/img:tag")
+
+    def test_pin_takes_the_digest_of_its_own_tag(self):
+        pushed = {"us-docker.pkg.dev/p/r/img:other": "sha256:other", "us-docker.pkg.dev/p/r/img:tag": "sha256:abc"}
+        with described(pushed):
+            self.assertEqual(images.pin("us-docker.pkg.dev/p/r/img:tag"), "us-docker.pkg.dev/p/r/img@sha256:abc")
+
+    def test_an_image_not_in_the_repository_is_missing(self):
+        with described({}, stderr="ERROR: (gcloud.artifacts.docker.tags.list) NOT_FOUND: Requested entity was not found."):
+            self.assertEqual(images.missing(["us-docker.pkg.dev/p/r/img:tag"]), ["us-docker.pkg.dev/p/r/img:tag"])
+
+    def test_a_gcloud_failure_is_reported_rather_than_taken_for_missing(self):
+        error = "ERROR: (gcloud.artifacts.docker.tags.list) PERMISSION_DENIED: Permission denied on resource"
+        with described({}, stderr=error), self.assertRaisesRegex(images.ImageError, "PERMISSION_DENIED"):
+            images.missing(["us-docker.pkg.dev/p/r/img:tag"])
+
+    def test_an_image_without_a_tag_is_refused(self):
+        for untagged in ("host:5000/p/r/img", "img"):
+            with described({}), self.assertRaises(images.ImageError):
+                images.digest(untagged)
 
     def test_missing_names_the_images_this_tree_has_not_pushed(self):
         repo = "us-docker.pkg.dev/p/r"

@@ -354,14 +354,17 @@ def check_images(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     rather than Cloud Run, builds them instead."""
     needed = needed_images(args, cases)
     log(f"run: checking {args.image_repo} has the images of this tree that {', '.join(cases)} pull")
-    absent = {group: images.missing(refs) for group, refs in needed.items()}
+    try:
+        absent = {group: images.missing(refs) for group, refs in needed.items()}
+    except images.ImageError as exc:
+        fail(str(exc))
     absent = {group: refs for group, refs in absent.items() if refs}
     if absent and not ON_CLOUD_RUN:
         build_images(args, absent)
     elif absent:
         where = f"--dev-infra={args.dev_infra}" if args.dev_infra else f"--repo={args.image_repo}"
         fail(
-            f"{args.image_repo} lacks these images of this tree, or gcloud's account cannot read them:\n"
+            f"{args.image_repo} lacks these images of this tree:\n"
             + "\n".join(f"  {ref}" for refs in absent.values() for ref in refs)
             + f"\nBuild them with: benchmarking/tools/build-images {where} --images={','.join(absent)}"
         )
