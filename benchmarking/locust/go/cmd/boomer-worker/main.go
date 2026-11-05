@@ -100,7 +100,8 @@ func main() {
 		apiConnections = flag.Int("api-connections", 1,
 			"Connections to ateapi this worker spreads its users over.")
 		provider     = flag.String("provider", "agent-substrate", "Provider: agent-substrate or agent-sandbox.")
-		warmPoolName = flag.String("warm-pool-name", "", "agent-sandbox only: name of the SandboxWarmPool to claim from.")
+		warmPoolName = flag.String("warm-pool-name", "",
+			"agent-sandbox only: the SandboxWarmPools to claim from, comma-separated; the users are spread over them.")
 
 		// runworkload's own settings, read only when --user-class selects it.
 		instructionsPerCycle = flag.Int("instructions-per-cycle", 1,
@@ -224,7 +225,7 @@ func main() {
 			Common: scenario.Setup(scenario.Options{
 				Config:         cfg,
 				Provider:       *provider,
-				WarmPoolName:   *warmPoolName,
+				WarmPoolNames:  splitList(*warmPoolName),
 				APIStubs:       apiStubs,
 				WorkloadName:   *workloadName,
 				Template:       *workloadTemplate,

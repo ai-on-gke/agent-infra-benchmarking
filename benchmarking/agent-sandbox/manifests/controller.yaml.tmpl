@@ -39,13 +39,14 @@ spec:
       - name: agent-sandbox-controller
         image: ${IMAGE}
         args:
-        - --leader-elect=true
+        # One replica: a lost lease, as when GKE resizes the control plane, would only stop it.
+        - --leader-elect=false
         - --extensions
         - --api-connections=4
         - --separate-watch-connection=true
         - --sandbox-concurrent-workers=200
         - --sandbox-claim-concurrent-workers=150
-        - --sandbox-warm-pool-concurrent-workers=2
+        - --sandbox-warm-pool-concurrent-workers=${WARM_POOL_WORKERS}
         - --sandbox-warm-pool-replenish-delay=0
         - --sandbox-warm-pool-max-refill-rate=100
         - --cache-label-selectors=true

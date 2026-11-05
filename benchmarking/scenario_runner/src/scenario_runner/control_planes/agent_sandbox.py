@@ -27,6 +27,8 @@ import subprocess
 import time
 from string import Template
 
+import yaml
+
 from .. import LABEL_RE, RUNNER_DIR, git, images
 from ..infra.cluster import Cluster
 from ..log import log
@@ -57,6 +59,13 @@ WORKLOADS_NAMESPACE = openclaw.NAMESPACE
 # The image of workloads.json each workload's template runs.
 WORKLOAD_IMAGES = {"glutton": "glutton", "openclaw": "openclaw-workload"}
 ROLLOUT_TIMEOUT_SECS = 180
+# The example asks 40 for its critical level and 25 for bulk, but GKE admits only
+# 30 shares across the levels a cluster adds; most go to the critical level.
+APF_SHARES = {"agent-sandbox-critical": 20, "agent-sandbox-bulk": 10}
+# agent-sandbox's performance guide splits a pool past about 30 claims/s, as one
+# pool's refills are reconciled one at a time; the controller gets a worker each.
+WARM_POOL_SHARDS = 4
+WARM_POOL_LABEL = "benchmark-workload"
 # Each sandbox class's RuntimeClass, GKE Sandbox's, whose nodes carry
 # GKE_SANDBOX_LABEL with it (infra.cluster.gke-sandbox).
 RUNTIME_CLASSES = {"gvisor": "gvisor"}
@@ -103,8 +112,22 @@ def apply(cluster: Cluster, manifest: str) -> None:
     stream(cluster.kubectl("apply", "-f", "-"), input=manifest)
 
 
-def warm_pool_name(workload: str) -> str:
-    return f"{workload}-warm-pool"
+def apf_insulation() -> str:
+    """agent-sandbox's APF example, with its levels' shares cut to APF_SHARES."""
+    docs = list(yaml.safe_load_all((AGENT_SANDBOX_DIR / "examples" / "apf-insulation" / "apf-insulation.yaml").read_text()))
+    for doc in docs:
+        if doc and doc["kind"] == "PriorityLevelConfiguration":
+            doc["spec"]["limited"]["nominalConcurrencyShares"] = APF_SHARES[doc["metadata"]["name"]]
+    return yaml.safe_dump_all([doc for doc in docs if doc])
+
+
+def warm_pools(workload: str, worker_count: int) -> dict[str, int]:
+    """The SandboxWarmPools worker_count sandboxes of workload are split over,
+    each with its replicas."""
+    shards = max(1, min(WARM_POOL_SHARDS, worker_count))
+    return {
+        f"{workload}-warm-pool-{i}": worker_count // shards + (i < worker_count % shards) for i in range(shards)
+    }
 
 
 def install(cluster: Cluster) -> None:
@@ -125,7 +148,13 @@ def install_once(cluster: Cluster) -> None:
     cluster.apply_namespace(NAMESPACE)
     for rbac in ("rbac.generated.yaml", "extensions-rbac.generated.yaml", "extensions.yaml"):
         stream(cluster.kubectl("apply", "-f", str(k8s / rbac)))
-    apply(cluster, render("controller.yaml.tmpl", NAMESPACE=NAMESPACE, IMAGE=controller_img))
+    # Without it the controller shares workload-low with the locust workers, and
+    # at 300 VUs its requests queue past the claim timeout.
+    apply(cluster, apf_insulation())
+    apply(
+        cluster,
+        render("controller.yaml.tmpl", NAMESPACE=NAMESPACE, IMAGE=controller_img, WARM_POOL_WORKERS=WARM_POOL_SHARDS),
+    )
     router_deploy = AGENT_SANDBOX_DIR / "sandbox-router" / "deploy"
     for manifest in ("serviceaccount.yaml", "rbac.yaml", "service.yaml"):
         stream(cluster.kubectl("apply", "-f", str(router_deploy / manifest)))
@@ -185,7 +214,7 @@ def deploy_workload_and_pool(
 def recreate_warm_pool(
     cluster: Cluster, workload_name: str, worker_count: int, sandbox_class: str = "gvisor", timeout: int = 300
 ) -> None:
-    delete = ["delete", "sandboxwarmpool", warm_pool_name(workload_name), "--ignore-not-found"]
+    delete = ["delete", "sandboxwarmpool", "-l", f"{WARM_POOL_LABEL}={workload_name}", "--ignore-not-found"]
     stream(cluster.kubectl(*delete, namespace=WORKLOADS_NAMESPACE))
     apply_warm_pool(cluster, workload_name, worker_count, timeout)
     check_isolated(cluster, RUNTIME_CLASSES[sandbox_class])
@@ -233,11 +262,19 @@ def isolation_problems(pods: list[dict], nodes: list[dict], runtime_class: str) 
 
 
 def apply_warm_pool(cluster: Cluster, workload_name: str, worker_count: int, timeout: int) -> None:
-    name = warm_pool_name(workload_name)
-    log(f"agent-sandbox: deploying SandboxWarmPool {name} with {worker_count} replicas")
-    values = {"NAME": name, "NAMESPACE": WORKLOADS_NAMESPACE, "REPLICAS": worker_count, "TEMPLATE": workload_name}
-    apply(cluster, render("warm-pool.yaml.tmpl", **values))
-    wait_warm_pool_ready(cluster, name, worker_count, timeout)
+    pools = warm_pools(workload_name, worker_count)
+    for name, replicas in pools.items():
+        log(f"agent-sandbox: deploying SandboxWarmPool {name} with {replicas} replicas")
+        values = {
+            "NAME": name,
+            "NAMESPACE": WORKLOADS_NAMESPACE,
+            "LABEL": WARM_POOL_LABEL,
+            "REPLICAS": replicas,
+            "TEMPLATE": workload_name,
+        }
+        apply(cluster, render("warm-pool.yaml.tmpl", **values))
+    for name, replicas in pools.items():
+        wait_warm_pool_ready(cluster, name, replicas, timeout)
 
 
 def wait_warm_pool_ready(cluster: Cluster, name: str, worker_count: int, timeout: int = 300) -> None:

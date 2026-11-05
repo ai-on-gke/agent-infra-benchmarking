@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,20 +70,25 @@ type AgentSandbox struct {
 	Client dynamic.Interface
 	Rec    measure.Recorder
 
-	// Workload labels the actor gauges, and WarmPool names the
-	// SandboxWarmPool claimed from.
-	Workload string
-	WarmPool string
+	// Workload labels the actor gauges, and WarmPools are the
+	// SandboxWarmPools the actors are spread over, one each in turn.
+	Workload  string
+	WarmPools []string
+
+	// Counts the actors created, to spread them over WarmPools.
+	started atomic.Int64
 }
 
 // Create claims nothing: the first Wake does.
 func (p *AgentSandbox) Create(context.Context) (Sandbox, error) {
-	return &agentSandbox{p: p, name: "sb-" + uuid.NewString()}, nil
+	pool := p.WarmPools[(p.started.Add(1)-1)%int64(len(p.WarmPools))]
+	return &agentSandbox{p: p, name: "sb-" + uuid.NewString(), warmPool: pool}, nil
 }
 
 type agentSandbox struct {
 	p         *AgentSandbox
 	name      string
+	warmPool  string
 	claimName string
 	podIP     string
 	isActive  bool
@@ -110,7 +116,7 @@ func (s *agentSandbox) Wake(ctx context.Context) error {
 	ctx, span := s.p.Rec.Tracer.Start(ctx, ResumeMetric)
 	defer span.End()
 	span.SetAttributes(
-		attribute.String("warm_pool", s.p.WarmPool),
+		attribute.String("warm_pool", s.warmPool),
 		attribute.String("workload", s.p.Workload),
 	)
 
@@ -134,7 +140,7 @@ func (s *agentSandbox) Wake(ctx context.Context) error {
 			},
 			"spec": map[string]interface{}{
 				"warmPoolRef": map[string]interface{}{
-					"name": s.p.WarmPool,
+					"name": s.warmPool,
 				},
 			},
 		},

@@ -161,6 +161,8 @@ suites:
   - glutton-substrate-microvm
   - openclaw-substrate-gvisor
   - openclaw-substrate-microvm
+  - glutton-agent-sandbox-gvisor
+  - openclaw-agent-sandbox-gvisor
   - dummy
   # substrate-bench-staging's: dummy, which creates no cluster, and
   # glutton-single, one glutton run.
@@ -171,9 +173,9 @@ suites:
 cases:
   # Each workload at 300 VUs (virtual users) on 300 workers over 30 nodes for
   # 4m, measured once, its VUs started 10 a second and each actor woken by a
-  # ResumeActor first: on substrate's gvisor, on its microvm with the nested
-  # virtualization it boots its guests on, and on agent-sandbox, all alike but
-  # for what they run on, so they compare.
+  # ResumeActor first: on substrate's gvisor, and on its microvm with the nested
+  # virtualization it boots its guests on, alike but for what they run on, so
+  # they compare.
   "{workload}-{control-plane}-{sandbox-class}":
     repeats:
       count: 1
@@ -188,7 +190,6 @@ cases:
           sandboxed-disk-size-gb: 1000
           configuration: "{configuration}"
           nested-virtualization: "{nested-virtualization}"
-          gke-sandbox: "{gke-sandbox}"
       workers:
         count: 300
       master:
@@ -220,9 +221,45 @@ cases:
       - control-plane: substrate
         sandbox-class: microvm
         nested-virtualization: true
-      - control-plane: agent-sandbox
-        sandbox-class: gvisor
-        gke-sandbox: true
+
+  # The same on agent-sandbox, its pods in GKE Sandbox's gVisor, but glutton at
+  # 30 VUs on 30 workers: each of its cycles starts a new pod, and with more VUs
+  # its claims can wait past their timeout for one.
+  "{workload}-agent-sandbox-gvisor":
+    repeats:
+      count: 1
+    locust:
+      install:
+        agent-sandbox:
+          sandbox-class: gvisor
+      infra:
+        cluster:
+          sandboxed-nodes: 30
+          sandboxed-disk-size-gb: 1000
+          configuration: "{configuration}"
+          gke-sandbox: true
+      workers:
+        count: "{vus}"
+      master:
+        run-time: "4m"
+        users: "{vus}"
+        spawn-rate: 10
+        warm-up: 1m
+      worker:
+        resume-mode: explicit
+        workload-name: "{workload}"
+        workload-template: "{workload}"
+        workload-timeout: "{workload-timeout}"
+        actor-egress-allow: "{actor-egress-allow}"
+    parameters:
+      workload:
+      - workload: glutton
+        vus: 30
+      - workload: openclaw
+        vus: 300
+        configuration: openclaw
+        workload-timeout: 240s
+        actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
   # glutton at 10 VUs on 10 workers on one node, once with no warm-up, for a
   # quicker check of the path.

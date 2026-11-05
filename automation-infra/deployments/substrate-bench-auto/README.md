@@ -2,10 +2,11 @@
 
 Runs the cases of
 [`scenarios.yaml`](../../../benchmarking/scenarios/scenarios.yaml) that `args`
-in [`main.tf`](main.tf) names, the gVisor and microvm pairs, every 6 hours
-from 3am UTC, in the GCP project `akvelon-gke-aieco` (`us-central1`). Each
-execution runs the latest commit pushed to the `main` branch, and each
-repeat of a case gets a cluster of its own, destroyed after it.
+in [`main.tf`](main.tf) names, on substrate's gVisor and microvm and on
+agent-sandbox's gVisor, every 6 hours from 3am UTC, in the GCP project
+`akvelon-gke-aieco` (`us-central1`). Each execution runs the latest commit
+pushed to the `main` branch, and each repeat of a case gets a cluster of its
+own, destroyed after it.
 
 To run it now with one case rather than waiting for the schedule:
 
