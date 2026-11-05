@@ -134,6 +134,23 @@ func activeGauge(t *testing.T, workload string) float64 {
 	return 0
 }
 
+func TestAgentSandboxSpreadsActorsOverWarmPools(t *testing.T) {
+	p := &AgentSandbox{WarmPools: []string{"pool-0", "pool-1", "pool-2"}}
+	counts := map[string]int{}
+	for i := 0; i < 9; i++ {
+		sb, err := p.Create(context.Background())
+		if err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+		counts[sb.(*agentSandbox).warmPool]++
+	}
+	for _, pool := range p.WarmPools {
+		if counts[pool] != 3 {
+			t.Fatalf("expected 3 actors on %s, got %v", pool, counts)
+		}
+	}
+}
+
 // wokenAgentSandbox is a sandbox whose Wake claimed a warm one from a fake
 // controller, its gauges labelled workload.
 func wokenAgentSandbox(t *testing.T, workload string) *agentSandbox {
@@ -152,8 +169,8 @@ func wokenAgentSandbox(t *testing.T, workload string) *agentSandbox {
 			Timeout:      5 * time.Second,
 			WindowMethod: "runworkload",
 		},
-		Workload: workload,
-		WarmPool: "glutton-warm-pool",
+		Workload:  workload,
+		WarmPools: []string{"glutton-warm-pool-0"},
 	}
 
 	ctx := context.Background()

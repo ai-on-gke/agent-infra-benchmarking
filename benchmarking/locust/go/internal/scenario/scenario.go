@@ -20,6 +20,7 @@
 package scenario
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"time"
@@ -65,8 +66,9 @@ type Options struct {
 	// Provider names the infrastructure provider: agent-substrate or agent-sandbox.
 	Provider string
 
-	// WarmPoolName is the agent-sandbox SandboxWarmPool name.
-	WarmPoolName string
+	// WarmPoolNames are the agent-sandbox SandboxWarmPools the users are
+	// spread over.
+	WarmPoolNames []string
 
 	// APIStubs are the connections to substrate's API the users are spread
 	// over, one each in turn. Empty uses the Config's one.
@@ -154,16 +156,19 @@ func (c Common) ActorTemplate() string {
 // and waitForWorker wait for a free worker on a resume that finds none.
 func (c Common) NewProvider(rec measure.Recorder, suspendDisabled, waitForWorker bool) (sandbox.Provider, error) {
 	if c.Provider == "agent-sandbox" {
+		if len(c.WarmPoolNames) == 0 {
+			return nil, errors.New("agent-sandbox needs a --warm-pool-name to claim from")
+		}
 		dc, err := sandbox.NewKubeDynamicClient()
 		if err != nil {
 			return nil, err
 		}
 		return &sandbox.AgentSandbox{
-			Config:   c.Config,
-			Client:   dc,
-			Rec:      rec,
-			Workload: c.Workload.Name(),
-			WarmPool: c.WarmPoolName,
+			Config:    c.Config,
+			Client:    dc,
+			Rec:       rec,
+			Workload:  c.Workload.Name(),
+			WarmPools: c.WarmPoolNames,
 		}, nil
 	}
 	return &sandbox.Substrate{

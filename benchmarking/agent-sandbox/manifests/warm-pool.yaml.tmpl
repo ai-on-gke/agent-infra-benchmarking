@@ -3,6 +3,8 @@ kind: SandboxWarmPool
 metadata:
   name: ${NAME}
   namespace: ${NAMESPACE}
+  labels:
+    ${LABEL}: ${TEMPLATE}
 spec:
   replicas: ${REPLICAS}
   sandboxTemplateRef:

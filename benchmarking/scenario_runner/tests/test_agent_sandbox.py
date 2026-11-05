@@ -16,7 +16,7 @@
 
 import unittest
 
-from scenario_runner.control_planes.agent_sandbox import isolation_problems
+from scenario_runner.control_planes.agent_sandbox import isolation_problems, warm_pools
 
 SANDBOX = [{"kind": "Sandbox", "name": "s"}]
 
@@ -57,3 +57,17 @@ class Isolation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WarmPools(unittest.TestCase):
+    def test_the_sandboxes_are_split_evenly(self):
+        self.assertEqual(
+            warm_pools("glutton", 300),
+            {f"glutton-warm-pool-{i}": 75 for i in range(4)},
+        )
+
+    def test_a_remainder_goes_to_the_first_pools(self):
+        self.assertEqual(list(warm_pools("glutton", 10).values()), [3, 3, 2, 2])
+
+    def test_fewer_sandboxes_than_shards_get_a_pool_each(self):
+        self.assertEqual(warm_pools("openclaw", 2), {"openclaw-warm-pool-0": 1, "openclaw-warm-pool-1": 1})

@@ -52,6 +52,16 @@ class ControlPlaneImages(unittest.TestCase):
         # Named as the manifest named it, not by the image ID a digest reference shows in the status.
         self.assertEqual(images["DaemonSet/atenet"]["atenet"]["image"], "r/atenet@sha256:4")
 
+    def test_sandbox_pods_are_one_workload(self):
+        pods = [
+            pod(f"sb-{i}", {"kind": "Sandbox", "name": f"sb-{i}"},
+                [{"name": "glutton", "image": "r/glutton:v1", "imageID": "r/glutton@sha256:1"}])
+            for i in range(300)
+        ]  # fmt: skip
+        with mock.patch.object(run_info, "_kubectl_json", return_value={"items": pods}):
+            images = run_info.pod_images(mock.Mock(), "benchmark-workloads")
+        self.assertEqual(images, {"Sandbox": {"glutton": {"image": "r/glutton:v1", "digests": ["sha256:1"]}}})
+
 
 class Tools(unittest.TestCase):
     def test_versions_are_read_where_the_tools_are(self):

@@ -122,6 +122,9 @@ class ShippedCases(unittest.TestCase):
             self.assertEqual(mine["locust"].pop("install"), {"agent-sandbox": {"sandbox-class": "gvisor"}})
             # Its pods' gVisor is GKE Sandbox's.
             self.assertIs(mine["locust"]["infra"]["cluster"].pop("gke-sandbox"), True)
+            # It may run fewer VUs, a worker each.
+            for case in (mine, pair):
+                self.assertEqual(case["locust"]["workers"].pop("count"), case["locust"]["master"].pop("users"))
             self.assertEqual(mine, pair, f"{name} differs from its substrate case in more than the control plane")
 
     def test_shared_workers_is_glutton_single_on_fewer_bounded_workers(self):

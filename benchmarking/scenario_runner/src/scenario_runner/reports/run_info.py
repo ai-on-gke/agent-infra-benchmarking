@@ -164,12 +164,16 @@ def control_plane_namespace(case: dict) -> str:
 
 
 def workload_of(pod: dict) -> str:
-    """The Deployment, DaemonSet, StatefulSet or Job a pod belongs to, or the
-    pod itself."""
+    """The Deployment, DaemonSet, StatefulSet or Job a pod belongs to, the
+    agent-sandbox Sandboxes as one, or the pod itself."""
     owners = pod["metadata"].get("ownerReferences") or []
     if not owners:
         return f"Pod/{pod['metadata']['name']}"
     owner = owners[0]
+    # One entry per Sandbox would put a warm pool's every pod into run info,
+    # past the 128 KiB a single env value may take when the master starts.
+    if owner["kind"] == "Sandbox":
+        return "Sandbox"
     if owner["kind"] == "ReplicaSet":
         suffix = (pod["metadata"].get("labels") or {}).get("pod-template-hash")
         name = owner["name"].removesuffix(f"-{suffix}") if suffix else owner["name"]
@@ -282,12 +286,21 @@ def collect(
 def actors_pool(
     cluster: Cluster, case: dict, template_name: str | None, pool: tuple[str, str], errors: dict[str, str]
 ) -> dict | None:
-    """The pool the run's actors come from: agent-sandbox's warm pool of the
-    template, or else the WorkerPool pool names."""
+    """The pool the run's actors come from: agent-sandbox's warm pools of the
+    template, by name, or else the WorkerPool pool names."""
     namespace, name = pool
     if control_plane(case) == AGENT_SANDBOX:
-        warm_pool = agent_sandbox.warm_pool_name(template_name)
-        return _read("warm pool", lambda: _kubectl_json(cluster, "sandboxwarmpool", warm_pool, namespace=namespace), errors)
+        selector = f"{agent_sandbox.WARM_POOL_LABEL}={template_name}"
+        listed = _read(
+            "warm pools", lambda: _kubectl_json(cluster, "sandboxwarmpool", "-l", selector, namespace=namespace), errors
+        )
+        if listed is None:
+            return None
+        warm_pools = {item["metadata"]["name"]: item for item in listed["items"]}
+        return {
+            "spec": {name: item.get("spec") for name, item in warm_pools.items()},
+            "status": {name: item.get("status") for name, item in warm_pools.items()},
+        }
     return _read("worker pool", lambda: _kubectl_json(cluster, "workerpool", name, namespace=namespace), errors)
 
 

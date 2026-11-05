@@ -419,7 +419,7 @@ def run(
                 **options["worker"],
                 "provider": "agent-sandbox",
                 "router-url": "http://sandbox-router-svc.agent-sandbox-system.svc.cluster.local:8080",
-                "warm-pool-name": agent_sandbox.warm_pool_name(workload),
+                "warm-pool-name": ",".join(agent_sandbox.warm_pools(workload, options["workers"]["count"])),
                 "atespace": agent_sandbox.WORKLOADS_NAMESPACE,
             },
         }
