@@ -33,6 +33,7 @@ from .. import LABEL_RE, RUNNER_DIR, git, images
 from ..infra.cluster import Cluster
 from ..log import log
 from ..process import output, retry, stream
+from .. import workloads
 from ..workloads import openclaw
 
 AGENT_SANDBOX_DIR = RUNNER_DIR.parent.parent / "dependency-repos" / "agent-sandbox"
@@ -194,7 +195,7 @@ def deploy_workload_and_pool(
     if sandbox_class not in RUNTIME_CLASSES:
         raise AgentSandboxError(f"agent-sandbox runs only {', '.join(RUNTIME_CLASSES)}, not {sandbox_class}")
     cluster.apply_namespace(WORKLOADS_NAMESPACE)
-    if workload_name == "openclaw":
+    if workload_name in workloads.MOCK_LLM_TEMPLATES:
         openclaw.deploy_mock_llm(cluster, image_repo, timeout)
     values = {"OPENCLAW_TIMEOUT_SECS": openclaw.exec_timeout_secs(workload_timeout)} if workload_name == "openclaw" else {}
     template = render(
