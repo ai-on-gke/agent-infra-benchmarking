@@ -339,7 +339,7 @@ def check_deployed(template: dict, name: str, actor_memory: str) -> None:
 
 def delete(cluster: Cluster, names: list[str] | None = None) -> None:
     """Deletes the named templates, by default all, then their atespace unless
-    other templates are left in it, and mock-llm with openclaw's."""
+    other templates are left in it, and mock-llm with any template that calls it."""
     check_templates(names or [])
     log("workloads: deleting")
     with kubectl_ate(cluster) as ate:
@@ -347,5 +347,5 @@ def delete(cluster: Cluster, names: list[str] | None = None) -> None:
             delete_template(ate, name)
         if subprocess.run(ate("delete", "atespace", ATESPACE), capture_output=True).returncode:
             log(f"workloads: atespace {ATESPACE} not deleted; it may not exist or not be empty")
-    if "openclaw" in (names or templates()):
+    if MOCK_LLM_TEMPLATES & set(names or templates()):
         openclaw.delete_mock_llm(cluster)

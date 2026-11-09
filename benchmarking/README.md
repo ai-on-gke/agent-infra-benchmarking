@@ -418,6 +418,11 @@ The scheduled runs (`automation-infra/deployments/substrate-bench-auto`) run
 the cases its `main.tf` lists in `args`, so a new case runs there once it is
 added to that list.
 
+### Adding a workload
+
+To benchmark another application inside the actors, see
+[Adding a workload](workloads/README.md#adding-a-workload) in the workloads README.
+
 ### Running on bare metal
 
 A case with `bare-metal: true` runs its `sandboxed` pool on a bare-metal

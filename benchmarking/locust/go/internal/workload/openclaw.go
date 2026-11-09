@@ -44,8 +44,6 @@ const (
 	// What the mock agent replies when it has successfully finished the loop,
 	// followed by the nonce it found in the prompt.
 	openclawExpectedReply = "I have successfully executed the bash commands!"
-
-	textContentType = "text/plain"
 )
 
 func init() {

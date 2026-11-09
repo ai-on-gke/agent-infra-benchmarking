@@ -116,8 +116,8 @@ func New(c Config) (task func(), shutdown func(context.Context)) {
 func NewScenario(c Config, userClass string) harness.Scenario {
 	c.InstructionsPerCycle = max(c.InstructionsPerCycle, 1)
 	c.ConcurrentInstructions = max(c.ConcurrentInstructions, 1)
-	if (c.GluttonWriteRAM != "" || c.GluttonWriteDisk > 0) && c.Workload.Name() != workload.GluttonName {
-		slog.Error("fatal: --glutton-write-ram and --glutton-write-disk are for the glutton workload only",
+	if _, ok := c.Workload.(workload.Loader); !ok && (c.GluttonWriteRAM != "" || c.GluttonWriteDisk > 0) {
+		slog.Error("fatal: --glutton-write-ram and --glutton-write-disk need a workload that implements workload.Loader",
 			slog.String("workload", c.Workload.Name()))
 		os.Exit(1)
 	}

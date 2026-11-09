@@ -144,7 +144,7 @@ a run whose images are missing.
 
 | Path | |
 |---|---|
-| [`benchmarking/`](benchmarking/README.md) | The scenario-runner (`scenario_runner/`), the cluster Terraform (`scenarios/infra/`), the cases (`scenarios/scenarios.yaml`), the load generator (`locust/`, Python master and Go boomer worker), the workloads and their images (`workloads/`), agent-sandbox's manifests (`agent-sandbox/`), and the provider comparison (`sandbox-benchmark/`, see its [doc](benchmarking/sandbox-benchmark/sandbox-benchmark.md)) |
+| [`benchmarking/`](benchmarking/README.md) | The scenario-runner (`scenario_runner/`), the cluster Terraform (`scenarios/infra/`), the cases (`scenarios/scenarios.yaml`), the load generator (`locust/`, Python master and Go boomer worker), the workloads and their images ([`workloads/`](benchmarking/workloads/README.md)), agent-sandbox's manifests (`agent-sandbox/`), and the provider comparison (`sandbox-benchmark/`, see its [doc](benchmarking/sandbox-benchmark/sandbox-benchmark.md)) |
 | [`automation-infra/`](automation-infra/README.md) | The Terraform module for a Cloud Run job that runs the scenario-runner on a schedule, its image, the two deployments and the `trigger` and `destroy-leftovers` tools |
 | [`benchmark-charts/`](benchmark-charts/) | Charts drawn from a run's raw CSVs, `pip install ./benchmark-charts` |
 | `dependency-repos/` | Submodules the images are built from: `substrate` and its `env`, `agent-sandbox`, and `ai-sandbox-benchmark` for the provider comparison. Keep them at the pinned commits; the preflight check fails a run whose substrate is not |

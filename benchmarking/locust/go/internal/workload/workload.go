@@ -124,6 +124,9 @@ func Resolve(name string) (Workload, error) {
 // afresh, so unlike other failures it is worth sending again at once.
 var ErrStaleAssignment = errors.New("stale worker assignment")
 
+// textContentType is the Content-Type of a plain-text instruction.
+const textContentType = "text/plain"
+
 // httpInstruction is one request a workload sends through the router, together
 // with the check that decides whether the answer proves the sandbox ran it.
 type httpInstruction struct {
