@@ -13,23 +13,18 @@
 # limitations under the License.
 
 """Installs substrate on a case's cluster from the submodule's images, which
-builder.py pushes ahead of the run, with its hack/install-ate.sh
-deploy ate-system, and hack/install-microvm-deps.sh --install for a microvm
-case, configured from the cluster's Terraform outputs. The gVisor SandboxConfig's assets are then
-mirrored into the cluster's bucket."""
+builder.py pushes ahead of the run, with its ate-setup deploy ate-system,
+configured from the cluster's Terraform outputs. The gVisor SandboxConfig's
+assets are then mirrored into the cluster's bucket."""
 
 from __future__ import annotations
 
 import functools
-import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
-from pathlib import Path
-
-import yaml
 
 from .. import LABEL_RE, RUNNER_DIR, git, images
 from ..infra.cluster import Cluster
@@ -60,24 +55,16 @@ ENVOY_DATAPLANE_DIR = f"{SUBSTRATE_PATH}/cmd/dataplane/envoy"
 ENVOY_DATAPLANE = images.Image(
     name="envoy-dataplane", dockerfile=f"{ENVOY_DATAPLANE_DIR}/Dockerfile", context=ENVOY_DATAPLANE_DIR
 )
+ATE_SETUP = ["go", "run", "./cmd/ate-setup"]
 # Where the benchmark's Jobs run, as benchmarks/jobs.py names it.
 RUNNER_NAMESPACE = "benchmarking"
-# The SandboxConfig install-ate.sh lays down.
+# The SandboxConfig ate-setup lays down.
 GVISOR_CONFIG = "gvisor-default"
 # Where in the cluster's bucket substrate stores every snapshot.
 SNAPSHOT_PREFIX = "snapshots"
 # Where in the cluster's bucket its assets are mirrored to, clear of the
 # snapshot locations the object-store plugin refuses assets under.
 ASSET_MIRROR_PREFIX = "sandbox-assets"
-MICROVM_SANDBOX_CONFIG = "manifests/microvm/sandboxconfig-microvm.yaml.tmpl"
-# The nodes' architecture, as the SandboxConfig's assets name it.
-MICROVM_ARCH = images.DEFAULT_PLATFORM.rsplit("/", 1)[-1]
-MICROVM_ASSETS = ("cloud-hypervisor", "virtiofsd", "vmlinux", "rootfs.img")
-MICROVM_ASSETS_DIR = SUBSTRATE_DIR / "bin" / "microvm-assets" / MICROVM_ARCH
-# The microvm scripts read these from the environment, so a developer's own
-# would change what they download and where; the versions are the ones the
-# submodule's scripts pin.
-MICROVM_ASSET_ENV = {"ARCH": MICROVM_ARCH, "OUT": str(MICROVM_ASSETS_DIR), "KATA_VER": None, "CH_VER": None}
 
 
 class SubstrateError(RuntimeError):
@@ -93,7 +80,7 @@ def revision() -> str:
 @functools.cache
 def build_version() -> str:
     """The submodule's build version, which the cluster labels its nodes with,
-    read once per run. It has to be the one hack/install-ate.sh stamps on the
+    read once per run. It has to be the one ate-setup stamps on the
     atelet DaemonSet, so it is worked out as ko.BuildVersion
     (cmd/ate-setup/internal/ko/ko.go) does: VERSION if set, else git describe
     in the submodule, else "dev"."""
@@ -183,7 +170,8 @@ def install(cluster: Cluster, microvm: bool = False) -> None:
 
 
 def install_microvm(cluster: Cluster) -> None:
-    """The microvm SandboxConfig alone, on a cluster substrate is installed on."""
+    """The microvm SandboxConfig and its assets alone, on a cluster substrate
+    is installed on."""
     retry(f"substrate's microvm SandboxConfig on cluster {cluster.name}", lambda: install_microvm_once(cluster))
 
 
@@ -219,10 +207,12 @@ def install_once(cluster: Cluster, microvm: bool) -> None:
     log(f"substrate: installing on cluster {cluster.name}")
     # The benchmark's pods call ateapi and atenet-router as this identity.
     runner = f"spiffe://cluster.local/ns/{RUNNER_NAMESPACE}/sa/{cluster.runner_ksa}"
-    install_ate = [
-        str(SUBSTRATE_DIR / "hack" / "install-ate.sh"),
+    ate_setup = [
         "deploy",
         "ate-system",
+        # ate-setup stages the microvm assets in <bucket>-assets and applies
+        # their SandboxConfig as well, unless told gvisor alone.
+        f"--sandbox-classes={'gvisor,microvm' if microvm else 'gvisor'}",
         # Egress credential injection is off: no workload needs the bundled
         # provider, and the installer requires a choice either way.
         '--credential-provider={"enabled":false}',
@@ -230,22 +220,14 @@ def install_once(cluster: Cluster, microvm: bool) -> None:
         # kubectl-ate's own, which the runner deploys the templates with.
         f"--ateapi-authz-bootstrap-owners=system:serviceaccount:ate-system:ate-client,{runner}",
     ]
-    stream(install_ate, env=env, cwd=SUBSTRATE_DIR)
+    stream(ATE_SETUP + ate_setup, env=env, cwd=SUBSTRATE_DIR)
     mirror_gvisor_assets(cluster)
-    # install-ate.sh lays down only the gVisor SandboxConfig. This one needs
-    # substrate's CRDs, so it comes after.
-    if microvm:
-        install_microvm_once(cluster)
 
 
 def install_microvm_once(cluster: Cluster) -> None:
     cluster.get_credentials()
-    # Assembled and checked here, so install-microvm-deps.sh only uploads
-    # them: it skips assembling a complete set it would assemble the same.
-    microvm_env = {**install_env(cluster), **MICROVM_ASSET_ENV}
-    verify_microvm_assets(assemble_microvm_assets(microvm_env))
     log(f"substrate: installing the microvm SandboxConfig and its assets on cluster {cluster.name}")
-    stream([str(SUBSTRATE_DIR / "hack" / "install-microvm-deps.sh"), "--install"], env=microvm_env, cwd=SUBSTRATE_DIR)
+    stream(ATE_SETUP + ["deploy", "sandboxconfig", "--sandbox-classes=microvm"], env=install_env(cluster), cwd=SUBSTRATE_DIR)
 
 
 def mirror_gvisor_assets(cluster: Cluster) -> None:
@@ -269,47 +251,3 @@ def mirror_gvisor_assets(cluster: Cluster) -> None:
                 patch.append({"op": "replace", "path": f"/spec/versions/{i}/assets/{arch}/{name}/url", "value": mirror})
     if patch:
         stream(cluster.kubectl("patch", "sandboxconfig", GVISOR_CONFIG, "--type=json", f"--patch={json.dumps(patch)}"))
-
-
-def assemble_microvm_assets(env: dict[str, str | None]) -> Path:
-    """Downloads the microvm assets into MICROVM_ASSETS_DIR unless a complete
-    set of the versions the submodule pins is there, and returns the dir."""
-    assemble = str(SUBSTRATE_DIR / "hack" / "microvm-assets" / "assemble.sh")
-    stamp = output([assemble, "--print-stamp"], env=env, cwd=SUBSTRATE_DIR).strip()
-    stamp_file = MICROVM_ASSETS_DIR / ".asset-versions"
-    complete = all((MICROVM_ASSETS_DIR / name).is_file() for name in MICROVM_ASSETS)
-    if not complete or not stamp_file.is_file() or stamp_file.read_text().strip() != stamp:
-        log(f"substrate: assembling the microvm assets into {MICROVM_ASSETS_DIR}")
-        stream([assemble], env=env, cwd=SUBSTRATE_DIR)
-    return MICROVM_ASSETS_DIR
-
-
-def pinned_asset_digests() -> dict[str, str]:
-    """The sha256 the microvm SandboxConfig pins, in its default version, for
-    each asset of the nodes' architecture, by its file name."""
-    spec = yaml.safe_load((SUBSTRATE_DIR / MICROVM_SANDBOX_CONFIG).read_text())["spec"]
-    version = next(v for v in spec["versions"] if v["name"] == spec["defaultVersion"])
-    assets = version["assets"][MICROVM_ARCH]
-    return {asset["url"].rsplit("/", 1)[-1]: asset["sha256"] for asset in assets.values()}
-
-
-def verify_microvm_assets(assets_dir: Path) -> None:
-    """Refuses assets other than the ones the SandboxConfig pins, before they
-    are uploaded. atelet checks them again on the node, but only once an actor
-    is resumed, where a mismatch shows as an actor stuck resuming."""
-    pinned = pinned_asset_digests()
-    if set(pinned) != set(MICROVM_ASSETS):
-        raise SubstrateError(f"{MICROVM_SANDBOX_CONFIG} pins {', '.join(sorted(pinned))}, not {', '.join(MICROVM_ASSETS)}")
-    wrong = []
-    for name, want in pinned.items():
-        digest = hashlib.sha256()
-        with (assets_dir / name).open("rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                digest.update(chunk)
-        if digest.hexdigest() != want:
-            wrong.append(f"{name} is {digest.hexdigest()}, not {want}")
-    if wrong:
-        # Assembled again from scratch next time, rather than trusted.
-        (assets_dir / ".asset-versions").unlink(missing_ok=True)
-        raise SubstrateError(f"microvm assets in {assets_dir} do not match {MICROVM_SANDBOX_CONFIG}: {'; '.join(wrong)}")
-    log(f"substrate: microvm assets match the sha256s {MICROVM_SANDBOX_CONFIG} pins")

@@ -55,7 +55,7 @@ DEFAULT_ACTOR_MEMORY_BY_WORKLOAD = {"openclaw": "2Gi"}
 ACTOR_CPU = "1"
 # The least memory a workload's actors can do their work in, by workload and
 # sandbox class. openclaw's Node.js agent is OOM-killed at 256Mi under gVisor,
-# and at 1Gi in a microvm, whose guest gets the limit less the VMM's share.
+# and at 1Gi in a microvm.
 MIN_ACTOR_MEMORY_MIB = {"openclaw": {"gvisor": 1024, "microvm": 2048}}
 # Kubernetes quantity suffixes, in bytes.
 # A Kubernetes cpu quantity as a case quotes it, such as "2" or "1500m".

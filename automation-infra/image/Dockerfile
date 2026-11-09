@@ -38,14 +38,33 @@ COPY benchmarking/scenario_runner/infra /tf/runner
 COPY benchmarking/scenarios/infra/clusters /tf/clusters
 RUN for dir in /tf/runner /tf/clusters/*/; do terraform -chdir="$dir" init -backend=false -input=false; done
 
-# The microvm assets the substrate submodule pins, for the nodes' amd64, as
-# substrate.py assembles them. assemble.sh only needs a git repo to start in.
+# The microvm assets of the versions the substrate submodule's ate-setup pins,
+# laid out and stamped as it assembles them, for both architectures it stages
+# on GKE, so it finds them complete and downloads nothing. It checks their
+# sha256s against its SandboxConfig before it uploads them.
 FROM base AS microvm
-COPY dependency-repos/substrate/hack/microvm-assets/assemble.sh /usr/local/bin/assemble-microvm-assets
-RUN git init -q /microvm && cd /microvm && ARCH=amd64 OUT=/microvm/out assemble-microvm-assets
+COPY dependency-repos/substrate/cmd/ate-setup/internal/steps/microvm.go /tmp/microvm.go
+RUN set -e; \
+  kata=$(sed -n 's/^\tdefaultKataVersion *= "\(.*\)"$/\1/p' /tmp/microvm.go); \
+  ch=$(sed -n 's/^\tdefaultCloudHypervisorVersion *= "\(.*\)"$/\1/p' /tmp/microvm.go); \
+  test -n "$kata" && test -n "$ch"; \
+  for arch in amd64 arm64; do \
+    out=/microvm/$arch kroot=/tmp/kata-$arch/opt/kata; \
+    mkdir -p "$out" "/tmp/kata-$arch"; \
+    curl -fsSL "https://github.com/kata-containers/kata-containers/releases/download/$kata/kata-static-$kata-$arch.tar.zst" \
+      | tar --zstd -x -C "/tmp/kata-$arch" --wildcards '*opt/kata/share/kata-containers/*' '*opt/kata/libexec/virtiofsd'; \
+    cp -L "$kroot/share/kata-containers/vmlinux.container" "$out/vmlinux"; \
+    cp -L "$kroot/share/kata-containers/kata-containers.img" "$out/rootfs.img"; \
+    cp -L "$kroot/libexec/virtiofsd" "$out/virtiofsd"; \
+    chname=cloud-hypervisor-static; [ "$arch" = arm64 ] && chname=cloud-hypervisor-static-aarch64; \
+    curl -fsSL -o "$out/cloud-hypervisor" "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/$ch/$chname"; \
+    chmod 644 "$out/vmlinux" "$out/rootfs.img"; chmod 755 "$out/virtiofsd" "$out/cloud-hypervisor"; \
+    printf 'arch=%s\nkata=%s\ncloud-hypervisor=%s\n' "$arch" "$kata" "$ch" > "$out/.asset-versions"; \
+    rm -rf "/tmp/kata-$arch"; \
+  done
 
-# Go's caches for what each execution compiles: ate-setup, which
-# hack/install-ate.sh runs with go run, and env's CLI. Without VCS stamps, as
+# Go's caches for what each execution compiles: ate-setup, which the runner
+# runs with go run, and env's CLI. Without VCS stamps, as
 # the submodules' git dirs come with the repo's later; the packages compile the
 # same.
 FROM base AS gocache
@@ -62,7 +81,7 @@ RUN benchmarking/tools/python -c ''
 COPY --from=providers /opt/terraform-plugin-cache /opt/terraform-plugin-cache
 COPY --from=gocache /opt/go /opt/go
 COPY dependency-repos dependency-repos
-COPY --from=microvm /microvm/out dependency-repos/substrate/bin/microvm-assets/amd64
+COPY --from=microvm /microvm dependency-repos/substrate/bin/microvm-assets
 COPY --exclude=dependency-repos . .
 
 # The workflow's builds fail on a tree git sees changed, as the scenario-runner

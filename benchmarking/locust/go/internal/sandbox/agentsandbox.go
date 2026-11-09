@@ -16,6 +16,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -27,9 +28,11 @@ import (
 	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.opentelemetry.io/otel/attribute"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
@@ -146,7 +149,14 @@ func (s *agentSandbox) Wake(ctx context.Context) error {
 		},
 	}
 
-	_, err := s.p.Client.Resource(sandboxClaimsGVR).Namespace(s.p.Config.Atespace).Create(callCtx, claim, metav1.CreateOptions{})
+	err := retryAPI(callCtx, func(attempt int) error {
+		_, err := s.claims().Create(callCtx, claim, metav1.CreateOptions{})
+		// An earlier attempt the connection dropped on may have landed.
+		if attempt > 1 && apierrors.IsAlreadyExists(err) {
+			return nil
+		}
+		return err
+	})
 	if err != nil {
 		s.p.Rec.Window(ctx, span, ResumeMetric, time.Since(start), err)
 		return fmt.Errorf("failed to create sandbox claim %s: %w", claimName, err)
@@ -167,11 +177,15 @@ func (s *agentSandbox) Wake(ctx context.Context) error {
 	return nil
 }
 
+func (s *agentSandbox) claims() dynamic.ResourceInterface {
+	return s.p.Client.Resource(sandboxClaimsGVR).Namespace(s.p.Config.Atespace)
+}
+
 func (s *agentSandbox) waitForClaimReady(ctx context.Context, claimName string) (string, string, error) {
 	// First do a fast poll: pre-warmed pools often resolve in single-digit ms
 	pollInterval := 25 * time.Millisecond
 	for i := 0; i < 4; i++ {
-		obj, err := s.p.Client.Resource(sandboxClaimsGVR).Namespace(s.p.Config.Atespace).Get(ctx, claimName, metav1.GetOptions{})
+		obj, err := s.claims().Get(ctx, claimName, metav1.GetOptions{})
 		if err == nil {
 			if sbName, podIP, ready := parseClaimStatus(obj); ready {
 				return sbName, podIP, nil
@@ -184,25 +198,56 @@ func (s *agentSandbox) waitForClaimReady(ctx context.Context, claimName string) 
 		}
 	}
 
-	// Fallback to Watch
-	watcher, err := s.p.Client.Resource(sandboxClaimsGVR).Namespace(s.p.Config.Atespace).Watch(ctx, metav1.ListOptions{
-		FieldSelector: "metadata.name=" + claimName,
+	// Fallback to Watch, opened again whenever it ends early.
+	delay := measure.RetryInitialDelay
+	for {
+		sbName, podIP, err := s.watchClaim(ctx, claimName)
+		if err == nil {
+			return sbName, podIP, nil
+		}
+		if ctx.Err() == nil && !errors.Is(err, errWatchEnded) && !transientAPIError(err) {
+			return "", "", fmt.Errorf("failed to watch claim %s: %w", claimName, err)
+		}
+		select {
+		case <-ctx.Done():
+			return "", "", fmt.Errorf("timeout waiting for claim %s to become ready (last: %v): %w", claimName, err, ctx.Err())
+		case <-time.After(delay):
+		}
+		delay = min(2*delay, measure.RetryMaxDelay)
+	}
+}
+
+var errWatchEnded = errors.New("watch ended")
+
+// watchClaim reads the claim, then watches it from that version until it is
+// ready, so that no change between the two is missed.
+func (s *agentSandbox) watchClaim(ctx context.Context, claimName string) (string, string, error) {
+	obj, err := s.claims().Get(ctx, claimName, metav1.GetOptions{})
+	if err != nil {
+		return "", "", err
+	}
+	if sbName, podIP, ready := parseClaimStatus(obj); ready {
+		return sbName, podIP, nil
+	}
+	watcher, err := s.claims().Watch(ctx, metav1.ListOptions{
+		FieldSelector:   "metadata.name=" + claimName,
+		ResourceVersion: obj.GetResourceVersion(),
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("failed to watch claim %s: %w", claimName, err)
+		return "", "", err
 	}
 	defer watcher.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			return "", "", fmt.Errorf("timeout waiting for claim %s to become ready: %w", claimName, ctx.Err())
+			return "", "", ctx.Err()
 		case event, ok := <-watcher.ResultChan():
 			if !ok {
-				return "", "", fmt.Errorf("watch channel closed for claim %s", claimName)
+				return "", "", fmt.Errorf("%w: channel closed", errWatchEnded)
 			}
 			if event.Type == watch.Error {
-				return "", "", fmt.Errorf("watch error on claim %s: %v", claimName, event.Object)
+				return "", "", fmt.Errorf("%w: %v", errWatchEnded, event.Object)
 			}
 			obj, ok := event.Object.(*unstructured.Unstructured)
 			if ok {
@@ -211,6 +256,32 @@ func (s *agentSandbox) waitForClaimReady(ctx context.Context, claimName string) 
 				}
 			}
 		}
+	}
+}
+
+// transientAPIError is an error the API server gives while it cannot be
+// reached for a while, as when GKE resizes the control plane.
+func transientAPIError(err error) bool {
+	return utilnet.IsConnectionRefused(err) || utilnet.IsConnectionReset(err) || utilnet.IsProbableEOF(err) ||
+		utilnet.IsHTTP2ConnectionLost(err) || apierrors.IsServiceUnavailable(err) || apierrors.IsServerTimeout(err) ||
+		apierrors.IsTimeout(err) || apierrors.IsTooManyRequests(err)
+}
+
+// retryAPI calls do again, backing off, while it fails with a transient API
+// error, until ctx ends. attempt counts from 1.
+func retryAPI(ctx context.Context, do func(attempt int) error) error {
+	delay := measure.RetryInitialDelay
+	for attempt := 1; ; attempt++ {
+		err := do(attempt)
+		if err == nil || !transientAPIError(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(delay):
+		}
+		delay = min(2*delay, measure.RetryMaxDelay)
 	}
 }
 
@@ -275,7 +346,13 @@ func (s *agentSandbox) Remove(ctx context.Context) error {
 	callCtx, cancel := s.p.Rec.Context(ctx)
 	defer cancel()
 
-	err := s.p.Client.Resource(sandboxClaimsGVR).Namespace(s.p.Config.Atespace).Delete(callCtx, s.claimName, metav1.DeleteOptions{})
+	err := retryAPI(callCtx, func(attempt int) error {
+		err := s.claims().Delete(callCtx, s.claimName, metav1.DeleteOptions{})
+		if attempt > 1 && apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	})
 	s.claimName = ""
 	return err
 }
