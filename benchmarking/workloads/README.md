@@ -257,16 +257,7 @@ change to `workloads/__init__.py`:
 ```
 
 Then run the small case on a dev infra. The run deploys the template and fails
-if the actors don't answer. Before the first run:
-
-- Check the region's C2 quota, as in
-  [Cost and quota](../README.md#cost-and-quota). Other runs in the project use
-  it too, and a pool short of it fails the apply with `created in the error
-  state "ERROR"`. Short of C2, set `sandboxed-machine-type` and
-  `default-machine-type` in the case's `infra.cluster` to `n2-standard-8`,
-  which is enough for 10 VUs.
-- A new dev infra has an empty image repository, so its first run builds every
-  image, substrate's included, and takes longer than the ones after it.
+if the actors don't answer:
 
 ```bash
 ./benchmarking/tools/run --dev-infra myapp-dev --scenario myapp-single
@@ -274,18 +265,6 @@ if the actors don't answer. Before the first run:
 
 The reports land in `reports/<run-id>/myapp-single/`, and the run's
 `README.md` there says whether it passed.
-
-If the cluster's apply fails, run the same command again: a dev infra that has
-not been applied in full is applied again by its next run, and
-`tools/dev-infra list` shows it as incomplete. If you changed the case's
-`infra.cluster` in between, add `--dev-infra-update`, or the dev infra is
-applied as it was first recorded.
-
-A dev infra keeps costing money until it is destroyed:
-
-```bash
-./benchmarking/tools/dev-infra destroy myapp-dev
-```
 
 ### 9. Optional: agent-sandbox
 
