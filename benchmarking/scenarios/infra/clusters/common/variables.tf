@@ -176,7 +176,7 @@ variable "gke_sandbox" {
 }
 
 # Every node pool's ate.dev/substrate-version label, which has to be the
-# version hack/install-ate.sh stamps on the atelet DaemonSet: a worker pod
+# version ate-setup stamps on the atelet DaemonSet: a worker pod
 # schedules only onto a node whose label matches the dataplane's. The
 # scenario-runner passes the submodule's, worked out as the installer does; by
 # hand, that is the output of
@@ -329,7 +329,7 @@ variable "enable_atelet_bucket_iam" {
 }
 
 variable "enable_atelet_iam" {
-  description = "Grants atelet project-level storage and Artifact Registry roles, reaching every bucket and repository in the project. Off by default and rarely wanted: the grants in main.tf on this deployment's bucket, and the repository owner's on var.image_repository, cover atelet, and the nodes have their own service account rather than the project's default one. Turn this on only for a deployment that genuinely has to read or write outside what this config created. See cmd/iam.go and tools/setup-gcp/README.md for the authoritative list."
+  description = "Grants atelet project-level storage and Artifact Registry roles, reaching every bucket and repository in the project. Off by default and rarely wanted: the grants in main.tf on this deployment's bucket, and the repository owner's on var.image_repository, cover atelet, and the nodes have their own service account rather than the project's default one. Turn this on only for a deployment that genuinely has to read or write outside what this config created. See substrate-gke's tools/setup-gcp/README.md for the authoritative list."
   type        = bool
   default     = false
 }

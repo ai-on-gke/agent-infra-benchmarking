@@ -154,7 +154,7 @@ def deployments(cluster: Cluster, namespace: str) -> dict:
 
 
 # Substrate's control plane: ateapi, atelet, atenet, the controller and the
-# dataplane, which hack/install-ate.sh deploys into it.
+# dataplane, which ate-setup deploys into it.
 CONTROL_PLANE_NAMESPACE = "ate-system"
 
 

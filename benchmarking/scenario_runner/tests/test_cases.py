@@ -131,7 +131,7 @@ class ShippedCases(unittest.TestCase):
         # So it compares, and runs on glutton-single's dev infra.
         cases = copy.deepcopy(SHIPPED.cases)
         mine, pair = cases["glutton-shared-workers"], cases["glutton-single"]
-        self.assertEqual(mine["locust"].pop("workers"), {"count": 2, "limits": {"memory": "1536Mi"}})
+        self.assertEqual(mine["locust"].pop("workers"), {"count": 2, "limits": {"memory": "1600Mi"}})
         pair["locust"].pop("workers")
         self.assertEqual(mine, pair)
 
@@ -201,9 +201,15 @@ class CaseChecks(unittest.TestCase):
         self.assertEqual(check("c", glutton({"workers": workers}))["locust"]["workers"], workers)
 
     def test_worker_limits_must_fit_an_actor(self):
+        # substrate keeps 64Mi of each worker's limit, and a microvm actor books
+        # 128Mi plus 8Mi per GiB of its own on top of it.
         with self.assertRaisesRegex(ValueError, "leaves no room for one actor of 512Mi"):
-            check("c", glutton({"actor-memory": "512Mi", "workers": {"limits": {"memory": "256Mi"}}}))
-        check("c", glutton({"actor-memory": "512Mi", "workers": {"limits": {"memory": "512Mi"}}}))
+            check("c", glutton({"actor-memory": "512Mi", "workers": {"limits": {"memory": "512Mi"}}}))
+        check("c", glutton({"actor-memory": "512Mi", "workers": {"limits": {"memory": "576Mi"}}}))
+        microvm = {**on("microvm"), "actor-memory": "512Mi"}
+        with self.assertRaisesRegex(ValueError, "books 644Mi on microvm"):
+            check("c", glutton({**microvm, "workers": {"limits": {"memory": "707Mi"}}}))
+        check("c", glutton({**microvm, "workers": {"limits": {"memory": "708Mi"}}}))
 
     def test_substrate_suspends_asynchronously_unless_the_case_says(self):
         self.assertEqual(check("c", GLUTTON)["locust"]["worker"]["suspend-mode"], "async")

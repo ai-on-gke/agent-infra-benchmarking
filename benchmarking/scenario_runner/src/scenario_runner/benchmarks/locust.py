@@ -83,6 +83,9 @@ KEYS = {
 # What `workers` may state: the pool's replicas and each one's limits.
 WORKERS_KEYS = {"count", "limits"}
 WORKER_LIMITS = ("cpu", "memory")
+# Of a worker's memory limit, what substrate keeps out of the room its actors
+# share.
+WORKER_RESERVED_MIB = 64
 # The images.json files of the images a run pulls.
 IMAGE_FILES = [images.LOCUST_IMAGES, images.WORKLOADS_IMAGES]
 
@@ -168,7 +171,7 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
         raise ValueError(
             f"case {name}'s `{TYPE}.actor-memory` {memory} is less than {workload} needs on {on}, {need}Mi"
         )
-    workers = check_workers(name, options.get("workers"), memory, control_plane(case))
+    workers = check_workers(name, options.get("workers"), memory, control_plane(case), on)
     if control_plane(case) == SUBSTRATE:
         worker = {"suspend-mode": SUSPEND_MODES[0], **worker}
         if worker["suspend-mode"] not in SUSPEND_MODES:
@@ -201,7 +204,7 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     }
 
 
-def check_workers(name: str, workers: object, actor_memory: str, provider: str) -> dict:
+def check_workers(name: str, workers: object, actor_memory: str, provider: str, on: str | None = None) -> dict:
     """The case's `workers` with its count filled in, 1 by default. Its
     `limits` are substrate's alone, as agent-sandbox has no workers of its
     own to bound."""
@@ -226,9 +229,20 @@ def check_workers(name: str, workers: object, actor_memory: str, provider: str) 
         if not isinstance(memory, str) or workloads.memory_mib(memory) is None:
             raise ValueError(f"{where}.limits.memory` must be a Kubernetes memory quantity such as 1Gi, got {memory!r}")
         # The scheduler would find no worker with room for any actor.
-        if workloads.memory_mib(memory) < workloads.memory_mib(actor_memory):
-            raise ValueError(f"{where}.limits.memory` {memory} leaves no room for one actor of {actor_memory}")
+        room, booked = workloads.memory_mib(memory) - WORKER_RESERVED_MIB, booked_mib(actor_memory, on)
+        if room < booked:
+            raise ValueError(
+                f"{where}.limits.memory` {memory} leaves no room for one actor of {actor_memory}, which books"
+                f" {booked:g}Mi on {on}; substrate keeps {WORKER_RESERVED_MIB}Mi of each worker's limit"
+            )
     return {"count": count, "limits": limits}
+
+
+def booked_mib(actor_memory: str, on: str | None) -> float:
+    """What placing an actor of actor_memory books of its worker's memory: its
+    limit, and on microvm the VMM's 128Mi plus 8Mi per GiB of it."""
+    mib = workloads.memory_mib(actor_memory)
+    return mib + 128 + 8 * mib / 1024 if on == "microvm" else mib
 
 
 def cluster_config(name: str, case: dict) -> CommonCluster:

@@ -16,6 +16,9 @@ package sandbox
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"syscall"
 	"testing"
 	"time"
 
@@ -23,11 +26,14 @@ import (
 	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.opentelemetry.io/otel"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestParseClaimStatus(t *testing.T) {
@@ -155,12 +161,19 @@ func TestAgentSandboxSpreadsActorsOverWarmPools(t *testing.T) {
 // controller, its gauges labelled workload.
 func wokenAgentSandbox(t *testing.T, workload string) *agentSandbox {
 	t.Helper()
+	p, fakeDyn := fakeAgentSandbox(workload)
+	return wake(t, p, fakeDyn, nil)
+}
+
+// fakeAgentSandbox is an AgentSandbox on a fake API server, its gauges
+// labelled workload.
+func fakeAgentSandbox(workload string) (*AgentSandbox, *dynamicfake.FakeDynamicClient) {
 	scheme := runtime.NewScheme()
 	fakeDyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
 		sandboxClaimsGVR: "SandboxClaimList",
 	})
 
-	p := &AgentSandbox{
+	return &AgentSandbox{
 		Config: &userclass.Config{Atespace: "benchmark-workloads"},
 		Client: fakeDyn,
 		Rec: measure.Recorder{
@@ -171,8 +184,13 @@ func wokenAgentSandbox(t *testing.T, workload string) *agentSandbox {
 		},
 		Workload:  workload,
 		WarmPools: []string{"glutton-warm-pool-0"},
-	}
+	}, fakeDyn
+}
 
+// wake creates a sandbox on p and wakes it, the fake controller making its
+// claim ready once it exists and, if ready is not nil, ready is closed.
+func wake(t *testing.T, p *AgentSandbox, fakeDyn *dynamicfake.FakeDynamicClient, ready <-chan struct{}) *agentSandbox {
+	t.Helper()
 	ctx := context.Background()
 	sb, err := p.Create(ctx)
 	if err != nil {
@@ -180,8 +198,10 @@ func wokenAgentSandbox(t *testing.T, workload string) *agentSandbox {
 	}
 	s := sb.(*agentSandbox)
 
-	// In background, simulate controller updating claim to ready when created
 	go func() {
+		if ready != nil {
+			<-ready
+		}
 		for i := 0; i < 50; i++ {
 			time.Sleep(20 * time.Millisecond)
 			claims, err := fakeDyn.Resource(sandboxClaimsGVR).Namespace("benchmark-workloads").List(ctx, metav1.ListOptions{})
@@ -215,6 +235,126 @@ func wokenAgentSandbox(t *testing.T, workload string) *agentSandbox {
 		t.Fatalf("expected s.isActive=true")
 	}
 	return s
+}
+
+// shortRetries makes the API retries back off in milliseconds.
+func shortRetries(t *testing.T) {
+	initial, maxDelay := measure.RetryInitialDelay, measure.RetryMaxDelay
+	measure.RetryInitialDelay, measure.RetryMaxDelay = time.Millisecond, 4*time.Millisecond
+	t.Cleanup(func() { measure.RetryInitialDelay, measure.RetryMaxDelay = initial, maxDelay })
+}
+
+var errRefused = fmt.Errorf("dial tcp 34.118.224.1:443: connect: %w", syscall.ECONNREFUSED)
+
+func TestAgentSandboxWakeRetriesRefusedCreate(t *testing.T) {
+	shortRetries(t)
+	p, fakeDyn := fakeAgentSandbox("retry-create")
+	refused := 0
+	fakeDyn.PrependReactor("create", "sandboxclaims", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if refused < 2 {
+			refused++
+			return true, nil, errRefused
+		}
+		return false, nil, nil
+	})
+
+	wake(t, p, fakeDyn, nil)
+	if refused != 2 {
+		t.Errorf("refused creates: got %d, want 2", refused)
+	}
+}
+
+// A create whose connection drops after the server took it is not made twice.
+func TestAgentSandboxWakeTakesCreateThatLanded(t *testing.T) {
+	shortRetries(t)
+	p, fakeDyn := fakeAgentSandbox("landed-create")
+	creates := 0
+	fakeDyn.PrependReactor("create", "sandboxclaims", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		creates++
+		if creates == 1 {
+			obj := action.(k8stesting.CreateAction).GetObject()
+			if err := fakeDyn.Tracker().Create(sandboxClaimsGVR, obj, action.GetNamespace()); err != nil {
+				return true, nil, err
+			}
+			return true, nil, errors.New("http2: server sent GOAWAY and closed the connection; LastStreamID=7")
+		}
+		return false, nil, nil
+	})
+
+	wake(t, p, fakeDyn, nil)
+	if creates != 2 {
+		t.Errorf("creates: got %d, want 2", creates)
+	}
+}
+
+func TestAgentSandboxWakeReopensClosedWatch(t *testing.T) {
+	shortRetries(t)
+	p, fakeDyn := fakeAgentSandbox("reopen-watch")
+	watches := 0
+	reopened := make(chan struct{})
+	fakeDyn.PrependWatchReactor("sandboxclaims", func(action k8stesting.Action) (bool, watch.Interface, error) {
+		watches++
+		if watches == 1 {
+			closed := watch.NewFake()
+			closed.Stop()
+			return true, closed, nil
+		}
+		w, err := fakeDyn.Tracker().Watch(sandboxClaimsGVR, action.GetNamespace())
+		if watches == 2 {
+			close(reopened)
+		}
+		return true, w, err
+	})
+
+	wake(t, p, fakeDyn, reopened)
+	if watches != 2 {
+		t.Errorf("watches: got %d, want 2", watches)
+	}
+}
+
+func TestAgentSandboxRemoveRetriesRefusedDelete(t *testing.T) {
+	shortRetries(t)
+	s := wokenAgentSandbox(t, "retry-delete")
+	fake := s.p.Client.(*dynamicfake.FakeDynamicClient)
+	refused := false
+	fake.PrependReactor("delete", "sandboxclaims", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if !refused {
+			refused = true
+			return true, nil, errRefused
+		}
+		return false, nil, nil
+	})
+
+	if err := s.Remove(context.Background()); err != nil {
+		t.Fatalf("Remove failed: %v", err)
+	}
+	claims, err := s.claims().List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(claims.Items) != 0 {
+		t.Errorf("claims left: %d", len(claims.Items))
+	}
+}
+
+func TestTransientAPIError(t *testing.T) {
+	gr := sandboxClaimsGVR.GroupResource()
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{errRefused, true},
+		{errors.New("http2: server sent GOAWAY and closed the connection; LastStreamID=7"), true},
+		{apierrors.NewServiceUnavailable("resizing"), true},
+		{apierrors.NewTooManyRequests("busy", 1), true},
+		{apierrors.NewNotFound(gr, "claim"), false},
+		{apierrors.NewAlreadyExists(gr, "claim"), false},
+		{apierrors.NewForbidden(gr, "claim", errors.New("denied")), false},
+	} {
+		if got := transientAPIError(tc.err); got != tc.want {
+			t.Errorf("transientAPIError(%v): got %v, want %v", tc.err, got, tc.want)
+		}
+	}
 }
 
 // The router finds a claimed sandbox by these headers alone.

@@ -301,7 +301,7 @@ cases:
       workers:
         count: 2
         limits:
-          memory: 1536Mi
+          memory: 1600Mi
       master:
         run-time: 5m
         users: 10
@@ -319,8 +319,8 @@ cases:
   # that suspends keeps 80 actors active at once, whatever the workload's turn
   # takes, and only the actors they are shared among grows; while the VUs ramp
   # up to 80, every one of them is in a cycle all along. Each worker has room
-  # for one actor, its actor-memory, so the actors share the 100 workers
-  # rather than pile onto them.
+  # for one actor, its actor-memory and the 64Mi substrate keeps for the worker,
+  # so the actors share the 100 workers rather than pile onto them.
   #
   # The variants differ in their VUs alone, and in the spawn rate that grows
   # with them, so each ramps up in 100s. Every variant of either workload then
@@ -342,7 +342,7 @@ cases:
       workers:
         count: 100
         limits:
-          memory: "{actor-memory}"
+          memory: "{worker-memory}"
       master:
         run-time: 5m20s
         spawn-rate: 1
@@ -377,11 +377,13 @@ cases:
       # glutton-substrate-gvisor.
       - workload: glutton
         actor-memory: 256Mi
+        worker-memory: 320Mi
         skipped-resume-suspend: 750ms
       # No skipped-resume-suspend until a run has measured them: its turn makes
       # up most of its cycle.
       - workload: openclaw
         actor-memory: 2Gi
+        worker-memory: 2112Mi
         configuration: openclaw
         workload-timeout: 120s
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local

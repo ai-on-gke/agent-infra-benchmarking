@@ -28,7 +28,7 @@ resource "google_project_service" "this" {
 
 locals {
   # Substrate's dataplane schedules only onto nodes carrying this label, and
-  # hack/install-ate.sh stamps it on the nodes that exist when it runs. Setting
+  # ate-setup stamps it on the nodes that exist when it runs. Setting
   # it on the pools instead covers the nodes GKE adds afterwards — autoscaling,
   # auto-repair, an upgrade — which are born with their pool's labels and would
   # otherwise host no workers.
@@ -67,7 +67,7 @@ module "cluster" {
   block_upgrades      = true
 
   # Without these, substrate's podcertificate-controller never creates the
-  # ClusterTrustBundles and hack/install-ate.sh waits for them forever.
+  # ClusterTrustBundles and ate-setup waits for them forever.
   k8s_beta_apis = [
     "certificates.k8s.io/v1beta1/clustertrustbundles",
     "certificates.k8s.io/v1beta1/podcertificaterequests",
@@ -75,11 +75,11 @@ module "cluster" {
 
   # Substrate's install, the benchmark Job and the actors all export to the
   # managed collector; without it every one of them logs a failed export.
-  # Substrate's own tools/setup-gcp enables it too.
+  # substrate-gke's tools/setup-gcp enables it too.
   managed_otel_scope = "COLLECTION_AND_INSTRUMENTATION_COMPONENTS"
 
   # Every pool leaves auto_upgrade off: an upgrade drains the workers, which
-  # crashes the actors still awake on them; see substrate's
+  # crashes the actors still awake on them; see substrate-gke's
   # tools/setup-gcp/README.md.
   node_pools = merge({
     default = {
@@ -254,8 +254,8 @@ resource "google_storage_bucket_iam_member" "atelet_bucket_viewer" {
   member = local.atelet_wi_principal
 }
 
-# Substrate's install-microvm-deps.sh uploads the microvm assets to
-# <bucket>-assets, which atelet reads them from.
+# Substrate's ate-setup uploads the microvm assets to <bucket>-assets, which
+# atelet reads them from.
 resource "google_storage_bucket" "assets" {
   project  = var.project_id
   name     = "${local.bucket_name}-assets"
