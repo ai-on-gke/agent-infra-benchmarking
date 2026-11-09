@@ -7,67 +7,96 @@ ActorTemplates (`manifests/`).
 
 ## Adding a workload
 
-You add a workload in four places: the actor image, its ActorTemplate, the
-scenario runner's tables, and a Go type in the boomer worker. Below, `myapp`
-stands for the new workload's name. Use the same name everywhere, because the
-scenario runner finds each file by it. Paths are relative to this directory.
+Below, `myapp` is the new workload's name. It has to be the same in three
+places: the Go workload's `Name()`, the template's file name
+(`myapp-template.yaml.tmpl`) and the template's `metadata.name`. The image's
+key in `images.json` can be different. Paths are relative to this directory.
 
-### Building the actor image
+Steps 1–7 add the workload on substrate. Step 8 checks it works. Agent-sandbox
+needs one more step, after that.
 
-Put a `Dockerfile` and anything it copies in `images/myapp/`. Then add an
-entry to [`images.json`](images.json); its key is the image name the later
-steps refer to. The application has to:
+### 1. Write the actor image
 
-- Serve on port 80. That is the only inbound port the worker forwards into
-  the sandbox.
-- Answer a readiness route, such as `/readyz`, which the template's
-  `wakeupProbe` polls.
-- Give an answer that proves it ran the instruction. Echoing a nonce sent in
-  the request is the best proof: glutton's `/ping` does that, and openclaw's
-  reply carries the nonce back.
+Create `images/myapp/` with a `Dockerfile` and anything it copies. The
+application in it has to:
 
-### Writing the ActorTemplate
+- serve HTTP on port 80, the only port forwarded into the sandbox;
+- answer a readiness route, such as `GET /readyz`;
+- send back something that proves it ran the instruction, best an echo of a
+  nonce from the request.
 
-Add `manifests/myapp-template.yaml.tmpl`. Copy
-[`openclaw-template.yaml.tmpl`](manifests/openclaw-template.yaml.tmpl) and
-keep its `metadata.atespace`, its `workerSelector` and its `resources` block.
-The scenario runner fills these placeholders:
+### 2. Register the image
 
-| Placeholder | Value |
+Add an entry to [`images.json`](images.json):
+
+```json
+"myapp-workload": {
+  "description": "The actor the myapp workload drives.",
+  "dockerfile": "benchmarking/workloads/images/myapp/Dockerfile",
+  "context": "benchmarking/workloads/images/myapp"
+}
+```
+
+The key, here `myapp-workload`, is what steps 4 and 9 refer to.
+
+### 3. Write the ActorTemplate
+
+Copy [`manifests/openclaw-template.yaml.tmpl`](manifests/openclaw-template.yaml.tmpl)
+to `manifests/myapp-template.yaml.tmpl`, then change:
+
+- `metadata.name` to `myapp`;
+- the container's `name`, `command` and `env` to your application's;
+- `wakeupProbe.httpGet.path` to your readiness route.
+
+Keep `metadata.atespace`, `workerSelector`, `resources` and
+`snapshotConfig`. Use only these placeholders; any other `${...}` fails the
+deploy:
+
+| Placeholder | Filled with |
 |---|---|
-| `${IMAGE_WITH_DIGEST}` | the image built above, pinned (needs the `TEMPLATE_IMAGES` entry below) |
+| `${IMAGE_WITH_DIGEST}` | the image from step 2, pinned |
 | `${ACTOR_MEMORY_BYTES}`, `${ACTOR_CPU_MILLICORES}` | the case's `actor-memory`, and 1 CPU |
 | `${OTLP_ENDPOINT}` | the control plane's OTLP collector |
 | `${PROJECT_ID}` | the cluster's project |
 
-Any other `${...}` in the template makes the deploy fail, so a new
-placeholder needs its own code in `render_template` in
-[`workloads/__init__.py`](../scenario_runner/src/scenario_runner/workloads/__init__.py),
-the way `OPENCLAW_TIMEOUT_SECS` has. Actors may call only the hosts named in
-URLs in the container's `env`; the worker allows those hosts, and substrate
-refuses connections to any other host.
+### 4. Register the template with the scenario runner
 
-### Registering it with the scenario runner
+In [`scenario_runner/src/scenario_runner/workloads/__init__.py`](../scenario_runner/src/scenario_runner/workloads/__init__.py),
+add the template and its image key to `TEMPLATE_IMAGES`:
 
-In [`workloads/__init__.py`](../scenario_runner/src/scenario_runner/workloads/__init__.py):
+```python
+TEMPLATE_IMAGES = {"openclaw": "openclaw-workload", "myapp": "myapp-workload"}
+```
 
-- Add `"myapp": "<images.json key>"` to `TEMPLATE_IMAGES`.
-- If the actors need more than 256Mi, add the workload to
-  `DEFAULT_ACTOR_MEMORY_BY_WORKLOAD` and `MIN_ACTOR_MEMORY_MIB`.
-- If the actors call mock-llm, add the workload to `MOCK_LLM_TEMPLATES`. Its
-  cases then need `configuration: openclaw`, the cluster with mock-llm's
-  pool.
+In the same file, only if it applies:
 
-### Driving it from the boomer worker
+- the actors need more than 256Mi: add `myapp` to
+  `DEFAULT_ACTOR_MEMORY_BY_WORKLOAD` and `MIN_ACTOR_MEMORY_MIB`;
+- the actors call mock-llm: add `myapp` to `MOCK_LLM_TEMPLATES`, and give
+  its cases `configuration: openclaw` in step 7.
 
-Add `myapp.go` to [`locust/go/internal/workload/`](../locust/go/internal/workload/).
-In it, write a type that implements `Workload` (in `workload.go`), and
-register it in `init`:
+### 5. Add the Go workload
+
+Create [`locust/go/internal/workload/`](../locust/go/internal/workload/)`myapp.go`.
+Replace `/run` and the check in `Verify` with your application's route and
+reply:
 
 ```go
+package workload
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/google/uuid"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
+)
+
 const (
 	myappWorkloadName = "myapp"
-	myappTemplate     = "myapp" // the name in myapp-template.yaml.tmpl
+	myappTemplate     = "myapp"
 )
 
 func init() {
@@ -95,47 +124,69 @@ func (myappWorkload) SendInstruction(ctx context.Context, actor sandbox.Actor) (
 }
 ```
 
-Send the request with `sendHTTPInstruction`. It addresses the actor through
-the router, propagates the trace, and sorts failures into retryable (5xx,
-429, 421) and fatal. `SendInstruction` must not return a nil error until the
-actor has actually run the instruction, because a nil error ends the
-measurement. To let cases use `glutton-write-ram` and `glutton-write-disk`,
-also implement `Loader`; without it, the worker skips that step. The master
-needs no change: it runs `runworkload` for every workload.
+`SendInstruction` must not return a nil error before the actor has run the
+instruction: a nil error ends the measurement. `sendHTTPInstruction`
+already retries a 5xx, 429 or 421. To support `glutton-write-ram` and
+`glutton-write-disk`, also implement `Loader` from `workload.go`.
 
-Add `myapp_test.go` next to the new file. Its fake server is built the way
-`openclaw_test.go` builds one, and it checks the request, the verification,
-a 503 being retried, and `Resolve("myapp")`. Then, in `benchmarking/locust/go`,
-run:
+### 6. Add a Go test
+
+Create `locust/go/internal/workload/myapp_test.go`, following
+[`openclaw_test.go`](../locust/go/internal/workload/openclaw_test.go): a fake
+server for your routes, and tests that the right request is sent, a wrong
+reply fails, a 503 is retried, and `Resolve("myapp")` returns your workload.
+
+### 7. Add a case
+
+In [`scenarios/scenarios.yaml`](../scenarios/scenarios.yaml), add an entry to
+the `workload` parameters of the `"{workload}-{control-plane}-{sandbox-class}"`
+case:
+
+```yaml
+      - workload: myapp
+        # Only if the actors call another host; without it they can't reach it.
+        actor-egress-allow: myhost.example.svc.cluster.local
+```
+
+This creates the cases `myapp-substrate-gvisor` and
+`myapp-substrate-microvm`. To write a case of your own instead, set
+`workload-name: myapp` in its `locust.worker`; see
+[Adding a case](../README.md#adding-a-case).
+
+### 8. Check it
+
+From `benchmarking/locust/go`, run the Go tests:
 
 ```bash
 go test ./...
 ```
 
-### Running it on agent-sandbox too
-
-For agent-sandbox cases, also add
-`../agent-sandbox/manifests/myapp-template.yaml.tmpl`, a SandboxTemplate that
-takes `${NAME}`, `${NAMESPACE}`, `${IMAGE}` and `${RUNTIME_CLASS}`.
-[`glutton-template.yaml.tmpl`](../agent-sandbox/manifests/glutton-template.yaml.tmpl)
-there is the one to copy. Then add `"myapp": "<images.json key>"` to
-`WORKLOAD_IMAGES` in
-[`agent_sandbox.py`](../scenario_runner/src/scenario_runner/control_planes/agent_sandbox.py).
-
-### Adding a case that runs it
-
-Add `- workload: myapp` to the `workload` parameters of the
-`"{workload}-{control-plane}-{sandbox-class}"` case in
-[`scenarios.yaml`](../scenarios/scenarios.yaml). That case sets
-`actor-egress-allow` itself, so if your actors call a host, give the
-parameter entry that host, as openclaw's entry does. For agent-sandbox, add
-the workload to the `"{workload}-agent-sandbox-gvisor"` case as well. You can
-also write a case of your own whose `locust.worker` sets
-`workload-name: myapp`; [Adding a case](../README.md#adding-a-case) covers
-the rest.
-
-Then, from the repo root, run it on a dev infra:
+Then, from the repo root, run the case on a dev infra. The run deploys the
+template and fails if the actors don't answer:
 
 ```bash
 ./benchmarking/tools/run --dev-infra myapp-dev --scenario myapp-substrate-gvisor
+```
+
+### 9. Optional: agent-sandbox
+
+Copy [`../agent-sandbox/manifests/glutton-template.yaml.tmpl`](../agent-sandbox/manifests/glutton-template.yaml.tmpl)
+to `../agent-sandbox/manifests/myapp-template.yaml.tmpl` and change its
+container as in step 3. It takes `${NAME}`, `${NAMESPACE}`, `${IMAGE}` and
+`${RUNTIME_CLASS}`.
+
+Add the image key to `WORKLOAD_IMAGES` in
+[`agent_sandbox.py`](../scenario_runner/src/scenario_runner/control_planes/agent_sandbox.py):
+
+```python
+WORKLOAD_IMAGES = {"glutton": "glutton", "openclaw": "openclaw-workload", "myapp": "myapp-workload"}
+```
+
+Then add an entry to the parameters of the `"{workload}-agent-sandbox-gvisor"`
+case, with `actor-egress-allow` as in step 7 if needed, and run
+`myapp-agent-sandbox-gvisor` as in step 8:
+
+```yaml
+      - workload: myapp
+        vus: 30
 ```
