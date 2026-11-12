@@ -20,6 +20,7 @@ containers:
     httpGet:
       path: /readyz
       port: 80
+    timeoutSeconds: 120
 resources:
   limits:
     cpuMillicores: "${ACTOR_CPU_MILLICORES}"
