@@ -4,7 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # The nonce the benchmark worker puts in its prompt, "(request <uuid>)", which
 # the final answer repeats so the worker can tell this turn's answer from any
-# other (locust/go/internal/runworkload/openclaw.go).
+# other (locust/go/internal/workload/openclaw.go and hermes.go).
 REQUEST_NONCE = re.compile(r"\(request ([0-9a-f-]{36})\)")
 
 
@@ -20,6 +20,18 @@ def request_nonce(messages):
         if match:
             return match[1]
     return None
+
+
+def shell_tool(tools):
+    """The shell tool the agent offers: hermes' terminal, else openclaw's exec."""
+    names = {(t.get("function") or {}).get("name") for t in tools or [] if isinstance(t, dict)}
+    return "terminal" if "terminal" in names else "exec"
+
+
+def shell_call(tool, command, title):
+    """A call of that tool running command; terminal takes no title."""
+    args = {"command": command} if tool == "terminal" else {"command": command, "title": title}
+    return {"name": tool, "arguments": json.dumps(args)}
 
 
 class MockLLMHandler(BaseHTTPRequestHandler):
@@ -56,9 +68,11 @@ class MockLLMHandler(BaseHTTPRequestHandler):
                 messages = req_data.get("messages", [])
                 assistant_message_count = sum(1 for m in messages if m.get("role") == "assistant")
                 nonce = request_nonce(messages)
+                tool = shell_tool(req_data.get("tools"))
             except Exception:
                 assistant_message_count = 0
                 nonce = None
+                tool = "exec"
 
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
@@ -69,10 +83,7 @@ class MockLLMHandler(BaseHTTPRequestHandler):
                 tool_call = {
                     "id": "call_create_app",
                     "type": "function",
-                    "function": {
-                        "name": "exec",
-                        "arguments": json.dumps({"command": cmd, "title": "Create target application file"})
-                    }
+                    "function": shell_call(tool, cmd, "Create target application file"),
                 }
                 self._send_tool_call_sse(tool_call, "turn1")
             elif assistant_message_count == 1:
@@ -80,40 +91,28 @@ class MockLLMHandler(BaseHTTPRequestHandler):
                 tool_call = {
                     "id": "call_create_test",
                     "type": "function",
-                    "function": {
-                        "name": "exec",
-                        "arguments": json.dumps({"command": cmd, "title": "Write reproduction test"})
-                    }
+                    "function": shell_call(tool, cmd, "Write reproduction test"),
                 }
                 self._send_tool_call_sse(tool_call, "turn2")
             elif assistant_message_count == 2:
                 tool_call = {
                     "id": "call_run_test_fail",
                     "type": "function",
-                    "function": {
-                        "name": "exec",
-                        "arguments": json.dumps({"command": "python3 /tmp/test_app.py", "title": "Run reproduction script"})
-                    }
+                    "function": shell_call(tool, "python3 /tmp/test_app.py", "Run reproduction script"),
                 }
                 self._send_tool_call_sse(tool_call, "turn3")
             elif assistant_message_count == 3:
                 tool_call = {
                     "id": "call_patch_app",
                     "type": "function",
-                    "function": {
-                        "name": "exec",
-                        "arguments": json.dumps({"command": "sed -i 's/text.replace/text.lower().replace/g' /tmp/app.py", "title": "Patch app.py to fix casing"})
-                    }
+                    "function": shell_call(tool, "sed -i 's/text.replace/text.lower().replace/g' /tmp/app.py", "Patch app.py to fix casing"),
                 }
                 self._send_tool_call_sse(tool_call, "turn4")
             elif assistant_message_count == 4:
                 tool_call = {
                     "id": "call_run_test_pass",
                     "type": "function",
-                    "function": {
-                        "name": "exec",
-                        "arguments": json.dumps({"command": "python3 /tmp/test_app.py", "title": "Verify fix with reproduction script"})
-                    }
+                    "function": shell_call(tool, "python3 /tmp/test_app.py", "Verify fix with reproduction script"),
                 }
                 self._send_tool_call_sse(tool_call, "turn5")
             else:

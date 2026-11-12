@@ -14,8 +14,8 @@
 
 """Deploys the benchmark ActorTemplates of
 workloads/manifests/<name>-template.yaml.tmpl onto the worker pool, with what
-they call (openclaw's mock-llm), and waits for their golden snapshots; or
-deletes them."""
+they call (mock-llm, for openclaw and hermes), and waits for their golden
+snapshots; or deletes them."""
 
 from __future__ import annotations
 
@@ -41,15 +41,15 @@ MANIFESTS_DIR = RUNNER_DIR.parent / "workloads" / "manifests"
 NAMESPACE = worker_pool.NAMESPACE
 ATESPACE = "benchmark-workloads"
 # The templates whose image is neither ko:// nor a literal, but one of ours.
-TEMPLATE_IMAGES = {"openclaw": "openclaw-workload"}
+TEMPLATE_IMAGES = {"openclaw": "openclaw-workload", "hermes": "hermes-workload"}
 # The templates whose actors call mock-llm rather than a real LLM, which needs
 # a node pool of its own (cluster_configs.MOCK_LLM_POOL).
-MOCK_LLM_TEMPLATES = {"openclaw"}
+MOCK_LLM_TEMPLATES = {"openclaw", "hermes"}
 # The smallest microvm admits, so actors don't get kata's 2 GiB and its page
 # cache in every snapshot.
 DEFAULT_ACTOR_MEMORY = "256Mi"
 # A case's `actor-memory` unless it states one, by workload.
-DEFAULT_ACTOR_MEMORY_BY_WORKLOAD = {"openclaw": "2Gi"}
+DEFAULT_ACTOR_MEMORY_BY_WORKLOAD = {"openclaw": "2Gi", "hermes": "1Gi"}
 # Every actor's cpu limit, which substrate requires; one vCPU is what a microvm
 # guest got before it did.
 ACTOR_CPU = "1"

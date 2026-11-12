@@ -4,6 +4,11 @@
     "dockerfile": "benchmarking/workloads/images/openclaw/Dockerfile",
     "context": "benchmarking/workloads/images/openclaw"
   },
+  "hermes-workload": {
+    "description": "The actor the hermes workload drives: the official Hermes Agent image with a shim on port 80.",
+    "dockerfile": "benchmarking/workloads/images/hermes/Dockerfile",
+    "context": "benchmarking/workloads/images/hermes"
+  },
   "mock-llm": {
     "description": "The mock LLM deployed beside the workloads.",
     "dockerfile": "benchmarking/workloads/images/mock-llm/Dockerfile",

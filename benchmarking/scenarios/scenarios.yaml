@@ -312,6 +312,35 @@ cases:
         workload-name: glutton
         workload-template: glutton
 
+  # hermes at 10 VUs on 10 workers on one node, for a quick check of the
+  # workload; on the cluster with mock-llm, whose URL in the template lets the
+  # actors reach it.
+  hermes-single:
+    repeats:
+      warmups: 0
+    locust:
+      install:
+        substrate:
+          sandbox-class: gvisor
+      infra:
+        cluster:
+          sandboxed-nodes: 1
+          configuration: openclaw
+      workers:
+        count: 10
+      master:
+        run-time: 5m
+        users: 10
+        spawn-rate: 10
+        warm-up: 10s
+      worker:
+        resume-mode: explicit
+        workload-name: hermes
+        workload-template: hermes
+        # The actors end a turn 20s sooner. With the default 30s, a turn or a
+        # suspend of 10 actors on one node can run past it.
+        workload-timeout: 120s
+
   # 100 workers on 10 nodes, suspended between instructions, at 100, 250 and
   # 500 VUs, the variants named for their actors per node, against a baseline
   # of 100 that never suspend. The density user class paces each actor to be

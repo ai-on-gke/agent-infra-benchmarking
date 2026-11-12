@@ -238,7 +238,7 @@ RESULT_ROWS = ("Resume", "ExecutionTime", "TTFI", "Suspend", "CycleTime")
 RECOVER_ROW = "Recover"
 # Workloads whose instruction takes long enough to dominate TTFI and CycleTime,
 # so that only Resume and Suspend say much about the sandbox itself.
-SLOW_INSTRUCTION_WORKLOADS = ("openclaw",)
+SLOW_INSTRUCTION_WORKLOADS = ("openclaw", "hermes")
 
 
 def _results(info: dict, stats: list[dict], stats_file: str | None) -> str:

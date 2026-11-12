@@ -1,0 +1,33 @@
+metadata:
+  atespace: benchmark-workloads
+  name: hermes
+workerSelector:
+  matchLabels:
+    workload: benchmark-ateom
+containers:
+- name: hermes
+  image: ${IMAGE_WITH_DIGEST}
+  command: ["python3", "-u", "/app/hermes_actor.py"]
+  env:
+  - name: MOCK_LLM_BASE_URL
+    value: "http://mock-llm.benchmark-workloads.svc.cluster.local/v1"
+  # The case's workload-timeout less 20s, as openclaw's (workloads/openclaw.py).
+  - name: HERMES_TIMEOUT_SECS
+    value: "${OPENCLAW_TIMEOUT_SECS}"
+  # The image's bootstrap chowns its home and drops to its hermes user, which
+  # substrate's default set (AUDIT_WRITE, KILL, NET_BIND_SERVICE) can't do.
+  securityContext:
+    capabilities:
+      add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"]
+  wakeupProbe:
+    httpGet:
+      path: /readyz
+      port: 80
+    # The gateway takes about 10s to start outside a sandbox.
+    timeoutSeconds: 120
+resources:
+  limits:
+    cpuMillicores: "${ACTOR_CPU_MILLICORES}"
+    memoryBytes: "${ACTOR_MEMORY_BYTES}"
+snapshotConfig:
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY

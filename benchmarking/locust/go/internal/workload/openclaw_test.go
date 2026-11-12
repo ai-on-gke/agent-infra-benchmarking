@@ -85,7 +85,7 @@ func (s *openclawServer) serve(w http.ResponseWriter, r *http.Request) {
 	// Only the benchmark prompt is modeled, answered as mock-llm answers it:
 	// any other body would be a bug in the workload, and the empty reply
 	// below fails the verification that follows.
-	nonce, ok := strings.CutPrefix(strings.TrimSpace(string(body)), openclawPrompt+" (request ")
+	nonce, ok := strings.CutPrefix(strings.TrimSpace(string(body)), mockLLMPrompt+" (request ")
 	if !ok || !strings.HasSuffix(nonce, ")") {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -94,7 +94,7 @@ func (s *openclawServer) serve(w http.ResponseWriter, r *http.Request) {
 
 	reply := s.Reply
 	if reply == "" {
-		reply = "...tool output...\n" + openclawReplyFor(nonce)
+		reply = "...tool output...\n" + mockLLMReplyFor(nonce)
 	}
 	w.Header().Set("Content-Type", textContentType)
 	_, _ = io.WriteString(w, reply)
@@ -135,15 +135,15 @@ func TestOpenclawSendsTheBenchmarkPrompt(t *testing.T) {
 	if reqs[0].path != openclawInvokePath {
 		t.Errorf("path: got %q, want %q", reqs[0].path, openclawInvokePath)
 	}
-	if !strings.HasPrefix(reqs[0].body, openclawPrompt+" (request ") {
-		t.Errorf("body: got %q, want the prompt %q with a nonce", reqs[0].body, openclawPrompt)
+	if !strings.HasPrefix(reqs[0].body, mockLLMPrompt+" (request ") {
+		t.Errorf("body: got %q, want the prompt %q with a nonce", reqs[0].body, mockLLMPrompt)
 	}
 }
 
 // Each instruction carries a nonce of its own, so a reply that is not this
 // turn's, such as one openclaw printed from an earlier turn, fails it.
 func TestOpenclawRejectsAnotherTurnsReply(t *testing.T) {
-	srv := &openclawServer{Reply: openclawReplyFor("00000000-0000-4000-8000-000000000000")}
+	srv := &openclawServer{Reply: mockLLMReplyFor("00000000-0000-4000-8000-000000000000")}
 	actor := newOpenclawActor(t, srv)
 
 	if _, err := (openclawWorkload{}).SendInstruction(context.Background(), actor); err == nil {

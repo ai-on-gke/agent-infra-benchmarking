@@ -36,14 +36,6 @@ const (
 	openclawTemplate = "openclaw"
 
 	openclawInvokePath = "/invoke"
-
-	// The instruction we send to OpenClaw to trigger the mock agent loop,
-	// with a nonce after it.
-	openclawPrompt = "do something please"
-
-	// What the mock agent replies when it has successfully finished the loop,
-	// followed by the nonce it found in the prompt.
-	openclawExpectedReply = "I have successfully executed the bash commands!"
 )
 
 func init() {
@@ -75,12 +67,12 @@ func (openclawWorkload) DefaultTemplate() string { return openclawTemplate }
 // openclaw printed from an earlier turn, or without reaching the LLM, fails.
 func (openclawWorkload) SendInstruction(ctx context.Context, actor sandbox.Actor) (bool, error) {
 	nonce := uuid.NewString()
-	want := openclawReplyFor(nonce)
+	want := mockLLMReplyFor(nonce)
 	return sendHTTPInstruction(ctx, actor, httpInstruction{
 		Method:      http.MethodPost,
 		Path:        openclawInvokePath,
 		ContentType: textContentType,
-		Body:        []byte(openclawPromptFor(nonce)),
+		Body:        []byte(mockLLMPromptFor(nonce)),
 		Verify: func(respBody []byte) error {
 			if !strings.Contains(string(respBody), want) {
 				return fmt.Errorf("unexpected /invoke reply: got %q, want it to contain %q", string(respBody), want)
@@ -89,10 +81,3 @@ func (openclawWorkload) SendInstruction(ctx context.Context, actor sandbox.Actor
 		},
 	})
 }
-
-// openclawPromptFor and openclawReplyFor carry the nonce in the form mock-llm
-// reads it from the prompt and writes it into its answer
-// (workloads/images/mock-llm/mock_llm.py).
-func openclawPromptFor(nonce string) string { return openclawPrompt + " (request " + nonce + ")" }
-
-func openclawReplyFor(nonce string) string { return openclawExpectedReply + " (request " + nonce + ")" }
