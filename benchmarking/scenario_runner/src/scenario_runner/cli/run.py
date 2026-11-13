@@ -135,11 +135,7 @@ def parse_args() -> argparse.Namespace:
         required="PROJECT_ID" not in os.environ,
         help="GCP project to create the infra in. Default: $PROJECT_ID, which benchmarking/.env.sh can set",
     )
-    p.add_argument(
-        "--region",
-        default=os.environ.get("REGION", "us-central1"),
-        help="default: %(default)s, which benchmarking/.env.sh can set",
-    )
+    p.add_argument("--region", default="us-central1", help="default: %(default)s")
     p.add_argument(
         "--state-backend",
         choices=STATE_BACKENDS,
