@@ -197,7 +197,7 @@ def deploy_workload_and_pool(
     cluster.apply_namespace(WORKLOADS_NAMESPACE)
     if workload_name in workloads.MOCK_LLM_TEMPLATES:
         openclaw.deploy_mock_llm(cluster, image_repo, timeout)
-    values = {"OPENCLAW_TIMEOUT_SECS": openclaw.exec_timeout_secs(workload_timeout)} if workload_name == "openclaw" else {}
+    values = {"EXEC_TIMEOUT_SECS": openclaw.exec_timeout_secs(workload_timeout)} if workload_name == "openclaw" else {}
     template = render(
         f"{workload_name}-template.yaml.tmpl",
         NAME=workload_name,

@@ -15,7 +15,7 @@ containers:
     value: "http://mock-llm.benchmark-workloads.svc.cluster.local/v1"
   # The case's workload-timeout less 20s (workloads/openclaw.py).
   - name: OPENCLAW_TIMEOUT_SECS
-    value: "${OPENCLAW_TIMEOUT_SECS}"
+    value: "${EXEC_TIMEOUT_SECS}"
   wakeupProbe:
     httpGet:
       path: /readyz

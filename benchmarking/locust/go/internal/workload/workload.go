@@ -73,6 +73,14 @@ type Loader interface {
 	WriteDisk(ctx context.Context, actor sandbox.Actor, size int) error
 }
 
+// PerActor is a workload that keeps state about each actor across its
+// cycles, such as where the actor is in a session of several turns. Each user
+// drives its actor with the Workload ForActor returns, one instruction at a
+// time.
+type PerActor interface {
+	ForActor() Workload
+}
+
 // Default is the workload Resolve selects when no name is given.
 const Default = GluttonName
 

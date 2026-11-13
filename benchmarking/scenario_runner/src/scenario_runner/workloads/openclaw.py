@@ -56,7 +56,7 @@ def deploy_mock_llm(cluster: Cluster, image_repo: str, timeout: int) -> None:
 
 
 def exec_timeout_secs(workload_timeout: str | None) -> int:
-    """The templates' OPENCLAW_TIMEOUT_SECS for a case's workload-timeout,
+    """The templates' EXEC_TIMEOUT_SECS for a case's workload-timeout,
     such as 120s or 4m."""
     if not workload_timeout or workload_timeout == "0":
         return DEFAULT_EXEC_TIMEOUT_SECS
@@ -66,7 +66,7 @@ def exec_timeout_secs(workload_timeout: str | None) -> int:
     secs = sum(float(number) * DURATION_UNIT_SECS[unit] for number, unit in parts)
     if secs <= EXEC_TIMEOUT_MARGIN_SECS:
         raise ValueError(
-            f"workload-timeout {workload_timeout} leaves openclaw no time for a turn; it needs more than"
+            f"workload-timeout {workload_timeout} leaves the actors no time for a turn; it needs more than"
             f" {EXEC_TIMEOUT_MARGIN_SECS}s"
         )
     return int(secs - EXEC_TIMEOUT_MARGIN_SECS)
