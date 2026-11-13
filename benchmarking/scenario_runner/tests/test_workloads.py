@@ -87,9 +87,18 @@ class OpenclawTimeout(unittest.TestCase):
         self.assertEqual(env["OPENCLAW_TIMEOUT_SECS"], "220")
         manifest = agent_sandbox.render(
             "openclaw-template.yaml.tmpl", NAME="openclaw", NAMESPACE="n", IMAGE="i", RUNTIME_CLASS="gvisor",
-            OPENCLAW_TIMEOUT_SECS=openclaw.exec_timeout_secs("240s"),
+            EXEC_TIMEOUT_SECS=openclaw.exec_timeout_secs("240s"),
         )  # fmt: skip
         self.assertIn('value: "220"', manifest)
+
+    def test_claude_code_takes_it_and_calls_mock_llm(self):
+        cluster = mock.Mock(project_id="p")
+        with mock.patch.object(workloads, "pinned_image", return_value="i"):
+            rendered = yaml.safe_load(workloads.render_template(cluster, "claude-code", "1Gi", "o", "r", "240s"))
+        env = {e["name"]: e["value"] for e in rendered["containers"][0]["env"]}
+        self.assertEqual(env["CLAUDE_CODE_TIMEOUT_SECS"], "220")
+        self.assertEqual(workloads.egress_hosts(rendered), (["mock-llm.benchmark-workloads.svc.cluster.local"], []))
+        self.assertIn("claude-code", workloads.MOCK_LLM_TEMPLATES)
 
 
 class WorkerPool(unittest.TestCase):

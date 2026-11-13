@@ -480,6 +480,34 @@ cases:
         workload-template: glutton
         concurrent-instructions: 4
 
+  # A Claude Code session on a git repo, one turn per wake, suspended through
+  # a think time of 20-40s between turns. Each turn fixes one failing test
+  # and commits it, continuing the session and repo of the turn before.
+  claude-code-single:
+    repeats:
+      warmups: 0
+    locust:
+      install:
+        substrate:
+          sandbox-class: gvisor
+      infra:
+        cluster:
+          sandboxed-nodes: 1
+          configuration: openclaw
+      workers:
+        count: 10
+      master:
+        run-time: 10m
+        users: 10
+        spawn-rate: 10
+        warm-up: 10s
+      worker:
+        resume-mode: explicit
+        workload-name: claude-code
+        workload-timeout: 240s
+        min-wait: 20s
+        max-wait: 40s
+
   # glutton at scale: 100 VUs on 100 workers over 25 sandboxed nodes, the
   # load spread over four boomer pods. Its 26 c2-standard-16 nodes take 416 of
   # a region's default 500 C2 vCPUs, so it runs by hand rather than nightly.

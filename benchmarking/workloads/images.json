@@ -4,6 +4,11 @@
     "dockerfile": "benchmarking/workloads/images/openclaw/Dockerfile",
     "context": "benchmarking/workloads/images/openclaw"
   },
+  "claude-code-workload": {
+    "description": "The actor the claude-code workload drives: Claude Code from npm, a wrapper script and the textkit repo it works on.",
+    "dockerfile": "benchmarking/workloads/images/claude-code/Dockerfile",
+    "context": "benchmarking/workloads/images/claude-code"
+  },
   "mock-llm": {
     "description": "The mock LLM deployed beside the workloads.",
     "dockerfile": "benchmarking/workloads/images/mock-llm/Dockerfile",

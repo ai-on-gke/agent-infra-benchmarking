@@ -121,6 +121,11 @@ func NewScenario(c Config, userClass string) harness.Scenario {
 			slog.String("workload", c.Workload.Name()))
 		os.Exit(1)
 	}
+	if _, ok := c.Workload.(workload.PerActor); ok && c.ConcurrentInstructions > 1 {
+		slog.Error("fatal: --concurrent-instructions needs a workload that keeps no state per actor",
+			slog.String("workload", c.Workload.Name()))
+		os.Exit(1)
+	}
 	provider, err := c.NewProvider(recorder(c, userClass), c.SuspendDisabled, c.WaitForWorker)
 	if err != nil {
 		slog.Error("fatal: cannot initialize k8s client for agent-sandbox", slog.String("err", err.Error()))
@@ -151,10 +156,14 @@ func (s *runWorkloadScenario) Start(ctx context.Context) (harness.Session, error
 	if err != nil {
 		return nil, err
 	}
+	w := s.c.Workload
+	if p, ok := w.(workload.PerActor); ok {
+		w = p.ForActor()
+	}
 	return &runWorkloadUser{
 		rec:          recorder(s.c, s.userClass),
 		sandbox:      sb,
-		workload:     s.c.Workload,
+		workload:     w,
 		templateName: s.c.ActorTemplate(),
 		resumeMode:   s.c.ResumeMode,
 		steps:        max(s.c.InstructionsPerCycle, 1),
