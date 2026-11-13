@@ -24,6 +24,6 @@ ENV OPENCLAW_NO_AUTO_UPDATE=1 \
     OPENCLAW_TELEMETRY=0 \
     DO_NOT_TRACK=1
 
-COPY openclaw_actor.py /app/openclaw_actor.py
+COPY openclaw_actor.py gateway.py /app/
 
 CMD ["python3", "-u", "/app/openclaw_actor.py"]
