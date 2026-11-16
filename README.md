@@ -62,6 +62,7 @@ The main ones:
 |---|---|---|---|
 | `glutton-substrate-gvisor`, `glutton-substrate-microvm`, `openclaw-substrate-gvisor`, `openclaw-substrate-microvm`, `openclaw-agent-sandbox-gvisor` | 300 users on 300 workers, 4 min after a 1 min warm-up | 30 | The headline comparison; run every 6 hours |
 | `glutton-agent-sandbox-gvisor` | 30 users on 30 workers, the most its pod-per-cycle keeps up with | 30 | Same, on agent-sandbox; run every 6 hours |
+| `glutton-substrate-gvisor-1node`, `glutton-substrate-microvm-1node` | 90 users on 90 workers, 4 min after a 1 min warm-up | 1 bare-metal | glutton on bare metal, recorded as `<case>-metal`; run every 6 hours |
 | `glutton-density`, `openclaw-density` | 100 workers kept at 80 active actors, with 100, 250 or 500 actors sharing them, against a never-suspend baseline | 10 | How many idle actors a node holds, and what sharing costs |
 | `glutton-single`, `glutton-implicit`, `glutton-load`, `glutton-session`, `glutton-concurrent`, `glutton-shared-workers` | 10 users on one node, 5 min | 1 | One feature each: router wake, RAM and disk in the snapshot, five instructions per wake, four at once, workers shared by actors |
 | `glutton-large` | 100 users over four load-generator pods, three repeats | 25 | Scale; run by hand, as it takes most of a region's C2 quota |

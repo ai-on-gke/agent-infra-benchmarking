@@ -164,6 +164,8 @@ suites:
   - openclaw-substrate-microvm
   - glutton-agent-sandbox-gvisor
   - openclaw-agent-sandbox-gvisor
+  - glutton-substrate-gvisor-1node
+  - glutton-substrate-microvm-1node
   - dummy
   # substrate-bench-staging's: dummy, which creates no cluster, and
   # glutton-single, one glutton run.
@@ -261,6 +263,37 @@ cases:
         configuration: openclaw
         workload-timeout: 240s
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
+
+  # glutton on substrate on one bare-metal node, which the region's C3 quota
+  # holds one of, recorded as <case>-metal: 90 VUs on 90 workers, as a GKE
+  # node takes 110 pods, its DaemonSets' among them.
+  "glutton-substrate-{sandbox-class}-1node":
+    bare-metal: true
+    repeats:
+      count: 1
+    locust:
+      install:
+        substrate:
+          sandbox-class: "{sandbox-class}"
+      infra:
+        cluster:
+          sandboxed-nodes: 1
+          sandboxed-disk-size-gb: 1000
+      workers:
+        count: 90
+      master:
+        run-time: "4m"
+        users: 90
+        spawn-rate: 10
+        warm-up: 1m
+      worker:
+        resume-mode: explicit
+        workload-name: glutton
+        workload-template: glutton
+    parameters:
+      class:
+      - sandbox-class: gvisor
+      - sandbox-class: microvm
 
   # glutton at 10 VUs on 10 workers on one node, once with no warm-up, for a
   # quicker check of the path.
