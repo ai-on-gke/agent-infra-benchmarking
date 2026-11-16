@@ -75,6 +75,15 @@ class Variables(unittest.TestCase):
         placement = {"zone": "us-central1-c", "machine-type": "c3-highcpu-192-metal"}
         self.assertTrue(CommonCluster().placed(placement).sandboxed_kvm)
 
+    def test_the_cluster_goes_in_the_executions_zone_unless_the_case_gives_one(self):
+        in_zone = Execution(NAMED, zone="us-east4-b")
+        self.assertEqual(CommonCluster().variables(in_zone)["zone"], "us-east4-b")
+        self.assertEqual(CommonCluster(zone="us-east4-c").variables(in_zone)["zone"], "us-east4-c")
+        placement = {"zone": "us-east4-a", "machine-type": "c3-highcpu-192-metal"}
+        self.assertEqual(CommonCluster().placed(placement).variables(in_zone)["zone"], "us-east4-a")
+        # The config's own default.
+        self.assertNotIn("zone", CommonCluster().variables(Execution(NAMED)))
+
     def test_common_has_default_tfvars_defaults(self):
         variables = CommonCluster().variables(Execution(NAMED))
         self.assertEqual(variables["sandboxed_machine_type"], "c2-standard-16")

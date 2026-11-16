@@ -36,6 +36,24 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def default_zone(project_id: str, region: str) -> str:
+    """The first zone of the region that is up, which a case's cluster goes in
+    unless it or --zone says another. Raises ValueError if there is none, or
+    the zones cannot be read."""
+    cmd = ["gcloud", "compute", "zones", "list", f"--project={project_id}", "--format=json(name,region,status)"]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode:
+        raise ValueError(f"cannot list the zones of {region} to pick one; pass --zone: {proc.stderr.strip()}")
+    zones = sorted(
+        zone["name"]
+        for zone in json.loads(proc.stdout or "[]")
+        if zone.get("region", "").rsplit("/", 1)[-1] == region and zone.get("status") == "UP"
+    )
+    if not zones:
+        raise ValueError(f"project {project_id} has no zone up in region {region}")
+    return zones[0]
+
+
 def gke_stockout(project_id: str, location: str, cluster: str, since: str) -> bool:
     """Whether a create of the cluster or of one of its node pools that GKE
     started at since (RFC 3339) or later failed on a stockout. GKE says so only

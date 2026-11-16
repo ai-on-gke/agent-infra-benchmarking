@@ -141,3 +141,18 @@ class Refs(unittest.TestCase):
         for bad in ("us-central1-docker.pkg.dev/my-project", "gcr.io/my-project/my-repo", "x-docker.pkg.dev/p/r/extra"):
             with self.assertRaises(ValueError):
                 images.repository_name(bad)
+
+
+class Logins(unittest.TestCase):
+    def test_the_hosts_logged_in_to_are_logged_in_again(self):
+        from scenario_runner.images import builder
+
+        with mock.patch.object(builder, "LOGGED_IN", set()), \
+             mock.patch.object(builder, "access_token", return_value="token"), \
+             mock.patch.object(builder, "stream") as stream:  # fmt: skip
+            builder.renew_logins()
+            stream.assert_not_called()
+            builder.docker_login("us-east4-docker.pkg.dev")
+            builder.renew_logins()
+        logins = [call.args[0][-1] for call in stream.call_args_list]
+        self.assertEqual(logins, ["https://us-east4-docker.pkg.dev"] * 2)

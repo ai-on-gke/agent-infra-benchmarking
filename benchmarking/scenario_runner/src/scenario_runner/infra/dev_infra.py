@@ -84,7 +84,8 @@ def create_deployment(record: dict, infra: str, json_output: bool = False) -> De
     config = from_record(record["cluster"])
     if record.get("placement"):
         config = config.placed(record["placement"])
-    return config.deployment(uncreated, execution(variables, repository, version))
+    # A record from before zones were recorded leaves its config's default.
+    return config.deployment(uncreated, execution(variables, repository, version, record.get("zone")))
 
 
 def runner_outputs(name: str) -> dict:
