@@ -102,6 +102,10 @@ def access_token(host: str) -> str:
     return token.stdout.strip()
 
 
+# The hosts this process logged docker in to, whose stored token expires.
+LOGGED_IN: set[str] = set()
+
+
 def docker_login(host: str) -> None:
     """Rather than relying on gcloud auth configure-docker having been run for
     the host, which docker looks credentials up by."""
@@ -109,6 +113,15 @@ def docker_login(host: str) -> None:
         ["docker", "login", "--username=oauth2accesstoken", "--password-stdin", f"https://{host}"],
         input=access_token(host),
     )
+    LOGGED_IN.add(host)
+
+
+def renew_logins() -> None:
+    """Logs in again to the hosts docker was logged in to, whose tokens last
+    an hour. ate-setup reads docker's credentials before gcloud's, so an
+    expired one fails it in a run's later cases."""
+    for host in sorted(LOGGED_IN):
+        docker_login(host)
 
 
 def docker_build_and_push(
@@ -147,6 +160,8 @@ def build_substrate(repo: str, login: bool, cache_args: Sequence[str] = ()) -> N
         ko = [str(substrate.SUBSTRATE_DIR / "hack" / "run-tool.sh"), "ko", "login", host]
         token = access_token(host)
         stream([*ko, "--username=oauth2accesstoken", "--password-stdin"], cwd=substrate.SUBSTRATE_DIR, input=token)
+        # ko stores it where docker does.
+        LOGGED_IN.add(host)
     stream(ko_build, env=env, cwd=substrate.SUBSTRATE_DIR)
     docker_build_and_push([substrate.ENVOY_DATAPLANE], repo, version, images.DEFAULT_PLATFORM, login, cache_args)
 
@@ -170,4 +185,5 @@ def build_env(repo: str, login: bool) -> None:
         host = repo.split("/", 1)[0]
         ko_login = ["go", "run", KO, "login", host, "--username=oauth2accesstoken", "--password-stdin"]
         stream(ko_login, cwd=ate_env.ENV_DIR, input=access_token(host))
+        LOGGED_IN.add(host)
     stream(ko_build, env=env, cwd=ate_env.ENV_DIR)

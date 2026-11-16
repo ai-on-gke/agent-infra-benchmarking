@@ -116,7 +116,8 @@
 #   sandboxed-machine-type  its machine type, c2-standard-16 by default
 #   sandboxed-disk-size-gb  its nodes' boot disk in GB, 100 by default, where
 #                           substrate writes snapshots
-#   zone                    the zone of every pool, the config's by default
+#   zone                    the zone of every pool, in the run's --region;
+#                           --zone's by default
 #   nested-virtualization   true for /dev/kvm on the sandboxed pool off bare
 #                           metal, which a microvm case's guests boot on; off by
 #                           default, and only on Intel machine families
