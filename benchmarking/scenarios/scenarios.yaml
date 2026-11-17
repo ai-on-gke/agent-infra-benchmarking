@@ -151,6 +151,24 @@ bare-metal:
     machine-type: c3-highcpu-192-metal
   - zone: us-central1-a
     machine-type: c3-highmem-192-metal
+  - zone: us-east1-b
+    machine-type: c3-standard-192-metal
+  - zone: us-east1-c
+    machine-type: c3-standard-192-metal
+  - zone: us-east1-d
+    machine-type: c3-standard-192-metal
+  - zone: us-east1-b
+    machine-type: c3-highcpu-192-metal
+  - zone: us-east1-c
+    machine-type: c3-highcpu-192-metal
+  - zone: us-east1-d
+    machine-type: c3-highcpu-192-metal
+  - zone: us-east1-b
+    machine-type: c3-highmem-192-metal
+  - zone: us-east1-c
+    machine-type: c3-highmem-192-metal
+  - zone: us-east1-d
+    machine-type: c3-highmem-192-metal
 
 # `suites` lists cases by name, as --scenario takes them, for --suite to run in
 # that order. The automation-infra deployments run one each, so a case is added
@@ -164,9 +182,12 @@ suites:
   - openclaw-substrate-microvm
   - glutton-agent-sandbox-gvisor
   - openclaw-agent-sandbox-gvisor
+  - dummy
+  # substrate-bench-metal's, in a region of its own, as a bare-metal case can
+  # wait hours for a machine.
+  bare-metal:
   - glutton-substrate-gvisor-1node
   - glutton-substrate-microvm-1node
-  - dummy
   # substrate-bench-staging's: dummy, which creates no cluster, and
   # glutton-single, one glutton run.
   staging:
