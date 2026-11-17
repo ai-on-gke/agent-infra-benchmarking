@@ -107,6 +107,10 @@ type Options struct {
 	// sandbox.EgressHosts returns them.
 	EgressAllow    []string
 	EgressAllowTLS []string
+
+	// Turns are the prompts of a recorded conversation the workload sends in
+	// place of its own, which it has to be a workload.Conversation for.
+	Turns []string
 }
 
 // Common is Options as Setup resolved them.
@@ -125,6 +129,15 @@ func Setup(o Options) Common {
 	if err != nil {
 		slog.Error("fatal: cannot select the workload", slog.String("err", err.Error()))
 		os.Exit(1)
+	}
+	if len(o.Turns) > 0 {
+		c, ok := wl.(workload.Conversation)
+		if !ok {
+			slog.Error("fatal: --workload-turns needs a workload that can send a conversation's turns",
+				slog.String("workload", wl.Name()))
+			os.Exit(1)
+		}
+		wl = c.WithTurns(o.Turns)
 	}
 	if o.EgressAllow, err = sandbox.EgressHosts(o.EgressAllow); err != nil {
 		slog.Error("fatal: invalid --actor-egress-allow", slog.String("err", err.Error()))

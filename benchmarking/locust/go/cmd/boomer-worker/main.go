@@ -97,6 +97,8 @@ func main() {
 			"agent-substrate only: comma-separated hostnames every actor may reach over cleartext HTTP or gRPC, on any port, each as the actor dials it. Unset, with --actor-egress-allow-tls unset too, gives actors no egress policy, so they can reach nothing.")
 		actorEgressAllowTLS = flag.String("actor-egress-allow-tls", "",
 			"agent-substrate only: comma-separated hostnames every actor may reach over TLS, such as an https:// endpoint, on any port, passed through undecrypted. A cleartext rule does not let TLS through.")
+		workloadTurns = flag.String("workload-turns", "",
+			"The prompts of a recorded conversation, as a JSON list, that the workload sends one a turn, from the first again after the last, in place of its own; mock-llm has to replay that recording. claude-code only.")
 		apiConnections = flag.Int("api-connections", 1,
 			"Connections to ateapi this worker spreads its users over.")
 		provider     = flag.String("provider", "agent-substrate", "Provider: agent-substrate or agent-sandbox.")
@@ -218,6 +220,13 @@ func main() {
 			slog.Duration("workload_timeout", *workloadTimeout))
 		os.Exit(1)
 	}
+	var turns []string
+	if *workloadTurns != "" {
+		if err := json.Unmarshal([]byte(*workloadTurns), &turns); err != nil || len(turns) == 0 {
+			slog.Error("fatal: --workload-turns must be a JSON list of prompts", slog.String("workload_turns", *workloadTurns))
+			os.Exit(1)
+		}
+	}
 	// runworkload and density are built here, from the flags, rather than
 	// looked up: the registry hands an Init nothing but cfg.
 	cycle := func() runworkload.Config {
@@ -236,6 +245,7 @@ func main() {
 				SuspendMode:    *suspendMode,
 				EgressAllow:    splitList(*actorEgressAllow),
 				EgressAllowTLS: splitList(*actorEgressAllowTLS),
+				Turns:          turns,
 			}),
 			SuspendDisabled:        *suspendDisabled,
 			InstructionsPerCycle:   *instructionsPerCycle,

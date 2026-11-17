@@ -101,6 +101,25 @@ class OpenclawTimeout(unittest.TestCase):
         self.assertIn("claude-code", workloads.MOCK_LLM_TEMPLATES)
 
 
+class MockLLM(unittest.TestCase):
+    def deployed_env(self, *args) -> dict:
+        """The env of the mock-llm Deployment deploy_mock_llm applies."""
+        with (
+            mock.patch.object(openclaw.images, "pin", return_value="i"),
+            mock.patch.object(openclaw, "stream") as stream,
+        ):
+            openclaw.deploy_mock_llm(mock.Mock(), "r", 60, *args)
+        deployment = next(yaml.safe_load_all(stream.call_args_list[0].kwargs["input"]))
+        return {e["name"]: e["value"] for e in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
+
+    def test_scripted_by_default(self):
+        self.assertEqual(self.deployed_env()["MOCK_LLM_MODE"], "script")
+
+    def test_replays_a_recording_baked_into_its_image(self):
+        env = self.deployed_env("fix", "recorded")
+        self.assertEqual(env, {"MOCK_LLM_MODE": "replay", "CASSETTE": "/recordings/fix/cassette.jsonl", "REPLAY_TIMING": "recorded"})
+
+
 class WorkerPool(unittest.TestCase):
     def deployed(self, *args) -> dict:
         """The WorkerPool deploy applies, its images left unresolved."""

@@ -245,9 +245,12 @@ def deploy(
     otlp: str | None = None,
     timeout: int = DEFAULT_TIMEOUT_SECS,
     workload_timeout: str | None = None,
+    recording: str | None = None,
+    replay_timing: str = "instant",
 ) -> None:
     """image_repo holds the workload images built from this tree. otlp is where an instrumented actor sends its telemetry; by
-    default the control plane's endpoint. workload_timeout is the case's, which openclaw's actors end a turn before."""
+    default the control plane's endpoint. workload_timeout is the case's, which openclaw's actors end a turn before.
+    recording is what mock-llm replays, at replay_timing (openclaw.deploy_mock_llm)."""
     if not names:
         raise ValueError("no workload template to deploy")
     check_templates(names)
@@ -261,7 +264,7 @@ def deploy(
         f" otlp_endpoint={otlp}, snapshots=gs://{cluster.bucket}/{substrate.SNAPSHOT_PREFIX}/, substrate={substrate.revision()})"
     )
     if MOCK_LLM_TEMPLATES & set(names):
-        openclaw.deploy_mock_llm(cluster, image_repo, timeout)
+        openclaw.deploy_mock_llm(cluster, image_repo, timeout, recording, replay_timing)
 
     with kubectl_ate(cluster) as ate:
         ensure_atespace(ate, ATESPACE)

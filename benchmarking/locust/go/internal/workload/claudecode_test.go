@@ -21,6 +21,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -177,5 +179,104 @@ func TestClaudeCodeIsSelectableAndPerActor(t *testing.T) {
 	}
 	if p.ForActor() == p.ForActor() {
 		t.Error("ForActor returned one Workload twice, want one per actor")
+	}
+}
+
+// conversationActor stands in for claude_code_actor.py replaying a recorded
+// conversation: it answers /invoke?turn=K as turn K, or as sessionTurn when
+// that is set.
+type conversationActor struct {
+	status      int
+	sessionTurn int
+	paths       []string
+	bodies      []string
+}
+
+func (a *conversationActor) serve(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	a.paths = append(a.paths, r.URL.RequestURI())
+	a.bodies = append(a.bodies, string(body))
+	if a.status != 0 {
+		http.Error(w, http.StatusText(a.status), a.status)
+		return
+	}
+	turn := a.sessionTurn
+	if turn == 0 {
+		turn, _ = strconv.Atoi(r.URL.Query().Get("turn"))
+	}
+	_, nonce, _ := strings.Cut(string(body), " (request ")
+	_ = json.NewEncoder(w).Encode(claudeCodeReply{
+		Result: fmt.Sprintf("Done. (turn %d) (request %s", turn, nonce),
+		Tasks:  5,
+	})
+}
+
+func newConversationActor(t *testing.T, a *conversationActor) sandbox.Actor {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(a.serve))
+	t.Cleanup(ts.Close)
+	return sandbox.Actor{HTTPClient: ts.Client(), RouterURL: ts.URL, Name: "conversationactor"}
+}
+
+func conversationWorkload(prompts ...string) Workload {
+	return (&claudeCodeWorkload{}).WithTurns(prompts).(PerActor).ForActor()
+}
+
+// The conversation's prompts go in order, each saying its turn, and from the
+// first again after the last.
+func TestClaudeCodeSendsTheConversation(t *testing.T) {
+	a := &conversationActor{}
+	actor := newConversationActor(t, a)
+	w := conversationWorkload("Look at the repo.", "Add a test.")
+	for i := range 3 {
+		if _, err := send(t, w, actor); err != nil {
+			t.Fatalf("instruction %d: %v", i+1, err)
+		}
+	}
+	wantPaths := []string{"/invoke?turn=1", "/invoke?turn=2", "/invoke?turn=1"}
+	if !slices.Equal(a.paths, wantPaths) {
+		t.Errorf("paths: got %q, want %q", a.paths, wantPaths)
+	}
+	for i, prefix := range []string{"Look at the repo. (request ", "Add a test. (request ", "Look at the repo. (request "} {
+		if !strings.HasPrefix(a.bodies[i], prefix) {
+			t.Errorf("prompt %d: got %q, want it to start with %q", i+1, a.bodies[i], prefix)
+		}
+	}
+}
+
+// A session that lost its turns since the last answers the next prompt as
+// its first.
+func TestClaudeCodeRejectsALostConversation(t *testing.T) {
+	a := &conversationActor{}
+	actor := newConversationActor(t, a)
+	w := conversationWorkload("one", "two")
+	if _, err := send(t, w, actor); err != nil {
+		t.Fatalf("turn 1: %v", err)
+	}
+	a.sessionTurn = 1
+	retry, err := send(t, w, actor)
+	if err == nil || !strings.Contains(err.Error(), "want turn 2") || retry {
+		t.Fatalf("got retry %v, err %v; want turn 1 for turn 2 to fail without a retry", retry, err)
+	}
+}
+
+// After a failed turn the conversation starts over.
+func TestClaudeCodeStartsTheConversationOverAfterAFailure(t *testing.T) {
+	a := &conversationActor{}
+	actor := newConversationActor(t, a)
+	w := conversationWorkload("one", "two", "three")
+	if _, err := send(t, w, actor); err != nil {
+		t.Fatalf("turn 1: %v", err)
+	}
+	a.status = http.StatusGatewayTimeout
+	if _, err := send(t, w, actor); err == nil {
+		t.Fatal("504: got success, want failure")
+	}
+	a.status = 0
+	if _, err := send(t, w, actor); err != nil {
+		t.Fatalf("after a failure: %v", err)
+	}
+	if got := a.paths[len(a.paths)-1]; got != "/invoke?turn=1" {
+		t.Errorf("after a failure: got %s, want turn 1", got)
 	}
 }

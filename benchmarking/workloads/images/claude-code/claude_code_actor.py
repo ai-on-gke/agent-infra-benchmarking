@@ -3,7 +3,11 @@ the textkit repo, its body the prompt, and continues the session of the turn
 before. It answers with JSON: Claude Code's `result` and `session_id`, the
 repo's `commits` since its base, and the `tasks` a session has, so the worker
 can check that both the session and the repo survived the suspend between
-turns."""
+turns.
+
+POST /invoke?turn=K is turn K of a recorded conversation instead, whose turns
+need not fix a test each: turn 1 starts over on a fresh repo and session, and
+a later one continues the session."""
 
 import json
 import os
@@ -11,6 +15,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 REPO = "/workspace/textkit"
@@ -42,11 +47,17 @@ def start_over():
     session_id, dirty = None, False
 
 
-def run_turn(prompt):
-    """Runs one turn and returns the HTTP status and reply."""
+def run_turn(prompt, turn=None):
+    """Runs one turn, turn K of a conversation if given, and returns the HTTP
+    status and reply."""
     global session_id, dirty
-    if dirty or commits() >= TASKS:
+    if turn is None:
+        if dirty or commits() >= TASKS:
+            start_over()
+    elif turn == 1:
         start_over()
+    elif dirty or not session_id:
+        return 409, f"turn {turn} has no session to continue; start the conversation over"
     before = commits()
     cmd = ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "json"]
     if session_id:
@@ -70,7 +81,7 @@ def run_turn(prompt):
         return 500, f"Claude Code exited with code {proc.returncode}.\nOutput:\n{stdout}{stderr}"
     session_id = result.get("session_id")
     after = commits()
-    dirty = after != before + 1
+    dirty = turn is None and after != before + 1
     reply = {"result": result.get("result", ""), "session_id": session_id, "commits": after, "tasks": TASKS}
     return 200, json.dumps(reply)
 
@@ -83,13 +94,18 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(404, "not found")
 
     def do_POST(self):
-        if not self.path.startswith("/invoke"):
+        url = urllib.parse.urlsplit(self.path)
+        if url.path != "/invoke":
             self.reply(404, "not found")
             return
         prompt = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8")
+        turn = urllib.parse.parse_qs(url.query).get("turn", [None])[0]
+        if turn is not None and (not turn.isdigit() or int(turn) < 1):
+            self.reply(400, f"turn {turn!r} is not a number from 1")
+            return
         start = time.monotonic()
         try:
-            status, body = run_turn(prompt)
+            status, body = run_turn(prompt, int(turn) if turn else None)
         except Exception as e:
             global dirty
             dirty = True

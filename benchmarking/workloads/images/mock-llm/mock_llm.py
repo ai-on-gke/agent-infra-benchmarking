@@ -7,17 +7,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from recording import (
     ANTHROPIC,
-    OPENAI,
+    COUNT_TOKENS,
     OPENCLAW_DONE,
+    RECORDED_PATHS,
     REQUEST_NONCE,
     Cassette,
     UpstreamError,
     answer_suffix,
+    call_messages,
     conversation,
     conversation_key,
+    ends_turn,
     error_body,
-    failed,
     forward,
+    is_error,
     is_prompt,
     mask_nonces,
     replace_in,
@@ -29,9 +32,9 @@ from recording import (
 # How the agent's calls are answered: "script" scripts the workload's turn
 # (claude_code_step for Claude Code's, do_POST's tool loop for openclaw's);
 # "record" forwards a call to the real API (recording.py) and saves the answer
-# to CASSETTE, unless CASSETTE already has one for it; "replay" answers from
-# CASSETTE only. REPLAY_TIMING=recorded replays an answer at the pace it was
-# recorded.
+# to CASSETTE, unless CASSETTE already has one for it that is not an error;
+# "replay" answers from CASSETTE only. REPLAY_TIMING=recorded replays an
+# answer at the pace it was recorded.
 MODE = os.environ.get("MOCK_LLM_MODE", "script")
 CASSETTE_PATH = os.environ.get("CASSETTE", "/cassettes/cassette.jsonl")
 REPLAY_TIMING = os.environ.get("REPLAY_TIMING", "instant")
@@ -168,14 +171,14 @@ class MockLLMHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(content_length)
 
         path = self.path.split("?", 1)[0]
-        if path == "/v1/messages/count_tokens":
+        if MODE != "script" and path in RECORDED_PATHS:
+            self._answer_from_cassette(json.loads(body.decode("utf-8")), body, RECORDED_PATHS[path], path)
+            return
+        if path == COUNT_TOKENS:
             self._send_json({"input_tokens": 100})
             return
         if path == "/v1/messages":
             self._answer_anthropic(body)
-            return
-        if path == "/v1/chat/completions" and MODE != "script":
-            self._answer_from_cassette(json.loads(body.decode("utf-8")), body, OPENAI)
             return
 
         if self.path in ["/v1/chat/completions", "/v1/responses"]:
@@ -263,55 +266,64 @@ class MockLLMHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _send_error(self, status, body):
+    def _send_error(self, status, body, content_type="application/json", headers=None):
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        for name, value in {"content-type": content_type, **(headers or {})}.items():
+            self.send_header(name, value)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
-    def _answer_from_cassette(self, req, body, api):
-        conv = conversation(req, api)
+    def _answer_from_cassette(self, req, body, api, path):
+        conv = conversation(req, api, path)
         key = conversation_key(conv)
-        nonce = request_nonce(req.get("messages", []))
-        entry = cassette.get(key)
-        if entry:
-            print(f"{MODE}: answering {key} from the cassette", flush=True)
-        elif MODE == "replay":
-            print(f"replay: no answer for {key}: {json.dumps(conv)[:2000]}", flush=True)
-            self._send_error(404, error_body(api, "not_found_error", f"mock-llm has no recorded answer for {key}"))
-            return
+        nonce = request_nonce(call_messages(req, api))
+        recorded = cassette.get(key)
+        if MODE == "replay":
+            if not recorded:
+                print(f"replay: no answer for {key}: {json.dumps(conv)[:2000]}", flush=True)
+                self._send_error(404, error_body(api, "not_found_error", f"mock-llm has no recorded answer for {key}"))
+                return
+            # Claude Code's session, where it says so; else the agent's address.
+            client = self.headers.get("X-Claude-Code-Session-Id") or self.client_address[0]
+            entry = cassette.next(key, client)
+            print(f"replay: answering {key} from the cassette", flush=True)
+        elif recorded and not is_error(recorded[-1]):
+            entry = recorded[-1]
+            print(f"record: answering {key} from the cassette", flush=True)
         else:
             try:
                 entry = forward(api, self.path, self.headers, req, body)
             except UpstreamError as e:
-                print(f"record: upstream answered {e.status} for {key}", flush=True)
-                self.send_response(e.status)
-                self.send_header("Content-Type", e.content_type)
-                self.send_header("Content-Length", str(len(e.body)))
-                self.end_headers()
-                self.wfile.write(e.body)
+                print(f"record: upstream answered {e.status} for {key}, not saved", flush=True)
+                self._send_error(e.status, e.body, e.content_type)
                 return
             entry = mask_nonces(entry, nonce, api)
             if nonce:
                 entry = replace_in(entry, nonce, "{{nonce}}")
-            if failed(entry):
-                print(f"record: not saving {key}, the upstream stream ended in an error", flush=True)
-            else:
-                entry = {"key": key, "api": api, "conversation": conv, **entry}
-                cassette.add(entry)
-                print(f"record: saved {key}", flush=True)
+            entry = {"key": key, "api": api, "conversation": conv, **entry}
+            cassette.add(entry)
+            status = entry["error"]["status"] if "error" in entry else "a failed stream" if is_error(entry) else None
+            print(f"record: saved {key}" + (f", the upstream's {status}" if status else ""), flush=True)
 
+        paced = MODE == "replay" and REPLAY_TIMING == "recorded"
+        if paced and "ms" in entry:
+            time.sleep(entry["ms"] / 1000)
         if nonce:
-            entry = with_suffix(replace_in(entry, "{{nonce}}", nonce), answer_suffix(req, api, nonce), api)
+            entry = replace_in(entry, "{{nonce}}", nonce)
+            if ends_turn(req, api, path) and not is_error(entry):
+                entry = with_suffix(entry, answer_suffix(req, api, nonce), api)
+        if "error" in entry:
+            error = entry["error"]
+            self._send_error(error["status"], error["body"].encode("utf-8"), headers=error["headers"])
+            return
         # Claude Code merges the assistant messages that share an id.
         message_id = f"msg_{uuid.uuid4().hex}"
         if "message" in entry:
             message = entry["message"]
-            self._send_json({**message, "id": message_id} if api == ANTHROPIC else message)
+            self._send_json({**message, "id": message_id} if "id" in message and api == ANTHROPIC else message)
             return
 
-        paced = MODE == "replay" and REPLAY_TIMING == "recorded"
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
@@ -326,9 +338,6 @@ class MockLLMHandler(BaseHTTPRequestHandler):
 
     def _answer_anthropic(self, body):
         req = json.loads(body.decode("utf-8"))
-        if MODE != "script" and req.get("tools"):
-            self._answer_from_cassette(req, body, ANTHROPIC)
-            return
         # Claude Code's side requests, such as a title for the session, offer
         # no tools; only the agent loop's do.
         block = claude_code_step(req) if req.get("tools") else {"type": "text", "text": "OK"}
@@ -441,7 +450,7 @@ if __name__ == "__main__":
         raise SystemExit("MOCK_LLM_MODE=record needs ANTHROPIC_API_KEY or OPENAI_API_KEY")
     if MODE != "script":
         cassette = Cassette(CASSETTE_PATH, must_exist=MODE == "replay")
-        print(f"{MODE}: {len(cassette.entries)} answers in {CASSETTE_PATH}")
+        print(f"{MODE}: {len(cassette)} answers in {CASSETTE_PATH}")
     print("Starting Mock LLM Server on 0.0.0.0:8080...")
     server = ThreadingHTTPServer(("0.0.0.0", 8080), MockLLMHandler)
     server.serve_forever()

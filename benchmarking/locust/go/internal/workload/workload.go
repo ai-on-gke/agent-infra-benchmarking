@@ -81,6 +81,13 @@ type PerActor interface {
 	ForActor() Workload
 }
 
+// Conversation is a workload that can send the prompts of a recorded
+// conversation, one a turn and from the first again after the last, in place
+// of its own.
+type Conversation interface {
+	WithTurns(prompts []string) Workload
+}
+
 // Default is the workload Resolve selects when no name is given.
 const Default = GluttonName
 

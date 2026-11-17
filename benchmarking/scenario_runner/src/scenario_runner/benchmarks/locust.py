@@ -34,6 +34,7 @@ from ..infra.cluster_configs import CommonCluster, OpenclawCluster, from_infra
 from ..log import ON_CLOUD_RUN, log
 from ..process import stream
 from ..reports import run_info
+from ..workloads import openclaw
 from ..scenarios.install import AGENT_SANDBOX, INSTALL, SUBSTRATE, control_plane, sandbox_class
 from . import jobs
 
@@ -77,11 +78,15 @@ KEYS = {
     "locust-workers",
     "actor-memory",
     "max-failure-ratio",
+    "recording",
     "master",
     "worker",
 }
 # What `workers` may state: the pool's replicas and each one's limits.
 WORKERS_KEYS = {"count", "limits"}
+RECORDING_KEYS = {"name", "timing"}
+# The workloads whose worker can send a recorded conversation's turns.
+RECORDING_WORKLOADS = {"claude-code"}
 WORKER_LIMITS = ("cpu", "memory")
 # Of a worker's memory limit, what substrate keeps out of the room its actors
 # share.
@@ -172,6 +177,9 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
             f"case {name}'s `{TYPE}.actor-memory` {memory} is less than {workload} needs on {on}, {need}Mi"
         )
     workers = check_workers(name, options.get("workers"), memory, control_plane(case), on)
+    recording = check_recording(name, options.get("recording"), workload)
+    if recording:
+        worker = {**worker, "workload-turns": openclaw.recording_turns(recording["name"])}
     if control_plane(case) == SUBSTRATE:
         worker = {"suspend-mode": SUSPEND_MODES[0], **worker}
         if worker["suspend-mode"] not in SUSPEND_MODES:
@@ -198,6 +206,7 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
             **options,
             "workers": workers,
             "actor-memory": memory,
+            **({"recording": recording} if recording else {}),
             "master": {**master, "spawn-rate": master.get("spawn-rate", master["users"])},
             "worker": worker,
         },
@@ -236,6 +245,23 @@ def check_workers(name: str, workers: object, actor_memory: str, provider: str, 
                 f" {booked:g}Mi on {on}; substrate keeps {WORKER_RESERVED_MIB}Mi of each worker's limit"
             )
     return {"count": count, "limits": limits}
+
+
+def check_recording(name: str, recording: object, workload: str | None) -> dict | None:
+    """The case's `recording` with its timing filled in: the conversation,
+    recorded with local-test's run.sh, that mock-llm replays and the worker
+    sends the turns of."""
+    if recording is None:
+        return None
+    where = f"case {name}'s `{TYPE}.recording"
+    if not isinstance(recording, dict) or recording.keys() - RECORDING_KEYS or not isinstance(recording.get("name"), str):
+        raise ValueError(f"{where}` must be a mapping of a `name` and optionally `timing`, got {recording!r}")
+    timing = recording.get("timing", openclaw.REPLAY_TIMINGS[0])
+    if timing not in openclaw.REPLAY_TIMINGS:
+        raise ValueError(f"{where}.timing` must be {' or '.join(openclaw.REPLAY_TIMINGS)}, got {timing!r}")
+    if workload not in RECORDING_WORKLOADS:
+        raise ValueError(f"{where}` is for {' or '.join(sorted(RECORDING_WORKLOADS))}, not {workload}")
+    return {"name": recording["name"], "timing": timing}
 
 
 def booked_mib(actor_memory: str, on: str | None) -> float:
@@ -457,8 +483,11 @@ roleRef:
         )
         # The golden snapshot is taken on the pool just deployed.
         if deploy_workloads:
+            recording = options.get("recording") or {}
             workloads.deploy(cluster, [template_name], sandbox_class(case), image_repo, options["actor-memory"],
-                             workload_timeout=options["worker"].get("workload-timeout"))  # fmt: skip
+                             workload_timeout=options["worker"].get("workload-timeout"),
+                             recording=recording.get("name"),
+                             replay_timing=recording.get("timing", openclaw.REPLAY_TIMINGS[0]))  # fmt: skip
         if template_name:
             template = workloads.deployed_template(cluster, template_name)
             workloads.check_deployed(template, template_name, options["actor-memory"])

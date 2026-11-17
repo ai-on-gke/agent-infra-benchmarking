@@ -29,6 +29,10 @@ from ..process import stream
 
 MOCK_LLM_MANIFEST = RUNNER_DIR.parent / "workloads" / "manifests" / "mock-llm.yaml.tmpl"
 MOCK_LLM_IMAGE = "mock-llm"
+# The recordings baked into mock-llm at /recordings, each a directory with the
+# cassette.jsonl and turns.txt of local-test's `run.sh claude-code record -i`.
+RECORDINGS_DIR = RUNNER_DIR.parent / "workloads" / "images" / "mock-llm" / "recordings"
+REPLAY_TIMINGS = ("instant", "recorded")
 # Has to match the manifest's, which the openclaw template's MOCK_LLM_BASE_URL
 # names.
 NAMESPACE = worker_pool.NAMESPACE
@@ -44,15 +48,36 @@ DURATION_PART_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)(h|ms|m|s)")
 DURATION_UNIT_SECS = {"h": 3600, "m": 60, "s": 1, "ms": 0.001}
 
 
-def deploy_mock_llm(cluster: Cluster, image_repo: str, timeout: int) -> None:
-    """Expects mock-llm to have been built from this tree into
-    image_repo."""
-    log("workloads: deploying mock-llm")
+def deploy_mock_llm(
+    cluster: Cluster, image_repo: str, timeout: int, recording: str | None = None, replay_timing: str = "instant"
+) -> None:
+    """Expects mock-llm to have been built from this tree into image_repo.
+    With a recording, of RECORDINGS_DIR, mock-llm replays it rather than
+    scripting the answers."""
+    log(f"workloads: deploying mock-llm, {f'replaying {recording} ({replay_timing})' if recording else 'scripted'}")
     image = images.pin(images.image_ref(images.WORKLOADS_IMAGES, image_repo, MOCK_LLM_IMAGE))
-    manifest = Template(MOCK_LLM_MANIFEST.read_text()).substitute(IMAGE_WITH_DIGEST=image)
+    manifest = Template(MOCK_LLM_MANIFEST.read_text()).substitute(
+        IMAGE_WITH_DIGEST=image,
+        MOCK_LLM_MODE="replay" if recording else "script",
+        CASSETTE=f"/recordings/{recording}/cassette.jsonl" if recording else "",
+        REPLAY_TIMING=replay_timing,
+    )
     stream(cluster.kubectl("apply", "-f", "-", namespace=NAMESPACE), input=manifest)
     log(f"workloads: waiting for mock-llm to be ready (timeout: {timeout}s)")
     stream(cluster.kubectl("rollout", "status", "deployment/mock-llm", f"--timeout={timeout}s", namespace=NAMESPACE))
+
+
+def recording_turns(name: str) -> list[str]:
+    """The prompts of the recording's conversation, one a turn."""
+    path = RECORDINGS_DIR / name
+    if not name or name in (".", "..") or "/" in name or not (path / "cassette.jsonl").is_file():
+        have = sorted(p.name for p in RECORDINGS_DIR.iterdir() if (p / "cassette.jsonl").is_file())
+        raise ValueError(f"no recording {name!r} in {RECORDINGS_DIR}; there are {', '.join(have) or 'none'}")
+    turns_file = path / "turns.txt"
+    turns = turns_file.read_text().splitlines() if turns_file.is_file() else []
+    if not turns or not all(turns):
+        raise ValueError(f"recording {name} has no conversation in {turns_file}; record one with run.sh claude-code record -i")
+    return turns
 
 
 def exec_timeout_secs(workload_timeout: str | None) -> int:

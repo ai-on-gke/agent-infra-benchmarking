@@ -359,6 +359,53 @@ class Clusters(unittest.TestCase):
             load({"c": glutton({"infra": {"cluster": {"size": 1}}})})
 
 
+class Recordings(unittest.TestCase):
+    CLAUDE_CODE = {"worker": {"workload-name": "claude-code"}, "infra": {"cluster": {"configuration": "openclaw"}}}
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        patch = mock.patch.object(locust.openclaw, "RECORDINGS_DIR", self.dir)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def record(self, name: str, turns: str | None) -> None:
+        (self.dir / name).mkdir()
+        (self.dir / name / "cassette.jsonl").write_text("{}\n")
+        if turns is not None:
+            (self.dir / name / "turns.txt").write_text(turns)
+
+    def case(self, recording: object, **locust_keys) -> dict:
+        return check("c", glutton({**self.CLAUDE_CODE, **locust_keys, "recording": recording}))
+
+    def test_the_worker_sends_the_recorded_turns(self):
+        self.record("fix", "Look at the repo.\nAdd a test.\n")
+        options = self.case({"name": "fix"})["locust"]
+        self.assertEqual(options["recording"], {"name": "fix", "timing": "instant"})
+        self.assertEqual(options["worker"]["workload-turns"], ["Look at the repo.", "Add a test."])
+        self.assertIn('--workload-turns=["Look at the repo.","Add a test."]', locust.worker_args(options))
+
+    def test_a_recording_has_to_be_a_conversation_that_is_there(self):
+        self.record("one-prompt", None)
+        with self.assertRaisesRegex(ValueError, "no recording 'gone'.*there are one-prompt"):
+            self.case({"name": "gone"})
+        with self.assertRaisesRegex(ValueError, "no recording '../x'"):
+            self.case({"name": "../x"})
+        with self.assertRaisesRegex(ValueError, "has no conversation"):
+            self.case({"name": "one-prompt"})
+
+    def test_a_recording_is_claude_codes_with_a_known_timing(self):
+        self.record("fix", "Look at the repo.\n")
+        self.assertEqual(self.case({"name": "fix", "timing": "recorded"})["locust"]["recording"]["timing"], "recorded")
+        with self.assertRaisesRegex(ValueError, "timing` must be instant or recorded"):
+            self.case({"name": "fix", "timing": "slow"})
+        with self.assertRaisesRegex(ValueError, "must be a mapping of a `name`"):
+            self.case("fix")
+        with self.assertRaisesRegex(ValueError, "is for claude-code, not openclaw"):
+            self.case({"name": "fix"}, worker=OPENCLAW["worker"])
+
+
 class Variants(unittest.TestCase):
     def test_shipped_sandbox_benchmark_is_a_case_per_provider(self):
         cases = SHIPPED.cases

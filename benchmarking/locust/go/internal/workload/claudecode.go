@@ -55,10 +55,15 @@ func init() {
 // continue from the turn before: its turn number in the conversation and the
 // repo's commits are each one more than last time, so a suspend that lost
 // either fails it.
+//
+// With turns, it sends a recorded conversation's prompts instead, which
+// mock-llm replays the answers to, and a turn counts if its number in the
+// session is the one sent.
 type claudeCodeWorkload struct {
 	// last is the turn the actor answered last: 0 on a fresh actor, which
 	// restores the golden snapshot's repo with no session.
-	last int
+	last  int
+	turns []string
 }
 
 type claudeCodeReply struct {
@@ -71,9 +76,16 @@ func (*claudeCodeWorkload) Name() string { return claudeCodeWorkloadName }
 
 func (*claudeCodeWorkload) DefaultTemplate() string { return claudeCodeTemplate }
 
-func (*claudeCodeWorkload) ForActor() Workload { return &claudeCodeWorkload{} }
+func (w *claudeCodeWorkload) ForActor() Workload { return &claudeCodeWorkload{turns: w.turns} }
+
+func (*claudeCodeWorkload) WithTurns(prompts []string) Workload {
+	return &claudeCodeWorkload{turns: prompts}
+}
 
 func (w *claudeCodeWorkload) SendInstruction(ctx context.Context, actor sandbox.Actor) (bool, error) {
+	if len(w.turns) > 0 {
+		return w.sendTurn(ctx, actor)
+	}
 	nonce := uuid.NewString()
 	turn := lastUnknown
 	retry, err := sendHTTPInstruction(ctx, actor, httpInstruction{
@@ -120,4 +132,47 @@ func checkClaudeCodeReply(body []byte, nonce string, last int) (int, error) {
 		}
 	}
 	return turn, nil
+}
+
+// sendTurn sends the conversation's next turn, the first after its last or a
+// failed one, which the actor starts the session and the repo over on.
+func (w *claudeCodeWorkload) sendTurn(ctx context.Context, actor sandbox.Actor) (bool, error) {
+	turn := 1
+	if w.last >= 1 && w.last < len(w.turns) {
+		turn = w.last + 1
+	}
+	nonce := uuid.NewString()
+	retry, err := sendHTTPInstruction(ctx, actor, httpInstruction{
+		Method:      http.MethodPost,
+		Path:        claudeCodeInvokePath + "?turn=" + strconv.Itoa(turn),
+		ContentType: textContentType,
+		Body:        []byte(w.turns[turn-1] + " (request " + nonce + ")"),
+		Verify: func(body []byte) error {
+			return checkClaudeCodeTurn(body, nonce, turn)
+		},
+	})
+	w.last = turn
+	if err != nil {
+		w.last = lastUnknown
+	}
+	return retry, err
+}
+
+// checkClaudeCodeTurn checks that body answers the conversation's turn.
+func checkClaudeCodeTurn(body []byte, nonce string, turn int) error {
+	var reply claudeCodeReply
+	if err := json.Unmarshal(body, &reply); err != nil {
+		return fmt.Errorf("unreadable /invoke reply %q: %w", body, err)
+	}
+	if !strings.Contains(reply.Result, "(request "+nonce+")") {
+		return fmt.Errorf("reply %q does not carry nonce %q", reply.Result, nonce)
+	}
+	match := claudeCodeTurn.FindStringSubmatch(reply.Result)
+	if match == nil {
+		return fmt.Errorf("reply %q gives no turn", reply.Result)
+	}
+	if got, _ := strconv.Atoi(match[1]); got != turn {
+		return fmt.Errorf("session at turn %d, want turn %d", got, turn)
+	}
+	return nil
 }
