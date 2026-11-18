@@ -25,6 +25,7 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Sequence
 
 from .. import LABEL_RE, RUNNER_DIR, git, images
 from ..infra.cluster import Cluster
@@ -162,11 +163,13 @@ def missing_requirements() -> list[str]:
     return list(dict.fromkeys(missing + images.missing_requirements() + missing_submodule()))
 
 
-def install(cluster: Cluster, microvm: bool = False) -> None:
+def install(cluster: Cluster, microvm: bool = False, ingress_ids: Sequence[str] = ()) -> None:
     """From the images image_refs names, so the installer builds nothing, and
-    with microvm the microvm SandboxConfig too. A failed install runs again
-    from the start."""
-    retry(f"substrate on cluster {cluster.name}", lambda: install_once(cluster, microvm))
+    with microvm the microvm SandboxConfig too. ingress_ids are the SPIFFE IDs
+    besides the benchmark runner's that the router lets reach actors, such as
+    the one of an API service that dials it. A failed install runs again from
+    the start."""
+    retry(f"substrate on cluster {cluster.name}", lambda: install_once(cluster, microvm, ingress_ids))
 
 
 def install_microvm(cluster: Cluster) -> None:
@@ -201,7 +204,7 @@ def install_env(cluster: Cluster) -> dict[str, str]:
     }
 
 
-def install_once(cluster: Cluster, microvm: bool) -> None:
+def install_once(cluster: Cluster, microvm: bool, ingress_ids: Sequence[str] = ()) -> None:
     cluster.get_credentials()
     env = install_env(cluster)
     log(f"substrate: installing on cluster {cluster.name}")
@@ -216,7 +219,8 @@ def install_once(cluster: Cluster, microvm: bool) -> None:
         # Egress credential injection is off: no workload needs the bundled
         # provider, and the installer requires a choice either way.
         '--credential-provider={"enabled":false}',
-        f"--ingress-allowed-spiffe-ids={runner}",
+        # ate-setup takes the IDs comma-separated.
+        f"--ingress-allowed-spiffe-ids={','.join([runner, *ingress_ids])}",
         # kubectl-ate's own, which the runner deploys the templates with.
         f"--ateapi-authz-bootstrap-owners=system:serviceaccount:ate-system:ate-client,{runner}",
     ]

@@ -165,13 +165,22 @@ def cluster(name: str) -> Cluster:
     return Cluster(infra.state_outputs(), infra.data / "kubeconfig")
 
 
-def install_substrate(record: dict, microvm: bool = False) -> dict:
+def install_substrate(record: dict, microvm: bool = False, ingress_ids: tuple[str, ...] = ()) -> dict:
     """Installs substrate on the dev infra's cluster from the images in its
     repository, and with microvm its microvm SandboxConfig, unless its record
-    says they are installed, and returns its record."""
+    says they are installed, and returns its record. ingress_ids are the
+    SPIFFE IDs besides the runner's the router lets reach actors; the record
+    keeps the ones it was installed with, and one it lacks installs substrate
+    again, which is how the router's list is widened."""
+    have = set(record.get("ingress_ids", []))
+    want = sorted(have | set(ingress_ids))
     if not record.get("substrate_installed"):
-        substrate.install(cluster(record["name"]), microvm)
-        record = {**record, "substrate_installed": True, "microvm_installed": microvm}
+        substrate.install(cluster(record["name"]), microvm, want)
+        record = {**record, "substrate_installed": True, "microvm_installed": microvm, "ingress_ids": want}
+    elif set(want) != have:
+        microvm = microvm or bool(record.get("microvm_installed"))
+        substrate.install(cluster(record["name"]), microvm, want)
+        record = {**record, "microvm_installed": microvm, "ingress_ids": want}
     elif microvm and not record.get("microvm_installed"):
         substrate.install_microvm(cluster(record["name"]))
         record = {**record, "microvm_installed": True}
