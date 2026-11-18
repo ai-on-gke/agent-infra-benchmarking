@@ -30,7 +30,7 @@ from typing import Callable
 from .. import LABEL_RE, RUNNER_DIR, images, reports, workloads
 from ..control_planes import agent_sandbox, worker_pool
 from ..infra.cluster import Cluster
-from ..infra.cluster_configs import CommonCluster, OpenclawCluster, from_infra
+from ..infra.cluster_configs import CommonCluster, MockLlmCluster, from_infra
 from ..log import ON_CLOUD_RUN, log
 from ..process import stream
 from ..reports import run_info
@@ -191,10 +191,10 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
         raise ValueError(f"case {name}'s `{TYPE}.worker.suspend-mode` is substrate's, and {control_plane(case)} has none")
     config = cluster_config(name, case)
     # mock-llm's pods select and tolerate only its pool, and stay pending without it.
-    if template in workloads.MOCK_LLM_TEMPLATES and not isinstance(config, OpenclawCluster):
+    if template in workloads.MOCK_LLM_TEMPLATES and not isinstance(config, MockLlmCluster):
         raise ValueError(
             f"case {name}'s workload {template} calls mock-llm, which runs on a pool of its own:"
-            f" set `{TYPE}.infra.cluster.configuration: {OpenclawCluster.CONFIGURATION}`"
+            f" set `{TYPE}.infra.cluster.configuration: {MockLlmCluster.CONFIGURATION}`"
         )
     # spawn-rate defaults to the user count, putting the whole load on at once.
     return {
@@ -278,7 +278,7 @@ def cluster_config(name: str, case: dict) -> CommonCluster:
         name,
         f"{TYPE}.infra",
         case[TYPE].get("infra"),
-        (CommonCluster, OpenclawCluster),
+        (CommonCluster, MockLlmCluster),
     )
 
 

@@ -25,7 +25,7 @@ from scenario_runner.infra.cluster_configs import (
     CommonCluster,
     DummyCluster,
     Execution,
-    OpenclawCluster,
+    MockLlmCluster,
     from_record,
     to_record,
 )
@@ -58,7 +58,7 @@ EVERYTHING = {
 
 class Variables(unittest.TestCase):
     def test_every_variable_is_one_the_config_declares(self):
-        for config in (OpenclawCluster(**EVERYTHING), DummyCluster(**EVERYTHING)):
+        for config in (MockLlmCluster(**EVERYTHING), DummyCluster(**EVERYTHING)):
             with self.subTest(config=type(config).__name__):
                 undeclared = config.variables(EXECUTION).keys() - declared_variables(config.CONFIG)
                 self.assertFalse(undeclared, f"{config.CONFIG} declares none of {sorted(undeclared)}")
@@ -86,8 +86,8 @@ class Variables(unittest.TestCase):
                      "node_service_account", "existing_network", "enable_private_endpoint"):  # fmt: skip
             self.assertNotIn(name, variables)
 
-    def test_openclaw_is_common_with_a_pool_for_mock_llm(self):
-        variables = OpenclawCluster(sandboxed_nodes=2).variables(EXECUTION)
+    def test_mock_llm_is_common_with_a_pool_for_mock_llm(self):
+        variables = MockLlmCluster(sandboxed_nodes=2).variables(EXECUTION)
         pools = variables.pop("additional_node_pools")
         self.assertEqual([pool["labels"] for pool in pools], [{"benchmarking-mock-llm": "true"}])
         self.assertEqual(variables, CommonCluster(sandboxed_nodes=2).variables(EXECUTION))
@@ -150,7 +150,7 @@ class Sharing(unittest.TestCase):
     def test_clusters_asked_for_alike_are_equal(self):
         self.assertEqual(CommonCluster.from_yaml({"sandboxed-nodes": 1}), CommonCluster())
         self.assertEqual(len({CommonCluster(), CommonCluster(sandboxed_nodes=1)}), 1)
-        self.assertNotEqual(CommonCluster(), OpenclawCluster())
+        self.assertNotEqual(CommonCluster(), MockLlmCluster())
         self.assertNotEqual(CommonCluster(), DummyCluster())
 
     def test_a_bare_metal_placement_moves_the_sandboxed_pool(self):
@@ -168,10 +168,13 @@ class Configs(unittest.TestCase):
             self.assertEqual(config.CONFIGURATION, name)
 
     def test_a_record_is_read_back_as_its_configuration(self):
-        for config in (CommonCluster(sandboxed_nodes=2), OpenclawCluster(nested_virtualization=True), DummyCluster()):
+        for config in (CommonCluster(sandboxed_nodes=2), MockLlmCluster(nested_virtualization=True), DummyCluster()):
             with self.subTest(config=type(config).__name__):
                 self.assertEqual(from_record(to_record(config)), config)
-        self.assertEqual(to_record(OpenclawCluster())["name"], "common")
+        self.assertEqual(to_record(MockLlmCluster())["name"], "common")
+
+    def test_a_record_of_openclaw_is_read_back_as_mock_llm(self):
+        self.assertEqual(from_record({**to_record(MockLlmCluster()), "configuration": "openclaw"}), MockLlmCluster())
 
     def test_a_record_of_a_class_has_nested_virtualization_for_microvm(self):
         record = {**to_record(CommonCluster()), "sandbox_class": "microvm"}

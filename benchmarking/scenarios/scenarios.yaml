@@ -107,8 +107,8 @@
 # Terraform variables of the infra/clusters/ config it applies, all of them
 # optional:
 #   configuration           common, the default, a GKE cluster from
-#                           infra/clusters/common; openclaw, common's with a
-#                           pool for mock-llm, which openclaw's workload needs;
+#                           infra/clusters/common; mock-llm, common's with a
+#                           pool for mock-llm, which openclaw and claude-code call;
 #                           or dummy, infra/clusters/dummy, for a noop only
 #   sandboxed-nodes         the sandboxed pool's nodes, 1 by default, which it
 #                           is pinned at
@@ -123,9 +123,9 @@
 #   gke-sandbox             true for GKE Sandbox on the sandboxed pool, for an
 #                           agent-sandbox case only, and needed by one; off by
 #                           default
-#   default-machine-type    common's and openclaw's default pool's,
+#   default-machine-type    common's and mock-llm's default pool's,
 #                           c2-standard-16 by default
-# locust runs on common or openclaw, sandbox-benchmark on common, and a noop on
+# locust runs on common or mock-llm, sandbox-benchmark on common, and a noop on
 # any of them.
 #
 # Varying the load or the pool means another case, so that every run is
@@ -208,7 +208,7 @@ cases:
       - workload: glutton
       # On the cluster with mock-llm.
       - workload: openclaw
-        configuration: openclaw
+        configuration: mock-llm
         # The actors end a turn 20s sooner, at 220s. A turn takes about twice as
         # long with 10 actors on a node as on an idle one, and on microvm runs
         # past 100s.
@@ -257,7 +257,7 @@ cases:
         vus: 30
       - workload: openclaw
         vus: 300
-        configuration: openclaw
+        configuration: mock-llm
         workload-timeout: 240s
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
@@ -384,7 +384,7 @@ cases:
       - workload: openclaw
         actor-memory: 2Gi
         worker-memory: 2112Mi
-        configuration: openclaw
+        configuration: mock-llm
         workload-timeout: 120s
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
 
@@ -493,7 +493,7 @@ cases:
       infra:
         cluster:
           sandboxed-nodes: 1
-          configuration: openclaw
+          configuration: mock-llm
       workers:
         count: 10
       master:
@@ -508,9 +508,10 @@ cases:
         min-wait: 20s
         max-wait: 40s
 
-  # claude-code-single, but each session replays the workload's
-  # {workload}-textkit-fix-all recording of it against a real model: its five
-  # prompts on the textkit repo, answered from the cassette.
+  # A session of the workload, claude-code or openclaw, on the textkit repo,
+  # one turn per wake, suspended through a think time of 20-40s between turns:
+  # each session replays its {workload}-textkit-fix-all recording against a
+  # real model, its five prompts answered from the cassette.
   "{workload}-replay":
     repeats:
       warmups: 0
@@ -521,7 +522,7 @@ cases:
       infra:
         cluster:
           sandboxed-nodes: 1
-          configuration: openclaw
+          configuration: mock-llm
           # Off the nightly's us-central1 C2 quota; run with --region us-east1.
           zone: us-east1-b
       workers:

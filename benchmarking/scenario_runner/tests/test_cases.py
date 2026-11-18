@@ -27,7 +27,7 @@ from unittest import mock
 
 from scenario_runner import benchmarks
 from scenario_runner.benchmarks import locust, sandbox_benchmark
-from scenario_runner.infra.cluster_configs import CommonCluster, DummyCluster, OpenclawCluster
+from scenario_runner.infra.cluster_configs import CommonCluster, DummyCluster, MockLlmCluster
 from scenario_runner.scenarios.bare_metal import Settings, with_bare_metal
 from scenario_runner.scenarios.file import SCENARIOS_FILE, load_scenarios
 from scenario_runner.scenarios.repeats import record_names, warmup_names
@@ -66,7 +66,7 @@ def check(name: str, case: dict) -> dict:
 # An openclaw case on the cluster it needs.
 OPENCLAW = {
     "worker": {"workload-name": "openclaw", "workload-template": "openclaw"},
-    "infra": {"cluster": {"configuration": "openclaw"}},
+    "infra": {"cluster": {"configuration": "mock-llm"}},
 }
 
 
@@ -145,7 +145,7 @@ class ShippedCases(unittest.TestCase):
             clusters["glutton-substrate-microvm"],
             CommonCluster(sandboxed_nodes=30, nested_virtualization=True, sandboxed_disk_size_gb=1000),
         )
-        self.assertEqual(clusters["openclaw-density-baseline"], OpenclawCluster(sandboxed_nodes=10))
+        self.assertEqual(clusters["openclaw-density-baseline"], MockLlmCluster(sandboxed_nodes=10))
         self.assertEqual(
             clusters["sandbox-benchmark-substrate"],
             CommonCluster(sandboxed_nodes=1, sandboxed_machine_type="n2-standard-16"),
@@ -341,11 +341,11 @@ class Clusters(unittest.TestCase):
         cluster = {"sandboxed-nodes": 3, "nested-virtualization": True}
         case = load({"c": glutton({"infra": {"cluster": cluster}, **on("microvm")})})["c"]
         self.assertEqual(benchmarks.cluster_config("c", case), CommonCluster(3, nested_virtualization=True))
-        openclaw = load({"c": glutton({"infra": {"cluster": {"configuration": "openclaw"}}})})["c"]
-        self.assertEqual(benchmarks.cluster_config("c", openclaw), OpenclawCluster())
+        mock_llm = load({"c": glutton({"infra": {"cluster": {"configuration": "mock-llm"}}})})["c"]
+        self.assertEqual(benchmarks.cluster_config("c", mock_llm), MockLlmCluster())
 
-    def test_a_workload_that_calls_mock_llm_needs_openclaw(self):
-        with self.assertRaisesRegex(ValueError, "set `locust.infra.cluster.configuration: openclaw`"):
+    def test_a_workload_that_calls_mock_llm_needs_its_pool(self):
+        with self.assertRaisesRegex(ValueError, "set `locust.infra.cluster.configuration: mock-llm`"):
             load({"c": glutton({"worker": OPENCLAW["worker"]})})
         load({"c": glutton(OPENCLAW)})
 
@@ -360,7 +360,7 @@ class Clusters(unittest.TestCase):
 
 
 class Recordings(unittest.TestCase):
-    CLAUDE_CODE = {"worker": {"workload-name": "claude-code"}, "infra": {"cluster": {"configuration": "openclaw"}}}
+    CLAUDE_CODE = {"worker": {"workload-name": "claude-code"}, "infra": {"cluster": {"configuration": "mock-llm"}}}
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
