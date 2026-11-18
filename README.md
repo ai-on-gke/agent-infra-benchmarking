@@ -99,8 +99,8 @@ with `--report-deployment`. All of it is in
 
 ## The scheduled runs
 
-Five Cloud Run jobs in the GCP project `akvelon-gke-aieco` (`us-central1`, and
-`us-east1`, `us-east4` and `europe-west1` for bare metal) run the scenario-runner from the latest image of their branch. Which cases they
+Six Cloud Run jobs in the GCP project `akvelon-gke-aieco` (`us-central1`, and
+`us-east1`, `us-east4`, `europe-west1` and `asia-southeast1` for bare metal) run the scenario-runner from the latest image of their branch. Which cases they
 run is the suite of the same name in `scenarios.yaml`, so a case is added to
 or dropped from a schedule by editing the suite, with no Terraform apply.
 
@@ -112,6 +112,7 @@ or dropped from a schedule by editing the suite, with no Terraform apply.
 | [`substrate-bench-metal`](automation-infra/deployments/substrate-bench-metal/) | 01:00 daily | `bare-metal` | The two 1-node bare-metal cases, in `us-east1`, apart from the nightly, as a bare-metal machine can take hours to get |
 | [`substrate-bench-east4`](automation-infra/deployments/substrate-bench-east4/) | 13:00 daily | `bare-metal` | The same cases in `us-east4`, for a second chance a day at a free machine |
 | [`substrate-bench-europe`](automation-infra/deployments/substrate-bench-europe/) | 07:00 daily | `bare-metal` | The same cases in `europe-west1`, for a third chance a day |
+| [`substrate-bench-asia`](automation-infra/deployments/substrate-bench-asia/) | 19:00 daily | `bare-metal` | The same cases in `asia-southeast1`, for a fourth chance a day |
 
 Each execution's reports land in `gs://substrate-bench-auto-tfstate/data/<run-id>/`
 and are queryable in the BigQuery dataset `substrate_bench_auto`, for example:
