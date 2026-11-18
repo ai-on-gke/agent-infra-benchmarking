@@ -222,6 +222,10 @@ locals {
   cluster_id       = var.autopilot ? google_container_cluster.autopilot[0].id : google_container_cluster.standard[0].id
   cluster_name     = var.autopilot ? google_container_cluster.autopilot[0].name : google_container_cluster.standard[0].name
   cluster_endpoint = var.autopilot ? google_container_cluster.autopilot[0].endpoint : google_container_cluster.standard[0].endpoint
+
+  provisioned_disk = {
+    for name, pool in var.node_pools : name => pool.disk_provisioned_iops != null || pool.disk_provisioned_throughput != null
+  }
 }
 
 resource "google_container_node_pool" "this" {
@@ -246,10 +250,22 @@ resource "google_container_node_pool" "this" {
 
   node_config {
     machine_type = each.value.machine_type
-    disk_size_gb = each.value.disk_size_gb
-    disk_type    = each.value.disk_type
+    disk_size_gb = local.provisioned_disk[each.key] ? null : each.value.disk_size_gb
+    disk_type    = local.provisioned_disk[each.key] ? null : each.value.disk_type
     spot         = each.value.spot
     labels       = each.value.labels
+
+    # Provisioned IOPS and throughput are set only through boot_disk, which
+    # then carries the type and size as well.
+    dynamic "boot_disk" {
+      for_each = local.provisioned_disk[each.key] ? [1] : []
+      content {
+        disk_type              = each.value.disk_type
+        size_gb                = each.value.disk_size_gb
+        provisioned_iops       = each.value.disk_provisioned_iops
+        provisioned_throughput = each.value.disk_provisioned_throughput
+      }
+    }
 
     # gVisor only runs on Container-Optimized OS with containerd.
     image_type = each.value.sandbox_gvisor ? "COS_CONTAINERD" : null
