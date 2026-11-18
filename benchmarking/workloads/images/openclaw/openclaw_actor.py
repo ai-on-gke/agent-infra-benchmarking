@@ -1,9 +1,17 @@
+"""The openclaw actor: POST /invoke runs one headless openclaw agent turn, its
+body the prompt, each in a session of its own.
+
+POST /invoke?turn=K is turn K of a recorded conversation instead: turn 1
+starts a new session, and a later one continues it."""
+
 import sys
 import os
 import signal
 import subprocess
 import json
 import time
+import urllib.parse
+import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # How long one `openclaw agent exec` may run. Kept below the benchmark worker's
@@ -11,6 +19,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 # with a 504 that says so, and its processes are gone before the worker
 # suspends the actor.
 EXEC_TIMEOUT_SECS = float(os.environ.get("OPENCLAW_TIMEOUT_SECS", "100"))
+
+# The conversation's session; None until its turn 1, and after a turn that
+# failed, which may have left it half done.
+session_id = None
 
 # MAIN ACTOR SERVER (Runs on port 80)
 # ==========================================
@@ -26,12 +38,22 @@ class OpenClawHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
-        if self.path.startswith("/invoke"):
+        global session_id
+        url = urllib.parse.urlsplit(self.path)
+        if url.path.startswith("/invoke"):
             content_length = int(self.headers.get('Content-Length', 0))
             post_data = self.rfile.read(content_length).decode('utf-8')
+            turn = urllib.parse.parse_qs(url.query).get("turn", [None])[0]
+            if turn is not None and (not turn.isdigit() or int(turn) < 1):
+                self.reply(400, f"turn {turn!r} is not a number from 1", time.monotonic())
+                return
+            turn = int(turn) if turn else None
+            if turn is not None and turn > 1 and not session_id:
+                self.reply(409, f"turn {turn} has no session to continue; start the conversation over", time.monotonic())
+                return
 
             # If no input is provided, provide a fast default prompt to measure baseline latency
-            if not post_data.strip() or post_data.strip() == "echo 'hello'":
+            if turn is None and (not post_data.strip() or post_data.strip() == "echo 'hello'"):
                 # For high-throughput load testing, we bypass the heavy Node.js boot
                 # to prevent Envoy from timing out the connection (>5s).
                 # This isolates Substrate's exact routing and network latency!
@@ -41,6 +63,7 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                 self.wfile.write(b"Mock Substrate Benchmark Response")
                 return
 
+            ok = False
             try:
                 import base64
 
@@ -66,7 +89,10 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                     with open("/tmp/mock-config.json", "w") as f:
                         json.dump(config, f)
 
-                    cmd = ["openclaw", "agent", "exec", "--config", "/tmp/mock-config.json", "--model", "mock-provider/mock-model", post_data]
+                    model = "mock-provider/mock-model"
+                    # `openclaw agent` takes its config from the environment.
+                    env["OPENCLAW_CONFIG_PATH"] = "/tmp/mock-config.json"
+                    cmd = ["openclaw", "agent", "exec", "--config", "/tmp/mock-config.json", "--model", model, post_data]
                 else:
                     # Unused by the benchmark, whose template sets OPENCLAW_USE_MOCK_LLM: nothing
                     # in this repo sets GCP_SA_KEY_B64. An ActorTemplate cannot mount a
@@ -78,7 +104,16 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                         env["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
 
                     # Use `openclaw agent exec` to run an isolated headless agent turn.
-                    cmd = ["openclaw", "agent", "exec", "--isolated", "--model", "google-vertex/gemini-2.5-flash-lite", post_data]
+                    model = "google-vertex/gemini-2.5-flash-lite"
+                    cmd = ["openclaw", "agent", "exec", "--isolated", "--model", model, post_data]
+
+                # `agent exec` starts a new session every time; `agent --local`
+                # runs the same embedded agent in the session it names.
+                if turn is not None:
+                    if turn == 1:
+                        session_id = str(uuid.uuid4())
+                    cmd = ["openclaw", "agent", "--local", "--session-id", session_id, "--model", model,
+                           "--message", post_data]
 
                 # Its own session, so a timeout can kill openclaw together with
                 # every process it started.
@@ -104,12 +139,16 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                     self.reply(500, f"OpenClaw exited with code {proc.returncode} after "
                                f"{time.monotonic() - start:.1f}s.\nOutput:\n{output}", start)
                     return
+                ok = True
                 self.reply(200, output, start)
             except Exception as e:
                 self.send_response(500)
                 self.send_header("Content-type", "text/plain")
                 self.end_headers()
                 self.wfile.write(str(e).encode("utf-8"))
+            finally:
+                if turn is not None and not ok:
+                    session_id = None
         else:
             self.send_response(404)
             self.end_headers()

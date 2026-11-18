@@ -23,6 +23,8 @@ import urllib.error
 import urllib.request
 import uuid
 
+from recording import OPENCLAW_DONE
+
 SERVER = "http://localhost:8080"
 SERVER_LOG = "/tmp/mock-llm.log"
 
@@ -42,12 +44,14 @@ def check_claude_code(reply, nonce, i, own_prompt):
 
 
 def check_openclaw(reply, nonce, i, own_prompt):
-    """The worker's check (locust/go/internal/workload/openclaw.go), which
-    mock-llm's answer meets for any prompt."""
-    want = f"I have successfully executed the bash commands! (request {nonce})"
-    assert want in reply, f"no {want!r} in {reply[-2000:]!r}"
-    answer = next(line for line in reply.splitlines() if nonce in line)
-    return f"turn {i}: {answer.strip()[-300:]}"
+    """The worker's checks (locust/go/internal/workload/openclaw.go): mock-llm's
+    scripted answer ends with OPENCLAW_DONE and the nonce, a recorded one with
+    its turn and the nonce, for any prompt."""
+    answer = next((line for line in reply.splitlines() if f"(request {nonce})" in line), None)
+    assert answer, f"no nonce {nonce} in {reply[-2000:]!r}"
+    turn = re.search(rf"\(turn (\d+)\) \(request {nonce}\)", answer)
+    assert turn or f"{OPENCLAW_DONE} (request {nonce})" in answer, f"no turn or {OPENCLAW_DONE!r} in {answer!r}"
+    return f"turn {turn[1] if turn else i}: {answer.strip()[-300:]}"
 
 
 # Each workload's worker prompt, how many turns it sends, its check and the
@@ -89,6 +93,9 @@ class Turns:
             sys.exit(f"turn {i} failed: {e.code} {e.read().decode('utf-8', 'replace')[:2000]}")
         try:
             print(self.check(reply, nonce, i, self.own_prompt), flush=True)
+            # As the worker checks a conversation's turns (mockllm.go).
+            if self.conversation:
+                assert f"(turn {i}) (request {nonce})" in reply, f"the session is not at turn {i}"
         except (AssertionError, KeyError, TypeError, ValueError, StopIteration) as e:
             sys.exit(f"turn {i}'s reply fails the check: {e!r}")
 

@@ -107,13 +107,10 @@ def is_prompt(message):
 
 
 def answer_suffix(req, api, nonce):
-    """What the turn's answer ends with for its worker: Claude Code's the
-    turn's number in the session as well (claudecode.go), openclaw's
-    OPENCLAW_DONE."""
-    if api == ANTHROPIC:
-        turn = sum(1 for m in req.get("messages", []) if is_prompt(m))
-        return f" (turn {turn}) (request {nonce})"
-    return f"\n\n{OPENCLAW_DONE} (request {nonce})"
+    """What the turn's answer ends with for its worker (mockllm.go): the
+    turn's number in the session, how many prompts it holds, and the nonce."""
+    turn = sum(1 for m in call_messages(req, api) if is_prompt(m))
+    return f" (turn {turn}) (request {nonce})"
 
 
 def ends_turn(req, api, path):

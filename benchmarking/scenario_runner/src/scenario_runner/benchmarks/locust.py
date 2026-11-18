@@ -86,7 +86,7 @@ KEYS = {
 WORKERS_KEYS = {"count", "limits"}
 RECORDING_KEYS = {"name", "timing"}
 # The workloads whose worker can send a recorded conversation's turns.
-RECORDING_WORKLOADS = {"claude-code"}
+RECORDING_WORKLOADS = {"claude-code", "openclaw"}
 WORKER_LIMITS = ("cpu", "memory")
 # Of a worker's memory limit, what substrate keeps out of the room its actors
 # share.

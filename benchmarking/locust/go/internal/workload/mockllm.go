@@ -40,20 +40,17 @@ import (
 // which may or may not have gone through.
 const lastUnknown = -1
 
-// mockLLMTurn is the "(turn N)" mock-llm ends its answer with: how many
-// prompts the conversation holds.
-var mockLLMTurn = regexp.MustCompile(`\(turn (\d+)\)`)
-
 // withNonce is prompt as sent, carrying nonce where mock-llm reads it.
 func withNonce(prompt, nonce string) string { return prompt + " (request " + nonce + ")" }
 
 // answerTurn checks that the agent's answer carries nonce, so it is this
-// turn's, and returns the turn it gives.
+// turn's, and returns the turn it gives: the "(turn N)" mock-llm puts before
+// the nonce, how many prompts the conversation holds.
 func answerTurn(answer, nonce string) (int, error) {
 	if !strings.Contains(answer, "(request "+nonce+")") {
 		return 0, fmt.Errorf("reply %q does not carry nonce %q", answer, nonce)
 	}
-	match := mockLLMTurn.FindStringSubmatch(answer)
+	match := regexp.MustCompile(`\(turn (\d+)\) \(request ` + regexp.QuoteMeta(nonce) + `\)`).FindStringSubmatch(answer)
 	if match == nil {
 		return 0, fmt.Errorf("reply %q gives no turn", answer)
 	}

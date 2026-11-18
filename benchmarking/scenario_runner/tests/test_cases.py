@@ -396,15 +396,21 @@ class Recordings(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "has no conversation"):
             self.case({"name": "one-prompt"})
 
-    def test_a_recording_is_claude_codes_with_a_known_timing(self):
+    def test_a_recording_is_an_agents_with_a_known_timing(self):
         self.record("fix", "Look at the repo.\n")
         self.assertEqual(self.case({"name": "fix", "timing": "recorded"})["locust"]["recording"]["timing"], "recorded")
         with self.assertRaisesRegex(ValueError, "timing` must be instant or recorded"):
             self.case({"name": "fix", "timing": "slow"})
         with self.assertRaisesRegex(ValueError, "must be a mapping of a `name`"):
             self.case("fix")
-        with self.assertRaisesRegex(ValueError, "is for claude-code, not openclaw"):
-            self.case({"name": "fix"}, worker=OPENCLAW["worker"])
+        with self.assertRaisesRegex(ValueError, "is for claude-code or openclaw, not glutton"):
+            self.case({"name": "fix"}, worker={"workload-name": "glutton"})
+
+    def test_openclaw_gets_the_recorded_turns_too(self):
+        self.record("fix", "Look at the repo.\n")
+        options = self.case({"name": "fix"}, worker=OPENCLAW["worker"])["locust"]
+        url = "http://mock-llm.benchmark-workloads.svc.cluster.local/recordings/fix/turns"
+        self.assertEqual(options["worker"]["openclaw-turns-url"], url)
 
 
 class Variants(unittest.TestCase):

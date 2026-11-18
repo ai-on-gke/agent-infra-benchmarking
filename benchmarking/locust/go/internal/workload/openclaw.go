@@ -16,6 +16,7 @@ package workload
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"net/http"
 	"strings"
@@ -47,7 +48,7 @@ const (
 )
 
 func init() {
-	register(openclawWorkload{})
+	register(&openclawWorkload{})
 }
 
 // openclawWorkload drives the openclaw actor from
@@ -59,11 +60,24 @@ func init() {
 // the actor's handler ran but not that the answer is fresh. The actor's
 // contract offers nothing better, and nothing in the path caches, so the
 // weaker check is the honest one rather than a chosen tradeoff.
-type openclawWorkload struct{}
+//
+// With --openclaw-turns-url, it sends a recorded conversation's prompts
+// instead, which mock-llm replays the answers to, one turn of one openclaw
+// session each, and a turn counts if its number in the session is the one
+// sent, as claude-code's does.
+type openclawWorkload struct {
+	conversation
+}
 
-func (openclawWorkload) Name() string { return openclawWorkloadName }
+func (*openclawWorkload) Name() string { return openclawWorkloadName }
 
-func (openclawWorkload) DefaultTemplate() string { return openclawTemplate }
+func (*openclawWorkload) DefaultTemplate() string { return openclawTemplate }
+
+func (w *openclawWorkload) ForActor() Workload { return &openclawWorkload{w.forActor()} }
+
+func (w *openclawWorkload) Flags(fs *flag.FlagSet) { w.flags(fs, openclawWorkloadName) }
+
+func (w *openclawWorkload) Configure(ctx context.Context) error { return w.configure(ctx) }
 
 // SendInstruction POSTs the prompt to /invoke and verifies the
 // reply contains the expected response. The actor answers 500 when an agent
@@ -73,7 +87,11 @@ func (openclawWorkload) DefaultTemplate() string { return openclawTemplate }
 // SendInstruction sends a prompt carrying a fresh nonce, which mock-llm puts
 // in its last answer, so a reply counts only if it is this turn's: one that
 // openclaw printed from an earlier turn, or without reaching the LLM, fails.
-func (openclawWorkload) SendInstruction(ctx context.Context, actor sandbox.Actor) (bool, error) {
+func (w *openclawWorkload) SendInstruction(ctx context.Context, actor sandbox.Actor) (bool, error) {
+	if w.recorded() {
+		// The actor's reply is openclaw's output, the answer in it.
+		return w.sendTurn(ctx, actor, openclawInvokePath, func(body []byte) (string, error) { return string(body), nil })
+	}
 	nonce := uuid.NewString()
 	want := openclawReplyFor(nonce)
 	return sendHTTPInstruction(ctx, actor, httpInstruction{

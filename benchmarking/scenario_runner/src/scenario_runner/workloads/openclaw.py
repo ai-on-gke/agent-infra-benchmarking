@@ -30,7 +30,7 @@ from ..process import stream
 MOCK_LLM_MANIFEST = RUNNER_DIR.parent / "workloads" / "manifests" / "mock-llm.yaml.tmpl"
 MOCK_LLM_IMAGE = "mock-llm"
 # The recordings baked into mock-llm at /recordings, each a directory with the
-# cassette.jsonl and turns.txt of the recorder's `run.sh claude-code record NAME -i`.
+# cassette.jsonl and turns.txt of the recorder's `run.sh WORKLOAD record NAME -i`.
 RECORDINGS_DIR = RUNNER_DIR.parent / "workloads" / "images" / "mock-llm" / "recordings"
 REPLAY_TIMINGS = ("instant", "recorded")
 # Has to match the manifest's, which the openclaw template's MOCK_LLM_BASE_URL
@@ -79,7 +79,7 @@ def recording_turns_url(name: str) -> str:
     turns_file = path / "turns.txt"
     turns = turns_file.read_text().splitlines() if turns_file.is_file() else []
     if not turns or not all(turns):
-        raise ValueError(f"recording {name} has no conversation in {turns_file}; record one with run.sh claude-code record -i")
+        raise ValueError(f"recording {name} has no conversation in {turns_file}; record one with the recorder's run.sh WORKLOAD record NAME -i")
     return f"{MOCK_LLM_URL}/recordings/{name}/turns"
 
 
