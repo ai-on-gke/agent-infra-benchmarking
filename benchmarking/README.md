@@ -363,6 +363,17 @@ TF_DATA_DIR=../tf-data terraform destroy
 Anything still left can be found in the console by the `benchmark-run-id`
 label.
 
+To see why a case stalls on its sandboxed nodes, `--probe-nodes` also runs
+`monitoring/node-probe.py` on each of them. Once a second it logs, as one JSON
+line, the node's pressure stall info, dirty and writeback memory, the tasks
+blocked in the kernel grouped by stack, the disks' in-flight requests, and how
+long reading the mount table takes. The lines are the logs of container
+`node-probe` in namespace `benchmarking`, so they outlast the cluster:
+
+```bash
+gcloud logging read 'resource.labels.container_name="node-probe" AND resource.labels.cluster_name="<cluster>"'
+```
+
 ### Keeping a cluster between runs
 
 To iterate without creating a cluster on every run, use `--dev-infra NAME`. It
