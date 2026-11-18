@@ -22,4 +22,4 @@
 /benchmarking/scenario_runner/.terraform-plugin-cache/
 
 # The API keys mock-llm records with in the workloads' local test.
-/benchmarking/workloads/local-test/.env
+/benchmarking/workloads/recorder/.env

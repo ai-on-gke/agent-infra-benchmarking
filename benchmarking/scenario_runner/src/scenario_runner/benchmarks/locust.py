@@ -249,7 +249,7 @@ def check_workers(name: str, workers: object, actor_memory: str, provider: str, 
 
 def check_recording(name: str, recording: object, workload: str | None) -> dict | None:
     """The case's `recording` with its timing filled in: the conversation,
-    recorded with local-test's run.sh, that mock-llm replays and the worker
+    recorded with the recorder's run.sh, that mock-llm replays and the worker
     sends the turns of."""
     if recording is None:
         return None
