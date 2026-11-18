@@ -17,11 +17,9 @@ package workload
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
-	"regexp"
-	"strconv"
-	"strings"
 
 	"github.com/google/uuid"
 	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
@@ -35,15 +33,7 @@ const (
 	claudeCodeTemplate     = "claude-code"
 	claudeCodeInvokePath   = "/invoke"
 	claudeCodePrompt       = "Fix the next failing test and commit the fix."
-
-	// lastUnknown is where an actor is in its session after a failed turn,
-	// which may or may not have committed.
-	lastUnknown = -1
 )
-
-// claudeCodeTurn is the "(turn N)" mock-llm ends its answer with: how many
-// prompts the conversation holds.
-var claudeCodeTurn = regexp.MustCompile(`\(turn (\d+)\)`)
 
 func init() {
 	register(&claudeCodeWorkload{})
@@ -56,14 +46,13 @@ func init() {
 // repo's commits are each one more than last time, so a suspend that lost
 // either fails it.
 //
-// With turns, it sends a recorded conversation's prompts instead, which
-// mock-llm replays the answers to, and a turn counts if its number in the
-// session is the one sent.
+// With --claude-code-turns-url, it sends a recorded conversation's prompts
+// instead, which mock-llm replays the answers to, and a turn counts if its
+// number in the session is the one sent.
 type claudeCodeWorkload struct {
-	// last is the turn the actor answered last: 0 on a fresh actor, which
-	// restores the golden snapshot's repo with no session.
-	last  int
-	turns []string
+	// Its last is also the turn of the workload's own session, 0 on a fresh
+	// actor, which restores the golden snapshot's repo with no session.
+	conversation
 }
 
 type claudeCodeReply struct {
@@ -76,15 +65,15 @@ func (*claudeCodeWorkload) Name() string { return claudeCodeWorkloadName }
 
 func (*claudeCodeWorkload) DefaultTemplate() string { return claudeCodeTemplate }
 
-func (w *claudeCodeWorkload) ForActor() Workload { return &claudeCodeWorkload{turns: w.turns} }
+func (w *claudeCodeWorkload) ForActor() Workload { return &claudeCodeWorkload{w.forActor()} }
 
-func (*claudeCodeWorkload) WithTurns(prompts []string) Workload {
-	return &claudeCodeWorkload{turns: prompts}
-}
+func (w *claudeCodeWorkload) Flags(fs *flag.FlagSet) { w.flags(fs, claudeCodeWorkloadName) }
+
+func (w *claudeCodeWorkload) Configure(ctx context.Context) error { return w.configure(ctx) }
 
 func (w *claudeCodeWorkload) SendInstruction(ctx context.Context, actor sandbox.Actor) (bool, error) {
-	if len(w.turns) > 0 {
-		return w.sendTurn(ctx, actor)
+	if w.recorded() {
+		return w.sendTurn(ctx, actor, claudeCodeInvokePath, claudeCodeAnswer)
 	}
 	nonce := uuid.NewString()
 	turn := lastUnknown
@@ -92,7 +81,7 @@ func (w *claudeCodeWorkload) SendInstruction(ctx context.Context, actor sandbox.
 		Method:      http.MethodPost,
 		Path:        claudeCodeInvokePath,
 		ContentType: textContentType,
-		Body:        []byte(claudeCodePrompt + " (request " + nonce + ")"),
+		Body:        []byte(withNonce(claudeCodePrompt, nonce)),
 		Verify: func(body []byte) (err error) {
 			turn, err = checkClaudeCodeReply(body, nonce, w.last)
 			return err
@@ -112,14 +101,10 @@ func checkClaudeCodeReply(body []byte, nonce string, last int) (int, error) {
 	if err := json.Unmarshal(body, &reply); err != nil {
 		return 0, fmt.Errorf("unreadable /invoke reply %q: %w", body, err)
 	}
-	if !strings.Contains(reply.Result, "(request "+nonce+")") {
-		return 0, fmt.Errorf("reply %q does not carry nonce %q", reply.Result, nonce)
+	turn, err := answerTurn(reply.Result, nonce)
+	if err != nil {
+		return 0, err
 	}
-	match := claudeCodeTurn.FindStringSubmatch(reply.Result)
-	if match == nil {
-		return 0, fmt.Errorf("reply %q gives no turn", reply.Result)
-	}
-	turn, _ := strconv.Atoi(match[1])
 	if turn != reply.Commits {
 		return 0, fmt.Errorf("session at turn %d but repo at commit %d", turn, reply.Commits)
 	}
@@ -134,45 +119,11 @@ func checkClaudeCodeReply(body []byte, nonce string, last int) (int, error) {
 	return turn, nil
 }
 
-// sendTurn sends the conversation's next turn, the first after its last or a
-// failed one, which the actor starts the session and the repo over on.
-func (w *claudeCodeWorkload) sendTurn(ctx context.Context, actor sandbox.Actor) (bool, error) {
-	turn := 1
-	if w.last >= 1 && w.last < len(w.turns) {
-		turn = w.last + 1
-	}
-	nonce := uuid.NewString()
-	retry, err := sendHTTPInstruction(ctx, actor, httpInstruction{
-		Method:      http.MethodPost,
-		Path:        claudeCodeInvokePath + "?turn=" + strconv.Itoa(turn),
-		ContentType: textContentType,
-		Body:        []byte(w.turns[turn-1] + " (request " + nonce + ")"),
-		Verify: func(body []byte) error {
-			return checkClaudeCodeTurn(body, nonce, turn)
-		},
-	})
-	w.last = turn
-	if err != nil {
-		w.last = lastUnknown
-	}
-	return retry, err
-}
-
-// checkClaudeCodeTurn checks that body answers the conversation's turn.
-func checkClaudeCodeTurn(body []byte, nonce string, turn int) error {
+// claudeCodeAnswer is Claude Code's answer in the actor's reply.
+func claudeCodeAnswer(body []byte) (string, error) {
 	var reply claudeCodeReply
 	if err := json.Unmarshal(body, &reply); err != nil {
-		return fmt.Errorf("unreadable /invoke reply %q: %w", body, err)
+		return "", fmt.Errorf("unreadable /invoke reply %q: %w", body, err)
 	}
-	if !strings.Contains(reply.Result, "(request "+nonce+")") {
-		return fmt.Errorf("reply %q does not carry nonce %q", reply.Result, nonce)
-	}
-	match := claudeCodeTurn.FindStringSubmatch(reply.Result)
-	if match == nil {
-		return fmt.Errorf("reply %q gives no turn", reply.Result)
-	}
-	if got, _ := strconv.Atoi(match[1]); got != turn {
-		return fmt.Errorf("session at turn %d, want turn %d", got, turn)
-	}
-	return nil
+	return reply.Result, nil
 }

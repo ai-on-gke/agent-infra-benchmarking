@@ -20,7 +20,9 @@
 package scenario
 
 import (
+	"context"
 	"errors"
+	"flag"
 	"log/slog"
 	"os"
 	"time"
@@ -108,9 +110,10 @@ type Options struct {
 	EgressAllow    []string
 	EgressAllowTLS []string
 
-	// Turns are the prompts of a recorded conversation the workload sends in
-	// place of its own, which it has to be a workload.Conversation for.
-	Turns []string
+	// Flags are the worker's, holding the workloads' own (see
+	// workload.RegisterFlags). Nil skips the check that none of another
+	// workload's is set.
+	Flags *flag.FlagSet
 }
 
 // Common is Options as Setup resolved them.
@@ -130,14 +133,9 @@ func Setup(o Options) Common {
 		slog.Error("fatal: cannot select the workload", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	if len(o.Turns) > 0 {
-		c, ok := wl.(workload.Conversation)
-		if !ok {
-			slog.Error("fatal: --workload-turns-url needs a workload that can send a conversation's turns",
-				slog.String("workload", wl.Name()))
-			os.Exit(1)
-		}
-		wl = c.WithTurns(o.Turns)
+	if err := workload.Configure(context.Background(), wl, o.Flags); err != nil {
+		slog.Error("fatal: cannot configure the workload", slog.String("workload", wl.Name()), slog.String("err", err.Error()))
+		os.Exit(1)
 	}
 	if o.EgressAllow, err = sandbox.EgressHosts(o.EgressAllow); err != nil {
 		slog.Error("fatal: invalid --actor-egress-allow", slog.String("err", err.Error()))

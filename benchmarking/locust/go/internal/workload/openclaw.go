@@ -93,6 +93,6 @@ func (openclawWorkload) SendInstruction(ctx context.Context, actor sandbox.Actor
 // openclawPromptFor and openclawReplyFor carry the nonce in the form mock-llm
 // reads it from the prompt and writes it into its answer
 // (workloads/images/mock-llm/mock_llm.py).
-func openclawPromptFor(nonce string) string { return openclawPrompt + " (request " + nonce + ")" }
+func openclawPromptFor(nonce string) string { return withNonce(openclawPrompt, nonce) }
 
 func openclawReplyFor(nonce string) string { return openclawExpectedReply + " (request " + nonce + ")" }

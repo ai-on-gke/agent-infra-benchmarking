@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
@@ -219,7 +220,7 @@ func newConversationActor(t *testing.T, a *conversationActor) sandbox.Actor {
 }
 
 func conversationWorkload(prompts ...string) Workload {
-	return (&claudeCodeWorkload{}).WithTurns(prompts).(PerActor).ForActor()
+	return (&claudeCodeWorkload{conversation{turns: prompts}}).ForActor()
 }
 
 // The conversation's prompts go in order, each saying its turn, and from the
@@ -279,4 +280,51 @@ func TestClaudeCodeStartsTheConversationOverAfterAFailure(t *testing.T) {
 	if got := a.paths[len(a.paths)-1]; got != "/invoke?turn=1" {
 		t.Errorf("after a failure: got %s, want turn 1", got)
 	}
+}
+
+func TestClaudeCodeFetchesItsTurns(t *testing.T) {
+	// serve answers each call with the next of statuses, the last for the rest.
+	serve := func(statuses ...int) (*httptest.Server, *atomic.Int32) {
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			status := statuses[min(int(calls.Add(1)), len(statuses))-1]
+			w.WriteHeader(status)
+			if status == http.StatusOK {
+				w.Write([]byte(`["Look at the repo.", "Add a test."]`))
+			}
+		}))
+		t.Cleanup(srv.Close)
+		return srv, &calls
+	}
+
+	t.Run("sends the served prompts", func(t *testing.T) {
+		srv, _ := serve(http.StatusOK)
+		w := &claudeCodeWorkload{conversation{turnsURL: srv.URL}}
+		if err := w.Configure(context.Background()); err != nil {
+			t.Fatalf("Configure failed: %v", err)
+		}
+		if want := []string{"Look at the repo.", "Add a test."}; !slices.Equal(w.turns, want) {
+			t.Errorf("turns: got %q, want %q", w.turns, want)
+		}
+	})
+
+	t.Run("tries a 5xx again", func(t *testing.T) {
+		srv, calls := serve(http.StatusServiceUnavailable, http.StatusOK)
+		if err := (&claudeCodeWorkload{conversation{turnsURL: srv.URL}}).Configure(context.Background()); err != nil {
+			t.Fatalf("Configure failed: %v", err)
+		}
+		if got := calls.Load(); got != 2 {
+			t.Errorf("calls: got %d, want 2", got)
+		}
+	})
+
+	t.Run("does not try another recording again", func(t *testing.T) {
+		srv, calls := serve(http.StatusConflict)
+		if err := (&claudeCodeWorkload{conversation{turnsURL: srv.URL}}).Configure(context.Background()); err == nil || !strings.Contains(err.Error(), "HTTP 409") {
+			t.Errorf("err: got %v, want an HTTP 409", err)
+		}
+		if got := calls.Load(); got != 1 {
+			t.Errorf("calls: got %d, want 1", got)
+		}
+	})
 }

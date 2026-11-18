@@ -97,8 +97,6 @@ func main() {
 			"agent-substrate only: comma-separated hostnames every actor may reach over cleartext HTTP or gRPC, on any port, each as the actor dials it. Unset, with --actor-egress-allow-tls unset too, gives actors no egress policy, so they can reach nothing.")
 		actorEgressAllowTLS = flag.String("actor-egress-allow-tls", "",
 			"agent-substrate only: comma-separated hostnames every actor may reach over TLS, such as an https:// endpoint, on any port, passed through undecrypted. A cleartext rule does not let TLS through.")
-		workloadTurnsURL = flag.String("workload-turns-url", "",
-			"mock-llm's /recordings/NAME/turns, which serves the prompts of the recorded conversation it replays: the workload sends them one a turn, from the first again after the last, in place of its own. claude-code only.")
 		apiConnections = flag.Int("api-connections", 1,
 			"Connections to ateapi this worker spreads its users over.")
 		provider     = flag.String("provider", "agent-substrate", "Provider: agent-substrate or agent-sandbox.")
@@ -110,10 +108,6 @@ func main() {
 			"runworkload only: instructions each cycle sends between its resume and its suspend; the first closes TTFI.")
 		concurrentInstructions = flag.Int("concurrent-instructions", 1,
 			"runworkload only: instructions sent to an actor at once at each of a cycle's steps.")
-		gluttonWriteRAM = flag.String("glutton-write-ram", "",
-			"runworkload with glutton only: memory each cycle rewrites in the actor before its suspend, such as 64Mi. Unset writes none.")
-		gluttonWriteDisk = flag.Int("glutton-write-disk", 0,
-			"runworkload with glutton only: bytes of a file each cycle rewrites in the actor before its suspend. Zero writes none.")
 		suspendDisabled = flag.Bool("suspend-disabled", false,
 			"runworkload only: whether to skip the suspend phase during the benchmark.")
 
@@ -123,6 +117,9 @@ func main() {
 		skippedResumeSuspend = flag.Duration("skipped-resume-suspend", 0,
 			"density with --suspend-disabled only: the resume and suspend each cycle skips, which the pacing counts as if it ran, so the actors send instructions at the rate of ones that suspend.")
 	)
+	// Each workload's own, such as --glutton-write-ram, which only the
+	// workload --workload-name selects may be given.
+	workload.RegisterFlags(flag.CommandLine)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
 	flag.Parse()
@@ -161,9 +158,8 @@ func main() {
 		_ = tp.Shutdown(shutdownCtx)
 	}()
 
-	if *apiConnections < 1 || *instructionsPerCycle < 1 || *concurrentInstructions < 1 || *gluttonWriteDisk < 0 {
-		slog.Error("fatal: --api-connections, --instructions-per-cycle and --concurrent-instructions must be at least 1," +
-			" and --glutton-write-disk not negative")
+	if *apiConnections < 1 || *instructionsPerCycle < 1 || *concurrentInstructions < 1 {
+		slog.Error("fatal: --api-connections, --instructions-per-cycle and --concurrent-instructions must be at least 1")
 		os.Exit(1)
 	}
 	// Each its own HTTP/2 connection, so the users' calls are not all
@@ -220,17 +216,6 @@ func main() {
 			slog.Duration("workload_timeout", *workloadTimeout))
 		os.Exit(1)
 	}
-	var turns []string
-	if *workloadTurnsURL != "" {
-		fetchCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		var err error
-		turns, err = workload.FetchTurns(fetchCtx, *workloadTurnsURL)
-		cancel()
-		if err != nil {
-			slog.Error("fatal: cannot get the conversation's turns", slog.String("err", err.Error()))
-			os.Exit(1)
-		}
-	}
 	// runworkload and density are built here, from the flags, rather than
 	// looked up: the registry hands an Init nothing but cfg.
 	cycle := func() runworkload.Config {
@@ -249,13 +234,11 @@ func main() {
 				SuspendMode:    *suspendMode,
 				EgressAllow:    splitList(*actorEgressAllow),
 				EgressAllowTLS: splitList(*actorEgressAllowTLS),
-				Turns:          turns,
+				Flags:          flag.CommandLine,
 			}),
 			SuspendDisabled:        *suspendDisabled,
 			InstructionsPerCycle:   *instructionsPerCycle,
 			ConcurrentInstructions: *concurrentInstructions,
-			GluttonWriteRAM:        *gluttonWriteRAM,
-			GluttonWriteDisk:       *gluttonWriteDisk,
 		}
 	}
 	var (

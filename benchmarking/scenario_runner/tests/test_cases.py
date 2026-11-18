@@ -384,8 +384,8 @@ class Recordings(unittest.TestCase):
         options = self.case({"name": "fix"})["locust"]
         self.assertEqual(options["recording"], {"name": "fix", "timing": "instant"})
         url = "http://mock-llm.benchmark-workloads.svc.cluster.local/recordings/fix/turns"
-        self.assertEqual(options["worker"]["workload-turns-url"], url)
-        self.assertIn(f"--workload-turns-url={url}", locust.worker_args(options))
+        self.assertEqual(options["worker"]["claude-code-turns-url"], url)
+        self.assertIn(f"--claude-code-turns-url={url}", locust.worker_args(options))
 
     def test_a_recording_has_to_be_a_conversation_that_is_there(self):
         self.record("one-prompt", None)

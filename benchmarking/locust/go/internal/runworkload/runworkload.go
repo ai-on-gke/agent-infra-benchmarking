@@ -57,8 +57,6 @@ const (
 	ttfiMetric          = "TTFI"
 	cycleTimeMetric     = "CycleTime"
 	executionTimeMetric = "ExecutionTime"
-	writeRAMMetric      = "WriteRAM"
-	writeDiskMetric     = "WriteDisk"
 	recoverMetric       = "Recover"
 
 	// Transport label for TTFI, CycleTime and Recover. Their windows span
@@ -87,13 +85,6 @@ type Config struct {
 	// at once at each of those steps; below 1 is 1. TTFI closes once all of
 	// the first step's are served.
 	ConcurrentInstructions int
-
-	// GluttonWriteRAM, a size such as "64Mi", has every glutton cycle write
-	// that much of the actor's memory after its instructions, so the suspend
-	// snapshots dirtied memory. GluttonWriteDisk does the same with that many
-	// bytes of a file. Unset for none.
-	GluttonWriteRAM  string
-	GluttonWriteDisk int
 }
 
 // New returns a boomer-compatible task function running c, plus a shutdown
@@ -116,11 +107,6 @@ func New(c Config) (task func(), shutdown func(context.Context)) {
 func NewScenario(c Config, userClass string) harness.Scenario {
 	c.InstructionsPerCycle = max(c.InstructionsPerCycle, 1)
 	c.ConcurrentInstructions = max(c.ConcurrentInstructions, 1)
-	if _, ok := c.Workload.(workload.Loader); !ok && (c.GluttonWriteRAM != "" || c.GluttonWriteDisk > 0) {
-		slog.Error("fatal: --glutton-write-ram and --glutton-write-disk need a workload that implements workload.Loader",
-			slog.String("workload", c.Workload.Name()))
-		os.Exit(1)
-	}
 	if _, ok := c.Workload.(workload.PerActor); ok && c.ConcurrentInstructions > 1 {
 		slog.Error("fatal: --concurrent-instructions needs a workload that keeps no state per actor",
 			slog.String("workload", c.Workload.Name()))
@@ -157,6 +143,10 @@ func (s *runWorkloadScenario) Start(ctx context.Context) (harness.Session, error
 		return nil, err
 	}
 	w := s.c.Workload
+	var loads []workload.Load
+	if l, ok := w.(workload.Loader); ok {
+		loads = l.Loads()
+	}
 	if p, ok := w.(workload.PerActor); ok {
 		w = p.ForActor()
 	}
@@ -168,8 +158,8 @@ func (s *runWorkloadScenario) Start(ctx context.Context) (harness.Session, error
 		resumeMode:   s.c.ResumeMode,
 		steps:        max(s.c.InstructionsPerCycle, 1),
 		concurrent:   max(s.c.ConcurrentInstructions, 1),
-		writeRAM:     s.c.GluttonWriteRAM,
-		writeDisk:    s.c.GluttonWriteDisk,
+		loads:        loads,
+		loaded:       make([]bool, len(loads)),
 	}, nil
 }
 
@@ -186,11 +176,10 @@ type runWorkloadUser struct {
 	steps      int
 	concurrent int
 
-	// What load writes each cycle, for a workload that is a loader, and
-	// whether this actor's memory has been written yet.
-	writeRAM   string
-	writeDisk  int
-	ramWritten bool
+	// What each cycle writes before its suspend, for a workload that is a
+	// loader, and which of them have succeeded on this actor yet.
+	loads  []workload.Load
+	loaded []bool
 }
 
 // Iterate runs one cycle. The first iteration on a VU is its Start, which
@@ -273,28 +262,17 @@ func (u *runWorkloadUser) executeStep(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// load writes u.writeRAM of the actor's memory and u.writeDisk bytes of its
-// disk, each its own row, so the suspend after it snapshots that much changed
-// state. It returns the name of the call that failed, if one did.
+// load runs the workload's loads, each its own row, so the suspend after
+// them snapshots that much changed state. It returns the name of the call
+// that failed, if one did.
 func (u *runWorkloadUser) load(ctx context.Context) (string, error) {
-	loader, ok := u.workload.(workload.Loader)
-	if !ok {
-		return "", nil
-	}
-	if u.writeRAM != "" {
-		if err := u.rec.HTTP(ctx, writeRAMMetric, nil, func(ctx context.Context) error {
-			return loader.WriteRAM(ctx, u.sandbox.Actor(), u.writeRAM, !u.ramWritten)
+	for i, l := range u.loads {
+		if err := u.rec.HTTP(ctx, l.Metric, nil, func(ctx context.Context) error {
+			return l.Run(ctx, u.sandbox.Actor(), !u.loaded[i])
 		}); err != nil {
-			return writeRAMMetric, err
+			return l.Metric, err
 		}
-		u.ramWritten = true
-	}
-	if u.writeDisk > 0 {
-		if err := u.rec.HTTP(ctx, writeDiskMetric, nil, func(ctx context.Context) error {
-			return loader.WriteDisk(ctx, u.sandbox.Actor(), u.writeDisk)
-		}); err != nil {
-			return writeDiskMetric, err
-		}
+		u.loaded[i] = true
 	}
 	return "", nil
 }

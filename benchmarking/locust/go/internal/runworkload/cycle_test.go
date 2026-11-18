@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/workload"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
@@ -77,13 +78,20 @@ func TestConcurrentInstructionFailureFailsTheStep(t *testing.T) {
 	}
 }
 
+// setGluttonLoads has u's cycles write as glutton's --glutton-write-ram and
+// --glutton-write-disk would.
+func setGluttonLoads(u *runWorkloadUser, writeRAM string, writeDisk int) {
+	u.loads = workload.NewGlutton(writeRAM, writeDisk).(workload.Loader).Loads()
+	u.loaded = make([]bool, len(u.loads))
+}
+
 // A glutton cycle with a load writes the actor's memory and then its disk
 // after the instruction, and suspends after both.
 func TestCycleLoadsGluttonBeforeSuspend(t *testing.T) {
 	srv := &pingServer{}
 	fake := &fakeControlClient{}
 	u := newTestRunWorkloadUser(t, srv, &userclass.Config{APIStub: fake})
-	u.writeRAM, u.writeDisk = "1Mi", 4096
+	setGluttonLoads(u, "1Mi", 4096)
 
 	if call, err := u.cycle(context.Background(), scenario.ResumeModeExplicit); err != nil {
 		t.Fatalf("cycle failed at %s: %v", call, err)
@@ -101,7 +109,7 @@ func TestCycleLoadsGluttonBeforeSuspend(t *testing.T) {
 func TestFirstRAMWriteFillsLaterOnesRotate(t *testing.T) {
 	srv := &pingServer{}
 	u := newTestRunWorkloadUser(t, srv, nil)
-	u.writeRAM = "1Mi"
+	setGluttonLoads(u, "1Mi", 0)
 
 	for i := range 3 {
 		if call, err := u.cycle(context.Background(), scenario.ResumeModeExplicit); err != nil {
@@ -124,14 +132,14 @@ func TestFailedLoadFailsTheCycle(t *testing.T) {
 	srv := &pingServer{LoadStatus: http.StatusInternalServerError}
 	fake := &fakeControlClient{}
 	u := newTestRunWorkloadUser(t, srv, &userclass.Config{APIStub: fake})
-	u.writeRAM = "1Mi"
+	setGluttonLoads(u, "1Mi", 0)
 
 	call, err := u.cycle(context.Background(), scenario.ResumeModeExplicit)
 	if err == nil {
 		t.Fatal("cycle succeeded with a failed WriteRAM, want failure")
 	}
-	if call != writeRAMMetric {
-		t.Errorf("failed call: got %q, want %q", call, writeRAMMetric)
+	if call != "WriteRAM" {
+		t.Errorf("failed call: got %q, want WriteRAM", call)
 	}
 	if got := fake.countCalls("SuspendActor"); got != 0 {
 		t.Errorf("SuspendActor calls: got %d, want none after the failed load", got)

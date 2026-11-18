@@ -166,8 +166,9 @@ func (myappWorkload) SendInstruction(ctx context.Context, actor sandbox.Actor) (
 
 `SendInstruction` must not return a nil error before the actor has run the
 instruction: a nil error ends the measurement. `sendHTTPInstruction`
-already retries a 5xx, 429 or 421. To support `glutton-write-ram` and
-`glutton-write-disk`, also implement `Loader` from `workload.go`.
+already retries a 5xx, 429 or 421. For writes before each suspend, also
+implement `Loader` from `workload.go`, and for flags of its own,
+`Configurable`, naming them `--myapp-...`.
 
 ### 6. Add a Go test
 

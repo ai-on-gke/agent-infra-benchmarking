@@ -179,7 +179,7 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     workers = check_workers(name, options.get("workers"), memory, control_plane(case), on)
     recording = check_recording(name, options.get("recording"), workload)
     if recording:
-        worker = {**worker, "workload-turns-url": openclaw.recording_turns_url(recording["name"])}
+        worker = {**worker, f"{workload}-turns-url": openclaw.recording_turns_url(recording["name"])}
     if control_plane(case) == SUBSTRATE:
         worker = {"suspend-mode": SUSPEND_MODES[0], **worker}
         if worker["suspend-mode"] not in SUSPEND_MODES:
