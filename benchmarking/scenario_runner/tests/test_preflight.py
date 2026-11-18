@@ -133,11 +133,11 @@ class DevInfraConfiguration(unittest.TestCase):
 
     def test_a_case_runs_on_its_configuration_or_one_that_has_more(self):
         self.assertIsNone(self.prepare("common", "common"))
-        self.assertIsNone(self.prepare("openclaw", "openclaw"))
-        self.assertIsNone(self.prepare("openclaw", "common"))
+        self.assertIsNone(self.prepare("mock-llm", "mock-llm"))
+        self.assertIsNone(self.prepare("mock-llm", "common"))
 
     def test_a_case_is_refused_one_without_what_it_asks_for(self):
-        for applied, asked in (("common", "openclaw"), ("common", "dummy"), ("dummy", "common")):
+        for applied, asked in (("common", "mock-llm"), ("common", "dummy"), ("dummy", "common")):
             with self.subTest(applied=applied, asked=asked):
                 self.assertIn(
                     f"case c runs on configuration {asked}, but dev infra dev is {applied}", self.prepare(applied, asked)

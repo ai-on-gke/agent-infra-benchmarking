@@ -24,6 +24,13 @@ spec:
       containers:
       - name: mock-llm
         image: ${IMAGE_WITH_DIGEST}
+        env:
+        - name: MOCK_LLM_MODE
+          value: "${MOCK_LLM_MODE}"
+        - name: CASSETTE
+          value: "${CASSETTE}"
+        - name: REPLAY_TIMING
+          value: "${REPLAY_TIMING}"
         ports:
         - containerPort: 8080
         readinessProbe:

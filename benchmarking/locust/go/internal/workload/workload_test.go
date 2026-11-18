@@ -15,6 +15,8 @@
 package workload
 
 import (
+	"context"
+	"flag"
 	"strings"
 	"testing"
 )
@@ -35,8 +37,8 @@ func TestResolve(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Resolve(%q) failed: %v", GluttonName, err)
 		}
-		if _, ok := w.(gluttonWorkload); !ok {
-			t.Errorf("workload: got %T, want gluttonWorkload", w)
+		if _, ok := w.(*gluttonWorkload); !ok {
+			t.Errorf("workload: got %T, want *gluttonWorkload", w)
 		}
 	})
 
@@ -50,6 +52,51 @@ func TestResolve(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), GluttonName) {
 			t.Errorf("error does not list the known workloads: %v", err)
+		}
+	})
+}
+
+func TestConfigure(t *testing.T) {
+	// parse registers every workload's flags on a new set and parses args.
+	parse := func(t *testing.T, args ...string) *flag.FlagSet {
+		t.Helper()
+		fs := flag.NewFlagSet("worker", flag.ContinueOnError)
+		RegisterFlags(fs)
+		if err := fs.Parse(args); err != nil {
+			t.Fatalf("Parse(%q) failed: %v", args, err)
+		}
+		return fs
+	}
+	glutton, _ := Resolve(GluttonName)
+	claudeCode, _ := Resolve(claudeCodeWorkloadName)
+	t.Cleanup(func() { *glutton.(*gluttonWorkload) = gluttonWorkload{} })
+
+	t.Run("applies the workload's own flags", func(t *testing.T) {
+		fs := parse(t, "--glutton-write-ram=1Mi", "--glutton-write-disk=4096")
+		if err := Configure(context.Background(), glutton, fs); err != nil {
+			t.Fatalf("Configure failed: %v", err)
+		}
+		var metrics []string
+		for _, l := range glutton.(Loader).Loads() {
+			metrics = append(metrics, l.Metric)
+		}
+		if got, want := strings.Join(metrics, ","), "WriteRAM,WriteDisk"; got != want {
+			t.Errorf("loads: got %s, want %s", got, want)
+		}
+	})
+
+	t.Run("refuses another workload's flag", func(t *testing.T) {
+		fs := parse(t, "--glutton-write-ram=1Mi")
+		err := Configure(context.Background(), claudeCode, fs)
+		if err == nil || !strings.Contains(err.Error(), "--glutton-write-ram is glutton's, not claude-code's") {
+			t.Errorf("err: got %v, want --glutton-write-ram refused", err)
+		}
+	})
+
+	t.Run("refuses a negative disk write", func(t *testing.T) {
+		fs := parse(t, "--glutton-write-disk=-1")
+		if err := Configure(context.Background(), glutton, fs); err == nil {
+			t.Error("Configure succeeded, want --glutton-write-disk refused")
 		}
 	})
 }

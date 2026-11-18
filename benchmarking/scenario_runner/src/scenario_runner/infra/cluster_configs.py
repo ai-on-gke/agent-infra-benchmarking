@@ -225,11 +225,12 @@ class CommonCluster(ClusterConfig):
 
 
 @dataclass(frozen=True)
-class OpenclawCluster(CommonCluster):
-    """common's cluster with a pool for mock-llm, which the openclaw actors
-    call, so it shares no node with the control plane."""
+class MockLlmCluster(CommonCluster):
+    """common's cluster with a pool for mock-llm, which the workloads in
+    workloads.MOCK_LLM_TEMPLATES call, so it shares no node with the control
+    plane."""
 
-    CONFIGURATION: ClassVar[str] = "openclaw"
+    CONFIGURATION: ClassVar[str] = "mock-llm"
 
     def variables(self, execution: Execution) -> dict:
         return {**super().variables(execution), "additional_node_pools": [MOCK_LLM_POOL]}
@@ -246,7 +247,7 @@ class DummyCluster(ClusterConfig):
 
 # What infra.cluster.configuration picks, common by default.
 CLUSTER_CONFIGS: dict[str, type[ClusterConfig]] = {
-    config.CONFIGURATION: config for config in (CommonCluster, OpenclawCluster, DummyCluster)
+    config.CONFIGURATION: config for config in (CommonCluster, MockLlmCluster, DummyCluster)
 }
 
 
@@ -299,7 +300,11 @@ def from_record(record: dict) -> ClusterConfig:
     # Recorded before the case's class became nested-virtualization's input.
     if "sandbox_class" in values:
         values["nested_virtualization"] = values.pop("sandbox_class") == "microvm"
-    config = CLUSTER_CONFIGS.get(values.pop("configuration", None))
+    configuration = values.pop("configuration", None)
+    # Recorded before mock-llm's configuration was named for it.
+    if configuration == "openclaw":
+        configuration = MockLlmCluster.CONFIGURATION
+    config = CLUSTER_CONFIGS.get(configuration)
     try:
         if config is None:
             raise TypeError

@@ -108,10 +108,6 @@ func main() {
 			"runworkload only: instructions each cycle sends between its resume and its suspend; the first closes TTFI.")
 		concurrentInstructions = flag.Int("concurrent-instructions", 1,
 			"runworkload only: instructions sent to an actor at once at each of a cycle's steps.")
-		gluttonWriteRAM = flag.String("glutton-write-ram", "",
-			"runworkload with glutton only: memory each cycle rewrites in the actor before its suspend, such as 64Mi. Unset writes none.")
-		gluttonWriteDisk = flag.Int("glutton-write-disk", 0,
-			"runworkload with glutton only: bytes of a file each cycle rewrites in the actor before its suspend. Zero writes none.")
 		suspendDisabled = flag.Bool("suspend-disabled", false,
 			"runworkload only: whether to skip the suspend phase during the benchmark.")
 
@@ -121,6 +117,9 @@ func main() {
 		skippedResumeSuspend = flag.Duration("skipped-resume-suspend", 0,
 			"density with --suspend-disabled only: the resume and suspend each cycle skips, which the pacing counts as if it ran, so the actors send instructions at the rate of ones that suspend.")
 	)
+	// Each workload's own, such as --glutton-write-ram, which only the
+	// workload --workload-name selects may be given.
+	workload.RegisterFlags(flag.CommandLine)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
 	flag.Parse()
@@ -159,9 +158,8 @@ func main() {
 		_ = tp.Shutdown(shutdownCtx)
 	}()
 
-	if *apiConnections < 1 || *instructionsPerCycle < 1 || *concurrentInstructions < 1 || *gluttonWriteDisk < 0 {
-		slog.Error("fatal: --api-connections, --instructions-per-cycle and --concurrent-instructions must be at least 1," +
-			" and --glutton-write-disk not negative")
+	if *apiConnections < 1 || *instructionsPerCycle < 1 || *concurrentInstructions < 1 {
+		slog.Error("fatal: --api-connections, --instructions-per-cycle and --concurrent-instructions must be at least 1")
 		os.Exit(1)
 	}
 	// Each its own HTTP/2 connection, so the users' calls are not all
@@ -236,12 +234,11 @@ func main() {
 				SuspendMode:    *suspendMode,
 				EgressAllow:    splitList(*actorEgressAllow),
 				EgressAllowTLS: splitList(*actorEgressAllowTLS),
+				Flags:          flag.CommandLine,
 			}),
 			SuspendDisabled:        *suspendDisabled,
 			InstructionsPerCycle:   *instructionsPerCycle,
 			ConcurrentInstructions: *concurrentInstructions,
-			GluttonWriteRAM:        *gluttonWriteRAM,
-			GluttonWriteDisk:       *gluttonWriteDisk,
 		}
 	}
 	var (

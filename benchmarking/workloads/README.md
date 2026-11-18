@@ -1,9 +1,11 @@
 # Workloads
 
 A workload is the application inside each actor that the boomer worker sends
-instructions to. Today there are two: `glutton` and `openclaw`. This
-directory holds their images (`images/`, `images.json`) and their
-ActorTemplates (`manifests/`).
+instructions to. Today there are three: `glutton`, `openclaw` and
+`claude-code`, the last two agents calling `mock-llm` in place of a model. This
+directory holds their images (`images/`, `images.json`), their
+ActorTemplates (`manifests/`) and the [recorder](recorder/README.md), which
+records an agent's conversation with a real model for mock-llm to replay.
 
 ## Adding a workload
 
@@ -90,6 +92,7 @@ only these placeholders; any other `${...}` fails the deploy:
 | `${ACTOR_MEMORY_BYTES}`, `${ACTOR_CPU_MILLICORES}` | the case's `actor-memory`, and 1 CPU |
 | `${OTLP_ENDPOINT}` | the control plane's OTLP collector |
 | `${PROJECT_ID}` | the cluster's project |
+| `${EXEC_TIMEOUT_SECS}` | the case's `workload-timeout` less 20 s, 100 without one: when the actor should give up on an instruction |
 
 An actor that sends OpenTelemetry has to be told the collector, as substrate
 gives it none. Add to the container:
@@ -108,11 +111,14 @@ In [`scenario_runner/src/scenario_runner/workloads/__init__.py`](../scenario_run
 add the template and its image key to `TEMPLATE_IMAGES`:
 
 ```python
-TEMPLATE_IMAGES = {"openclaw": "openclaw-workload", "myapp": "myapp-workload"}
+TEMPLATE_IMAGES = {"openclaw": "openclaw-workload", "claude-code": "claude-code-workload", "myapp": "myapp-workload"}
 ```
 
 If the actors need more than 256Mi, also add `myapp` to
 `DEFAULT_ACTOR_MEMORY_BY_WORKLOAD` and `MIN_ACTOR_MEMORY_MIB` in the same file.
+If they call mock-llm, add it to `MOCK_LLM_TEMPLATES` there, which deploys
+mock-llm with it, give its cases `infra.cluster.configuration: mock-llm`, and
+see the recorder's [Adding a workload](recorder/README.md#adding-a-workload).
 
 ### 5. Add the Go workload
 
@@ -166,8 +172,9 @@ func (myappWorkload) SendInstruction(ctx context.Context, actor sandbox.Actor) (
 
 `SendInstruction` must not return a nil error before the actor has run the
 instruction: a nil error ends the measurement. `sendHTTPInstruction`
-already retries a 5xx, 429 or 421. To support `glutton-write-ram` and
-`glutton-write-disk`, also implement `Loader` from `workload.go`.
+already retries a 5xx, 429 or 421. For writes before each suspend, also
+implement `Loader` from `workload.go`, and for flags of its own,
+`Configurable`, naming them `--myapp-...`.
 
 ### 6. Add a Go test
 

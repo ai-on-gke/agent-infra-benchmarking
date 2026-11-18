@@ -1,8 +1,19 @@
 {
   "openclaw-workload": {
-    "description": "The actor the openclaw workload drives. The Dockerfile installs openclaw from npm and copies one script, so its context is its own directory.",
+    "description": "The actor the openclaw workload drives: openclaw from npm, a wrapper script and the textkit repo (images/textkit), a second context.",
     "dockerfile": "benchmarking/workloads/images/openclaw/Dockerfile",
-    "context": "benchmarking/workloads/images/openclaw"
+    "context": "benchmarking/workloads/images/openclaw",
+    "build_contexts": {
+      "textkit": "benchmarking/workloads/images/textkit"
+    }
+  },
+  "claude-code-workload": {
+    "description": "The actor the claude-code workload drives: Claude Code from npm, a wrapper script and the textkit repo (images/textkit), a second context.",
+    "dockerfile": "benchmarking/workloads/images/claude-code/Dockerfile",
+    "context": "benchmarking/workloads/images/claude-code",
+    "build_contexts": {
+      "textkit": "benchmarking/workloads/images/textkit"
+    }
   },
   "mock-llm": {
     "description": "The mock LLM deployed beside the workloads.",

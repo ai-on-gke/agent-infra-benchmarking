@@ -1,10 +1,19 @@
+"""The openclaw actor: POST /invoke runs one openclaw agent turn through the
+gateway warmed up at boot, its body the prompt, each in a session of its own.
+
+POST /invoke?turn=K is turn K of a recorded conversation instead, run by
+`openclaw agent --local` in the textkit repo: turn 1 starts a new session on a
+fresh repo, and a later one continues both."""
+
 import json
 import os
 import signal
 import socket
+import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -12,6 +21,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from gateway import GATEWAY_PORT, GATEWAY_TOKEN, start_and_warmup_gateway
 
 EXEC_TIMEOUT_SECS = float(os.environ.get("OPENCLAW_TIMEOUT_SECS", "100"))
+REPO = "/workspace/textkit"
+
+# The conversation's session; None until its turn 1, and after a turn that
+# failed, which may have left it half done.
+session_id = None
 
 
 class OpenClawHandler(BaseHTTPRequestHandler):
@@ -44,7 +58,8 @@ class OpenClawHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
-        if not self.path.startswith("/invoke"):
+        url = urllib.parse.urlsplit(self.path)
+        if not url.path.startswith("/invoke"):
             self.send_response(404)
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -52,6 +67,14 @@ class OpenClawHandler(BaseHTTPRequestHandler):
 
         content_length = int(self.headers.get("Content-Length", 0))
         post_data = self.rfile.read(content_length).decode("utf-8")
+
+        turn = urllib.parse.parse_qs(url.query).get("turn", [None])[0]
+        if turn is not None:
+            if not turn.isdigit() or int(turn) < 1:
+                self.reply(400, f"turn {turn!r} is not a number from 1", time.monotonic())
+                return
+            self.replay_turn(int(turn), post_data)
+            return
 
         # Fast-path default prompt to measure baseline network and routing latency
         if not post_data.strip() or post_data.strip() == "echo 'hello'":
@@ -93,6 +116,85 @@ class OpenClawHandler(BaseHTTPRequestHandler):
             self.reply(504, f"OpenClaw execution timed out: {e}", start)
         except Exception as e:
             self.reply(500, str(e), start)
+
+    def replay_turn(self, turn, prompt):
+        """Runs turn K of a recorded conversation with the openclaw CLI rather
+        than the gateway, whose one workspace and per-request session don't fit."""
+        global session_id
+        if turn > 1 and not session_id:
+            self.reply(409, f"turn {turn} has no session to continue; start the conversation over", time.monotonic())
+            return
+
+        start = time.monotonic()
+        ok = False
+        try:
+            env = os.environ.copy()
+            if env.get("OPENCLAW_USE_MOCK_LLM", "").lower() in ["true", "1", "yes"]:
+                base_url = env.get("MOCK_LLM_BASE_URL", "http://127.0.0.1:8080/v1")
+                config = {
+                    "models": {
+                        "providers": {
+                            "mock-provider": {
+                                "api": "openai-completions",
+                                "baseUrl": base_url,
+                                # openclaw reads no env var for a custom provider's key,
+                                # so without this every turn fails with missing-provider-auth.
+                                "apiKey": "mock-key",
+                                "models": [{"id": "mock-model", "name": "mock-model"}]
+                            }
+                        }
+                    },
+                    # skipBootstrap keeps openclaw's own files out of the repo.
+                    "agents": {"defaults": {"workspace": REPO, "skipBootstrap": True}},
+                    # memory-core syncs the session's past turns as each turn starts; a
+                    # short turn ends before that does, and openclaw then exits 1.
+                    "plugins": {"entries": {"memory-core": {"enabled": False}}},
+                }
+                with open("/tmp/mock-config.json", "w") as f:
+                    json.dump(config, f)
+                model = "mock-provider/mock-model"
+                # `openclaw agent` takes its config from the environment.
+                env["OPENCLAW_CONFIG_PATH"] = "/tmp/mock-config.json"
+            else:
+                model = "google-vertex/gemini-2.5-flash-lite"
+
+            if turn == 1:
+                session_id = str(uuid.uuid4())
+                for args in (["reset", "-q", "--hard", "base"], ["clean", "-qfdx"]):
+                    subprocess.run(["git", *args], cwd=REPO, check=True)
+            cmd = ["openclaw", "agent", "--local", "--session-id", session_id, "--model", model,
+                   "--message", prompt]
+
+            # Its own session, so a timeout can kill openclaw together with
+            # every process it started.
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                start_new_session=True,
+            )
+            try:
+                stdout, stderr = proc.communicate(timeout=EXEC_TIMEOUT_SECS)
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.communicate()
+                self.reply(504, f"OpenClaw execution timed out after {EXEC_TIMEOUT_SECS:g}s", start)
+                return
+
+            output = stdout + stderr
+            if proc.returncode != 0:
+                self.reply(500, f"OpenClaw exited with code {proc.returncode} after "
+                           f"{time.monotonic() - start:.1f}s.\nOutput:\n{output}", start)
+                return
+            ok = True
+            self.reply(200, output, start)
+        except Exception as e:
+            self.reply(500, str(e), start)
+        finally:
+            if not ok:
+                session_id = None
 
     def reply(self, status, body, start):
         """Sends an /invoke reply with the execution time in X-Openclaw-Exec-Ms."""

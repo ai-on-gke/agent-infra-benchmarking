@@ -499,7 +499,7 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
     current = from_record(record["cluster"])
     for name, case in cases.items():
         config = benchmarks.cluster_config(name, case)
-        # A configuration's subclass is its cluster and more, such as openclaw's common's.
+        # A configuration's subclass is its cluster and more, such as mock-llm's common's.
         if not isinstance(current, type(config)):
             fail(
                 f"case {name} runs on configuration {config.CONFIGURATION}, but dev infra {args.dev_infra}"
