@@ -1,0 +1,5 @@
+Run the test suite and tell me briefly which tests fail.
+Fix the failing test in tests/test_case.py and commit the fix.
+Fix the failing tests in tests/test_counts.py and tests/test_slug.py, then commit.
+Fix the remaining failing tests and commit.
+Summarize in two sentences what you changed in this session.

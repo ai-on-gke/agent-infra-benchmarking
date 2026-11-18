@@ -508,10 +508,10 @@ cases:
         min-wait: 20s
         max-wait: 40s
 
-  # claude-code-single, but each session replays the claude-code-textkit-fix-all
-  # recording of Claude Code against a real model: its five prompts, answered
-  # from the cassette.
-  claude-code-replay:
+  # claude-code-single, but each session replays the workload's
+  # {workload}-textkit-fix-all recording of it against a real model: its five
+  # prompts on the textkit repo, answered from the cassette.
+  "{workload}-replay":
     repeats:
       warmups: 0
     locust:
@@ -522,6 +522,8 @@ cases:
         cluster:
           sandboxed-nodes: 1
           configuration: openclaw
+          # Off the nightly's us-central1 C2 quota; run with --region us-east1.
+          zone: us-east1-b
       workers:
         count: 10
       master:
@@ -530,13 +532,17 @@ cases:
         spawn-rate: 10
         warm-up: 10s
       recording:
-        name: claude-code-textkit-fix-all
+        name: "{workload}-textkit-fix-all"
       worker:
         resume-mode: explicit
-        workload-name: claude-code
+        workload-name: "{workload}"
         workload-timeout: 240s
         min-wait: 20s
         max-wait: 40s
+    parameters:
+      workload:
+      - workload: claude-code
+      - workload: openclaw
 
   # glutton at scale: 100 VUs on 100 workers over 25 sandboxed nodes, the
   # load spread over four boomer pods. Its 26 c2-standard-16 nodes take 416 of

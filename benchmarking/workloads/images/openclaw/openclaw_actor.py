@@ -91,6 +91,9 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                     if turn is not None:
                         # skipBootstrap keeps openclaw's own files out of the repo.
                         config["agents"] = {"defaults": {"workspace": REPO, "skipBootstrap": True}}
+                        # memory-core syncs the session's past turns as each turn starts; a
+                        # short turn ends before that does, and openclaw then exits 1.
+                        config["plugins"] = {"entries": {"memory-core": {"enabled": False}}}
                     with open("/tmp/mock-config.json", "w") as f:
                         json.dump(config, f)
 
