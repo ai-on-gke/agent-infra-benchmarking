@@ -587,12 +587,53 @@ class BenchmarkRun(unittest.TestCase):
         from scenario_runner import benchmarks
 
         args = argparse.Namespace(name="run-1", no_deploy_workloads=False, report_bucket=None,
-                                  report_prefix="reports", dev_infra=None)  # fmt: skip
+                                  report_prefix="reports", dev_infra=None, probe_nodes=False)  # fmt: skip
         with mock.patch.object(benchmarks, "run") as bench_run:
             run.run_case(args, "c-1", {"type": "locust"}, mock.Mock(), "c", 1, 0, "repo")
+        # benchmarks.run takes these itself.
+        own = {name for name, p in inspect.signature(benchmarks.run).parameters.items() if p.kind is p.KEYWORD_ONLY}
         for type_, module in benchmarks.RUNNERS.items():
             # benchmarks.run runs nothing of a noop's.
             if module is benchmarks.noop:
                 continue
             params = inspect.signature(module.run).parameters
-            self.assertLessEqual(set(bench_run.call_args.kwargs), set(params), type_)
+            self.assertLessEqual(set(bench_run.call_args.kwargs) - own, set(params), type_)
+
+    def test_probe_nodes_deploys_the_probe_and_is_not_passed_on(self):
+        from scenario_runner import benchmarks
+        from scenario_runner.benchmarks import monitoring, node_probe
+
+        cluster = mock.Mock()
+        with (
+            mock.patch.object(monitoring, "deploy"),
+            mock.patch.object(node_probe, "deploy") as deploy,
+            mock.patch.object(locust, "run") as run,
+        ):
+            benchmarks.run("c-1", {"type": "locust"}, "run-1", cluster, image_repo="repo", probe_nodes=True)
+        deploy.assert_called_once_with(cluster, "repo")
+        run.assert_called_once_with(cluster, "c-1", {"type": "locust"}, "run-1", image_repo="repo")
+
+    def test_without_probe_nodes_there_is_no_probe(self):
+        from scenario_runner import benchmarks
+        from scenario_runner.benchmarks import monitoring, node_probe
+
+        with (
+            mock.patch.object(monitoring, "deploy"),
+            mock.patch.object(node_probe, "deploy") as deploy,
+            mock.patch.object(locust, "run"),
+        ):
+            benchmarks.run("c-1", {"type": "locust"}, "run-1", mock.Mock(), image_repo="repo")
+        deploy.assert_not_called()
+
+    def test_the_probe_runs_privileged_on_the_sandboxed_nodes_with_the_script(self):
+        import json
+
+        from scenario_runner.benchmarks import node_probe
+
+        config_map, daemon_set = map(json.loads, node_probe.manifest("img@sha256:1").split("\n---\n"))
+        self.assertEqual(config_map["data"]["node-probe.py"], node_probe.SCRIPT.read_text())
+        pod = daemon_set["spec"]["template"]["spec"]
+        self.assertEqual(pod["nodeSelector"], {"benchmarking-worker": "true"})
+        self.assertTrue(pod["hostPID"])
+        self.assertTrue(pod["containers"][0]["securityContext"]["privileged"])
+        self.assertEqual(pod["containers"][0]["image"], "img@sha256:1")

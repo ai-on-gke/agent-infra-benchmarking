@@ -228,6 +228,12 @@ def parse_args() -> argparse.Namespace:
         help="use the mock-llm and ActorTemplates already deployed rather than deploying the case's; only with"
         " --dev-infra. The worker pool is recreated either way",
     )
+    p.add_argument(
+        "--probe-nodes",
+        action="store_true",
+        help="also run monitoring/node-probe.py on every sandboxed node, which logs what the node's kernel waits on"
+        " once a second, for debugging a case that stalls",
+    )
     args = p.parse_args()
     # argparse checks choices only against what is given, not the default.
     if args.state_backend not in STATE_BACKENDS:
@@ -560,6 +566,7 @@ def run_case(
         report_bucket=args.report_bucket,
         report_prefix=args.report_prefix,
         keeps_bucket=bool(args.dev_infra),
+        probe_nodes=args.probe_nodes,
     )
 
 
