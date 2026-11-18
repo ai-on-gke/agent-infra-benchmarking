@@ -43,8 +43,9 @@ from typing import Callable, Iterator, NoReturn
 import yaml
 
 from .. import LABEL_RE, LOCAL_DATA_DIR, benchmarks, images, preflight, reports
-from ..benchmarks import noop, sandbox_benchmark
+from ..benchmarks import noop, sandbox_benchmark, swebench
 from ..benchmarks.sandbox_benchmark import ate_env
+from ..benchmarks.swebench import sandboxenv_rl
 from ..control_planes import agent_sandbox, substrate
 from ..images import builder
 from ..infra import dev_infra, names, terraform
@@ -388,6 +389,9 @@ def needed_images(args: argparse.Namespace, cases: dict[str, dict]) -> dict[str,
         if case["type"] == sandbox_benchmark.TYPE
     ):
         needed["env"] = ate_env.image_refs(args.image_repo)
+    # sandboxenv-rl's, likewise, for the swebench cases.
+    if not args.no_deploy_workloads and any(case["type"] == swebench.TYPE for case in cases.values()):
+        needed["sandboxenv-rl"] = sandboxenv_rl.image_refs(args.image_repo)
     files = list(dict.fromkeys(file for case in cases.values() for file in benchmarks.image_files(case)))
     if files:
         needed["benchmark"] = images.refs(args.image_repo, files)
@@ -674,7 +678,9 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
             record = dev_infra.install_agent_sandbox(record)
         elif control_plane(case) == SUBSTRATE:
             builder.renew_logins()
-            record = dev_infra.install_substrate(record, sandbox_class(case) == "microvm")
+            record = dev_infra.install_substrate(
+                record, sandbox_class(case) == "microvm", tuple(benchmarks.ingress_spiffe_ids(case))
+            )
         run_repeats(
             name,
             case,
@@ -758,7 +764,7 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
                     agent_sandbox.install(cluster)
                 elif control_plane(case) == SUBSTRATE:
                     builder.renew_logins()
-                    substrate.install(cluster, sandbox_class(case) == "microvm")
+                    substrate.install(cluster, sandbox_class(case) == "microvm", benchmarks.ingress_spiffe_ids(case))
                 yield cluster
             finally:
                 if pulls:

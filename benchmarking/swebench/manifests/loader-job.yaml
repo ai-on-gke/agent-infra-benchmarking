@@ -1,0 +1,96 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The loader of one swebench run, which plays an RL trainer against
+# ate-env-api with sandboxenv-rl's swebench-loader. Rendered and submitted by
+# scenario_runner/src/scenario_runner/benchmarks/swebench/. The run's results
+# are this pod's log and the files run_loader.py uploads.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: swebench-loader
+  namespace: benchmarking
+spec:
+  # A benchmark that died partway is not one to quietly run again.
+  backoffLimit: 0
+  # The log is the result and lives in the pod, so the pod outlives the run by
+  # a day.
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        benchmark-run-id: "${BENCHMARK_RUN_ID}"
+        benchmark-test-case: "${BENCHMARK_RECORD_NAME}"
+    spec:
+      restartPolicy: Never
+      # The account the bucket's objectCreator grant names, for the upload.
+      serviceAccountName: ${BENCHMARK_RUNNER_KSA}
+      # The loader calls ate-env-api, not the Kubernetes API.
+      automountServiceAccountToken: false
+      # Time for a stopped run to end its tasks, delete its environments and
+      # upload what it wrote. swebench.STOP_TIMEOUT_SECS waits a little longer.
+      terminationGracePeriodSeconds: 120
+      containers:
+      - name: loader
+        image: ${LOADER_IMAGE}
+        imagePullPolicy: Always
+        env:
+        # What run_loader.py reads; its docstring says what each is.
+        - name: LOADER_ARGS
+          value: "${LOADER_ARGS}"
+        - name: BENCHMARK_RUN_INFO
+          value: "${BENCHMARK_RUN_INFO}"
+        - name: BENCHMARK_RUN_ID
+          value: "${BENCHMARK_RUN_ID}"
+        - name: REPORT_BUCKET
+          value: "${BENCHMARK_REPORT_BUCKET}"
+        - name: REPORT_PREFIX
+          value: "${BENCHMARK_REPORT_PREFIX}"
+        - name: BENCHMARK_REPORT_FOLDER
+          value: "${BENCHMARK_REPORT_FOLDER}"
+        # ate-env-api's bearer token, which the loader reads from here. The
+        # scenario-runner copies it from the Secret ate-env-api reads, as a
+        # Secret can only be named from its own namespace.
+        - name: SUBSTRATE_ENV_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: ${TOKEN_SECRET}
+              key: token
+        volumeMounts:
+        - name: dataset
+          mountPath: /data
+          readOnly: true
+        - name: out
+          mountPath: /out
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+      volumes:
+      # The dataset manifest, which the scenario-runner makes the ConfigMap of.
+      - name: dataset
+        configMap:
+          name: ${DATASET_CONFIGMAP}
+      - name: out
+        emptyDir: {}
+---
+# The account the Job runs as, also in sandbox-benchmark/manifests/comparator-job.yaml
+# and locust/manifests/master-job.yaml. benchmarking/scenarios/infra/clusters/common
+# grants this exact namespace/name pair objectCreator on the bucket through a
+# principal:// subject, so no iam.gke.io annotation is needed here.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${BENCHMARK_RUNNER_KSA}
+  namespace: benchmarking

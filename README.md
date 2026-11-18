@@ -67,6 +67,7 @@ The main ones:
 | `glutton-single`, `glutton-implicit`, `glutton-load`, `glutton-session`, `glutton-concurrent`, `glutton-shared-workers` | 10 users on one node, 5 min | 1 | One feature each: router wake, RAM and disk in the snapshot, five instructions per wake, four at once, workers shared by actors |
 | `glutton-large` | 100 users over four load-generator pods, three repeats | 25 | Scale; run by hand, as it takes most of a region's C2 quota |
 | `sandbox-benchmark` | 10 suspend-resume runs per provider | 1 | substrate against E2B, Modal, Daytona, Anthropic and OpenAI, with a monthly cost sheet |
+| `swebench-substrate-gvisor` | 16 tasks, 8 at a time, on 8 workers | 1 | [sandboxenv-rl](https://github.com/ai-on-gke/sandboxenv-rl)'s loader playing an RL trainer against its `ate-env-api`; run by name, in no suite yet |
 | `dummy` | none | 0 | The Terraform path without a cluster, for checking a setup |
 
 The file's comments document every key: the load, the cluster, repeats,
@@ -149,10 +150,10 @@ a run whose images are missing.
 
 | Path | |
 |---|---|
-| [`benchmarking/`](benchmarking/README.md) | The scenario-runner (`scenario_runner/`), the cluster Terraform (`scenarios/infra/`), the cases (`scenarios/scenarios.yaml`), the load generator (`locust/`, Python master and Go boomer worker), the workloads and their images ([`workloads/`](benchmarking/workloads/README.md)), agent-sandbox's manifests (`agent-sandbox/`), and the provider comparison (`sandbox-benchmark/`, see its [doc](benchmarking/sandbox-benchmark/sandbox-benchmark.md)) |
+| [`benchmarking/`](benchmarking/README.md) | The scenario-runner (`scenario_runner/`), the cluster Terraform (`scenarios/infra/`), the cases (`scenarios/scenarios.yaml`), the load generator (`locust/`, Python master and Go boomer worker), the workloads and their images ([`workloads/`](benchmarking/workloads/README.md)), agent-sandbox's manifests (`agent-sandbox/`), the provider comparison (`sandbox-benchmark/`, see its [doc](benchmarking/sandbox-benchmark/sandbox-benchmark.md)), and sandboxenv-rl's loader as a case (`swebench/`, see its [doc](benchmarking/swebench/README.md)) |
 | [`automation-infra/`](automation-infra/README.md) | The Terraform module for a Cloud Run job that runs the scenario-runner on a schedule, its image, the two deployments and the `trigger` and `destroy-leftovers` tools |
 | [`benchmark-charts/`](benchmark-charts/) | Charts drawn from a run's raw CSVs, `pip install ./benchmark-charts` |
-| `dependency-repos/` | Submodules the images are built from: `substrate` and its `env`, `agent-sandbox`, and `ai-sandbox-benchmark` for the provider comparison. Keep them at the pinned commits; the preflight check fails a run whose substrate is not |
+| `dependency-repos/` | Submodules the images are built from: `substrate` and its `env`, `sandboxenv-rl`, `agent-sandbox`, and `ai-sandbox-benchmark` for the provider comparison. Keep them at the pinned commits; the preflight check fails a run whose substrate is not |
 | `reports/` | Where a run's reports are downloaded; ignored by git |
 | `.github/workflows/` | `ci.yml` and `publish.yml` |
 

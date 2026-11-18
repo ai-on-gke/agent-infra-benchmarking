@@ -22,22 +22,25 @@ from .. import images, reports, workloads
 from ..infra.cluster import Cluster
 from ..infra.cluster_configs import ClusterConfig
 from ..log import log
-from . import locust, monitoring, noop, sandbox_benchmark
+from . import locust, monitoring, noop, sandbox_benchmark, swebench
 from .sandbox_benchmark import ate_env
+from .swebench import sandboxenv_rl
 
-RUNNERS = {module.TYPE: module for module in (locust, noop, sandbox_benchmark)}
+RUNNERS = {module.TYPE: module for module in (locust, noop, sandbox_benchmark, swebench)}
 # What a failed run raises besides CalledProcessError.
 ERRORS = (
     locust.LocustError,
     sandbox_benchmark.SandboxBenchmarkError,
     ate_env.EnvError,
+    swebench.SwebenchError,
+    sandboxenv_rl.SandboxenvError,
     reports.ReportError,
     workloads.WorkloadError,
     images.ImageError,
     monitoring.MonitoringError,
 )
 # A run that may still be going, which a series on a shared cluster stops at.
-STILL_RUNNING = (locust.LocustStillRunning, sandbox_benchmark.SandboxBenchmarkTimeout)
+STILL_RUNNING = (locust.LocustStillRunning, sandbox_benchmark.SandboxBenchmarkTimeout, swebench.SwebenchTimeout)
 # The types whose repeats summary.write can summarize.
 SUMMARIZED = {"locust"}
 
@@ -59,6 +62,13 @@ def cluster_config(name: str, case: dict) -> ClusterConfig:
 def image_files(case: dict) -> list[Path]:
     """The images.json files of the images the case's runs pull."""
     return RUNNERS[case["type"]].IMAGE_FILES
+
+
+def ingress_spiffe_ids(case: dict) -> list[str]:
+    """The SPIFFE IDs besides the runner's that the case's substrate has to let
+    through its router, for the types whose service dials it."""
+    ids = getattr(RUNNERS[case["type"]], "ingress_spiffe_ids", None)
+    return ids(case) if ids else []
 
 
 def missing_requirements(cases: dict[str, dict]) -> list[str]:

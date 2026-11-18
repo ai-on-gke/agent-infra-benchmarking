@@ -14,9 +14,10 @@
 
 """Builds the images the scenario-runner pulls and pushes them to a
 repository ahead of its runs, with local Docker and ko, each
-under the name and tag images, substrate.py, ate_env.py and
+under the name and tag images, substrate.py, ate_env.py, sandboxenv_rl.py and
 agent_sandbox.py look it up by. The groups are substrate's, env's,
-agent-sandbox's, and the benchmark's own of the images.json files."""
+sandboxenv-rl's, agent-sandbox's, and the benchmark's own of the images.json
+files."""
 
 from __future__ import annotations
 
@@ -26,12 +27,13 @@ from collections.abc import Sequence
 
 from .. import images
 from ..benchmarks.sandbox_benchmark import ate_env
+from ..benchmarks.swebench import sandboxenv_rl
 from ..control_planes import agent_sandbox, substrate
 from ..log import log
 from ..process import stream
 from . import Image, ImageError
 
-GROUPS = ("substrate", "env", "agent-sandbox", "benchmark")
+GROUPS = ("substrate", "env", "sandboxenv-rl", "agent-sandbox", "benchmark")
 # The ko substrate's hack/tools/ko pins.
 KO = "github.com/google/ko@v0.19.1"
 # Where ko stamps substrate's build version, as ate-setup's ko runner does.
@@ -40,13 +42,15 @@ VERSION_PKG = "go.ate.dev/substrate/internal/version"
 
 def missing_requirements(groups: list[str]) -> list[str]:
     tools = ["git", "gcloud", "docker"]
-    if {"substrate", "env"} & set(groups):
+    if {"substrate", "env", "sandboxenv-rl"} & set(groups):
         tools.append("go")
     missing = [tool for tool in tools if not shutil.which(tool)]
     if "substrate" in groups:
         missing += substrate.missing_submodule()
     if "env" in groups and not (ate_env.ENV_DIR / "go.mod").is_file():
         missing.append(f"the env submodule in {ate_env.ENV_DIR}")
+    if "sandboxenv-rl" in groups and not (sandboxenv_rl.DIR / "go.mod").is_file():
+        missing.append(f"the sandboxenv-rl submodule in {sandboxenv_rl.DIR}")
     if "agent-sandbox" in groups:
         missing += agent_sandbox.missing_submodule()
     return missing
@@ -58,6 +62,8 @@ def refs(group: str, repo: str) -> list[str]:
         return substrate.image_refs(repo)
     if group == "env":
         return ate_env.image_refs(repo)
+    if group == "sandboxenv-rl":
+        return sandboxenv_rl.image_refs(repo)
     if group == "agent-sandbox":
         return agent_sandbox.image_refs(repo)
     return images.refs(repo, images.IMAGE_FILES)
@@ -71,6 +77,8 @@ def dirty(group: str) -> bool:
         return substrate.build_version().endswith("-dirty")
     if group == "env":
         return ate_env.build_version().endswith("-dirty")
+    if group == "sandboxenv-rl":
+        return sandboxenv_rl.build_version().endswith("-dirty")
     if group == "agent-sandbox":
         return agent_sandbox.build_version().endswith("-dirty")
     return False
@@ -84,6 +92,8 @@ def build(group: str, repo: str, image_refs: list[str], login: bool, cache_args:
         build_substrate(repo, login, cache_args)
     elif group == "env":
         build_env(repo, login)
+    elif group == "sandboxenv-rl":
+        build_sandboxenv_rl(repo, login)
     elif group == "agent-sandbox":
         build_agent_sandbox(repo, login, cache_args)
     else:
@@ -187,3 +197,21 @@ def build_env(repo: str, login: bool) -> None:
         stream(ko_login, cwd=ate_env.ENV_DIR, input=access_token(host))
         LOGGED_IN.add(host)
     stream(ko_build, env=env, cwd=ate_env.ENV_DIR)
+
+
+def build_sandboxenv_rl(repo: str, login: bool) -> None:
+    """Pushes sandboxenv_rl.image_refs."""
+    repo = images.group_repo(repo, sandboxenv_rl.GROUP)
+    ko_build = [
+        "go", "run", KO, "build", "--base-import-paths", f"--tags={sandboxenv_rl.build_version()}", *sandboxenv_rl.PACKAGES,
+    ]  # fmt: skip
+    env = {"KO_DEFAULTPLATFORMS": images.DEFAULT_PLATFORM, "KO_DOCKER_REPO": repo}
+    log(f"sandboxenv-rl: building {', '.join(sandboxenv_rl.PACKAGES)} into {repo}")
+    if login:
+        # ko login, as ko doesn't push with docker.
+        host = repo.split("/", 1)[0]
+        ko_login = ["go", "run", KO, "login", host, "--username=oauth2accesstoken", "--password-stdin"]
+        stream(ko_login, cwd=sandboxenv_rl.DIR, input=access_token(host))
+        LOGGED_IN.add(host)
+    # In the submodule, whose .ko.yaml names the guest's base image.
+    stream(ko_build, env=env, cwd=sandboxenv_rl.DIR)

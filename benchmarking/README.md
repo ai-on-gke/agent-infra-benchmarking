@@ -294,7 +294,7 @@ tags them with the repo's `HEAD` commit; a tree with uncommitted changes, here
 or in the submodules, gets `<commit>-dirty-<digest of the changes>` instead, so
 an image is only ever reused for exactly the code it was built from, and
 `run.json` records which. Commit before a run whose results you want to tie to
-a commit. Substrate's, env's and agent-sandbox's images are tagged with their
+a commit. Substrate's, env's, sandboxenv-rl's and agent-sandbox's images are tagged with their
 submodule's version instead, below; a `-dirty` one is built again every time. The images
 are built for `linux/amd64`, the nodes' platform, whatever the build host's;
 on an ARM machine that needs Docker's emulation (with Rosetta on Apple
@@ -495,6 +495,19 @@ Anthropic Managed Agents and OpenAI. It needs the providers' API keys; see
 
 ```bash
 ./benchmarking/tools/run --dev-infra cost-dev --scenario sandbox-benchmark
+```
+
+### Playing an RL trainer with sandboxenv-rl's loader
+
+The `swebench` case runs sandboxenv-rl's `swebench-loader` against its
+`ate-env-api` on substrate: it makes environments from task images, runs a
+workload in each, parks and wakes them between training steps and times what a
+trainer sees. By default it needs no SWE-bench images; see
+[swebench/README.md](swebench/README.md), which says how to give it a real
+dataset and reads its numbers beside the locust cases':
+
+```bash
+./benchmarking/tools/run --dev-infra swebench-dev --scenario swebench-substrate-gvisor
 ```
 
 ## Reading the results

@@ -1,0 +1,15 @@
+{
+  "swebench-loader": {
+    "description": "sandboxenv-rl's swebench-loader and run_loader.py, which runs it in a case's Job and uploads what it wrote. The sandboxenv-rl submodule is a build context of its own.",
+    "dockerfile": "benchmarking/swebench/image/Dockerfile",
+    "context": "benchmarking/swebench/image",
+    "build_contexts": {
+      "sandboxenv-rl": "dependency-repos/sandboxenv-rl"
+    }
+  },
+  "swebench-smoke-rootfs": {
+    "description": "The task image of a case's `dataset.images`: a plain Python rootfs the loader's built-in workloads can run in, so a case needs no SWE-bench images mirrored into a registry.",
+    "dockerfile": "benchmarking/swebench/smoke-rootfs/Dockerfile",
+    "context": "benchmarking/swebench/smoke-rootfs"
+  }
+}

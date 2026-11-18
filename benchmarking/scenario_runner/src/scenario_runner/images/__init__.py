@@ -34,10 +34,15 @@ ROOT = RUNNER_DIR.parent.parent
 LOCUST_IMAGES = ROOT / "benchmarking" / "locust" / "images.json"
 WORKLOADS_IMAGES = ROOT / "benchmarking" / "workloads" / "images.json"
 SANDBOX_BENCHMARK_IMAGES = ROOT / "benchmarking" / "sandbox-benchmark" / "images.json"
-IMAGE_FILES = [LOCUST_IMAGES, WORKLOADS_IMAGES, SANDBOX_BENCHMARK_IMAGES]
+SWEBENCH_IMAGES = ROOT / "benchmarking" / "swebench" / "images.json"
+IMAGE_FILES = [LOCUST_IMAGES, WORKLOADS_IMAGES, SANDBOX_BENCHMARK_IMAGES, SWEBENCH_IMAGES]
 # The submodules the images build from besides substrate, whose uncommitted
 # changes the tag covers when they are checked out.
-OTHER_SOURCES = [ROOT / "dependency-repos" / "env", ROOT / "dependency-repos" / "ai-sandbox-benchmark"]
+OTHER_SOURCES = [
+    ROOT / "dependency-repos" / "env",
+    ROOT / "dependency-repos" / "ai-sandbox-benchmark",
+    ROOT / "dependency-repos" / "sandboxenv-rl",
+]
 # The nodes', whatever the build host's.
 DEFAULT_PLATFORM = "linux/amd64"
 # Of the uncommitted changes' digest in a dirty tree's image tag, which a
@@ -146,7 +151,7 @@ def ref(repo: str, name: str, image_tag: str | None = None) -> str:
 
 def group_repo(repo: str, group: str) -> str:
     """The folder of repo a group of images goes in: substrate, env,
-    benchmark or agent-sandbox."""
+    sandboxenv-rl, benchmark or agent-sandbox."""
     return f"{repo}/{group}"
 
 
