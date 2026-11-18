@@ -469,8 +469,11 @@ and zones run out of them often. So the pool goes on the first of
 each, and the whole cluster with it. If that zone is out of the machine type,
 the run destroys what it applied there and moves on to the next placement,
 wrapping around; the last it tries is retried like any apply. GKE takes about
-35 minutes to give up on a pool it cannot get nodes for, so the cases after it
-start from the placement the last one got rather than the first. The preflight checks that each placement's
+35 minutes to give up on a pool it cannot get nodes for, so the run watches the
+pool's instance group instead, and once its instances have failed on
+stockouts for 5 minutes, resizes it to 0, which ends GKE's wait, and moves on.
+The cases after it start from the placement the last one got rather than the
+first. The preflight checks that each placement's
 zone offers its machine type and the GKE version, and that the pool fits in
 the region's C3 CPU quota. A 300-vCPU quota, for one, fits a single node:
 

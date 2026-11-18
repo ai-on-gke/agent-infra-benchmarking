@@ -37,7 +37,6 @@ import subprocess
 import sys
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 from datetime import datetime, timezone
-from functools import partial
 from pathlib import Path
 from typing import Callable, Iterator, NoReturn
 
@@ -49,7 +48,7 @@ from ..benchmarks.sandbox_benchmark import ate_env
 from ..control_planes import agent_sandbox, substrate
 from ..images import builder
 from ..infra import dev_infra, names, terraform
-from ..infra.cluster import Cluster, default_zone, gke_stockout, utc_now
+from ..infra.cluster import Cluster, PoolStockout, default_zone
 from ..infra.cluster_configs import execution, from_record, to_record
 from ..infra.deployment import RUNNER_INFRA_DIR, Deployment, DestroyFailed, GcsDeployment
 from ..log import ON_CLOUD_RUN, log
@@ -744,7 +743,7 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
             if placement:
                 log(f"{key}: sandboxed pool on {placement['machine-type']} in {placement['zone']}")
                 cluster_name = case_vars[key]["default_resource_name"]
-                stockout = partial(gke_stockout, args.project_id, placement["zone"], cluster_name, utc_now())
+                stockout = PoolStockout(args.project_id, placement["zone"], cluster_name, give_up=not last)
             stack.enter_context(case_infra.applied(retry_stockout=last, stockout=stockout))
             applied = case_infra
 
