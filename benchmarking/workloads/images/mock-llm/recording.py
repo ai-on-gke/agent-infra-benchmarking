@@ -54,6 +54,9 @@ VOLATILE_TEXT = [
     re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL),
     re.compile(r"^\[\w{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})? [^\]]*\] ", re.MULTILINE),
     re.compile(r"^Runtime: .*$", re.MULTILINE),
+    # Claude Code's system prompt: the day it runs and the node's kernel.
+    re.compile(r"^Today's date is \d{4}-\d{2}-\d{2}\.$", re.MULTILINE),
+    re.compile(r"^ *- OS Version: .*$", re.MULTILINE),
 ]
 
 
@@ -180,6 +183,16 @@ def conversation(req, api, path=None):
 
 def conversation_key(conv):
     return hashlib.sha256(json.dumps(conv, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def restable(conv):
+    """A recorded conversation with VOLATILE_TEXT taken out of its texts as
+    it is now, for cassettes recorded before a pattern was added."""
+    if isinstance(conv, list):
+        if len(conv) == 2 and conv[0] in ("text", "system") and isinstance(conv[1], str):
+            return [conv[0], stable_text(conv[1])]
+        return [restable(item) for item in conv]
+    return conv
 
 
 def replace_in(value, old, new):
@@ -480,6 +493,8 @@ class Cassette:
                     entry = json.loads(line)
                     # For cassettes recorded before mask_nonces, or the api.
                     entry = mask_nonces(entry, None, entry.get("api", ANTHROPIC))
+                    entry["conversation"] = restable(entry["conversation"])
+                    entry["key"] = conversation_key(entry["conversation"])
                     self.entries.setdefault(entry["key"], []).append(entry)
 
     def __len__(self):
