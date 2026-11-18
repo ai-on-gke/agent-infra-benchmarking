@@ -97,8 +97,8 @@ func main() {
 			"agent-substrate only: comma-separated hostnames every actor may reach over cleartext HTTP or gRPC, on any port, each as the actor dials it. Unset, with --actor-egress-allow-tls unset too, gives actors no egress policy, so they can reach nothing.")
 		actorEgressAllowTLS = flag.String("actor-egress-allow-tls", "",
 			"agent-substrate only: comma-separated hostnames every actor may reach over TLS, such as an https:// endpoint, on any port, passed through undecrypted. A cleartext rule does not let TLS through.")
-		workloadTurns = flag.String("workload-turns", "",
-			"The prompts of a recorded conversation, as a JSON list, that the workload sends one a turn, from the first again after the last, in place of its own; mock-llm has to replay that recording. claude-code only.")
+		workloadTurnsURL = flag.String("workload-turns-url", "",
+			"mock-llm's /recordings/NAME/turns, which serves the prompts of the recorded conversation it replays: the workload sends them one a turn, from the first again after the last, in place of its own. claude-code only.")
 		apiConnections = flag.Int("api-connections", 1,
 			"Connections to ateapi this worker spreads its users over.")
 		provider     = flag.String("provider", "agent-substrate", "Provider: agent-substrate or agent-sandbox.")
@@ -221,9 +221,13 @@ func main() {
 		os.Exit(1)
 	}
 	var turns []string
-	if *workloadTurns != "" {
-		if err := json.Unmarshal([]byte(*workloadTurns), &turns); err != nil || len(turns) == 0 {
-			slog.Error("fatal: --workload-turns must be a JSON list of prompts", slog.String("workload_turns", *workloadTurns))
+	if *workloadTurnsURL != "" {
+		fetchCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		var err error
+		turns, err = workload.FetchTurns(fetchCtx, *workloadTurnsURL)
+		cancel()
+		if err != nil {
+			slog.Error("fatal: cannot get the conversation's turns", slog.String("err", err.Error()))
 			os.Exit(1)
 		}
 	}

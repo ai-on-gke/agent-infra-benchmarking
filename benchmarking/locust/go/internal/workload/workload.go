@@ -20,6 +20,7 @@ package workload
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -27,6 +28,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
 	"go.opentelemetry.io/otel"
@@ -86,6 +88,47 @@ type PerActor interface {
 // of its own.
 type Conversation interface {
 	WithTurns(prompts []string) Workload
+}
+
+// FetchTurns gets a recorded conversation's prompts from url, mock-llm's
+// /recordings/NAME/turns, which serves them only while it replays that
+// recording, so they match the answers it replays. A connection error or a
+// 5xx is tried again until ctx is done; any other failure is final.
+func FetchTurns(ctx context.Context, url string) ([]string, error) {
+	for {
+		turns, retry, err := fetchTurns(ctx, url)
+		if err == nil || !retry {
+			return turns, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("%w (%w)", err, ctx.Err())
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func fetchTurns(ctx context.Context, url string) (turns []string, retry bool, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, true, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, true, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, resp.StatusCode >= 500, fmt.Errorf("GET %s: HTTP %d: %s", url, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if err := json.Unmarshal(body, &turns); err != nil || len(turns) == 0 {
+		return nil, false, fmt.Errorf("GET %s: want a JSON list of prompts, got %q", url, body)
+	}
+	return turns, false, nil
 }
 
 // Default is the workload Resolve selects when no name is given.

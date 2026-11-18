@@ -15,7 +15,12 @@
 package workload
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -50,6 +55,53 @@ func TestResolve(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), GluttonName) {
 			t.Errorf("error does not list the known workloads: %v", err)
+		}
+	})
+}
+
+func TestFetchTurns(t *testing.T) {
+	// serve answers each call with the next of statuses, the last for the rest.
+	serve := func(statuses ...int) (*httptest.Server, *atomic.Int32) {
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			status := statuses[min(int(calls.Add(1)), len(statuses))-1]
+			w.WriteHeader(status)
+			if status == http.StatusOK {
+				w.Write([]byte(`["Look at the repo.", "Add a test."]`))
+			}
+		}))
+		t.Cleanup(srv.Close)
+		return srv, &calls
+	}
+
+	t.Run("returns the served prompts", func(t *testing.T) {
+		srv, _ := serve(http.StatusOK)
+		turns, err := FetchTurns(context.Background(), srv.URL)
+		if err != nil {
+			t.Fatalf("FetchTurns failed: %v", err)
+		}
+		if want := []string{"Look at the repo.", "Add a test."}; !slices.Equal(turns, want) {
+			t.Errorf("turns: got %q, want %q", turns, want)
+		}
+	})
+
+	t.Run("tries a 5xx again", func(t *testing.T) {
+		srv, calls := serve(http.StatusServiceUnavailable, http.StatusOK)
+		if _, err := FetchTurns(context.Background(), srv.URL); err != nil {
+			t.Fatalf("FetchTurns failed: %v", err)
+		}
+		if got := calls.Load(); got != 2 {
+			t.Errorf("calls: got %d, want 2", got)
+		}
+	})
+
+	t.Run("does not try another recording again", func(t *testing.T) {
+		srv, calls := serve(http.StatusConflict)
+		if _, err := FetchTurns(context.Background(), srv.URL); err == nil || !strings.Contains(err.Error(), "HTTP 409") {
+			t.Errorf("err: got %v, want an HTTP 409", err)
+		}
+		if got := calls.Load(); got != 1 {
+			t.Errorf("calls: got %d, want 1", got)
 		}
 	})
 }

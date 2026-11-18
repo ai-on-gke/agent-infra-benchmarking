@@ -379,12 +379,13 @@ class Recordings(unittest.TestCase):
     def case(self, recording: object, **locust_keys) -> dict:
         return check("c", glutton({**self.CLAUDE_CODE, **locust_keys, "recording": recording}))
 
-    def test_the_worker_sends_the_recorded_turns(self):
+    def test_the_worker_gets_the_recorded_turns_from_mock_llm(self):
         self.record("fix", "Look at the repo.\nAdd a test.\n")
         options = self.case({"name": "fix"})["locust"]
         self.assertEqual(options["recording"], {"name": "fix", "timing": "instant"})
-        self.assertEqual(options["worker"]["workload-turns"], ["Look at the repo.", "Add a test."])
-        self.assertIn('--workload-turns=["Look at the repo.","Add a test."]', locust.worker_args(options))
+        url = "http://mock-llm.benchmark-workloads.svc.cluster.local/recordings/fix/turns"
+        self.assertEqual(options["worker"]["workload-turns-url"], url)
+        self.assertIn(f"--workload-turns-url={url}", locust.worker_args(options))
 
     def test_a_recording_has_to_be_a_conversation_that_is_there(self):
         self.record("one-prompt", None)

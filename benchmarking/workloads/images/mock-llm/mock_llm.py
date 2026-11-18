@@ -69,6 +69,8 @@ TEXTKIT_FIXES = {
         "return text[: width - len(suffix)] + suffix",
     ),
 }
+# GET /recordings/NAME/turns: the prompts the worker sends (_send_turns).
+TURNS_PATH = re.compile(r"/recordings/([^/]+)/turns")
 FAILED_TEST = re.compile(r"^FAILED (\S+::\w+)", re.MULTILINE)
 WORKING_DIRECTORY = re.compile(r"working directory: (\S+)", re.IGNORECASE)
 
@@ -169,6 +171,8 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(models_response).encode('utf-8'))
         elif self.path == "/stats":
             self._send_json(stats)
+        elif TURNS_PATH.fullmatch(self.path):
+            self._send_turns(TURNS_PATH.fullmatch(self.path)[1])
         elif self.path == "/readyz":
             self.send_response(200)
             self.end_headers()
@@ -278,6 +282,21 @@ class MockLLMHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _send_turns(self, name):
+        """The prompts of the replayed recording's conversation, one a turn,
+        which the benchmark's worker sends: only of the recording replayed, so
+        they always match the cassette answering them."""
+        replayed = os.path.basename(os.path.dirname(CASSETTE_PATH)) if MODE == "replay" else None
+        if name != replayed:
+            self._send_error(409, f"mock-llm replays {replayed or 'no recording'}, not {name}\n".encode(), "text/plain")
+            return
+        turns_file = os.path.join(os.path.dirname(CASSETTE_PATH), "turns.txt")
+        turns = open(turns_file).read().splitlines() if os.path.isfile(turns_file) else []
+        if not turns or not all(turns):
+            self._send_error(404, f"recording {name} has no conversation in {turns_file}\n".encode(), "text/plain")
+            return
+        self._send_json(turns)
 
     def _send_error(self, status, body, content_type="application/json", headers=None):
         self.send_response(status)

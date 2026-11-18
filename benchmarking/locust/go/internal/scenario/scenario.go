@@ -133,7 +133,7 @@ func Setup(o Options) Common {
 	if len(o.Turns) > 0 {
 		c, ok := wl.(workload.Conversation)
 		if !ok {
-			slog.Error("fatal: --workload-turns needs a workload that can send a conversation's turns",
+			slog.Error("fatal: --workload-turns-url needs a workload that can send a conversation's turns",
 				slog.String("workload", wl.Name()))
 			os.Exit(1)
 		}

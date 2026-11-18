@@ -36,6 +36,7 @@ REPLAY_TIMINGS = ("instant", "recorded")
 # Has to match the manifest's, which the openclaw template's MOCK_LLM_BASE_URL
 # names.
 NAMESPACE = worker_pool.NAMESPACE
+MOCK_LLM_URL = f"http://mock-llm.{NAMESPACE}.svc.cluster.local"
 # How much sooner than the worker's deadline for a call, the case's
 # workload-timeout, the actor gives up on a turn: so a slow turn ends in the
 # actor with a 504 that says so, and its processes are gone before the worker
@@ -67,8 +68,10 @@ def deploy_mock_llm(
     stream(cluster.kubectl("rollout", "status", "deployment/mock-llm", f"--timeout={timeout}s", namespace=NAMESPACE))
 
 
-def recording_turns(name: str) -> list[str]:
-    """The prompts of the recording's conversation, one a turn."""
+def recording_turns_url(name: str) -> str:
+    """Where mock-llm, replaying the recording, serves the prompts of its
+    conversation to the worker. They are checked here too, in this tree that
+    mock-llm is built from, to fail before a cluster is up."""
     path = RECORDINGS_DIR / name
     if not name or name in (".", "..") or "/" in name or not (path / "cassette.jsonl").is_file():
         have = sorted(p.name for p in RECORDINGS_DIR.iterdir() if (p / "cassette.jsonl").is_file())
@@ -77,7 +80,7 @@ def recording_turns(name: str) -> list[str]:
     turns = turns_file.read_text().splitlines() if turns_file.is_file() else []
     if not turns or not all(turns):
         raise ValueError(f"recording {name} has no conversation in {turns_file}; record one with run.sh claude-code record -i")
-    return turns
+    return f"{MOCK_LLM_URL}/recordings/{name}/turns"
 
 
 def exec_timeout_secs(workload_timeout: str | None) -> int:
