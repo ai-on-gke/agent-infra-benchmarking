@@ -99,8 +99,8 @@ with `--report-deployment`. All of it is in
 
 ## The scheduled runs
 
-Three Cloud Run jobs in the GCP project `akvelon-gke-aieco` (`us-central1`, and
-`us-east1` for bare metal) run the scenario-runner from the latest image of their branch. Which cases they
+Four Cloud Run jobs in the GCP project `akvelon-gke-aieco` (`us-central1`, and
+`us-east1` and `us-east4` for bare metal) run the scenario-runner from the latest image of their branch. Which cases they
 run is the suite of the same name in `scenarios.yaml`, so a case is added to
 or dropped from a schedule by editing the suite, with no Terraform apply.
 
@@ -110,6 +110,7 @@ or dropped from a schedule by editing the suite, with no Terraform apply.
 | `substrate-bench-auto-cleanup` | 15:00 daily | | Destroys what a killed execution left |
 | [`substrate-bench-staging`](automation-infra/deployments/substrate-bench-staging/) | 04:00 daily | `staging` | `dummy` and `glutton-single`, for trying changes to the job before `main` |
 | [`substrate-bench-metal`](automation-infra/deployments/substrate-bench-metal/) | 01:00 daily | `bare-metal` | The two 1-node bare-metal cases, in `us-east1`, apart from the nightly, as a bare-metal machine can take hours to get |
+| [`substrate-bench-east4`](automation-infra/deployments/substrate-bench-east4/) | 13:00 daily | `bare-metal` | The same cases in `us-east4`, for a second chance a day at a free machine |
 
 Each execution's reports land in `gs://substrate-bench-auto-tfstate/data/<run-id>/`
 and are queryable in the BigQuery dataset `substrate_bench_auto`, for example:
