@@ -34,7 +34,7 @@ import json
 import re
 import shutil
 import subprocess
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -46,6 +46,7 @@ from .. import RUNNER_DIR
 from ..log import log
 from ..process import retry, shielded
 from . import terraform
+from .cluster import PoolStockout
 
 RUNNER_INFRA_DIR = RUNNER_DIR / "infra"
 # The config's own deployments' files, e.g. one applied by hand, which would
@@ -153,7 +154,7 @@ class Deployment:
         once it succeeds. A failed plan or apply is planned again from the
         state it left, unless it was a stockout and not retry_stockout. A
         failure terraform's output does not tell as a stockout is one if
-        stockout says so."""
+        stockout says so, and an apply a PoolStockout gave up on is one too."""
         destroying = "-destroy" in args
         if not destroying:
             # Unflagged before, as even an apply that fails may create part of it.
@@ -161,17 +162,20 @@ class Deployment:
 
         def deploy() -> None:
             try:
-                terraform.deploy(
-                    self.config,
-                    *args,
-                    json_output=self.json_output,
-                    env=self.env(),
-                    plan_file=str(self.data / "run.tfplan"),
-                )
+                with stockout.watching() if isinstance(stockout, PoolStockout) else nullcontext():
+                    terraform.deploy(
+                        self.config,
+                        *args,
+                        json_output=self.json_output,
+                        env=self.env(),
+                        plan_file=str(self.data / "run.tfplan"),
+                    )
             except subprocess.CalledProcessError as exc:
                 if not isinstance(exc, terraform.Stockout) and stockout is not None and stockout():
                     raise terraform.Stockout(exc.returncode, exc.cmd) from None
                 raise
+            if isinstance(stockout, PoolStockout) and stockout.gave_up:
+                raise terraform.Stockout(1, ["terraform", f"-chdir={self.config}", "apply"])
 
         retry(str(self.root), deploy, give_up=() if retry_stockout else (terraform.Stockout,))
         if destroying:

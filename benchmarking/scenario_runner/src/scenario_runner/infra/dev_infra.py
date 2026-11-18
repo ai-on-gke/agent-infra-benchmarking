@@ -23,14 +23,13 @@ import argparse
 import json
 import re
 import shutil
-from functools import partial
 from pathlib import Path
 
 from .. import LOCAL_DATA_DIR
 from ..control_planes import agent_sandbox, substrate
 from ..log import log
 from . import names, terraform
-from .cluster import Cluster, gke_stockout, utc_now
+from .cluster import Cluster, PoolStockout
 from .cluster_configs import execution, from_record
 from .deployment import RUNNER_INFRA_DIR, VARIABLES_FILE, Deployment
 
@@ -146,7 +145,7 @@ def apply_placed_cluster(record: dict, json_output: bool, update: bool) -> dict:
         cluster_name = names.dev_infra_vars(record["project_id"], record["region"], record["name"], True)[
             "default_resource_name"
         ]
-        stockout = partial(gke_stockout, record["project_id"], placement["zone"], cluster_name, utc_now())
+        stockout = PoolStockout(record["project_id"], placement["zone"], cluster_name, give_up=not last)
         try:
             infra_deployment.apply(retry_stockout=last, stockout=stockout)
         except terraform.Stockout:
