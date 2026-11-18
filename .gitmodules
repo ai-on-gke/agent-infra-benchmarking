@@ -11,3 +11,6 @@
 [submodule "dependency-repos/env"]
 	path = dependency-repos/env
 	url = https://github.com/agent-substrate/env
+[submodule "dependency-repos/sandboxenv-rl"]
+	path = dependency-repos/sandboxenv-rl
+	url = https://github.com/ai-on-gke/sandboxenv-rl
