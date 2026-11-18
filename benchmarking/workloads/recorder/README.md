@@ -14,8 +14,9 @@ It knows the workloads that use mock-llm: `claude-code` and `openclaw`.
 ## Recording a session with a real model
 
 Put the keys in `.env`, which git ignores: `ANTHROPIC_API_KEY` for
-claude-code, which talks the Anthropic API; for openclaw, which talks the
-OpenAI Chat Completions API, `OPENAI_API_KEY`, the model to record with in
+claude-code, which talks the Anthropic API, and `ANTHROPIC_UPSTREAM` for an
+API other than Anthropic's; for openclaw, which talks the OpenAI Chat
+Completions API, `OPENAI_API_KEY`, the model to record with in
 `OPENAI_UPSTREAM_MODEL` and, for an API other than OpenAI's,
 `OPENAI_UPSTREAM`. Then run the turns with mock-llm forwarding the agent's
 calls to the API and saving each answer to
@@ -60,6 +61,23 @@ rather than at once:
 REPLAY_TIMING=recorded ./run.sh claude-code replay my-recording
 ```
 
+## Replaying a recording in a benchmark case
+
+The mock-llm image bakes in `../images/mock-llm/recordings`, so commit the
+recording's folder. A case replays it with `recording` in its `locust`, as
+`{workload}-replay` in `scenarios.yaml` does:
+
+```yaml
+      recording:
+        name: claude-code-textkit-fix-all
+        # Optional; instant by default.
+        timing: recorded
+```
+
+Only a recording made with `-i` can be: the worker sends the prompts of its
+`turns.txt`, which it gets from mock-llm, one a turn and from the first again
+after the last.
+
 ## Running the scripted check
 
 With no mode, mock-llm scripts the agent's turns, so a workload can be tried
@@ -69,9 +87,9 @@ without a key or a recording:
 ./run.sh claude-code
 ```
 
-Each run ends by counting the calls mock-llm answered, and removes the
-containers whether the check passed or not; on a failure it prints the end of
-mock-llm's log first. `TURNS` sets how many turns to send:
+A run that passes ends by counting the calls mock-llm answered, and one that
+fails by printing the end of mock-llm's log; either removes the containers.
+`TURNS` sets how many turns to send:
 
 ```bash
 TURNS=2 ./run.sh openclaw
@@ -90,6 +108,7 @@ prompt, how many turns it sends, its check of each reply and the variables
 recording needs. A variable other than the ones `run.sh` passes on also needs
 adding to its list.
 
-mock-llm records the Anthropic Messages and OpenAI Chat Completions APIs; the
-answer to a turn's last call gets the ending that workload's worker looks for
-(`answer_suffix` in `../images/mock-llm/recording.py`).
+mock-llm records the Anthropic Messages, OpenAI Chat Completions and OpenAI
+Responses APIs; the answer to a turn's last call gets the ending that
+workload's worker looks for (`answer_suffix` in
+`../images/mock-llm/recording.py`).

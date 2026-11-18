@@ -28,8 +28,8 @@ by default; see [Running in another region](#running-in-another-region)) and
 destroys it afterwards. It has a `default` node, `c2-standard-16`
 (`default_machine_type`); the `sandboxed` workers, `sandboxed_node_count` of
 `sandboxed_machine_type` (one `c2-standard-16` in the single-node cases, 30 in
-the scheduled ones); and an `e2-standard-4` for Prometheus. The openclaw case
-adds an `e2-standard-8` for its mock LLM. So a run needs at least 32 vCPUs of
+the scheduled ones); and an `e2-standard-4` for Prometheus. The openclaw and
+claude-code cases add an `e2-standard-8` for their mock LLM. So a run needs at least 32 vCPUs of
 C2 quota in the region, all billed while it is up. Before it applies anything,
 a run checks that each case's cluster fits in what is free of the region's
 quotas now, and refuses to start if one does not. Check it yourself with:
@@ -137,7 +137,8 @@ Before it applies anything, the run checks what the cases need, and names
 every problem it finds: the tools and their versions, Application Default
 Credentials and gcloud's login, the substrate submodule checked out at the commit the repo pins, and for each case
 its cluster's config as Terraform evaluates it, such as a machine type that
-can run `microvm`, a mock-llm node pool for `openclaw` and a GKE version the
+can run `microvm`, a mock-llm node pool for `openclaw` and `claude-code`, the
+recording a case replays and a GKE version the
 REGULAR channel still offers.
 
 Without `--report-bucket`, each case's reports go to its cluster's own bucket,
@@ -434,7 +435,10 @@ In the case's `locust`, `actor-memory` sets the actors' memory limit, which
 on `microvm` is the guest's RAM; every actor's cpu limit is 1, as substrate
 requires one. `locust-workers` runs that many boomer
 worker pods, each with its own connections to substrate, for loads one pod
-cannot drive (`glutton-large`).
+cannot drive (`glutton-large`). `recording: {name, timing}` has mock-llm
+replay one of its recordings, and the worker send its prompts in place of the
+workload's own (`{workload}-replay`); see
+[the recorder](workloads/recorder/README.md#replaying-a-recording-in-a-benchmark-case).
 
 The scheduled runs (`automation-infra/deployments/substrate-bench-auto`) run
 the cases its `main.tf` lists in `args`, so a new case runs there once it is
