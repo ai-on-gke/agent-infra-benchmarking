@@ -45,6 +45,8 @@ SETUP_ERRORS = (401, 403)
 # the final answer repeats so the worker can tell this turn's answer from any
 # other (locust/go/internal/workload).
 REQUEST_NONCE = re.compile(r"\(request ([0-9a-f-]{36})\)")
+# answer_suffix at the end of an answer, once its nonces are masked.
+MODEL_TURN_MARKER = re.compile(r"\s*(\(turn \d+\)\s*)?\(request \{\{nonce\}\}\)\s*$")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 # What agents add to a prompt that differs from run to run: Claude Code's
 # system reminders and billing line, and openclaw's timestamp before it and
@@ -251,15 +253,34 @@ def mask_nonces(entry, nonce, api):
     """The entry with "{{nonce}}" for the nonces in its answer's text: the
     turn's own, and any "(request <uuid>)" the model copied from an earlier
     answer, also where the stream splits one over several pieces."""
+    def spans(text):
+        found = [m.span(1) for m in REQUEST_NONCE.finditer(text)]
+        if nonce:
+            found += [m.span() for m in re.finditer(re.escape(nonce), text)]
+        return found
+
+    return replace_spans(entry, api, spans, "{{nonce}}")
+
+
+def without_turn_marker(entry, api):
+    """The entry without the answer_suffix the model wrote at the end of its
+    answer itself, copying the earlier answers, as mock-llm adds its own."""
+    def spans(text):
+        match = MODEL_TURN_MARKER.search(text)
+        return [match.span()] if match else []
+
+    return replace_spans(entry, api, spans, "")
+
+
+def replace_spans(entry, api, spans, new):
+    """The entry with new for the spans of each of its answer's texts that
+    spans(text) finds, also where the stream splits one over several pieces."""
     entry = json.loads(json.dumps(entry))
     for parts in text_runs(entry, api):
         text = "".join(holder[key] for holder, key in parts)
-        spans = [m.span(1) for m in REQUEST_NONCE.finditer(text)]
-        if nonce:
-            spans += [m.span() for m in re.finditer(re.escape(nonce), text)]
         chars = list(text)
-        for start, end in spans:
-            chars[start:end] = ["{{nonce}}"] + [""] * (end - start - 1)
+        for start, end in spans(text):
+            chars[start:end] = [new] + [""] * (end - start - 1)
         pos = 0
         for holder, key in parts:
             holder[key], pos = "".join(chars[pos:pos + len(holder[key])]), pos + len(holder[key])

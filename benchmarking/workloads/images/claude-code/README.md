@@ -2,7 +2,7 @@
 
 The actor the `claude-code` workload drives: a small HTTP wrapper,
 `claude_code_actor.py`, around headless [Claude Code](https://www.npmjs.com/package/@anthropic-ai/claude-code)
-(`claude -p --dangerously-skip-permissions`), working on `textkit/`, a small
+(`claude -p --dangerously-skip-permissions`), working on `../textkit`, a small
 Python repo baked into the image with five failing tests. `POST /invoke` runs
 one turn with the request body as the prompt.
 

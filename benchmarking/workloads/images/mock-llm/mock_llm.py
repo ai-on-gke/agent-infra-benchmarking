@@ -28,6 +28,7 @@ from recording import (
     request_nonce,
     sse,
     with_suffix,
+    without_turn_marker,
 )
 
 # How the agent's calls are answered: "script" scripts the workload's turn
@@ -333,6 +334,8 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             entry = mask_nonces(entry, nonce, api)
             if nonce:
                 entry = replace_in(entry, nonce, "{{nonce}}")
+            if ends_turn(req, api, path):
+                entry = without_turn_marker(entry, api)
             entry = {"key": key, "api": api, "conversation": conv, **entry}
             cassette.add(entry)
             count("saved")

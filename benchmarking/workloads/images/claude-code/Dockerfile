@@ -28,7 +28,7 @@ ENV DISABLE_AUTOUPDATER=1 \
 
 # The repo the agent works on, its five failing tests committed and tagged
 # base, at a fixed date so every build has the same commit.
-COPY textkit /workspace/textkit
+COPY --from=textkit . /workspace/textkit
 RUN git config --system user.name benchmark \
  && git config --system user.email benchmark@example.com \
  && cd /workspace/textkit \

@@ -3,8 +3,8 @@
 Records an agent's calls to a real model as a named recording in
 [mock-llm's recordings](../images/mock-llm/recordings), which the benchmark
 replays, and replays it locally, so the agent gets the same answers every run:
-`./run.sh claude-code record textkit-fix-all -i`, then
-`./run.sh claude-code replay textkit-fix-all`. It runs a workload's actor
+`./run.sh claude-code record claude-code-textkit-fix-all -i`, then
+`./run.sh claude-code replay claude-code-textkit-fix-all`. It runs a workload's actor
 beside [mock-llm](../images/mock-llm) in Docker and, from mock-llm's
 container, sends it turns as the benchmark's worker does and checks each
 reply.

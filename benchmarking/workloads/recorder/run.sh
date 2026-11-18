@@ -35,7 +35,7 @@ name=recorder-$workload-$$
 trap 'docker rm -f "$name-mock-llm" "$name-actor" >/dev/null 2>&1; docker network rm "$name" >/dev/null 2>&1 || true' EXIT
 
 docker build -q -t recorder-mock-llm ../images/mock-llm >/dev/null
-docker build -q -t "recorder-$workload" "../images/$workload" >/dev/null
+docker build -q -t "recorder-$workload" --build-context textkit=../images/textkit "../images/$workload" >/dev/null
 docker network create "$name" >/dev/null
 docker run -d --name "$name-actor" --network "$name" --network-alias actor "${actor_env[@]}" \
   "recorder-$workload" >/dev/null

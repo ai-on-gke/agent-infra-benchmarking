@@ -1,8 +1,9 @@
 """The openclaw actor: POST /invoke runs one headless openclaw agent turn, its
 body the prompt, each in a session of its own.
 
-POST /invoke?turn=K is turn K of a recorded conversation instead: turn 1
-starts a new session, and a later one continues it."""
+POST /invoke?turn=K is turn K of a recorded conversation instead, in the
+textkit repo: turn 1 starts a new session on a fresh repo, and a later one
+continues both."""
 
 import sys
 import os
@@ -19,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 # with a 504 that says so, and its processes are gone before the worker
 # suspends the actor.
 EXEC_TIMEOUT_SECS = float(os.environ.get("OPENCLAW_TIMEOUT_SECS", "100"))
+REPO = "/workspace/textkit"
 
 # The conversation's session; None until its turn 1, and after a turn that
 # failed, which may have left it half done.
@@ -86,6 +88,9 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                             }
                         }
                     }
+                    if turn is not None:
+                        # skipBootstrap keeps openclaw's own files out of the repo.
+                        config["agents"] = {"defaults": {"workspace": REPO, "skipBootstrap": True}}
                     with open("/tmp/mock-config.json", "w") as f:
                         json.dump(config, f)
 
@@ -112,6 +117,8 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                 if turn is not None:
                     if turn == 1:
                         session_id = str(uuid.uuid4())
+                        for args in (["reset", "-q", "--hard", "base"], ["clean", "-qfdx"]):
+                            subprocess.run(["git", *args], cwd=REPO, check=True)
                     cmd = ["openclaw", "agent", "--local", "--session-id", session_id, "--model", model,
                            "--message", post_data]
 
