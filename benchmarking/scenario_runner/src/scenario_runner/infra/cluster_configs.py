@@ -72,13 +72,23 @@ class Execution:
     # Set on automation-infra's Cloud Run job: the account substrate moves
     # snapshots as.
     snapshot_transfer_service_account: str | None = None
+    # The zone of a cluster whose case gives none; None for the config's own.
+    zone: str | None = None
 
 
-def execution(named: dict, image_repository: str | None = None, substrate_version: str | None = None) -> Execution:
+def execution(
+    named: dict, image_repository: str | None = None, substrate_version: str | None = None, zone: str | None = None
+) -> Execution:
     """The Execution of named, with what automation-infra's Cloud Run job sets."""
     network = {"network": CLUSTER_NETWORK, "subnetwork": CLUSTER_SUBNETWORK} if CLUSTER_SUBNETWORK else None
     return Execution(
-        named, image_repository, substrate_version, NODE_SERVICE_ACCOUNT, network, SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+        named,
+        image_repository,
+        substrate_version,
+        NODE_SERVICE_ACCOUNT,
+        network,
+        SNAPSHOT_TRANSFER_SERVICE_ACCOUNT,
+        zone,
     )
 
 
@@ -153,7 +163,10 @@ class ClusterConfig:
         """The cluster with its sandboxed pool at a bare-metal placement."""
         return replace(self, zone=placement["zone"], sandboxed_machine_type=placement["machine-type"])
 
-    def sandboxed_pool(self) -> dict:
+    def sandboxed_pool(self, default_zone: str | None = None) -> dict:
+        """The pool's variables, in the cluster's own zone, or else in
+        default_zone, or else in the config's."""
+        zone = self.zone or default_zone
         variables = {
             "nested_virtualization": self.nested_virtualization,
             "gke_sandbox": self.gke_sandbox,
@@ -163,11 +176,11 @@ class ClusterConfig:
             "sandboxed_min_node_count": self.sandboxed_nodes,
             "sandboxed_max_node_count": self.sandboxed_max_nodes or self.sandboxed_nodes,
         }
-        return {**variables, "zone": self.zone} if self.zone else variables
+        return {**variables, "zone": zone} if zone else variables
 
     def variables(self, execution: Execution) -> dict:
         """The config's Terraform variables."""
-        return {**self.sandboxed_pool(), **execution.named}
+        return {**self.sandboxed_pool(execution.zone), **execution.named}
 
     def deployment(self, uncreated: Deployment, execution: Execution) -> Deployment:
         """Creates uncreated as a deployment of the config."""
@@ -194,7 +207,7 @@ class CommonCluster(ClusterConfig):
             raise ValueError(f"`default-machine-type` must be a non-empty string, got {self.default_machine_type!r}")
 
     def variables(self, execution: Execution) -> dict:
-        variables = {**self.sandboxed_pool(), "bucket_force_destroy": True}
+        variables = {**self.sandboxed_pool(execution.zone), "bucket_force_destroy": True}
         if self.default_machine_type:
             variables["default_machine_type"] = self.default_machine_type
         if execution.image_repository is not None:

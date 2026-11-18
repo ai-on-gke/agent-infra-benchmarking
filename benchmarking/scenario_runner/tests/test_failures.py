@@ -15,6 +15,8 @@
 """How the scenario-runner fails: what stops a series, what is reported, and
 what is cleaned up."""
 
+import argparse
+import json
 import os
 import signal
 import subprocess
@@ -216,6 +218,74 @@ class GkeStockout(unittest.TestCase):
         self.assertFalse(self.stockout("2026-10-21T13:00:00Z", returncode=1))
 
 
+class PoolStockout(unittest.TestCase):
+    GROUP = "https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-b/instanceGroupManagers/gke-c-sandboxed-grp"
+    STOCKOUT = {"code": "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS", "message": "does not have enough resources"}
+
+    def watched(self, error_times: list[str], creating: int = 1, error=STOCKOUT) -> tuple[list[str], list[list[str]]]:
+        """The groups a check at 18:10 UTC finds stocked out, of an apply
+        from 18:00, and the gcloud commands it ran."""
+        ran = []
+
+        def gcloud(cmd):
+            ran.append(cmd)
+            if cmd[2] == "node-pools":
+                return {"instanceGroupUrls": [self.GROUP]}
+            if cmd[4] == "describe":
+                return {"currentActions": {"creating": creating}}
+            return [{"error": error, "timestamp": t} for t in error_times]
+
+        watch = cluster_module.PoolStockout("p", "us-east1-b", "c")
+        watch.since = "2026-11-17T18:00:00Z"
+        now = cluster_module.datetime.fromisoformat("2026-11-17T18:10:00+00:00")
+        with mock.patch.object(cluster_module, "gcloud_json", side_effect=gcloud), \
+             mock.patch.object(cluster_module, "datetime", wraps=cluster_module.datetime) as dt:
+            dt.now.return_value = now
+            return watch.stocked_out_groups(), ran
+
+    def test_a_group_that_kept_failing_on_stockouts_is_given_up_on(self):
+        # 10:02 PST is 18:02 UTC, eight minutes before the check.
+        groups, ran = self.watched(["2026-11-17T10:02:00.0-08:00", "2026-11-17T10:09:00.0-08:00"])
+        self.assertEqual(groups, [self.GROUP])
+        self.assertIn(["gcloud", "compute", "instance-groups", "managed", "list-errors", "gke-c-sandboxed-grp",
+                       "--zone=us-east1-b", "--project=p"], ran)  # fmt: skip
+
+    def test_a_stockout_within_the_grace_or_before_the_apply_is_not(self):
+        self.assertEqual(self.watched(["2026-11-17T10:08:00.0-08:00"])[0], [])
+        self.assertEqual(self.watched(["2026-11-17T09:50:00.0-08:00"])[0], [])
+
+    def test_a_group_creating_nothing_or_failing_otherwise_is_not(self):
+        self.assertEqual(self.watched(["2026-11-17T10:02:00.0-08:00"], creating=0)[0], [])
+        quota = {"code": "QUOTA_EXCEEDED", "message": "Quota 'C3_CPUS' exceeded"}
+        self.assertEqual(self.watched(["2026-11-17T10:02:00.0-08:00"], error=quota)[0], [])
+
+    def test_giving_up_resizes_the_group_to_zero_and_fails_the_apply_as_a_stockout(self):
+        watch = cluster_module.PoolStockout("p", "us-east1-b", "c")
+        resized = []
+        with mock.patch.object(cluster_module, "STOCKOUT_POLL_SECS", 0), \
+             mock.patch.object(watch, "stocked_out_groups", return_value=[self.GROUP]), \
+             mock.patch.object(cluster_module, "gcloud_json", side_effect=lambda cmd: resized.append(cmd) or {}), \
+             mock.patch.object(cluster_module, "log"):
+            dep = deployment.Deployment(Path(tempfile.mkdtemp()))
+            def apply(*args, **kwargs):
+                # One GKE takes as done once the group is at 0.
+                deadline = time.monotonic() + 5
+                while not watch.gave_up and time.monotonic() < deadline:
+                    time.sleep(0.01)
+
+            with mock.patch.object(deployment.terraform, "deploy", side_effect=apply):
+                with self.assertRaises(terraform.Stockout):
+                    dep.deploy(retry_stockout=False, stockout=watch)
+        self.assertEqual(resized, [["gcloud", "compute", "instance-groups", "managed", "resize", "gke-c-sandboxed-grp",
+                                    "--zone=us-east1-b", "--project=p", "--size=0"]])  # fmt: skip
+
+    def test_the_last_placement_is_not_watched(self):
+        watch = cluster_module.PoolStockout("p", "us-east1-b", "c", give_up=False)
+        with mock.patch.object(cluster_module.threading, "Thread") as thread, watch.watching():
+            pass
+        thread.assert_not_called()
+
+
 class Series(unittest.TestCase):
     args = mock.Mock(name="args")
 
@@ -332,10 +402,21 @@ class Series(unittest.TestCase):
 class Args(unittest.TestCase):
     REPO = "--image-repo=us-central1-docker.pkg.dev/p/r"
 
-    def parse(self, *argv: str, repo: str | None = REPO):
+    def parse(self, *argv: str, repo: str | None = REPO, **env: str):
         flags = ["--project-id=p", "--state-backend=local", *([repo] if repo else [])]
-        with mock.patch.object(sys, "argv", ["run", *flags, *argv]), mock.patch.dict(os.environ, {"IMAGE_REPO": ""}):
+        environ = {"IMAGE_REPO": "", "REGION": "", "ZONE": "", **env}
+        with mock.patch.object(sys, "argv", ["run", *flags, *argv]), mock.patch.dict(os.environ, environ):
             return run.parse_args()
+
+    def test_the_region_is_the_zones_unless_given(self):
+        self.assertEqual((self.parse("--all").region, self.parse("--all").zone), ("us-central1", None))
+        args = self.parse("--all", "--zone=us-east4-b")
+        self.assertEqual((args.region, args.zone), ("us-east4", "us-east4-b"))
+        self.assertEqual(self.parse("--all", REGION="us-east1").region, "us-east1")
+        args = self.parse("--all", ZONE="us-east4-c")
+        self.assertEqual((args.region, args.zone), ("us-east4", "us-east4-c"))
+        with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            self.parse("--all", "--region=us-east1", "--zone=us-east4-b")
 
     def test_cases_have_to_be_named_or_all(self):
         with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
@@ -351,6 +432,52 @@ class Args(unittest.TestCase):
             self.parse("--all", repo="--image-repo=gcr.io/p/r")
         with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
             self.parse("--all", "--dev-infra=d")
+
+
+class Zone(unittest.TestCase):
+    CLUSTER_CASE = {"type": "locust"}
+
+    def resolve(self, region: str, zone: str | None = None, record: dict | None = None, cases=None) -> str | None:
+        args = argparse.Namespace(project_id="p", region=region, zone=zone, dev_infra="dev" if record else None)
+        with mock.patch.object(run.dev_infra, "read_record", return_value=record), \
+             mock.patch.object(run, "default_zone", return_value=f"{region}-b") as lookup, \
+             mock.patch.object(run, "log"):  # fmt: skip
+            run.resolve_zone(args, cases or {"c": self.CLUSTER_CASE})
+        self.lookups = lookup.call_count
+        return args.zone
+
+    def test_the_default_region_keeps_its_zone_without_a_lookup(self):
+        self.assertEqual(self.resolve("us-central1"), "us-central1-a")
+        self.assertEqual(self.lookups, 0)
+
+    def test_another_region_takes_its_first_zone_that_is_up(self):
+        self.assertEqual(self.resolve("us-east4"), "us-east4-b")
+
+    def test_a_zone_given_or_a_dev_infras_own_wins(self):
+        self.assertEqual(self.resolve("us-east4", "us-east4-c"), "us-east4-c")
+        self.assertEqual(self.resolve("us-east4", record={"zone": "us-east4-a"}), "us-east4-a")
+        self.assertEqual(self.resolve("us-central1", record={}), "us-central1-a")
+
+    def test_a_run_that_applies_no_cluster_needs_none(self):
+        self.assertIsNone(self.resolve("us-east4", cases={"d": {"type": "noop"}}))
+        self.assertEqual(self.lookups, 0)
+
+    def test_the_first_zone_up_in_the_region(self):
+        zones = [
+            {"name": "us-east1-d", "region": "https://x/regions/us-east1", "status": "UP"},
+            {"name": "us-east1-b", "region": "https://x/regions/us-east1", "status": "DOWN"},
+            {"name": "us-east1-c", "region": "https://x/regions/us-east1", "status": "UP"},
+            {"name": "us-east4-a", "region": "https://x/regions/us-east4", "status": "UP"},
+        ]
+        listed = mock.Mock(returncode=0, stdout=json.dumps(zones))
+        with mock.patch.object(cluster_module.subprocess, "run", return_value=listed):
+            self.assertEqual(cluster_module.default_zone("p", "us-east1"), "us-east1-c")
+            with self.assertRaisesRegex(ValueError, "no zone up in region europe-west1"):
+                cluster_module.default_zone("p", "europe-west1")
+        failed = mock.Mock(returncode=1, stdout="", stderr="denied")
+        with mock.patch.object(cluster_module.subprocess, "run", return_value=failed), \
+             self.assertRaisesRegex(ValueError, "pass --zone: denied"):  # fmt: skip
+            cluster_module.default_zone("p", "us-east1")
 
 
 class Jobs(unittest.TestCase):

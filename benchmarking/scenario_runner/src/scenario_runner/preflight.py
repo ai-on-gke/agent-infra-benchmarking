@@ -50,8 +50,16 @@ CLUSTER_SETTINGS = (
     "kubernetes_version",
     "zone",
     "regional_control_plane",
+    "default_machine_type",
 )
 GKE_CHANNEL = "REGULAR"
+# GCE counts these families' vCPUs against a region's CPUS quota, and every
+# other family's against its own, such as C2_CPUS.
+CPUS_QUOTA_FAMILIES = {"n1", "e2", "f1", "g1"}
+# The pool every common cluster runs Prometheus on (infra/clusters/common).
+MONITORING_MACHINE_TYPE = "e2-standard-4"
+# How many regions a quota problem suggests.
+SUGGESTED_REGIONS = 4
 
 
 def nested_virtualization(machine_type: str) -> bool:
@@ -109,14 +117,15 @@ def creates_gke_cluster(config: Path) -> bool:
     return any("google_container_cluster" in tf.read_text() for tf in files)
 
 
-def cluster_settings(config: ClusterConfig, project_id: str, region: str) -> dict:
+def cluster_settings(config: ClusterConfig, project_id: str, region: str, zone: str | None = None) -> dict:
     """The settings of CLUSTER_SETTINGS the case's cluster would be applied
     with, evaluated by terraform from its config and variables, which also
     runs the config's own variable validations. Raises ValueError with
     terraform's message if they fail."""
     declared = declared_variables(config.CONFIG) & set(CLUSTER_SETTINGS)
     with tempfile.TemporaryDirectory() as tmp:
-        deployment = config.deployment(Deployment(Path(tmp)), execution(tf_vars(project_id, region, "preflight")))
+        named = tf_vars(project_id, region, "preflight")
+        deployment = config.deployment(Deployment(Path(tmp)), execution(named, zone=zone))
         env = data_env(deployment.data)
         init = ["terraform", f"-chdir={deployment.config}", "init", "-input=false", "-no-color"]
         proc = subprocess.run(init, capture_output=True, text=True, env=environ(env))
@@ -207,6 +216,86 @@ def cpu_quota(family: str, region: str, project_id: str) -> tuple[float, float] 
     return (quota["usage"], quota["limit"]) if quota else None
 
 
+def quota_metric(machine_type: str) -> str:
+    family = machine_type.split("-", 1)[0]
+    return "CPUS" if family in CPUS_QUOTA_FAMILIES else f"{family.upper()}_CPUS"
+
+
+def region_quotas(project_id: str) -> dict[str, dict[str, tuple[float, float]]] | None:
+    """Every region's CPU quotas, as {region: {metric: (usage, limit)}}, or
+    None if they cannot be read."""
+    cmd = ["gcloud", "compute", "regions", "list", f"--project={project_id}", "--format=json(name,quotas)"]
+    if not shutil.which("gcloud"):
+        return None
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode:
+        return None
+    return {
+        region["name"]: {
+            q["metric"]: (q["usage"], q["limit"]) for q in region.get("quotas", []) if q["metric"].endswith("CPUS")
+        }
+        for region in json.loads(proc.stdout or "[]")
+    }
+
+
+def cluster_pools(settings: dict) -> list[tuple[str, int]]:
+    """The machine type and most nodes of each of the cluster's pools."""
+    pools = [
+        (settings.get("default_machine_type"), 1),
+        (MONITORING_MACHINE_TYPE, 1),
+        (settings.get("sandboxed_machine_type"),
+         settings.get("sandboxed_max_node_count") or settings.get("sandboxed_node_count") or 1),
+    ]  # fmt: skip
+    for pool in settings.get("additional_node_pools") or []:
+        pools.append((pool.get("machine_type"), pool.get("max_node_count") or pool.get("node_count") or 1))
+    return [(machine_type, nodes) for machine_type, nodes in pools if machine_type]
+
+
+def quota_problems(
+    name: str, needs: dict[str, int], region: str, quotas: dict[str, dict[str, tuple[float, float]]]
+) -> list[str]:
+    """What stands in the way of the case's cluster in the region's CPU
+    quotas: one it never fits in, or one other runs use too much of now, such
+    as a scheduled run's in the same region. The latter names regions with
+    room for it, for --region."""
+    problems, short = [], []
+    here = quotas.get(region, {})
+    for metric, need in sorted(needs.items()):
+        if metric not in here:
+            log(f"preflight: cannot read the {metric} quota in {region}; not checking it", "WARNING")
+            continue
+        usage, limit = here[metric]
+        if need > limit:
+            problems.append(
+                f"case {name}'s cluster needs {need} vCPUs of the {metric} quota, but it is {limit:g} in {region};"
+                " ask for more or run fewer nodes"
+            )
+        elif need > limit - usage:
+            short.append(f"{need} vCPUs of {metric}, of which {limit - usage:g} are free ({usage:g} of {limit:g} in use)")
+    if short and not problems:
+        # Those in the region's own geography first, such as us- for us-central1.
+        geography = region.split("-", 1)[0]
+        roomy = sorted(
+            (
+                other
+                for other, theirs in quotas.items()
+                if other != region
+                and all(metric in theirs and need <= theirs[metric][1] - theirs[metric][0] for metric, need in needs.items())
+            ),
+            key=lambda other: (other.split("-", 1)[0] != geography, other),
+        )
+        where = (
+            f"run it in a region with room, such as {', '.join(roomy[:SUGGESTED_REGIONS])}, with --region,"
+            if roomy
+            else "no region has room for it now;"
+        )
+        problems.append(
+            f"case {name}'s cluster needs {'; '.join(short)} in {region} now, as other clusters there use it. To"
+            f" go ahead, {where} or wait for them to finish"
+        )
+    return problems
+
+
 def bare_metal_problems(
     name: str, settings: dict, placements: list[dict], project_id: str, region: str
 ) -> list[str]:
@@ -247,12 +336,20 @@ def offered(version: str, versions: list[str]) -> bool:
 
 
 def check(
-    cases: dict[str, dict], project_id: str, region: str, applied: list[str], placements: list[dict] = ()
+    cases: dict[str, dict],
+    project_id: str,
+    region: str,
+    applied: list[str],
+    placements: list[dict] = (),
+    zone: str | None = None,
+    quota: bool = True,
 ) -> list[str]:
     """Every problem the cases would run into, as messages; none means go.
     Only the clusters of the cases in applied are checked, as the others are
     not applied: a complete dev infra's, for one. A case on bare metal is
-    checked at each of placements, any of which its cluster may end up at."""
+    checked at each of placements, any of which its cluster may end up at.
+    Clusters go in zone unless their case says another; with quota, a VM
+    cluster's CPU quota is checked against what is free in the region now."""
     problems = []
     if not shutil.which("terraform"):
         return ["terraform is required to apply the infra"]
@@ -297,6 +394,8 @@ def check(
 
     offered: dict[str, list[str] | None] = {}
     evaluated: dict[ClusterConfig, dict | ValueError] = {}
+    quotas: dict[str, dict[str, tuple[float, float]]] | None = None
+    cpus: dict[str, int | str | None] = {}
     for name in applied:
         case = cases[name]
         config = benchmarks.cluster_config(name, case)
@@ -312,7 +411,7 @@ def check(
         # Cases on the same cluster are evaluated once.
         if config not in evaluated:
             try:
-                evaluated[config] = cluster_settings(config, project_id, region)
+                evaluated[config] = cluster_settings(config, project_id, region, zone)
             except ValueError as exc:
                 evaluated[config] = exc
         settings = evaluated[config]
@@ -320,6 +419,28 @@ def check(
             problems.append(f"case {name}'s cluster config does not evaluate: {settings}")
             continue
         gke = creates_gke_cluster(config.CONFIG)
+        if gke and settings.get("zone") and not settings["zone"].startswith(f"{region}-"):
+            problems.append(
+                f"case {name}'s cluster goes in zone {settings['zone']}, which is not in region {region}; run it"
+                f" with --region {settings['zone'].rsplit('-', 1)[0]}"
+            )
+            continue
+        if gke and quota and not bare_metal:
+            if quotas is None:
+                quotas = region_quotas(project_id) or {}
+                if not quotas:
+                    log("preflight: cannot read the regions' CPU quotas; not checking them", "WARNING")
+            needs: dict[str, int] = {}
+            for machine_type, nodes in cluster_pools(settings):
+                if machine_type not in cpus:
+                    cpus[machine_type] = machine_type_cpus(machine_type, settings.get("zone") or zone, project_id)
+                if isinstance(cpus[machine_type], str):
+                    problems.append(f"case {name}'s cluster cannot be applied: {cpus[machine_type]}")
+                elif cpus[machine_type]:
+                    metric = quota_metric(machine_type)
+                    needs[metric] = needs.get(metric, 0) + cpus[machine_type] * nodes
+            if quotas:
+                problems += quota_problems(name, needs, region, quotas)
         variants = [settings]
         if bare_metal:
             problems += bare_metal_problems(name, settings, placements, project_id, region)

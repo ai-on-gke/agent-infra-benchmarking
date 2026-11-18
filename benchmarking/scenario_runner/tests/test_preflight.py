@@ -111,7 +111,10 @@ class DevInfraConfiguration(unittest.TestCase):
         from scenario_runner.cli import run
         from scenario_runner.infra.cluster_configs import CLUSTER_CONFIGS, to_record
 
-        args = Namespace(dev_infra="dev", dev_infra_update=False, project_id="p", region="r", terraform_output="text")
+        args = Namespace(
+            dev_infra="dev", dev_infra_update=False, project_id="p", region="r", zone=run.DEFAULT_ZONE,
+            terraform_output="text",
+        )  # fmt: skip
         record = {
             "project_id": "p",
             "region": "r",
@@ -175,6 +178,56 @@ class BareMetal(unittest.TestCase):
         self.assertIn("not checking it", log.call_args.args[0])
 
 
+class Quota(unittest.TestCase):
+    # The nightly's 30 c2-standard-16 nodes in us-central1, and two empty regions.
+    QUOTAS = {
+        "asia-east1": {"C2_CPUS": (0.0, 500.0), "CPUS": (0.0, 600.0)},
+        "us-central1": {"C2_CPUS": (496.0, 500.0), "CPUS": (12.0, 600.0)},
+        "us-east1": {"C2_CPUS": (0.0, 500.0), "CPUS": (0.0, 600.0)},
+        "us-east4": {"C2_CPUS": (0.0, 500.0), "CPUS": (0.0, 600.0)},
+        "us-west1": {"C2_CPUS": (0.0, 24.0), "CPUS": (0.0, 600.0)},
+    }
+
+    def test_each_family_counts_against_its_quota(self):
+        self.assertEqual(preflight.quota_metric("c2-standard-16"), "C2_CPUS")
+        self.assertEqual(preflight.quota_metric("n2-standard-8"), "N2_CPUS")
+        self.assertEqual(preflight.quota_metric("e2-standard-4"), "CPUS")
+
+    def test_every_pool_of_the_cluster_counts(self):
+        settings = {
+            **SETTINGS,
+            "default_machine_type": "c2-standard-16",
+            "sandboxed_node_count": 2,
+            "sandboxed_max_node_count": 3,
+            "additional_node_pools": [{"name": "mock-llm", "machine_type": "e2-standard-8", "node_count": 1}],
+        }
+        pools = [("c2-standard-16", 1), ("e2-standard-4", 1), ("c2-standard-16", 3), ("e2-standard-8", 1)]
+        self.assertEqual(preflight.cluster_pools(settings), pools)
+
+    def test_a_cluster_that_fits_what_is_free(self):
+        self.assertEqual(preflight.quota_problems("c", {"C2_CPUS": 32, "CPUS": 4}, "us-east1", self.QUOTAS), [])
+
+    def test_a_cluster_the_quota_never_fits(self):
+        problems = preflight.quota_problems("c", {"C2_CPUS": 32}, "us-west1", self.QUOTAS)
+        self.assertRegex(problems[0], "needs 32 vCPUs of the C2_CPUS quota, but it is 24 in us-west1")
+
+    def test_a_cluster_other_runs_leave_no_room_for_names_regions_with_room(self):
+        problems = preflight.quota_problems("c", {"C2_CPUS": 32, "CPUS": 4}, "us-central1", self.QUOTAS)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("32 vCPUs of C2_CPUS, of which 4 are free (496 of 500 in use)", problems[0])
+        self.assertIn("such as us-east1, us-east4, asia-east1, with --region", problems[0])
+
+    def test_no_region_with_room(self):
+        quotas = {"us-central1": self.QUOTAS["us-central1"]}
+        problems = preflight.quota_problems("c", {"C2_CPUS": 32}, "us-central1", quotas)
+        self.assertIn("no region has room for it now", problems[0])
+
+    def test_a_quota_that_cannot_be_read_is_not_held_against_it(self):
+        with mock.patch.object(preflight, "log") as log:
+            self.assertEqual(preflight.quota_problems("c", {"N2_CPUS": 8}, "us-east1", self.QUOTAS), [])
+        self.assertIn("not checking it", log.call_args.args[0])
+
+
 @unittest.skipUnless(shutil.which("terraform"), "needs terraform")
 class ClusterSettings(unittest.TestCase):
     """Evaluated by terraform from the shipped common config, as the run would
@@ -185,6 +238,11 @@ class ClusterSettings(unittest.TestCase):
         self.assertIs(settings["nested_virtualization"], True)
         self.assertEqual(settings["sandboxed_machine_type"], "c2-standard-16")
         self.assertEqual(preflight.cluster_location(settings, "us-central1"), "us-central1-a")
+
+    def test_the_cluster_goes_in_the_zone_given(self):
+        settings = preflight.cluster_settings(CommonCluster(), "my-project", "us-east4", "us-east4-b")
+        self.assertEqual(preflight.cluster_location(settings, "us-east4"), "us-east4-b")
+        self.assertEqual(settings["default_machine_type"], "c2-standard-16")
 
     def test_the_pool_is_pinned(self):
         settings = preflight.cluster_settings(CommonCluster(sandboxed_nodes=3), "my-project", "us-central1")

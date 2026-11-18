@@ -116,7 +116,8 @@
 #   sandboxed-machine-type  its machine type, c2-standard-16 by default
 #   sandboxed-disk-size-gb  its nodes' boot disk in GB, 100 by default, where
 #                           substrate writes snapshots
-#   zone                    the zone of every pool, the config's by default
+#   zone                    the zone of every pool, in the run's --region;
+#                           --zone's by default
 #   nested-virtualization   true for /dev/kvm on the sandboxed pool off bare
 #                           metal, which a microvm case's guests boot on; off by
 #                           default, and only on Intel machine families
@@ -150,6 +151,66 @@ bare-metal:
     machine-type: c3-highcpu-192-metal
   - zone: us-central1-a
     machine-type: c3-highmem-192-metal
+  - zone: us-east1-b
+    machine-type: c3-standard-192-metal
+  - zone: us-east1-c
+    machine-type: c3-standard-192-metal
+  - zone: us-east1-d
+    machine-type: c3-standard-192-metal
+  - zone: us-east1-b
+    machine-type: c3-highcpu-192-metal
+  - zone: us-east1-c
+    machine-type: c3-highcpu-192-metal
+  - zone: us-east1-d
+    machine-type: c3-highcpu-192-metal
+  - zone: us-east1-b
+    machine-type: c3-highmem-192-metal
+  - zone: us-east1-c
+    machine-type: c3-highmem-192-metal
+  - zone: us-east1-d
+    machine-type: c3-highmem-192-metal
+  - zone: us-east4-a
+    machine-type: c3-highmem-192-metal
+  - zone: us-east4-c
+    machine-type: c3-standard-192-metal
+  - zone: us-east4-c
+    machine-type: c3-highcpu-192-metal
+  - zone: us-east4-c
+    machine-type: c3-highmem-192-metal
+  - zone: us-east4-a
+    machine-type: c3-standard-192-metal
+  - zone: us-east4-a
+    machine-type: c3-highcpu-192-metal
+  - zone: europe-west1-c
+    machine-type: c3-highcpu-192-metal
+  - zone: europe-west1-c
+    machine-type: c3-standard-192-metal
+  - zone: europe-west1-c
+    machine-type: c3-highmem-192-metal
+  - zone: europe-west1-b
+    machine-type: c3-highcpu-192-metal
+  - zone: europe-west1-b
+    machine-type: c3-standard-192-metal
+  - zone: europe-west1-b
+    machine-type: c3-highmem-192-metal
+  - zone: europe-west1-d
+    machine-type: c3-highcpu-192-metal
+  - zone: europe-west1-d
+    machine-type: c3-standard-192-metal
+  - zone: asia-southeast1-a
+    machine-type: c3-standard-192-metal
+  - zone: asia-southeast1-a
+    machine-type: c3-highcpu-192-metal
+  - zone: asia-southeast1-c
+    machine-type: c3-highcpu-192-metal
+  - zone: asia-southeast1-a
+    machine-type: c3-highmem-192-metal
+  - zone: asia-southeast1-b
+    machine-type: c3-highmem-192-metal
+  - zone: asia-southeast1-c
+    machine-type: c3-standard-192-metal
+  - zone: asia-southeast1-c
+    machine-type: c3-highmem-192-metal
 
 # `suites` lists cases by name, as --scenario takes them, for --suite to run in
 # that order. The automation-infra deployments run one each, so a case is added
@@ -164,6 +225,11 @@ suites:
   - glutton-agent-sandbox-gvisor
   - openclaw-agent-sandbox-gvisor
   - dummy
+  # substrate-bench-metal's, -east4's, -europe's and -asia's, each in a region
+  # of its own, as a bare-metal case can wait hours for a machine.
+  bare-metal:
+  - glutton-substrate-gvisor-1node
+  - glutton-substrate-microvm-1node
   # substrate-bench-staging's: dummy, which creates no cluster, and
   # glutton-single, one glutton run.
   staging:
@@ -260,6 +326,37 @@ cases:
         configuration: mock-llm
         workload-timeout: 240s
         actor-egress-allow: mock-llm.benchmark-workloads.svc.cluster.local
+
+  # glutton on substrate on one bare-metal node, which the region's C3 quota
+  # holds one of, recorded as <case>-metal: 90 VUs on 90 workers, as a GKE
+  # node takes 110 pods, its DaemonSets' among them.
+  "glutton-substrate-{sandbox-class}-1node":
+    bare-metal: true
+    repeats:
+      count: 1
+    locust:
+      install:
+        substrate:
+          sandbox-class: "{sandbox-class}"
+      infra:
+        cluster:
+          sandboxed-nodes: 1
+          sandboxed-disk-size-gb: 1000
+      workers:
+        count: 90
+      master:
+        run-time: "4m"
+        users: 90
+        spawn-rate: 10
+        warm-up: 1m
+      worker:
+        resume-mode: explicit
+        workload-name: glutton
+        workload-template: glutton
+    parameters:
+      class:
+      - sandbox-class: gvisor
+      - sandbox-class: microvm
 
   # glutton at 10 VUs on 10 workers on one node, once with no warm-up, for a
   # quicker check of the path.

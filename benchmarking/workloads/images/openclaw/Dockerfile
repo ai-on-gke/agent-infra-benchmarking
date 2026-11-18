@@ -35,6 +35,6 @@ RUN git config --system user.name benchmark \
     git commit -qm "textkit with five failing tests" \
  && git tag base
 
-COPY openclaw_actor.py /app/openclaw_actor.py
+COPY openclaw_actor.py gateway.py /app/
 
 CMD ["python3", "-u", "/app/openclaw_actor.py"]

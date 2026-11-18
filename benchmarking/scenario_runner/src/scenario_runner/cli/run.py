@@ -37,7 +37,6 @@ import subprocess
 import sys
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 from datetime import datetime, timezone
-from functools import partial
 from pathlib import Path
 from typing import Callable, Iterator, NoReturn
 
@@ -49,7 +48,7 @@ from ..benchmarks.sandbox_benchmark import ate_env
 from ..control_planes import agent_sandbox, substrate
 from ..images import builder
 from ..infra import dev_infra, names, terraform
-from ..infra.cluster import Cluster, gke_stockout, utc_now
+from ..infra.cluster import Cluster, PoolStockout, default_zone
 from ..infra.cluster_configs import execution, from_record, to_record
 from ..infra.deployment import RUNNER_INFRA_DIR, Deployment, DestroyFailed, GcsDeployment
 from ..log import ON_CLOUD_RUN, log
@@ -72,6 +71,11 @@ from ..scenarios.variants import grouped
 LOCAL_TERRAFORM_DIR = LOCAL_DATA_DIR / "runs" / "terraform"
 
 STATE_BACKENDS = ["local", "gcs"]
+
+DEFAULT_REGION = "us-central1"
+# The common config's default zone, so the default region needs no lookup, and
+# where a dev infra recorded with no zone was applied.
+DEFAULT_ZONE = "us-central1-a"
 
 # What a failed repeat raises, its infra's apply included.
 RUN_ERRORS = (subprocess.CalledProcessError, *benchmarks.ERRORS, substrate.SubstrateError, agent_sandbox.AgentSandboxError)
@@ -135,7 +139,18 @@ def parse_args() -> argparse.Namespace:
         required="PROJECT_ID" not in os.environ,
         help="GCP project to create the infra in. Default: $PROJECT_ID, which benchmarking/.env.sh can set",
     )
-    p.add_argument("--region", default="us-central1", help="default: %(default)s")
+    p.add_argument(
+        "--region",
+        default=os.environ.get("REGION"),
+        help=f"region of the infra. Default: $REGION, which benchmarking/.env.sh can set, else --zone's, else"
+        f" {DEFAULT_REGION}",
+    )
+    p.add_argument(
+        "--zone",
+        default=os.environ.get("ZONE"),
+        help=f"zone of the cases' clusters, in --region; a case's own `infra.cluster.zone` wins. Default: $ZONE, else"
+        f" {DEFAULT_ZONE} in {DEFAULT_REGION} and the first zone that is up in another region",
+    )
     p.add_argument(
         "--state-backend",
         choices=STATE_BACKENDS,
@@ -260,7 +275,34 @@ def parse_args() -> argparse.Namespace:
         p.error("--state-backend=gcs requires --state-bucket and --state-prefix, or STATE_BUCKET and STATE_PREFIX")
     if args.state_backend == "local" and (args.state_bucket or args.state_prefix):
         p.error("--state-bucket and --state-prefix are only for --state-backend=gcs")
+    # An empty REGION or ZONE in the environment is none.
+    args.zone = args.zone or None
+    if args.zone and not args.region:
+        args.region = args.zone.rsplit("-", 1)[0]
+    args.region = args.region or DEFAULT_REGION
+    if args.zone and not args.zone.startswith(f"{args.region}-"):
+        p.error(f"--zone {args.zone} is not in --region {args.region}")
     return args
+
+
+def resolve_zone(args: argparse.Namespace, cases: dict[str, dict]) -> None:
+    """Sets args.zone, unless given: a dev infra's own, DEFAULT_ZONE in
+    DEFAULT_REGION, or the first zone of --region that is up. Left None when
+    no case applies a cluster, so that such a run needs no gcloud."""
+    if args.zone or all(case["type"] == noop.TYPE for case in cases.values()):
+        return
+    record = dev_infra.read_record(args.dev_infra) if args.dev_infra else None
+    if record is not None:
+        args.zone = record.get("zone", DEFAULT_ZONE)
+        return
+    if args.region == DEFAULT_REGION:
+        args.zone = DEFAULT_ZONE
+        return
+    try:
+        args.zone = default_zone(args.project_id, args.region)
+    except ValueError as exc:
+        fail(str(exc))
+    log(f"run: clusters go in {args.zone}, the first zone of {args.region} that is up; --zone picks another")
 
 
 def selected_cases(args: argparse.Namespace) -> dict[str, dict]:
@@ -296,7 +338,11 @@ def applied_clusters(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
 def check_requirements(args: argparse.Namespace, cases: dict[str, dict]) -> None:
     """Fails, naming every problem, before anything is applied."""
     log(f"run: checking what {', '.join(cases)} need before applying anything")
-    problems = preflight.check(cases, args.project_id, args.region, applied_clusters(args, cases), args.placements)
+    # A dev infra's cluster already counts in the quota's usage.
+    quota = not (args.dev_infra and dev_infra.read_record(args.dev_infra) is not None)
+    problems = preflight.check(
+        cases, args.project_id, args.region, applied_clusters(args, cases), args.placements, args.zone, quota
+    )
     if problems:
         fail("cannot run, as:\n" + "\n".join(f"  - {problem}" for problem in problems))
     if not args.dev_infra and not args.image_repo and any(map(pulls_images, cases.values())):
@@ -415,10 +461,11 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
     first = next(iter(cases))
     wanted = benchmarks.cluster_config(first, cases[first])
     if record is not None:
-        if (record["project_id"], record["region"]) != (args.project_id, args.region):
+        zone = record.get("zone", DEFAULT_ZONE)
+        if (record["project_id"], record["region"], zone) != (args.project_id, args.region, args.zone):
             fail(
-                f"dev infra {args.dev_infra} is in project {record['project_id']} and region {record['region']},"
-                f" not {args.project_id} and {args.region}"
+                f"dev infra {args.dev_infra} is in project {record['project_id']}, region {record['region']} and"
+                f" zone {zone}, not {args.project_id}, {args.region} and {args.zone}"
             )
         # Another config under the same state would replace every resource.
         if args.dev_infra_update and wanted.name != record["cluster"]["name"]:
@@ -442,6 +489,7 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
             "test_case": first,
             "project_id": args.project_id,
             "region": args.region,
+            "zone": args.zone,
             "cluster": to_record(wanted),
             "bare_metal": cases[first][BARE_METAL],
             # The ones to try if the cluster's zone is out of its machine type.
@@ -625,6 +673,7 @@ def run_on_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
         if control_plane(case) == AGENT_SANDBOX:
             record = dev_infra.install_agent_sandbox(record)
         elif control_plane(case) == SUBSTRATE:
+            builder.renew_logins()
             record = dev_infra.install_substrate(record, sandbox_class(case) == "microvm")
         run_repeats(
             name,
@@ -689,12 +738,12 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
         def attempt(placement: dict | None, last: bool) -> None:
             nonlocal applied
             spec = config.placed(placement) if placement else config
-            case_infra = spec.deployment(uncreated, execution(case_vars[key], repository, version))
+            case_infra = spec.deployment(uncreated, execution(case_vars[key], repository, version, args.zone))
             stockout = None
             if placement:
                 log(f"{key}: sandboxed pool on {placement['machine-type']} in {placement['zone']}")
                 cluster_name = case_vars[key]["default_resource_name"]
-                stockout = partial(gke_stockout, args.project_id, placement["zone"], cluster_name, utc_now())
+                stockout = PoolStockout(args.project_id, placement["zone"], cluster_name, give_up=not last)
             stack.enter_context(case_infra.applied(retry_stockout=last, stockout=stockout))
             applied = case_infra
 
@@ -708,6 +757,7 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
                 if control_plane(case) == AGENT_SANDBOX:
                     agent_sandbox.install(cluster)
                 elif control_plane(case) == SUBSTRATE:
+                    builder.renew_logins()
                     substrate.install(cluster, sandbox_class(case) == "microvm")
                 yield cluster
             finally:
@@ -759,6 +809,7 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
 def main() -> None:
     args = parse_args()
     cases = selected_cases(args)
+    resolve_zone(args, cases)
     check_requirements(args, cases)
 
     # Cloud Run stops a task that outlives its timeout with SIGTERM; exiting

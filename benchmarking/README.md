@@ -23,13 +23,16 @@ against it and destroys it afterwards.
 
 ### Cost and quota
 
-Each run of a case applies a cluster of its own in one zone (`us-central1-a`)
-and destroys it afterwards. It has a `default` node, `c2-standard-16`
+Each run of a case applies a cluster of its own in one zone (`us-central1-a`
+by default; see [Running in another region](#running-in-another-region)) and
+destroys it afterwards. It has a `default` node, `c2-standard-16`
 (`default_machine_type`); the `sandboxed` workers, `sandboxed_node_count` of
-`sandboxed_machine_type` (one `c2-standard-16` in the shipped cases); and an
-`e2-standard-4` for Prometheus. The openclaw case adds an `e2-standard-8` for
-its mock LLM. So a run needs at least 32 vCPUs of C2 quota in the region, all
-billed while it is up. Check it with:
+`sandboxed_machine_type` (one `c2-standard-16` in the single-node cases, 30 in
+the scheduled ones); and an `e2-standard-4` for Prometheus. The openclaw case
+adds an `e2-standard-8` for its mock LLM. So a run needs at least 32 vCPUs of
+C2 quota in the region, all billed while it is up. Before it applies anything,
+a run checks that each case's cluster fits in what is free of the region's
+quotas now, and refuses to start if one does not. Check it yourself with:
 
 ```bash
 gcloud compute regions describe us-central1 --project <project-id> \
@@ -40,6 +43,24 @@ gcloud compute regions describe us-central1 --project <project-id> \
 Short of C2, set `default-machine-type` and `sandboxed-machine-type` in the
 case's `infra.cluster` to another family, such as `n2-standard-16` (which the
 `microvm` class also runs on).
+
+### Running in another region
+
+The scheduled runs take 496 of the project's 500 C2 vCPUs in `us-central1`
+while they run, so a run of yours there at the same time is refused, and the
+message names regions with room for it. Run there instead:
+
+```bash
+./benchmarking/tools/run --region us-east4 --scenario glutton-substrate-gvisor
+```
+
+The clusters go in the first zone of the region that is up, or in `--zone`,
+which on its own also sets the region; a case's own `infra.cluster.zone` wins
+over both, and has to be in the region. To make another region your default,
+set `REGION` (and `ZONE` if you like) in `benchmarking/.env.sh`. Without
+`--image-repo`, the run's image repository is created in the region too; with
+one in another region, the clusters pull from it across regions, which works
+but is slower.
 
 ## Setup
 
@@ -152,7 +173,8 @@ Useful flags (`--help` lists them all):
 | `--all` | run every case instead |
 | `--name RUN_ID` | run id, default `run-<UTC timestamp>`. It starts the names of the GCP resources, so keep it lowercase |
 | `--project-id ID` | overrides `PROJECT_ID` |
-| `--region REGION` | default `us-central1` |
+| `--region REGION` | overrides `REGION`; default `us-central1`, see [Running in another region](#running-in-another-region) |
+| `--zone ZONE` | overrides `ZONE`, the zone of the clusters; default the region's first zone that is up (`us-central1-a` in `us-central1`) |
 | `--state-backend local\|gcs` | overrides `STATE_BACKEND`, see [Terraform state](#terraform-state) |
 | `--report-deployment DIR` | send the reports to the bucket of that applied reports deployment, such as `automation-infra/dev/reports`, to be queried in its BigQuery dataset |
 | `--image-repo REPO` | overrides `IMAGE_REPO`, the repository the images are pulled from |
@@ -447,8 +469,11 @@ and zones run out of them often. So the pool goes on the first of
 each, and the whole cluster with it. If that zone is out of the machine type,
 the run destroys what it applied there and moves on to the next placement,
 wrapping around; the last it tries is retried like any apply. GKE takes about
-35 minutes to give up on a pool it cannot get nodes for, so the cases after it
-start from the placement the last one got rather than the first. The preflight checks that each placement's
+35 minutes to give up on a pool it cannot get nodes for, so the run watches the
+pool's instance group instead, and once its instances have failed on
+stockouts for 5 minutes, resizes it to 0, which ends GKE's wait, and moves on.
+The cases after it start from the placement the last one got rather than the
+first. The preflight checks that each placement's
 zone offers its machine type and the GKE version, and that the pool fits in
 the region's C3 CPU quota. A 300-vCPU quota, for one, fits a single node:
 
