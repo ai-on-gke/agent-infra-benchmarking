@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -140,6 +141,14 @@ def claude_code_step(req):
 
 
 cassette = None
+# What the server has answered, for the recorder's turns.py (GET /stats).
+stats = {"calls": 0, "saved": 0}
+stats_lock = threading.Lock()
+
+
+def count(name):
+    with stats_lock:
+        stats[name] += 1
 
 
 class MockLLMHandler(BaseHTTPRequestHandler):
@@ -158,6 +167,8 @@ class MockLLMHandler(BaseHTTPRequestHandler):
                 ]
             }
             self.wfile.write(json.dumps(models_response).encode('utf-8'))
+        elif self.path == "/stats":
+            self._send_json(stats)
         elif self.path == "/readyz":
             self.send_response(200)
             self.end_headers()
@@ -171,6 +182,8 @@ class MockLLMHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(content_length)
 
         path = self.path.split("?", 1)[0]
+        if path in RECORDED_PATHS:
+            count("calls")
         if MODE != "script" and path in RECORDED_PATHS:
             self._answer_from_cassette(json.loads(body.decode("utf-8")), body, RECORDED_PATHS[path], path)
             return
@@ -303,6 +316,7 @@ class MockLLMHandler(BaseHTTPRequestHandler):
                 entry = replace_in(entry, nonce, "{{nonce}}")
             entry = {"key": key, "api": api, "conversation": conv, **entry}
             cassette.add(entry)
+            count("saved")
             status = entry["error"]["status"] if "error" in entry else "a failed stream" if is_error(entry) else None
             print(f"record: saved {key}" + (f", the upstream's {status}" if status else ""), flush=True)
 

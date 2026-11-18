@@ -79,17 +79,16 @@ TURNS=2 ./run.sh openclaw
 
 ## Adding a workload
 
-Add a branch for it to the `case "$workload"` in `run.sh`, which sets:
+Add a branch for it to the `case $workload` in `run.sh`, which sets
+`actor_env`: the `docker run` options that point the actor, built from its
+folder in `../images`, at `http://mock-llm:8080`.
 
-- `actor_image`: the actor's folder in `../images`.
-- `actor_env`: the `docker run` options that point the actor at
-  `http://mock-llm:8080`.
-- `record_needs`: the variables recording needs.
-
-The turns are sent from mock-llm's container by
-[`turns.py`](../images/mock-llm/turns.py), which calls the actor at
-`http://actor`. Add the workload to its `WORKLOADS`: the worker's prompt, how
-many turns it sends and its check of each reply.
+The rest is mock-llm's [`turns.py`](../images/mock-llm/turns.py), which
+`run.sh` runs in mock-llm's container: it starts mock-llm's server and calls
+the actor at `http://actor`. Add the workload to its `WORKLOADS`: the worker's
+prompt, how many turns it sends, its check of each reply and the variables
+recording needs. A variable other than the ones `run.sh` passes on also needs
+adding to its list.
 
 mock-llm records the Anthropic Messages and OpenAI Chat Completions APIs; the
 answer to a turn's last call gets the ending that workload's worker looks for
