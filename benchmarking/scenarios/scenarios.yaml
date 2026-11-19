@@ -229,6 +229,7 @@ suites:
   - openclaw-substrate-microvm
   - glutton-agent-sandbox-gvisor
   - openclaw-agent-sandbox-gvisor
+  - claude-code-replay
   - dummy
   # substrate-bench-metal's, -east4's, -europe's and -asia's, each in a region
   # of its own, as a bare-metal case can wait hours for a machine.
@@ -597,8 +598,6 @@ cases:
         cluster:
           sandboxed-nodes: 1
           configuration: mock-llm
-          # Off the nightly's us-central1 C2 quota; run with --region us-east1.
-          zone: us-east1-b
       workers:
         count: 10
       master:

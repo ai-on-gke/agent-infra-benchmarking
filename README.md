@@ -66,7 +66,7 @@ The main ones:
 | `glutton-substrate-gvisor-1node`, `glutton-substrate-microvm-1node` | 90 users on 90 workers, 4 min after a 1 min warm-up | 1 bare-metal | glutton on bare metal, recorded as `<case>-metal`; run daily |
 | `glutton-density`, `openclaw-density` | 100 workers kept at 80 active actors, with 100, 250 or 500 actors sharing them, against a never-suspend baseline | 10 | How many idle actors a node holds, and what sharing costs |
 | `glutton-single`, `glutton-implicit`, `glutton-load`, `glutton-session`, `glutton-concurrent`, `glutton-shared-workers` | 10 users on one node, 5 min | 1 | One feature each: router wake, RAM and disk in the snapshot, five instructions per wake, four at once, workers shared by actors |
-| `claude-code-replay`, `openclaw-replay` | 10 users on one node, 10 min, 20-40 s between turns | 1 | A conversation recorded with a real model, replayed by the mock LLM ([recorder](benchmarking/workloads/recorder/README.md)); run by hand in `us-east1` |
+| `claude-code-replay`, `openclaw-replay` | 10 users on one node, 10 min, 20-40 s between turns | 1 | A conversation recorded with a real model, replayed by the mock LLM ([recorder](benchmarking/workloads/recorder/README.md)); `claude-code-replay` run every 6 hours |
 | `glutton-large` | 100 users over four load-generator pods, three repeats | 25 | Scale; run by hand, as it takes most of a region's C2 quota |
 | `sandbox-benchmark` | 10 suspend-resume runs per provider | 1 | substrate against E2B, Modal, Daytona, Anthropic and OpenAI, with a monthly cost sheet |
 | `dummy` | none | 0 | The Terraform path without a cluster, for checking a setup |
