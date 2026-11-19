@@ -300,6 +300,13 @@ resource "google_container_node_pool" "this" {
       }
     }
 
+    dynamic "linux_node_config" {
+      for_each = length(each.value.sysctls) > 0 ? [1] : []
+      content {
+        sysctls = each.value.sysctls
+      }
+    }
+
     service_account = var.node_service_account
 
     # cloud-platform is the scope Google pairs with a dedicated service
