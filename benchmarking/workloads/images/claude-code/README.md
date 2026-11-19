@@ -22,7 +22,8 @@ one more than the actor's last turn.
 
 Replaying a recording, as the `claude-code-replay` case does, the worker sends
 the recorded conversation's prompts as `POST /invoke?turn=K`, and mock-llm
-answers from the cassette (`../../recorder`). Turn 1 starts over on a fresh
+answers from the cassette ([mock-llm](../mock-llm/README.md#replaying-a-recorded-session),
+[recorder](../../recorder/README.md)). Turn 1 starts over on a fresh
 repo and session, a later turn continues them, and the worker counts a turn
 if its `(turn N)` is K.
 
