@@ -181,6 +181,8 @@ variable "node_pools" {
     # Hyperdisk only. Unset takes the disk type's defaults for its size.
     disk_provisioned_iops       = optional(number)
     disk_provisioned_throughput = optional(number)
+    # Kernel parameters, from those GKE's node system config takes.
+    sysctls = optional(map(string), {})
   }))
   default = {
     default = {}

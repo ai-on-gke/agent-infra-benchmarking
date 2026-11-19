@@ -102,10 +102,17 @@ module "cluster" {
       # The microvm guests boot on /dev/kvm.
       enable_nested_virtualization = var.nested_virtualization && !local.sandboxed_bare_metal
       sandbox_gvisor               = var.gke_sandbox
-      # At the default for 1000 GB, 9000 IOPS, microvm checkpoints and restores
-      # stall every actor on the node for tens of seconds at a time.
+      # Above the defaults for 1000 GB, 9000 IOPS, for microvm's snapshot writes.
       disk_provisioned_iops       = local.sandboxed_bare_metal ? 80000 : null
       disk_provisioned_throughput = local.sandboxed_bare_metal ? 2400 : null
+      # A bare-metal node's RAM lets microvm snapshots pile up tens of GB of
+      # dirty pages, whose flush then holds up the ext4 journal and with it
+      # every file operation on the node for seconds at a time. These start
+      # writeback early and cap what can pile up.
+      sysctls = local.sandboxed_bare_metal ? tomap({
+        "vm.dirty_background_bytes" = "268435456"
+        "vm.dirty_bytes"            = "1073741824"
+      }) : tomap({})
       # worker-pool.yaml.tmpl's WorkerPool already tolerates this taint; without
       # it actually applied to the nodes, nothing stops substrate's own
       # control-plane pods (and anything else) from also landing here
