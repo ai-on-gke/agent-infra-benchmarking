@@ -364,6 +364,36 @@ cases:
       - sandbox-class: gvisor
       - sandbox-class: microvm
 
+  # glutton-substrate-microvm-1node at fewer VUs, the variants named for them,
+  # on the same 90 workers and one cluster, for how Suspend grows with the load
+  # on the node's disk. In no suite.
+  glutton-substrate-microvm-1node-load:
+    bare-metal: true
+    repeats:
+      count: 1
+    locust:
+      install:
+        substrate:
+          sandbox-class: microvm
+      infra:
+        cluster:
+          sandboxed-nodes: 1
+          sandboxed-disk-size-gb: 1000
+      workers:
+        count: 90
+      master:
+        run-time: "4m"
+        spawn-rate: 10
+        warm-up: 1m
+      worker:
+        resume-mode: explicit
+        workload-name: glutton
+        workload-template: glutton
+    variants:
+      "10": {locust: {master: {users: 10}}}
+      "30": {locust: {master: {users: 30}}}
+      "60": {locust: {master: {users: 60}}}
+
   # glutton at 10 VUs on 10 workers on one node, once with no warm-up, for a
   # quicker check of the path.
   glutton-single:
