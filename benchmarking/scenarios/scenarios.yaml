@@ -592,6 +592,66 @@ cases:
       # https://developers.openai.com/api/docs/guides/agents-api/environments/openai-hosted
       openai: {sandbox-benchmark: {provider: {name: openai, container-size: medium}}}
 
+  # ComputeSDK burst_TTI benchmark: measures cold sandbox creation, readiness,
+  # and time to execute the first command under concurrent burst load.
+  burst-tti:
+    repeats:
+      count: 1
+      warmups: 0
+    computesdk:
+      benchmark: burst-tti
+      provider: substrate
+      iterations: 5
+      concurrency: 3
+      install:
+        substrate:
+          sandbox-class: gvisor
+      infra:
+        cluster:
+          sandboxed-nodes: 1
+          sandboxed-machine-type: c2-standard-16
+    variants:
+      gvisor: {}
+      microvm:
+        computesdk:
+          install:
+            substrate:
+              sandbox-class: microvm
+          infra:
+            cluster:
+              nested-virtualization: true
+
+  # ComputeSDK DAX benchmark: heavy real-world OpenCode clone, dependency install,
+  # and multi-project TypeScript typechecking workload.
+  dax:
+    repeats:
+      count: 1
+      warmups: 0
+    computesdk:
+      benchmark: dax
+      provider: substrate
+      iterations: 1
+      concurrency: 1
+      actor-cpu: "4"
+      actor-memory: 16Gi
+      install:
+        substrate:
+          sandbox-class: gvisor
+      infra:
+        cluster:
+          sandboxed-nodes: 1
+          sandboxed-machine-type: c2-standard-16
+    variants:
+      gvisor: {}
+      microvm:
+        computesdk:
+          install:
+            substrate:
+              sandbox-class: microvm
+          infra:
+            cluster:
+              nested-virtualization: true
+
   # The scenario-runner's Terraform path on infra/clusters/dummy, which creates
   # no GCP resources and so has nothing to benchmark on.
   dummy:

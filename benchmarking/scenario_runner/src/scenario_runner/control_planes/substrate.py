@@ -216,7 +216,7 @@ def install_once(cluster: Cluster, microvm: bool) -> None:
         # Egress credential injection is off: no workload needs the bundled
         # provider, and the installer requires a choice either way.
         '--credential-provider={"enabled":false}',
-        f"--ingress-allowed-spiffe-ids={runner}",
+        f"--ingress-allowed-spiffe-ids={runner},spiffe://cluster.local/ns/ate-system/sa/atenet-client",
         # kubectl-ate's own, which the runner deploys the templates with.
         f"--ateapi-authz-bootstrap-owners=system:serviceaccount:ate-system:ate-client,{runner}",
     ]

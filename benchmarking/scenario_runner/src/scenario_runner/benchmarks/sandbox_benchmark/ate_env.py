@@ -133,6 +133,7 @@ def render_stack(cli: AteEnv, cluster: Cluster, sandbox_class: str, worker_count
     )
     docs = list(yaml.safe_load_all(manifest))
     pool = next(doc for doc in docs if doc["kind"] == "WorkerPool")
+    pool["apiVersion"] = "ate.dev/v1"
     pool["metadata"].setdefault("labels", {}).update(POOL_LABELS)
     # env's pool is gvisor-default's alone.
     config_name = worker_pool.SANDBOX_CONFIGS[sandbox_class]
@@ -170,6 +171,9 @@ def render_template(
     )
     template = yaml.safe_load(manifest)
     template.pop("sandboxConfig", None)
+    if "snapshotConfig" in template:
+        template["snapshotConfig"].pop("storageLocation", None)
+        template["snapshotConfig"].pop("storage_location", None)
     template["workerSelector"] = {"matchLabels": POOL_LABELS}
     template["resources"] = {
         "limits": {

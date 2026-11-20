@@ -1,0 +1,2 @@
+# Requirements for computesdk-bench runner entrypoint
+google-cloud-storage==3.17.0

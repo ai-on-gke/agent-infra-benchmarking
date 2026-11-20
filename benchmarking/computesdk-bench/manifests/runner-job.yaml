@@ -1,0 +1,102 @@
+# ComputeSDK benchmark runner Job (burst_TTI & DAX)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: computesdk-bench-runner
+  namespace: benchmarking
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        benchmark-run-id: "${BENCHMARK_RUN_ID}"
+        benchmark-test-case: "${BENCHMARK_RECORD_NAME}"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ${BENCHMARK_RUNNER_KSA}
+      terminationGracePeriodSeconds: 120
+      containers:
+      - name: runner
+        image: ${RUNNER_IMAGE}
+        imagePullPolicy: Always
+        env:
+        - name: BENCHMARK_NAME
+          value: "${BENCHMARK_NAME}"
+        - name: BENCHMARK_PROVIDER
+          value: "${BENCHMARK_PROVIDER}"
+        - name: BENCHMARK_ITERATIONS
+          value: "${BENCHMARK_ITERATIONS}"
+        - name: BENCHMARK_CONCURRENCY
+          value: "${BENCHMARK_CONCURRENCY}"
+        - name: SUBSTRATE_ATESPACE
+          value: "${SUBSTRATE_ATESPACE}"
+        - name: SUBSTRATE_TEMPLATE
+          value: "${SUBSTRATE_TEMPLATE}"
+        - name: BENCHMARK_RUN_ID
+          value: "${BENCHMARK_RUN_ID}"
+        - name: BENCHMARK_RECORD_NAME
+          value: "${BENCHMARK_RECORD_NAME}"
+        - name: BENCHMARK_CASE
+          value: "${BENCHMARK_CASE}"
+        - name: BENCHMARK_REPEAT
+          value: "${BENCHMARK_REPEAT}"
+        - name: BENCHMARK_RUN_INFO
+          value: "${BENCHMARK_RUN_INFO}"
+        - name: REPORT_BUCKET
+          value: "${BENCHMARK_REPORT_BUCKET}"
+        - name: REPORT_PREFIX
+          value: "${BENCHMARK_REPORT_PREFIX}"
+        - name: BENCHMARK_REPORT_FOLDER
+          value: "${BENCHMARK_REPORT_FOLDER}"
+        # External provider API keys if available
+        - name: E2B_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: sandbox-benchmark-providers
+              key: E2B_API_KEY
+              optional: true
+        - name: DAYTONA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: sandbox-benchmark-providers
+              key: DAYTONA_API_KEY
+              optional: true
+        - name: MODAL_TOKEN_ID
+          valueFrom:
+            secretKeyRef:
+              name: sandbox-benchmark-providers
+              key: MODAL_TOKEN_ID
+              optional: true
+        - name: MODAL_TOKEN_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: sandbox-benchmark-providers
+              key: MODAL_TOKEN_SECRET
+              optional: true
+        resources:
+          requests:
+            cpu: "2"
+            memory: "2Gi"
+          limits:
+            cpu: "4"
+            memory: "4Gi"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${BENCHMARK_RUNNER_KSA}
+  namespace: benchmarking
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ${BENCHMARK_RUNNER_KSA}-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: ${BENCHMARK_RUNNER_KSA}
+  namespace: benchmarking
