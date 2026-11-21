@@ -14,6 +14,10 @@ Flags: --project (default akvelon-gke-aieco), --port, --host, --no-browser,
   <run_id>/<test_case>/<provider>/ (sandbox-benchmark JSONL), computed like the
   BigQuery views. Local cases can be overlaid with BigQuery ones. A sandbox
   provider is its directory name (substrate-gvisor, substrate-microvm, ...).
+  Run and case directory names may only have letters, digits, `.`, `_` and `-`,
+  and must not start with a dot; others are skipped, with a warning on the
+  console. A case whose files are damaged (an empty steady window, a truncated
+  JSONL line) is read as far as it goes, and never hides the other cases.
 - If BigQuery is unreachable (no ADC), the local dataset still works; the
   header shows the error. Use --no-bq to skip BigQuery entirely.
 

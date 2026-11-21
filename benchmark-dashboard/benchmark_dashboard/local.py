@@ -12,6 +12,7 @@ the provider field, so two substrate variants in one case stay apart.
 
 import csv
 import json
+import logging
 import math
 import re
 from collections import defaultdict
@@ -23,7 +24,11 @@ STATS_COLS = ["type", "name", "request_count", "failure_count", "median_ms", "av
               "avg_content_size", "requests_per_sec", "failures_per_sec", *PCT_COLS]
 INT_COLS = {"request_count", "failure_count", "user_count"}
 SANDBOX_TOTAL = ["Workspace Creation", "Suspend", "Resume", "Dependency Installation", "Environment Setup", "Code Execution", "Cleanup"]
-SAFE = re.compile(r"[A-Za-z0-9._-]+")
+# A run or case directory name: it must not start with a dot, so "." and ".." can
+# never leave the reports directory.
+SAFE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")
+
+log = logging.getLogger(__name__)
 
 
 class NotFound(Exception):
@@ -76,24 +81,46 @@ class LocalReports:
         rows = []
         if not self.root.is_dir():
             return rows
-        for run in sorted(p for p in self.root.iterdir() if p.is_dir()):
-            for case in sorted(p for p in run.iterdir() if p.is_dir()):
-                scenario = re.sub(r"-[0-9]+$", "", case.name)
-                if (case / "locust_stats_history.csv").exists():
-                    w = self._window(case)
-                    names = sorted({r[3] for r in _rows(case / "locust_stats_history.csv") if len(r) > 3 and r[3] != "Aggregated"})
-                    rows.append({"kind": "locust", "run_id": run.name, "test_case": case.name, "scenario": scenario,
-                                 "requests": names, "start": _iso(w[0]) if w else None, "end": _iso(w[1]) if w else None})
-                provs = self._providers(case)
-                if provs:
-                    starts, ends = [], []
-                    for p in provs:
-                        for r in self._jsonl(p / "sandbox_benchmark_run.jsonl"):
-                            starts.append(r.get("started")); ends.append(r.get("ended"))
-                    starts = [s for s in starts if s]; ends = [e for e in ends if e]
-                    rows.append({"kind": "sandbox", "run_id": run.name, "test_case": case.name, "scenario": scenario,
-                                 "requests": [p.name for p in provs],
-                                 "start": min(starts, key=_ts) if starts else None, "end": max(ends, key=_ts) if ends else None})
+        for run in sorted(p for p in self.root.iterdir() if p.is_dir() and self._listable(p)):
+            try:
+                cases = sorted(p for p in run.iterdir() if p.is_dir() and self._listable(p))
+            except OSError as e:
+                log.warning("skipping %s: %s", run, e)
+                continue
+            for case in cases:
+                try:
+                    rows.extend(self._case_rows(run, case))
+                except Exception as e:  # noqa: BLE001 - one unreadable case must not hide the others
+                    log.warning("skipping %s/%s: %s: %s", run.name, case.name, type(e).__name__, e)
+        return rows
+
+    @staticmethod
+    def _listable(path: Path) -> bool:
+        """Only names case_dir accepts are listed, so every listed case can be opened."""
+        if SAFE.fullmatch(path.name):
+            return True
+        log.warning("skipping %s: a run or case name may only have letters, digits, '.', '_' and '-', "
+                    "and must not start with '.'", path)
+        return False
+
+    def _case_rows(self, run: Path, case: Path) -> list[dict]:
+        rows = []
+        scenario = re.sub(r"-[0-9]+$", "", case.name)
+        if (case / "locust_stats_history.csv").exists():
+            w = self._window(case)
+            names = sorted({r[3] for r in _rows(case / "locust_stats_history.csv") if len(r) > 3 and r[3] != "Aggregated"})
+            rows.append({"kind": "locust", "run_id": run.name, "test_case": case.name, "scenario": scenario,
+                         "requests": names, "start": _iso(w[0]) if w else None, "end": _iso(w[1]) if w else None})
+        provs = self._providers(case)
+        if provs:
+            starts, ends = [], []
+            for p in provs:
+                for r in self._jsonl(p / "sandbox_benchmark_run.jsonl"):
+                    starts.append(r.get("started")); ends.append(r.get("ended"))
+            starts = [s for s in starts if s]; ends = [e for e in ends if e]
+            rows.append({"kind": "sandbox", "run_id": run.name, "test_case": case.name, "scenario": scenario,
+                         "requests": [p.name for p in provs],
+                         "start": min(starts, key=_ts) if starts else None, "end": max(ends, key=_ts) if ends else None})
         return rows
 
     @staticmethod
@@ -102,17 +129,36 @@ class LocalReports:
 
     @staticmethod
     def _jsonl(path: Path) -> list[dict]:
+        """A file's JSON lines. A line that is not one, as the last of a file whose
+        writer was killed, is skipped."""
         if not path.exists():
             return []
-        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        rows = []
+        for n, line in enumerate(path.read_text().splitlines(), 1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                log.warning("%s:%d: skipping a line that is not JSON", path, n)
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+        return rows
 
     @staticmethod
     def _window(case: Path):
+        """The steady window, or None for a case without one, as an empty or half-written
+        file has no row in the BigQuery view either."""
         p = case / "locust_steady_window.json"
         if not p.exists():
             return None
-        w = json.loads(p.read_text().splitlines()[0])
-        return (_ts(w.get("start")), _ts(w.get("end"))) if w.get("start") and w.get("end") else None
+        try:
+            w = json.loads(p.read_text().splitlines()[0])
+            return (_ts(w.get("start")), _ts(w.get("end"))) if w.get("start") and w.get("end") else None
+        except (IndexError, ValueError, AttributeError):
+            log.warning("%s: no usable steady window, treating the case as having none", p)
+            return None
 
     def _timebase(self, case: Path):
         """chart_start's first second (locust_stats_history, every row) and the steady test."""
@@ -132,6 +178,8 @@ class LocalReports:
             if len(r) < 17 or r[3] == "Aggregated":
                 continue
             t = _num(r[0], True)
+            if t is None:
+                continue
             rps, fps = _num(r[4]), _num(r[5])
             row = {"request": r[3], "elapsed_secs": t - first, "steady": steady(t), "user_count": _num(r[1], True)}
             for i, p in enumerate(PCT_COLS):
@@ -150,6 +198,8 @@ class LocalReports:
             if len(r) < 6 or r[5] != "worker" or r[3] not in ("CPUUtilizationPercent", "MemoryUtilizationPercent"):
                 continue
             t = _num(r[0], True)
+            if t is None:
+                continue
             m = re.search(r"([^-]+-[^-]+)$", r[2])
             node = m.group(1) if m else r[2]
             by[(node, t)]["cpu_percent" if r[3].startswith("CPU") else "memory_percent"] = _num(r[4])
@@ -182,6 +232,8 @@ class LocalReports:
             if len(r) < 5:
                 continue
             t = _num(r[0], True)
+            if t is None:
+                continue
             row = by.setdefault(t, {"elapsed_secs": t - first, "steady": steady(t), "actors": _num(r[1], True),
                                     **{v: None for v in names.values()}})
             if r[3] in names:

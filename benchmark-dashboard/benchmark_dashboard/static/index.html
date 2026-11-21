@@ -90,6 +90,7 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
 .tablewrap { overflow-x: auto; max-height: 520px; overflow-y: auto; }
 .status { color: var(--text-3); }
 .status.err { color: var(--critical); }
+#bqerr { flex: none; white-space: nowrap; }
 .hint { color: var(--text-3); padding: 40px; text-align: center; font-size: 14px; }
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; }
@@ -102,6 +103,7 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
 <header>
   <h1>Benchmark dashboard</h1>
   <span class="muted" id="project"></span>
+  <span class="status err" id="bqerr" hidden></span>
   <span class="spacer"></span>
   <span class="status" id="status"></span>
   <button id="refresh" title="Clear the server's query cache and reload">Refresh data</button>
@@ -149,6 +151,7 @@ const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v
 const S = {
   config: null,
   runs: {},          // dataset -> runs
+  runErr: {},        // dataset -> why its runs could not be loaded
   selected: [],      // [{dataset, run_id, test_case, kind, requests, slot}]
   data: {},          // key -> {latency, actors, pool, poolNodes, summary, summaryAll, sandbox}
   request: null,
@@ -202,7 +205,11 @@ async function loadDatasets() {
   S.config = await api("/api/config");
   const loc = S.config.datasets.find(d => d.local);
   $("project").textContent = [S.config.project && `BigQuery: ${S.config.project}`, loc && `local: ${loc.local}`].filter(Boolean).join(" · ");
-  if (S.config.bq_error) setStatus(`BigQuery unavailable (${S.config.bq_error.slice(0, 160)}) — local reports only`, true);
+  // Its own element: the status line is cleared by the next request.
+  const bq = $("bqerr");
+  bq.hidden = !S.config.bq_error;
+  bq.textContent = S.config.bq_error ? "BigQuery unavailable: local only" : "";
+  bq.title = S.config.bq_error ? `${S.config.bq_error}\n\nReload the page after fixing the credentials.` : "";
   const sel = $("dataset");
   sel.innerHTML = S.config.datasets.map(d => `<option value="${d.id}">${d.local ? "local reports (files)" : d.id}</option>`).join("");
   const pc = $("pcts");
@@ -213,11 +220,22 @@ async function loadDatasets() {
   }
 }
 async function loadRuns(ds) {
-  if (!S.runs[ds]) { $("runs").innerHTML = `<div class="empty">Loading runs…</div>`; S.runs[ds] = await api("/api/runs", { dataset: ds }); }
+  if (!S.runs[ds] && !S.runErr[ds]) {
+    $("runs").innerHTML = `<div class="empty">Loading runs…</div>`;
+    try { S.runs[ds] = await api("/api/runs", { dataset: ds }); }
+    catch (e) { S.runErr[ds] = e.message; }
+  }
   renderRuns();
 }
 function renderRuns() {
   const ds = $("dataset").value, runs = S.runs[ds] || [];
+  if (S.runErr[ds]) {
+    const m = document.createElement("div");
+    m.className = "empty";
+    m.textContent = `Could not load runs: ${S.runErr[ds]}. Fix the data and press Refresh data.`;
+    $("runs").replaceChildren(m);
+    return;
+  }
   const f = $("filter").value.trim().toLowerCase(), hideWarm = $("hidewarmup").checked;
   const selKeys = new Set(S.selected.map(key));
   const html = [];
@@ -343,7 +361,11 @@ function card(id, title, sub, wide) {
 async function refreshCharts() {
   const locust = S.selected.filter(s => s.kind === "locust");
   const sandbox = S.selected.filter(s => s.kind === "sandbox");
-  if (!S.selected.length) { $("content").innerHTML = `<div class="hint">Pick a case from the runs list to start. Add more to overlay them.</div>`; return; }
+  if (!S.selected.length) {
+    $("content").innerHTML = `<div class="hint">Pick a case from the runs list to start. Add more to overlay them.</div>`;
+    $("content").dataset.sig = "";  // the cards are gone: the next selection must build them again
+    return;
+  }
 
   // Request choices: the union across selected locust cases.
   const reqs = [...new Set(locust.flatMap(s => s.requests))].sort();
@@ -457,7 +479,8 @@ function drawSummary(locust, D) {
     });
   }
   h.push(`</tbody></table>`);
-  $("t-sum").innerHTML = h.join("");
+  const el = $("t-sum");  // gone if the selection changed while the data loaded
+  if (el) el.innerHTML = h.join("");
 }
 
 const PROV_ORDER = ["substrate", "local", "e2b", "daytona", "modal", "anthropic", "openai"];
@@ -512,7 +535,8 @@ function drawSandbox(sandbox, D) {
     }
   }
   h.push(`</tbody></table>`);
-  $("t-sbx").innerHTML = h.join("");
+  const el = $("t-sbx");
+  if (el) el.innerHTML = h.join("");
 }
 
 // ---------- events ----------
@@ -525,7 +549,7 @@ $("hidewarmup").onchange = renderRuns;
 $("request").onchange = () => { S.request = $("request").value; saveHash(); refreshCharts(); };
 $("pcts").addEventListener("change", () => { S.pcts = [...document.querySelectorAll("#pcts input:checked")].map(i => i.value); saveHash(); refreshCharts(); });
 for (const id of ["xaxis", "steadyonly", "pernode", "logy"]) $(id).onchange = () => { saveHash(); refreshCharts(); };
-$("refresh").onclick = async () => { await api("/api/refresh"); S.runs = {}; S.data = {}; await loadRuns($("dataset").value); refreshCharts(); };
+$("refresh").onclick = async () => { await api("/api/refresh"); S.runs = {}; S.runErr = {}; S.data = {}; await loadRuns($("dataset").value); refreshCharts(); };
 $("theme").onclick = () => {
   const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = dark ? "light" : "dark";
@@ -547,8 +571,11 @@ $("theme").onclick = () => {
   await loadRuns(ds);
   for (const k of h.getAll("s")) {
     const [d] = k.split("|");
-    if (!ids.includes(d)) continue;
-    if (!S.runs[d]) S.runs[d] = await api("/api/runs", { dataset: d });
+    if (!ids.includes(d) || S.runErr[d]) continue;
+    if (!S.runs[d]) {
+      try { S.runs[d] = await api("/api/runs", { dataset: d }); }
+      catch (e) { S.runErr[d] = e.message; continue; }
+    }
     const [, run_id, test_case] = k.split("|");
     const c = findCase(d, run_id, test_case);
     if (c && S.selected.length < MAX_SEL) S.selected.push({ dataset: d, run_id, test_case, kind: c.kind, requests: c.requests || [], start: c.start, end: c.end, slot: nextSlot() });

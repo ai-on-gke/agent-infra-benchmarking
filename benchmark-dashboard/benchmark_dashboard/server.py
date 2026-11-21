@@ -112,7 +112,8 @@ def table(dataset: str, view: str) -> str:
 
 @app.get("/api/config")
 def api_config():
-    return {"project": state["project"] if state["bq"] else None, "datasets": datasets(),
+    found = datasets()  # first: it is what sets bq_error
+    return {"project": state["project"] if state["bq"] and not state["bq_error"] else None, "datasets": found,
             "percentiles": PERCENTILES, "bq_error": state["bq_error"]}
 
 
