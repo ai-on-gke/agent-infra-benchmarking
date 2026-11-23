@@ -13,5 +13,5 @@
 	url = https://github.com/agent-substrate/env
 [submodule "dependency-repos/computesdk-benchmarks"]
 	path = dependency-repos/computesdk-benchmarks
-	url = /Users/dimadrogovoz/PycharmProjects/Akvelon_dima/benchmarks
-	branch = feat/substrate-provider
+	url = https://github.com/akvelon/akvelon-computesdk
+	branch = main
