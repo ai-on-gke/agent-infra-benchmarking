@@ -22,7 +22,7 @@ from .. import images, reports, workloads
 from ..infra.cluster import Cluster
 from ..infra.cluster_configs import ClusterConfig
 from ..log import log
-from . import computesdk, monitoring, locust, monitoring, noop, sandbox_benchmark
+from . import computesdk, locust, monitoring, noop, sandbox_benchmark
 from .sandbox_benchmark import ate_env
 
 RUNNERS = {module.TYPE: module for module in (locust, noop, sandbox_benchmark, computesdk)}

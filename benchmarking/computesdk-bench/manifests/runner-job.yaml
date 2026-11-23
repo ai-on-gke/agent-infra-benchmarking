@@ -89,13 +89,37 @@ metadata:
   namespace: benchmarking
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ${BENCHMARK_RUNNER_KSA}-computesdk
+rules:
+- apiGroups: [""]
+  resources: ["services", "pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods/portforward"]
+  verbs: ["create"]
+- apiGroups: ["ate.dev"]
+  resources: ["workerpools"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["substrate.ate.dev"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: ["certificates.k8s.io"]
+  resources: ["podcertificaterequests"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: ["certificates.k8s.io"]
+  resources: ["clustertrustbundles"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: ${BENCHMARK_RUNNER_KSA}-admin
+  name: ${BENCHMARK_RUNNER_KSA}-computesdk
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: cluster-admin
+  name: ${BENCHMARK_RUNNER_KSA}-computesdk
 subjects:
 - kind: ServiceAccount
   name: ${BENCHMARK_RUNNER_KSA}
