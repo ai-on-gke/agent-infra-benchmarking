@@ -1,0 +1,26 @@
+metadata:
+  atespace: benchmark-workloads
+  name: claude-code
+workerSelector:
+  matchLabels:
+    workload: benchmark-ateom
+containers:
+- name: claude-code
+  image: ${IMAGE_WITH_DIGEST}
+  command: ["python3", "-u", "/app/claude_code_actor.py"]
+  env:
+  - name: ANTHROPIC_BASE_URL
+    value: "http://mock-llm.benchmark-workloads.svc.cluster.local"
+  # The case's workload-timeout less 20s (workloads/openclaw.py).
+  - name: CLAUDE_CODE_TIMEOUT_SECS
+    value: "${EXEC_TIMEOUT_SECS}"
+  wakeupProbe:
+    httpGet:
+      path: /readyz
+      port: 80
+resources:
+  limits:
+    cpuMillicores: "${ACTOR_CPU_MILLICORES}"
+    memoryBytes: "${ACTOR_MEMORY_BYTES}"
+snapshotConfig:
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY

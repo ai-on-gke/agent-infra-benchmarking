@@ -37,7 +37,6 @@ import subprocess
 import sys
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 from datetime import datetime, timezone
-from functools import partial
 from pathlib import Path
 from typing import Callable, Iterator, NoReturn
 
@@ -49,7 +48,7 @@ from ..benchmarks.sandbox_benchmark import ate_env
 from ..control_planes import agent_sandbox, substrate
 from ..images import builder
 from ..infra import dev_infra, names, terraform
-from ..infra.cluster import Cluster, default_zone, gke_stockout, utc_now
+from ..infra.cluster import Cluster, PoolStockout, default_zone
 from ..infra.cluster_configs import execution, from_record, to_record
 from ..infra.deployment import RUNNER_INFRA_DIR, Deployment, DestroyFailed, GcsDeployment
 from ..log import ON_CLOUD_RUN, log
@@ -228,6 +227,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="use the mock-llm and ActorTemplates already deployed rather than deploying the case's; only with"
         " --dev-infra. The worker pool is recreated either way",
+    )
+    p.add_argument(
+        "--probe-nodes",
+        action="store_true",
+        help="also run monitoring/node-probe.py on every sandboxed node, which logs what the node's kernel waits on"
+        " once a second, for debugging a case that stalls",
     )
     args = p.parse_args()
     # argparse checks choices only against what is given, not the default.
@@ -500,7 +505,7 @@ def prepare_dev_infra(args: argparse.Namespace, cases: dict[str, dict]) -> dict:
     current = from_record(record["cluster"])
     for name, case in cases.items():
         config = benchmarks.cluster_config(name, case)
-        # A configuration's subclass is its cluster and more, such as openclaw's common's.
+        # A configuration's subclass is its cluster and more, such as mock-llm's common's.
         if not isinstance(current, type(config)):
             fail(
                 f"case {name} runs on configuration {config.CONFIGURATION}, but dev infra {args.dev_infra}"
@@ -561,6 +566,7 @@ def run_case(
         report_bucket=args.report_bucket,
         report_prefix=args.report_prefix,
         keeps_bucket=bool(args.dev_infra),
+        probe_nodes=args.probe_nodes,
     )
 
 
@@ -744,7 +750,7 @@ def run_on_own_infra(args: argparse.Namespace, cases: dict[str, dict]) -> list[s
             if placement:
                 log(f"{key}: sandboxed pool on {placement['machine-type']} in {placement['zone']}")
                 cluster_name = case_vars[key]["default_resource_name"]
-                stockout = partial(gke_stockout, args.project_id, placement["zone"], cluster_name, utc_now())
+                stockout = PoolStockout(args.project_id, placement["zone"], cluster_name, give_up=not last)
             stack.enter_context(case_infra.applied(retry_stockout=last, stockout=stockout))
             applied = case_infra
 

@@ -87,9 +87,37 @@ class OpenclawTimeout(unittest.TestCase):
         self.assertEqual(env["OPENCLAW_TIMEOUT_SECS"], "220")
         manifest = agent_sandbox.render(
             "openclaw-template.yaml.tmpl", NAME="openclaw", NAMESPACE="n", IMAGE="i", RUNTIME_CLASS="gvisor",
-            OPENCLAW_TIMEOUT_SECS=openclaw.exec_timeout_secs("240s"),
+            EXEC_TIMEOUT_SECS=openclaw.exec_timeout_secs("240s"),
         )  # fmt: skip
         self.assertIn('value: "220"', manifest)
+
+    def test_claude_code_takes_it_and_calls_mock_llm(self):
+        cluster = mock.Mock(project_id="p")
+        with mock.patch.object(workloads, "pinned_image", return_value="i"):
+            rendered = yaml.safe_load(workloads.render_template(cluster, "claude-code", "1Gi", "o", "r", "240s"))
+        env = {e["name"]: e["value"] for e in rendered["containers"][0]["env"]}
+        self.assertEqual(env["CLAUDE_CODE_TIMEOUT_SECS"], "220")
+        self.assertEqual(workloads.egress_hosts(rendered), (["mock-llm.benchmark-workloads.svc.cluster.local"], []))
+        self.assertIn("claude-code", workloads.MOCK_LLM_TEMPLATES)
+
+
+class MockLLM(unittest.TestCase):
+    def deployed_env(self, *args) -> dict:
+        """The env of the mock-llm Deployment deploy_mock_llm applies."""
+        with (
+            mock.patch.object(openclaw.images, "pin", return_value="i"),
+            mock.patch.object(openclaw, "stream") as stream,
+        ):
+            openclaw.deploy_mock_llm(mock.Mock(), "r", 60, *args)
+        deployment = next(yaml.safe_load_all(stream.call_args_list[0].kwargs["input"]))
+        return {e["name"]: e["value"] for e in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
+
+    def test_scripted_by_default(self):
+        self.assertEqual(self.deployed_env()["MOCK_LLM_MODE"], "script")
+
+    def test_replays_a_recording_baked_into_its_image(self):
+        env = self.deployed_env("fix", "recorded")
+        self.assertEqual(env, {"MOCK_LLM_MODE": "replay", "CASSETTE": "/recordings/fix/cassette.jsonl", "REPLAY_TIMING": "recorded"})
 
 
 class WorkerPool(unittest.TestCase):

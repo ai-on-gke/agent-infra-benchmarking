@@ -20,7 +20,9 @@
 package scenario
 
 import (
+	"context"
 	"errors"
+	"flag"
 	"log/slog"
 	"os"
 	"time"
@@ -107,6 +109,11 @@ type Options struct {
 	// sandbox.EgressHosts returns them.
 	EgressAllow    []string
 	EgressAllowTLS []string
+
+	// Flags are the worker's, holding the workloads' own (see
+	// workload.RegisterFlags). Nil skips the check that none of another
+	// workload's is set.
+	Flags *flag.FlagSet
 }
 
 // Common is Options as Setup resolved them.
@@ -124,6 +131,10 @@ func Setup(o Options) Common {
 	wl, err := workload.Resolve(o.WorkloadName)
 	if err != nil {
 		slog.Error("fatal: cannot select the workload", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	if err := workload.Configure(context.Background(), wl, o.Flags); err != nil {
+		slog.Error("fatal: cannot configure the workload", slog.String("workload", wl.Name()), slog.String("err", err.Error()))
 		os.Exit(1)
 	}
 	if o.EgressAllow, err = sandbox.EgressHosts(o.EgressAllow); err != nil {

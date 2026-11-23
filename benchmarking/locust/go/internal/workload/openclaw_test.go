@@ -16,9 +16,11 @@ package workload
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -117,7 +119,7 @@ func TestOpenclawSendsTheBenchmarkPrompt(t *testing.T) {
 	srv := &openclawServer{}
 	actor := newOpenclawActor(t, srv)
 
-	retry, err := openclawWorkload{}.SendInstruction(context.Background(), actor)
+	retry, err := (&openclawWorkload{}).SendInstruction(context.Background(), actor)
 	if err != nil {
 		t.Fatalf("SendInstruction failed: %v", err)
 	}
@@ -146,10 +148,10 @@ func TestOpenclawRejectsAnotherTurnsReply(t *testing.T) {
 	srv := &openclawServer{Reply: openclawReplyFor("00000000-0000-4000-8000-000000000000")}
 	actor := newOpenclawActor(t, srv)
 
-	if _, err := (openclawWorkload{}).SendInstruction(context.Background(), actor); err == nil {
+	if _, err := (&openclawWorkload{}).SendInstruction(context.Background(), actor); err == nil {
 		t.Fatal("SendInstruction succeeded on another turn's reply, want failure")
 	}
-	if _, err := (openclawWorkload{}).SendInstruction(context.Background(), newOpenclawActor(t, &openclawServer{})); err != nil {
+	if _, err := (&openclawWorkload{}).SendInstruction(context.Background(), newOpenclawActor(t, &openclawServer{})); err != nil {
 		t.Fatalf("SendInstruction failed on its own turn's reply: %v", err)
 	}
 	reqs := srv.recordedRequests()
@@ -164,7 +166,7 @@ func TestOpenclawRejectsAnUnexpectedReply(t *testing.T) {
 	srv := &openclawServer{Reply: "not the expected reply"}
 	actor := newOpenclawActor(t, srv)
 
-	retry, err := openclawWorkload{}.SendInstruction(context.Background(), actor)
+	retry, err := (&openclawWorkload{}).SendInstruction(context.Background(), actor)
 	if err == nil {
 		t.Fatal("SendInstruction succeeded on a wrong reply, want failure")
 	}
@@ -180,7 +182,7 @@ func TestOpenclawRetriesWhileActivating(t *testing.T) {
 	srv := &openclawServer{Status: http.StatusServiceUnavailable}
 	actor := newOpenclawActor(t, srv)
 
-	retry, err := openclawWorkload{}.SendInstruction(context.Background(), actor)
+	retry, err := (&openclawWorkload{}).SendInstruction(context.Background(), actor)
 	if err == nil {
 		t.Fatal("SendInstruction succeeded against a 503, want failure")
 	}
@@ -194,12 +196,48 @@ func TestOpenclawIsSelectable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve(%q) failed: %v", openclawWorkloadName, err)
 	}
-	if _, ok := w.(openclawWorkload); !ok {
-		t.Fatalf("workload: got %T, want openclawWorkload", w)
+	if _, ok := w.(*openclawWorkload); !ok {
+		t.Fatalf("workload: got %T, want *openclawWorkload", w)
 	}
 	// The template has to be the one the manifest creates, or the actor is
 	// built from something that does not serve /invoke.
 	if got := w.DefaultTemplate(); got != openclawTemplate {
 		t.Errorf("DefaultTemplate: got %q, want %q", got, openclawTemplate)
+	}
+}
+
+// A recorded conversation goes as claude-code's does, each turn's reply
+// openclaw's output, which ends with the turn and the nonce of mock-llm's
+// answer.
+func TestOpenclawSendsTheConversation(t *testing.T) {
+	var paths []string
+	// lost answers every turn as the session's first.
+	lost := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		paths = append(paths, r.URL.RequestURI())
+		_, nonce, _ := strings.Cut(string(body), " (request ")
+		turn := r.URL.Query().Get("turn")
+		if lost {
+			turn = "1"
+		}
+		fmt.Fprintf(w, "[agent] a log line (turn 9)\nDone. (turn %s) (request %s\n", turn, nonce)
+	}))
+	t.Cleanup(ts.Close)
+	actor := sandbox.Actor{HTTPClient: ts.Client(), RouterURL: ts.URL, Name: "openclawactor"}
+
+	w := (&openclawWorkload{conversation{turns: []string{"one", "two"}}}).ForActor()
+	for i := range 3 {
+		if _, err := w.SendInstruction(context.Background(), actor); err != nil {
+			t.Fatalf("instruction %d: %v", i+1, err)
+		}
+	}
+	if want := []string{"/invoke?turn=1", "/invoke?turn=2", "/invoke?turn=1"}; !slices.Equal(paths, want) {
+		t.Errorf("paths: got %q, want %q", paths, want)
+	}
+
+	lost = true
+	if _, err := w.SendInstruction(context.Background(), actor); err == nil || !strings.Contains(err.Error(), "want turn 2") {
+		t.Errorf("lost session: got %v, want turn 1 for turn 2 to fail", err)
 	}
 }

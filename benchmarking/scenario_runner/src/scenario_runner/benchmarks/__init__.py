@@ -22,7 +22,7 @@ from .. import images, reports, workloads
 from ..infra.cluster import Cluster
 from ..infra.cluster_configs import ClusterConfig
 from ..log import log
-from . import computesdk, locust, monitoring, noop, sandbox_benchmark
+from . import computesdk, monitoring, locust, monitoring, noop, sandbox_benchmark
 from .sandbox_benchmark import ate_env
 
 RUNNERS = {module.TYPE: module for module in (locust, noop, sandbox_benchmark, computesdk)}
@@ -67,9 +67,10 @@ def missing_requirements(cases: dict[str, dict]) -> list[str]:
     return list(dict.fromkeys(missing))
 
 
-def run(name: str, case: dict, run_id: str, cluster: Cluster, **options: object) -> None:
+def run(name: str, case: dict, run_id: str, cluster: Cluster, *, probe_nodes: bool = False, **options: object) -> None:
     """options are those of its type's run, e.g. locust.run's image_repo, and
-    test_case and repeat, or warmup, for one of a case's repeats."""
+    test_case and repeat, or warmup, for one of a case's repeats. probe_nodes
+    deploys node_probe's DaemonSet too, from options' image_repo."""
     if case["type"] == noop.TYPE:
         log(f"{name}: noop, nothing to run")
         return
@@ -77,6 +78,8 @@ def run(name: str, case: dict, run_id: str, cluster: Cluster, **options: object)
     log(f"{name}: running as {run_id} on cluster {cluster.name}")
     # First, so it is watching before the run deploys anything to watch.
     monitoring.deploy(cluster)
+    if probe_nodes:
+        node_probe.deploy(cluster, str(options["image_repo"]))
     RUNNERS[case["type"]].run(cluster, name, case, run_id, **options)
 
 

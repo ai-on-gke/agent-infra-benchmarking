@@ -218,6 +218,74 @@ class GkeStockout(unittest.TestCase):
         self.assertFalse(self.stockout("2026-10-21T13:00:00Z", returncode=1))
 
 
+class PoolStockout(unittest.TestCase):
+    GROUP = "https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-b/instanceGroupManagers/gke-c-sandboxed-grp"
+    STOCKOUT = {"code": "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS", "message": "does not have enough resources"}
+
+    def watched(self, error_times: list[str], creating: int = 1, error=STOCKOUT) -> tuple[list[str], list[list[str]]]:
+        """The groups a check at 18:10 UTC finds stocked out, of an apply
+        from 18:00, and the gcloud commands it ran."""
+        ran = []
+
+        def gcloud(cmd):
+            ran.append(cmd)
+            if cmd[2] == "node-pools":
+                return {"instanceGroupUrls": [self.GROUP]}
+            if cmd[4] == "describe":
+                return {"currentActions": {"creating": creating}}
+            return [{"error": error, "timestamp": t} for t in error_times]
+
+        watch = cluster_module.PoolStockout("p", "us-east1-b", "c")
+        watch.since = "2026-11-17T18:00:00Z"
+        now = cluster_module.datetime.fromisoformat("2026-11-17T18:10:00+00:00")
+        with mock.patch.object(cluster_module, "gcloud_json", side_effect=gcloud), \
+             mock.patch.object(cluster_module, "datetime", wraps=cluster_module.datetime) as dt:
+            dt.now.return_value = now
+            return watch.stocked_out_groups(), ran
+
+    def test_a_group_that_kept_failing_on_stockouts_is_given_up_on(self):
+        # 10:02 PST is 18:02 UTC, eight minutes before the check.
+        groups, ran = self.watched(["2026-11-17T10:02:00.0-08:00", "2026-11-17T10:09:00.0-08:00"])
+        self.assertEqual(groups, [self.GROUP])
+        self.assertIn(["gcloud", "compute", "instance-groups", "managed", "list-errors", "gke-c-sandboxed-grp",
+                       "--zone=us-east1-b", "--project=p"], ran)  # fmt: skip
+
+    def test_a_stockout_within_the_grace_or_before_the_apply_is_not(self):
+        self.assertEqual(self.watched(["2026-11-17T10:08:00.0-08:00"])[0], [])
+        self.assertEqual(self.watched(["2026-11-17T09:50:00.0-08:00"])[0], [])
+
+    def test_a_group_creating_nothing_or_failing_otherwise_is_not(self):
+        self.assertEqual(self.watched(["2026-11-17T10:02:00.0-08:00"], creating=0)[0], [])
+        quota = {"code": "QUOTA_EXCEEDED", "message": "Quota 'C3_CPUS' exceeded"}
+        self.assertEqual(self.watched(["2026-11-17T10:02:00.0-08:00"], error=quota)[0], [])
+
+    def test_giving_up_resizes_the_group_to_zero_and_fails_the_apply_as_a_stockout(self):
+        watch = cluster_module.PoolStockout("p", "us-east1-b", "c")
+        resized = []
+        with mock.patch.object(cluster_module, "STOCKOUT_POLL_SECS", 0), \
+             mock.patch.object(watch, "stocked_out_groups", return_value=[self.GROUP]), \
+             mock.patch.object(cluster_module, "gcloud_json", side_effect=lambda cmd: resized.append(cmd) or {}), \
+             mock.patch.object(cluster_module, "log"):
+            dep = deployment.Deployment(Path(tempfile.mkdtemp()))
+            def apply(*args, **kwargs):
+                # One GKE takes as done once the group is at 0.
+                deadline = time.monotonic() + 5
+                while not watch.gave_up and time.monotonic() < deadline:
+                    time.sleep(0.01)
+
+            with mock.patch.object(deployment.terraform, "deploy", side_effect=apply):
+                with self.assertRaises(terraform.Stockout):
+                    dep.deploy(retry_stockout=False, stockout=watch)
+        self.assertEqual(resized, [["gcloud", "compute", "instance-groups", "managed", "resize", "gke-c-sandboxed-grp",
+                                    "--zone=us-east1-b", "--project=p", "--size=0"]])  # fmt: skip
+
+    def test_the_last_placement_is_not_watched(self):
+        watch = cluster_module.PoolStockout("p", "us-east1-b", "c", give_up=False)
+        with mock.patch.object(cluster_module.threading, "Thread") as thread, watch.watching():
+            pass
+        thread.assert_not_called()
+
+
 class Series(unittest.TestCase):
     args = mock.Mock(name="args")
 
@@ -519,12 +587,53 @@ class BenchmarkRun(unittest.TestCase):
         from scenario_runner import benchmarks
 
         args = argparse.Namespace(name="run-1", no_deploy_workloads=False, report_bucket=None,
-                                  report_prefix="reports", dev_infra=None)  # fmt: skip
+                                  report_prefix="reports", dev_infra=None, probe_nodes=False)  # fmt: skip
         with mock.patch.object(benchmarks, "run") as bench_run:
             run.run_case(args, "c-1", {"type": "locust"}, mock.Mock(), "c", 1, 0, "repo")
+        # benchmarks.run takes these itself.
+        own = {name for name, p in inspect.signature(benchmarks.run).parameters.items() if p.kind is p.KEYWORD_ONLY}
         for type_, module in benchmarks.RUNNERS.items():
             # benchmarks.run runs nothing of a noop's.
             if module is benchmarks.noop:
                 continue
             params = inspect.signature(module.run).parameters
-            self.assertLessEqual(set(bench_run.call_args.kwargs), set(params), type_)
+            self.assertLessEqual(set(bench_run.call_args.kwargs) - own, set(params), type_)
+
+    def test_probe_nodes_deploys_the_probe_and_is_not_passed_on(self):
+        from scenario_runner import benchmarks
+        from scenario_runner.benchmarks import monitoring, node_probe
+
+        cluster = mock.Mock()
+        with (
+            mock.patch.object(monitoring, "deploy"),
+            mock.patch.object(node_probe, "deploy") as deploy,
+            mock.patch.object(locust, "run") as run,
+        ):
+            benchmarks.run("c-1", {"type": "locust"}, "run-1", cluster, image_repo="repo", probe_nodes=True)
+        deploy.assert_called_once_with(cluster, "repo")
+        run.assert_called_once_with(cluster, "c-1", {"type": "locust"}, "run-1", image_repo="repo")
+
+    def test_without_probe_nodes_there_is_no_probe(self):
+        from scenario_runner import benchmarks
+        from scenario_runner.benchmarks import monitoring, node_probe
+
+        with (
+            mock.patch.object(monitoring, "deploy"),
+            mock.patch.object(node_probe, "deploy") as deploy,
+            mock.patch.object(locust, "run"),
+        ):
+            benchmarks.run("c-1", {"type": "locust"}, "run-1", mock.Mock(), image_repo="repo")
+        deploy.assert_not_called()
+
+    def test_the_probe_runs_privileged_on_the_sandboxed_nodes_with_the_script(self):
+        import json
+
+        from scenario_runner.benchmarks import node_probe
+
+        config_map, daemon_set = map(json.loads, node_probe.manifest("img@sha256:1").split("\n---\n"))
+        self.assertEqual(config_map["data"]["node-probe.py"], node_probe.SCRIPT.read_text())
+        pod = daemon_set["spec"]["template"]["spec"]
+        self.assertEqual(pod["nodeSelector"], {"benchmarking-worker": "true"})
+        self.assertTrue(pod["hostPID"])
+        self.assertTrue(pod["containers"][0]["securityContext"]["privileged"])
+        self.assertEqual(pod["containers"][0]["image"], "img@sha256:1")

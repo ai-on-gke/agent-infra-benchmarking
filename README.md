@@ -44,6 +44,7 @@ explains each file.
 |---|---|---|
 | `glutton` | substrate's own echo server; the instruction is one HTTP ping with a nonce. Variants write RAM and disk before the suspend to size the snapshot. | Milliseconds, so it measures the platform |
 | `openclaw` | The [openclaw](https://www.npmjs.com/package/openclaw) agent running one tool-calling turn against a deterministic mock LLM in the cluster | A whole agent turn, tens of seconds, so compare its `Resume` and `Suspend` rather than `TTFI` |
+| `claude-code` | Headless [Claude Code](https://www.npmjs.com/package/@anthropic-ai/claude-code) fixing a small repo's failing tests, one turn of a session per cycle, against the mock LLM | As openclaw's; the session and the repo have to survive each suspend |
 
 ### Platforms
 
@@ -62,9 +63,10 @@ The main ones:
 |---|---|---|---|
 | `glutton-substrate-gvisor`, `glutton-substrate-microvm`, `openclaw-substrate-gvisor`, `openclaw-substrate-microvm`, `openclaw-agent-sandbox-gvisor` | 300 users on 300 workers, 4 min after a 1 min warm-up | 30 | The headline comparison; run every 6 hours |
 | `glutton-agent-sandbox-gvisor` | 30 users on 30 workers, the most its pod-per-cycle keeps up with | 30 | Same, on agent-sandbox; run every 6 hours |
-| `glutton-substrate-gvisor-1node`, `glutton-substrate-microvm-1node` | 90 users on 90 workers, 4 min after a 1 min warm-up | 1 bare-metal | glutton on bare metal, recorded as `<case>-metal`; run every 6 hours |
+| `glutton-substrate-gvisor-1node`, `glutton-substrate-microvm-1node` | 90 users on 90 workers, 4 min after a 1 min warm-up | 1 bare-metal | glutton on bare metal, recorded as `<case>-metal`; run daily |
 | `glutton-density`, `openclaw-density` | 100 workers kept at 80 active actors, with 100, 250 or 500 actors sharing them, against a never-suspend baseline | 10 | How many idle actors a node holds, and what sharing costs |
 | `glutton-single`, `glutton-implicit`, `glutton-load`, `glutton-session`, `glutton-concurrent`, `glutton-shared-workers` | 10 users on one node, 5 min | 1 | One feature each: router wake, RAM and disk in the snapshot, five instructions per wake, four at once, workers shared by actors |
+| `claude-code-replay`, `openclaw-replay` | 10 users on one node, 10 min, 20-40 s between turns | 1 | A conversation recorded with a real model, replayed by the mock LLM ([recorder](benchmarking/workloads/recorder/README.md)); `claude-code-replay` run every 6 hours |
 | `glutton-large` | 100 users over four load-generator pods, three repeats | 25 | Scale; run by hand, as it takes most of a region's C2 quota |
 | `sandbox-benchmark` | 10 suspend-resume runs per provider | 1 | substrate against E2B, Modal, Daytona, Anthropic and OpenAI, with a monthly cost sheet |
 | `dummy` | none | 0 | The Terraform path without a cluster, for checking a setup |
@@ -99,8 +101,8 @@ with `--report-deployment`. All of it is in
 
 ## The scheduled runs
 
-Two Cloud Run jobs in the GCP project `akvelon-gke-aieco` (`us-central1`) run
-the scenario-runner from the latest image of their branch. Which cases they
+Six Cloud Run jobs in the GCP project `akvelon-gke-aieco` (`us-central1`, and
+`us-east1`, `us-east4`, `europe-west1` and `asia-southeast1` for bare metal) run the scenario-runner from the latest image of their branch. Which cases they
 run is the suite of the same name in `scenarios.yaml`, so a case is added to
 or dropped from a schedule by editing the suite, with no Terraform apply.
 
@@ -109,6 +111,10 @@ or dropped from a schedule by editing the suite, with no Terraform apply.
 | [`substrate-bench-auto`](automation-infra/deployments/substrate-bench-auto/README.md) | 03:00, 09:00, 15:00, 21:00 | `nightly` | The six 30-node cases above and `dummy`; about 3 hours |
 | `substrate-bench-auto-cleanup` | 15:00 daily | | Destroys what a killed execution left |
 | [`substrate-bench-staging`](automation-infra/deployments/substrate-bench-staging/) | 04:00 daily | `staging` | `dummy` and `glutton-single`, for trying changes to the job before `main` |
+| [`substrate-bench-metal`](automation-infra/deployments/substrate-bench-metal/) | 01:00 daily | `bare-metal` | The two 1-node bare-metal cases, in `us-east1`, apart from the nightly, as a bare-metal machine can take hours to get |
+| [`substrate-bench-east4`](automation-infra/deployments/substrate-bench-east4/) | 13:00 daily | `bare-metal` | The same cases in `us-east4`, for a second chance a day at a free machine |
+| [`substrate-bench-europe`](automation-infra/deployments/substrate-bench-europe/) | 07:00 daily | `bare-metal` | The same cases in `europe-west1`, for a third chance a day |
+| [`substrate-bench-asia`](automation-infra/deployments/substrate-bench-asia/) | 19:00 daily | `bare-metal` | The same cases in `asia-southeast1`, for a fourth chance a day |
 
 Each execution's reports land in `gs://substrate-bench-auto-tfstate/data/<run-id>/`
 and are queryable in the BigQuery dataset `substrate_bench_auto`, for example:

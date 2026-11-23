@@ -16,6 +16,7 @@ package workload
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"net/http"
 
@@ -48,14 +49,56 @@ const (
 )
 
 func init() {
-	register(gluttonWorkload{})
+	register(&gluttonWorkload{})
 }
 
 // gluttonWorkload drives substrate's glutton actor. Its /ping route echoes the
 // message it was sent, and that echo is what makes glutton usable here: it
 // distinguishes a sandbox that ran the instruction from one that merely
 // accepted the connection, which is the line a measurement window closes on.
-type gluttonWorkload struct{}
+//
+// It can also rewrite part of the actor's memory and disk before each
+// suspend, as its --glutton-write-ram and --glutton-write-disk ask.
+type gluttonWorkload struct {
+	writeRAM  string
+	writeDisk int
+}
+
+// NewGlutton returns glutton set to write writeRAM of memory and writeDisk
+// bytes of disk before each suspend, as its flags would.
+func NewGlutton(writeRAM string, writeDisk int) Workload {
+	return &gluttonWorkload{writeRAM: writeRAM, writeDisk: writeDisk}
+}
+
+func (w *gluttonWorkload) Flags(fs *flag.FlagSet) {
+	fs.StringVar(&w.writeRAM, "glutton-write-ram", "",
+		"Memory each cycle rewrites in the actor before its suspend, such as 64Mi. Unset writes none.")
+	fs.IntVar(&w.writeDisk, "glutton-write-disk", 0,
+		"Bytes of a file each cycle rewrites in the actor before its suspend. Zero writes none.")
+}
+
+func (w *gluttonWorkload) Configure(context.Context) error {
+	if w.writeDisk < 0 {
+		return fmt.Errorf("--glutton-write-disk cannot be negative, got %d", w.writeDisk)
+	}
+	return nil
+}
+
+// Loads writes the memory, then the disk, each when set.
+func (w *gluttonWorkload) Loads() []Load {
+	var loads []Load
+	if w.writeRAM != "" {
+		loads = append(loads, Load{Metric: "WriteRAM", Run: func(ctx context.Context, actor sandbox.Actor, first bool) error {
+			return w.WriteRAM(ctx, actor, w.writeRAM, first)
+		}})
+	}
+	if w.writeDisk > 0 {
+		loads = append(loads, Load{Metric: "WriteDisk", Run: func(ctx context.Context, actor sandbox.Actor, _ bool) error {
+			return w.WriteDisk(ctx, actor, w.writeDisk)
+		}})
+	}
+	return loads
+}
 
 func (gluttonWorkload) Name() string { return GluttonName }
 

@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"maps"
@@ -40,8 +41,9 @@ import (
 // benchmark and are identical whichever workload is measured, which is what
 // keeps a measurement from one workload comparable to one from another.
 //
-// glutton and openclaw are the implementations today. Another one is a file
-// that implements this interface and calls register in its init.
+// glutton, openclaw and claude-code are the implementations today. Another
+// one is a file that implements this interface and calls register in its
+// init.
 type Workload interface {
 	// Name is the --workload-name value that selects this workload.
 	Name() string
@@ -62,21 +64,45 @@ type Workload interface {
 	SendInstruction(ctx context.Context, actor sandbox.Actor) (retry bool, err error)
 }
 
+// Configurable is a workload with settings of its own. Flags declares them,
+// each named after the workload, and Configure applies them once they are
+// parsed, before the run starts; an error ends the run.
+type Configurable interface {
+	Flags(fs *flag.FlagSet)
+	Configure(ctx context.Context) error
+}
+
 // Loader is a workload whose actors can be made to change their memory and
-// disk on request, which a cycle can do before its suspend so the snapshot
+// disk on request, which a cycle does before its suspend so the snapshot
 // holds that much changed state.
 type Loader interface {
-	// WriteRAM rewrites size (a quantity such as "64Mi") of the actor's
-	// memory, first on an actor not yet written to, and WriteDisk size bytes
-	// of a file on its disk.
-	WriteRAM(ctx context.Context, actor sandbox.Actor, size string, first bool) error
-	WriteDisk(ctx context.Context, actor sandbox.Actor, size int) error
+	// Loads are what each cycle writes before its suspend, in order; none
+	// when the workload was not set to write anything.
+	Loads() []Load
+}
+
+// Load is one write a cycle makes before its suspend, reported as its own
+// Metric row. first is true on an actor this load has not yet succeeded on.
+type Load struct {
+	Metric string
+	Run    func(ctx context.Context, actor sandbox.Actor, first bool) error
+}
+
+// PerActor is a workload that keeps state about each actor across its
+// cycles, such as where the actor is in a session of several turns. Each user
+// drives its actor with the Workload ForActor returns, one instruction at a
+// time.
+type PerActor interface {
+	ForActor() Workload
 }
 
 // Default is the workload Resolve selects when no name is given.
 const Default = GluttonName
 
 var workloads = map[string]Workload{}
+
+// flagOwners names the workload that declared each of RegisterFlags' flags.
+var flagOwners = map[string]string{}
 
 // register adds w to the set --workload-name can select. It
 // panics on a duplicate name, which can only be a build-time mistake,
@@ -117,6 +143,40 @@ func Resolve(name string) (Workload, error) {
 		return nil, fmt.Errorf("unknown --workload-name %q; known: %s", name, strings.Join(registeredNames(), ", "))
 	}
 	return w, nil
+}
+
+// RegisterFlags declares every workload's own flags on fs, so that one
+// command line can carry the settings of whichever workload it selects.
+func RegisterFlags(fs *flag.FlagSet) {
+	for _, name := range registeredNames() {
+		c, ok := workloads[name].(Configurable)
+		if !ok {
+			continue
+		}
+		own := flag.NewFlagSet(name, flag.ContinueOnError)
+		c.Flags(own)
+		own.VisitAll(func(f *flag.Flag) {
+			fs.Var(f.Value, f.Name, f.Usage)
+			flagOwners[f.Name] = name
+		})
+	}
+}
+
+// Configure applies w's own settings. A flag of another workload set in fs
+// is an error rather than ignored: the run would not do what it asks.
+func Configure(ctx context.Context, w Workload, fs *flag.FlagSet) error {
+	var errs []error
+	if fs != nil {
+		fs.Visit(func(f *flag.Flag) {
+			if owner, ok := flagOwners[f.Name]; ok && owner != w.Name() {
+				errs = append(errs, fmt.Errorf("--%s is %s's, not %s's", f.Name, owner, w.Name()))
+			}
+		})
+	}
+	if c, ok := w.(Configurable); ok && len(errs) == 0 {
+		errs = append(errs, c.Configure(ctx))
+	}
+	return errors.Join(errs...)
 }
 
 // ErrStaleAssignment marks a 421 from the actor's worker: the router sent the

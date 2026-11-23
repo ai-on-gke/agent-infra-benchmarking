@@ -30,7 +30,7 @@ jobs:
       id-token: write
     strategy:
       matrix:
-        deployment: [substrate-bench-auto, substrate-bench-staging]
+        deployment: [substrate-bench-auto, substrate-bench-staging, substrate-bench-metal, substrate-bench-east4, substrate-bench-europe, substrate-bench-asia]
     steps:
       # Only what the image holds, so its tree stays clean in git's eyes.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,7 +101,7 @@ jobs:
     strategy:
       matrix:
         # The same as runner-image's.
-        deployment: [substrate-bench-auto, substrate-bench-staging]
+        deployment: [substrate-bench-auto, substrate-bench-staging, substrate-bench-metal, substrate-bench-east4, substrate-bench-europe, substrate-bench-asia]
     concurrency:
       group: ${{ github.workflow }}-benchmark-images-${{ matrix.deployment }}-${{ github.ref }}
     steps:
@@ -180,7 +180,7 @@ jobs:
     strategy:
       matrix:
         # The same as runner-image's.
-        deployment: [substrate-bench-auto, substrate-bench-staging]
+        deployment: [substrate-bench-auto, substrate-bench-staging, substrate-bench-metal, substrate-bench-east4, substrate-bench-europe, substrate-bench-asia]
     concurrency:
       group: ${{ github.workflow }}-tag-runner-${{ matrix.deployment }}-${{ github.ref }}
     steps:
