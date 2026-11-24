@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "benchmark-dashboard"
+version = "0.1.0"
+description = "Local dashboard over the benchmark reports in BigQuery."
+requires-python = ">=3.10"
+dependencies = ["fastapi", "uvicorn", "google-cloud-bigquery"]
+
+[project.scripts]
+benchmark-dashboard = "benchmark_dashboard.server:main"
+
+[tool.setuptools]
+packages = ["benchmark_dashboard"]
+
+[tool.setuptools.package-data]
+benchmark_dashboard = ["static/*"]

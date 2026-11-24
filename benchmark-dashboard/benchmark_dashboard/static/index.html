@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Benchmark Dashboard</title>
+<link rel="icon" href="data:,">
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f4f2; --surface: #fcfcfb; --surface-2: #efefec; --border: #dddcd7;
+  --text: #0b0b0b; --text-2: #52514e; --text-3: #7d7c77; --grid: #e8e7e3;
+  --accent: #2a78d6; --critical: #c93b3a; --good: #0f7b3e;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --steady: rgba(42,120,214,0.07);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211; --surface: #1a1a19; --surface-2: #242422; --border: #34332f;
+    --text: #f0efec; --text-2: #c3c2b7; --text-3: #8e8d86; --grid: #2a2a27;
+    --accent: #3987e5; --critical: #e66767; --good: #3fb36f;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --steady: rgba(57,135,229,0.10);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211; --surface: #1a1a19; --surface-2: #242422; --border: #34332f;
+  --text: #f0efec; --text-2: #c3c2b7; --text-3: #8e8d86; --grid: #2a2a27;
+  --accent: #3987e5; --critical: #e66767; --good: #3fb36f;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --steady: rgba(57,135,229,0.10);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--surface); position: sticky; top: 0; z-index: 5; }
+header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+header .spacer { flex: 1; }
+header .muted { color: var(--text-3); }
+button, select, input[type=text] { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+button { cursor: pointer; }
+button:hover { background: var(--surface-2); }
+.layout { display: grid; grid-template-columns: 340px 1fr; min-height: calc(100vh - 49px); }
+aside { border-right: 1px solid var(--border); background: var(--surface); padding: 12px; overflow-y: auto; max-height: calc(100vh - 49px); position: sticky; top: 49px; }
+aside h2, main h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); margin: 14px 0 6px; font-weight: 600; }
+aside h2:first-child { margin-top: 0; }
+.row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.row > select, .row > input[type=text] { flex: 1; min-width: 0; }
+.sel { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; }
+.sel:hover { background: var(--surface-2); }
+.sel .sw { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.sel .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sel .lbl small { color: var(--text-3); display: block; }
+.sel button { border: none; background: none; color: var(--text-3); padding: 0 4px; font-size: 15px; }
+.empty { color: var(--text-3); padding: 4px 6px; }
+.run { border-top: 1px solid var(--border); }
+.run > summary { cursor: pointer; padding: 6px 2px; list-style: none; display: flex; gap: 6px; align-items: baseline; }
+.run > summary::-webkit-details-marker { display: none; }
+.run > summary::before { content: "▸"; color: var(--text-3); width: 10px; }
+.run[open] > summary::before { content: "▾"; }
+.run > summary .when { color: var(--text-3); margin-left: auto; font-size: 12px; white-space: nowrap; }
+.case { display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 18px; border-radius: 5px; cursor: pointer; }
+.case:hover { background: var(--surface-2); }
+.case .tag { font-size: 10px; color: var(--text-3); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+.case.on { font-weight: 600; }
+main { padding: 12px 16px 40px; min-width: 0; }
+.controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+.controls label { display: inline-flex; gap: 4px; align-items: center; color: var(--text-2); }
+.controls .group { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.controls .group > span { color: var(--text-3); }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(520px, 1fr)); gap: 12px; margin-top: 12px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.card.wide { grid-column: 1 / -1; }
+.card h3 { margin: 0 0 2px; font-size: 13px; font-weight: 600; }
+.card .sub { color: var(--text-3); font-size: 12px; margin-bottom: 4px; }
+.chart { height: 300px; }
+.card.wide .chart { height: 380px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 4px 8px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { color: var(--text-2); font-weight: 600; font-size: 12px; position: sticky; top: 0; background: var(--surface); }
+th:first-child, td:first-child { text-align: left; }
+td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.delta-up { color: var(--critical); }
+.delta-down { color: var(--good); }
+.tablewrap { overflow-x: auto; max-height: 520px; overflow-y: auto; }
+.status { color: var(--text-3); }
+.status.err { color: var(--critical); }
+#bqerr { flex: none; white-space: nowrap; }
+.hint { color: var(--text-3); padding: 40px; text-align: center; font-size: 14px; }
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  aside { position: static; max-height: none; border-right: none; border-bottom: 1px solid var(--border); }
+  .grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Benchmark dashboard</h1>
+  <span class="muted" id="project"></span>
+  <span class="status err" id="bqerr" hidden></span>
+  <span class="spacer"></span>
+  <span class="status" id="status"></span>
+  <button id="refresh" title="Clear the server's query cache and reload">Refresh data</button>
+  <button id="theme" title="Toggle light/dark">◐</button>
+</header>
+<div class="layout">
+  <aside>
+    <h2>Selected <span class="muted" id="selcount"></span></h2>
+    <div id="selected"></div>
+    <div class="row" style="margin-top:6px"><button id="clear">Clear</button></div>
+    <h2>Dataset</h2>
+    <div class="row"><select id="dataset"></select></div>
+    <h2>Runs</h2>
+    <div class="row"><input type="text" id="filter" placeholder="Filter runs / cases…"></div>
+    <div class="row" style="margin-top:6px">
+      <label><input type="checkbox" id="hidewarmup" checked> hide warm-up cases</label>
+    </div>
+    <div id="runs" style="margin-top:6px"></div>
+  </aside>
+  <main>
+    <div class="controls">
+      <div class="group"><span>Request</span><select id="request"></select></div>
+      <div class="group" id="pcts"><span>Percentiles</span></div>
+      <div class="group"><span>X axis</span>
+        <select id="xaxis">
+          <option value="start">secs since start</option>
+          <option value="steady">secs since steady start</option>
+        </select>
+      </div>
+      <label><input type="checkbox" id="steadyonly"> steady window only</label>
+      <label><input type="checkbox" id="logy"> log latency</label>
+      <label><input type="checkbox" id="pernode"> pool per node (single case)</label>
+    </div>
+    <div id="content"></div>
+  </main>
+</div>
+<script>
+const COLORS = ["--s1","--s2","--s3","--s4","--s5","--s6","--s7","--s8"];
+const DASHES = ["solid","dash","dot","dashdot","longdash","longdashdot"];
+const MAX_SEL = 8;
+const DEFAULT_PCTS = ["p50_ms","p95_ms","p99_ms"];
+const $ = (id) => document.getElementById(id);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+const S = {
+  config: null,
+  runs: {},          // dataset -> runs
+  runErr: {},        // dataset -> why its runs could not be loaded
+  selected: [],      // [{dataset, run_id, test_case, kind, requests, slot}]
+  data: {},          // key -> {latency, actors, pool, poolNodes, summary, summaryAll, sandbox}
+  request: null,
+  pcts: [...DEFAULT_PCTS],
+};
+const key = (s) => `${s.dataset}|${s.run_id}|${s.test_case}`;
+
+// ---------- url state ----------
+function saveHash() {
+  const h = new URLSearchParams();
+  h.set("ds", $("dataset").value);
+  S.selected.forEach(s => h.append("s", key(s)));
+  if (S.request) h.set("req", S.request);
+  h.set("p", S.pcts.join(","));
+  h.set("x", $("xaxis").value);
+  if ($("steadyonly").checked) h.set("steady", "1");
+  history.replaceState(null, "", "#" + h.toString());
+}
+function loadHash() {
+  return new URLSearchParams(location.hash.slice(1));
+}
+
+// ---------- fetch ----------
+let inflight = 0;
+function setStatus(msg, err) { const el = $("status"); el.textContent = msg || ""; el.className = "status" + (err ? " err" : ""); }
+async function api(path, params) {
+  inflight++; setStatus(`Loading… (${inflight})`);
+  try {
+    const r = await fetch(path + (params ? "?" + new URLSearchParams(params) : ""), { method: path === "/api/refresh" ? "POST" : "GET" });
+    if (!r.ok) throw new Error(`${path}: ${r.status} ${await r.text()}`);
+    return await r.json();
+  } catch (e) { setStatus(e.message, true); throw e; }
+  finally { inflight--; if (inflight === 0 && !$("status").classList.contains("err")) setStatus(""); else if (inflight) setStatus(`Loading… (${inflight})`); }
+}
+
+// ---------- labels ----------
+function shortDs(ds) { return ds === "local" ? "local" : ds.replace(/^substrate_bench_/, ""); }
+function shortRun(run) {
+  const m = run.match(/^run-(\d{4})(\d{2})(\d{2})t(\d{2})(\d{2})/);
+  return m ? `${m[2]}-${m[3]} ${m[4]}:${m[5]}` : run;
+}
+function label(s) {
+  const multiDs = new Set(S.selected.map(x => x.dataset)).size > 1;
+  return `${s.test_case} · ${shortRun(s.run_id)}${multiDs ? " · " + shortDs(s.dataset) : ""}`;
+}
+function color(s) { return css(COLORS[s.slot]); }
+function fmtWhen(iso) { if (!iso) return ""; const d = new Date(iso); return d.toLocaleString(undefined, {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"}); }
+
+// ---------- sidebar ----------
+async function loadDatasets() {
+  S.config = await api("/api/config");
+  const loc = S.config.datasets.find(d => d.local);
+  $("project").textContent = [S.config.project && `BigQuery: ${S.config.project}`, loc && `local: ${loc.local}`].filter(Boolean).join(" · ");
+  // Its own element: the status line is cleared by the next request.
+  const bq = $("bqerr");
+  bq.hidden = !S.config.bq_error;
+  bq.textContent = S.config.bq_error ? "BigQuery unavailable: local only" : "";
+  bq.title = S.config.bq_error ? `${S.config.bq_error}\n\nReload the page after fixing the credentials.` : "";
+  const sel = $("dataset");
+  sel.innerHTML = S.config.datasets.map(d => `<option value="${d.id}">${d.local ? "local reports (files)" : d.id}</option>`).join("");
+  const pc = $("pcts");
+  for (const p of S.config.percentiles) {
+    const l = document.createElement("label");
+    l.innerHTML = `<input type="checkbox" value="${p}"> ${p.replace(/_ms$/,"").replace("_",".")}`;
+    pc.appendChild(l);
+  }
+}
+async function loadRuns(ds) {
+  if (!S.runs[ds] && !S.runErr[ds]) {
+    $("runs").innerHTML = `<div class="empty">Loading runs…</div>`;
+    try { S.runs[ds] = await api("/api/runs", { dataset: ds }); }
+    catch (e) { S.runErr[ds] = e.message; }
+  }
+  renderRuns();
+}
+function renderRuns() {
+  const ds = $("dataset").value, runs = S.runs[ds] || [];
+  if (S.runErr[ds]) {
+    const m = document.createElement("div");
+    m.className = "empty";
+    m.textContent = `Could not load runs: ${S.runErr[ds]}. Fix the data and press Refresh data.`;
+    $("runs").replaceChildren(m);
+    return;
+  }
+  const f = $("filter").value.trim().toLowerCase(), hideWarm = $("hidewarmup").checked;
+  const selKeys = new Set(S.selected.map(key));
+  const html = [];
+  runs.forEach((run, i) => {
+    let cases = run.cases.filter(c => !(hideWarm && /warmup/.test(c.test_case)));
+    if (f) cases = cases.filter(c => (run.run_id + " " + c.test_case).toLowerCase().includes(f));
+    if (!cases.length) return;
+    const open = i < 2 || f || cases.some(c => selKeys.has(`${ds}|${run.run_id}|${c.test_case}`));
+    html.push(`<details class="run" ${open ? "open" : ""}><summary><span>${run.run_id}</span><span class="when">${fmtWhen(run.start)}</span></summary>`);
+    for (const c of cases) {
+      const k = `${ds}|${run.run_id}|${c.test_case}`, on = selKeys.has(k);
+      const s = S.selected.find(x => key(x) === k);
+      html.push(`<div class="case ${on ? "on" : ""}" data-k="${encodeURIComponent(k)}">
+        <span class="sw" style="width:10px;height:10px;border-radius:2px;flex:none;background:${on ? color(s) : "transparent"};border:1px solid ${on ? "transparent" : "var(--border)"}"></span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${c.test_case}</span>
+        ${c.kind === "sandbox" ? `<span class="tag">sandbox</span>` : ""}</div>`);
+    }
+    html.push(`</details>`);
+  });
+  $("runs").innerHTML = html.join("") || `<div class="empty">No runs.</div>`;
+}
+function renderSelected() {
+  $("selcount").textContent = S.selected.length ? `${S.selected.length}/${MAX_SEL}` : "";
+  $("selected").innerHTML = S.selected.length ? S.selected.map((s, i) => `
+    <div class="sel"><span class="sw" style="background:${color(s)}"></span>
+      <span class="lbl" title="${key(s)}">${s.test_case}<small>${s.run_id} · ${shortDs(s.dataset)}</small></span>
+      <button data-i="${i}" title="Remove">×</button></div>`).join("")
+    : `<div class="empty">Click cases below to add them. Pick several to compare.</div>`;
+}
+function findCase(ds, run_id, test_case) {
+  const run = (S.runs[ds] || []).find(r => r.run_id === run_id);
+  return run && run.cases.find(c => c.test_case === test_case);
+}
+function nextSlot() { const used = new Set(S.selected.map(s => s.slot)); for (let i = 0; i < MAX_SEL; i++) if (!used.has(i)) return i; return -1; }
+async function toggle(k) {
+  const i = S.selected.findIndex(s => key(s) === k);
+  if (i >= 0) S.selected.splice(i, 1);
+  else {
+    if (S.selected.length >= MAX_SEL) { setStatus(`At most ${MAX_SEL} cases at once`, true); return; }
+    const [dataset, run_id, test_case] = k.split("|");
+    const c = findCase(dataset, run_id, test_case);
+    if (!c) return;
+    S.selected.push({ dataset, run_id, test_case, kind: c.kind, requests: c.requests || [], start: c.start, end: c.end, slot: nextSlot() });
+  }
+  renderSelected(); renderRuns(); saveHash();
+  await refreshCharts();
+}
+
+// ---------- data ----------
+async function ensureData(s) {
+  const k = key(s);
+  const d = S.data[k] || (S.data[k] = {});
+  const p = { dataset: s.dataset, run_id: s.run_id, test_case: s.test_case };
+  const jobs = [];
+  if (s.kind === "locust") {
+    if (!d.latency) jobs.push(api("/api/latency", p).then(r => d.latency = r));
+    if (!d.actors) jobs.push(api("/api/actors", p).then(r => d.actors = r));
+    if (!d.pool) jobs.push(api("/api/pool", p).then(r => d.pool = r));
+    if (!d.summary) jobs.push(api("/api/summary", { ...p, steady: "true" }).then(r => d.summary = r));
+    if ($("pernode").checked && S.selected.filter(x => x.kind === "locust").length === 1 && !d.poolNodes)
+      jobs.push(api("/api/pool", { ...p, per_node: "true" }).then(r => d.poolNodes = r));
+  } else if (!d.sandbox) jobs.push(api("/api/sandbox", p).then(r => d.sandbox = r));
+  await Promise.all(jobs);
+  return d;
+}
+function steadyStart(d) {
+  const rows = d.latency || d.actors || [];
+  let m = null; for (const r of rows) if (r.steady && (m === null || r.elapsed_secs < m)) m = r.elapsed_secs;
+  return m;
+}
+function steadyRange(d) {
+  const rows = d.actors || d.latency || [];
+  let a = null, b = null; for (const r of rows) if (r.steady) { if (a === null || r.elapsed_secs < a) a = r.elapsed_secs; if (b === null || r.elapsed_secs > b) b = r.elapsed_secs; }
+  return a === null ? null : [a, b];
+}
+function xform(d) {
+  const off = $("xaxis").value === "steady" ? (steadyStart(d) ?? 0) : 0;
+  const only = $("steadyonly").checked;
+  const range = steadyRange(d);
+  return (rows) => {
+    const out = only && range ? rows.filter(r => r.elapsed_secs >= range[0] && r.elapsed_secs <= range[1]) : rows;
+    return { rows: out, x: out.map(r => r.elapsed_secs - off) };
+  };
+}
+
+// ---------- charts ----------
+function baseLayout(ytitle, extra) {
+  const t = css("--text-2"), g = css("--grid");
+  return Object.assign({
+    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+    font: { family: "system-ui, sans-serif", size: 12, color: t },
+    margin: { l: 56, r: 12, t: 8, b: 20 },
+    hovermode: "x unified",
+    hoverlabel: { bgcolor: css("--surface"), bordercolor: css("--border"), font: { color: css("--text") } },
+    xaxis: { ticksuffix: "s", gridcolor: g, zerolinecolor: css("--border"), linecolor: css("--border") },
+    yaxis: { title: { text: ytitle, font: { size: 11 } }, gridcolor: g, zerolinecolor: css("--border"), rangemode: "tozero" },
+    legend: { orientation: "h", x: 0, xanchor: "left", y: -0.12, yanchor: "top", font: { size: 11 } },
+    showlegend: true,
+  }, extra || {});
+}
+function steadyShape(d) {
+  const r = steadyRange(d); if (!r) return [];
+  const off = $("xaxis").value === "steady" ? (steadyStart(d) ?? 0) : 0;
+  return [{ type: "rect", xref: "x", yref: "paper", x0: r[0] - off, x1: r[1] - off, y0: 0, y1: 1, fillcolor: css("--steady"), line: { width: 0 }, layer: "below" }];
+}
+const PCTL = (p) => p.replace(/_ms$/, "").replace("_", ".");
+function plot(id, traces, layout) {
+  const el = $(id); if (!el) return;
+  Plotly.react(el, traces, layout, { displaylogo: false, responsive: true, modeBarButtonsToRemove: ["lasso2d", "select2d"] });
+}
+function line(x, y, name, colorv, dash, extra) {
+  return Object.assign({ type: "scatter", mode: "lines", x, y, name, line: { color: colorv, width: 2, dash: dash || "solid" }, connectgaps: false, hovertemplate: `%{y:,.4~r}<extra>${name}</extra>` }, extra || {});
+}
+
+// Compare mode: one legend entry per case (clicking it toggles all its lines); the hover names the line.
+function grp(tr, s, i, what) {
+  return Object.assign(tr, { legendgroup: key(s), showlegend: i === 0, hovertemplate: `%{y:,.4~r}<extra>${label(s)} · ${what}</extra>` });
+}
+function card(id, title, sub, wide) {
+  return `<div class="card ${wide ? "wide" : ""}"><h3>${title}</h3><div class="sub">${sub || ""}</div><div class="chart" id="${id}"></div></div>`;
+}
+
+async function refreshCharts() {
+  const locust = S.selected.filter(s => s.kind === "locust");
+  const sandbox = S.selected.filter(s => s.kind === "sandbox");
+  if (!S.selected.length) {
+    $("content").innerHTML = `<div class="hint">Pick a case from the runs list to start. Add more to overlay them.</div>`;
+    $("content").dataset.sig = "";  // the cards are gone: the next selection must build them again
+    return;
+  }
+
+  // Request choices: the union across selected locust cases.
+  const reqs = [...new Set(locust.flatMap(s => s.requests))].sort();
+  const rs = $("request");
+  if (!S.request || !reqs.includes(S.request)) S.request = ["TTFI", "CycleTime"].find(r => reqs.includes(r)) || reqs[0] || null;
+  rs.innerHTML = reqs.map(r => `<option ${r === S.request ? "selected" : ""}>${r}</option>`).join("");
+  document.querySelectorAll("#pcts input").forEach(i => i.checked = S.pcts.includes(i.value));
+
+  const single = locust.length === 1;
+  const parts = [];
+  if (locust.length) {
+    parts.push(`<div class="grid">`,
+      card("c-lat", `${S.request} latency`, single ? "Percentiles, ms. Shaded: steady window." : "ms. Color = case; " + S.config.percentiles.filter(p => S.pcts.includes(p)).map((p, i) => `${["solid","dashed","dotted","dash-dot","long dash","long dash-dot"][i % 6]} = ${PCTL(p)}`).join(", "), true),
+      card("c-thr", `${S.request} throughput`, "Successful requests/s" + (single ? "; failures/s" : "; dotted = failures/s")),
+      card("c-act", "Actors", "Locust users (solid) and active actors (dashed)"),
+      card("c-cpu", "Worker pool CPU", single && $("pernode").checked ? "% per node" : "% — mean across nodes (solid), max (dotted)"),
+      card("c-mem", "Worker pool memory", "% — mean across nodes (solid), max (dotted)"),
+      `<div class="card wide"><h3>Steady-window summary</h3><div class="sub">locust_stats_steady, every request. Δ is against the first selected case; red = worse.</div><div class="tablewrap" id="t-sum"><div class="empty">Loading…</div></div></div>`,
+      `</div>`);
+  }
+  if (sandbox.length) parts.push(`<div class="grid"><div class="card wide"><h3>Sandbox benchmark by metric</h3><div class="sub" id="c-sbx-sub"></div><div class="chart" id="c-sbx"></div></div><div class="card wide"><h3>Sandbox benchmark</h3><div class="sub">Mean ms (± population stddev) per test, metric and provider</div><div class="tablewrap" id="t-sbx"><div class="empty">Loading…</div></div></div></div>`);
+  // Keep chart DOM when the structure is unchanged, so Plotly.react keeps zoom.
+  const sig = parts.join("");
+  if ($("content").dataset.sig !== sig) { $("content").innerHTML = sig; $("content").dataset.sig = sig; }
+
+  let datas;
+  try { datas = await Promise.all(S.selected.map(ensureData)); } catch (e) { return; }
+  const D = new Map(S.selected.map((s, i) => [key(s), datas[i]]));
+  if (locust.length) drawLocust(locust, D);
+  if (sandbox.length) drawSandbox(sandbox, D);
+}
+
+function drawLocust(locust, D) {
+  const single = locust.length === 1;
+  const pcts = S.config.percentiles.filter(p => S.pcts.includes(p));
+  const lat = [], thr = [], act = [], cpu = [], mem = [];
+  let shapes = [];
+  for (const s of locust) {
+    const d = D.get(key(s)), X = xform(d), c = color(s), name = label(s);
+    const rows = (d.latency || []).filter(r => r.request === S.request);
+    const { rows: lr, x } = X(rows);
+    pcts.forEach((p, i) => {
+      if (single) lat.push(line(x, lr.map(r => r[p]), PCTL(p), css(COLORS[i % COLORS.length])));
+      else lat.push(grp(line(x, lr.map(r => r[p]), name, c, DASHES[i % DASHES.length]), s, i, PCTL(p)));
+    });
+    const g = (tr, i, what) => single ? tr : grp(tr, s, i, what);
+    thr.push(g(line(x, lr.map(r => r.successful_per_sec), single ? "successful/s" : name, single ? css("--s1") : c, "solid"), 0, "successful/s"));
+    if (single || lr.some(r => r.failures_per_sec > 0))
+      thr.push(g(line(x, lr.map(r => r.failures_per_sec), single ? "failures/s" : name, single ? css("--critical") : c, single ? "solid" : "dot"), 1, "failures/s"));
+    const A = X(d.actors || []);
+    act.push(g(line(A.x, A.rows.map(r => r.actors), single ? "actors" : name, c, "solid"), 0, "actors"));
+    act.push(g(line(A.x, A.rows.map(r => r.active_actors), single ? "active" : name, c, "dash"), 1, "active"));
+    if (single && $("pernode").checked && d.poolNodes) {
+      const byNode = {};
+      for (const r of d.poolNodes) (byNode[r.node] ||= []).push(r);
+      const off = $("xaxis").value === "steady" ? (steadyStart(d) ?? 0) : 0;
+      for (const [node, rows2] of Object.entries(byNode))
+        cpu.push(line(rows2.map(r => r.elapsed_secs - off), rows2.map(r => r.cpu_percent), node, c, "solid", { opacity: 0.45, line: { color: c, width: 1 }, showlegend: false }));
+    } else {
+      const P = X(d.pool || []);
+      cpu.push(g(line(P.x, P.rows.map(r => r.cpu_avg), single ? "mean" : name, c, "solid"), 0, "mean"));
+      cpu.push(g(line(P.x, P.rows.map(r => r.cpu_max), single ? "max" : name, c, "dot"), 1, "max"));
+    }
+    const P = X(d.pool || []);
+    mem.push(g(line(P.x, P.rows.map(r => r.memory_avg), single ? "mean" : name, c, "solid"), 0, "mean"));
+    mem.push(g(line(P.x, P.rows.map(r => r.memory_max), single ? "max" : name, c, "dot"), 1, "max"));
+    if (single && !$("steadyonly").checked) shapes = steadyShape(d);
+  }
+  const L = (y, extra) => baseLayout(y, Object.assign({ shapes }, extra));
+  plot("c-lat", lat, L("ms", $("logy").checked ? { yaxis: { ...baseLayout().yaxis, title: { text: "ms (log)", font: { size: 11 } }, type: "log", rangemode: undefined } } : {}));
+  plot("c-thr", thr, L("requests/s"));
+  plot("c-act", act, L("actors"));
+  plot("c-cpu", cpu, L("CPU %", { yaxis: { ...baseLayout().yaxis, title: { text: "CPU %", font: { size: 11 } }, range: [0, 100] } }));
+  plot("c-mem", mem, L("memory %", { yaxis: { ...baseLayout().yaxis, title: { text: "memory %", font: { size: 11 } }, range: [0, 100] } }));
+  drawSummary(locust, D);
+}
+
+const SUM_COLS = [
+  ["request_count", "requests", 0, false], ["failure_count", "failures", 0, true],
+  ["requests_per_sec", "req/s", 1, false], ["avg_ms", "avg", 0, true],
+  ["p50_ms", "p50", 0, true], ["p90_ms", "p90", 0, true], ["p95_ms", "p95", 0, true],
+  ["p99_ms", "p99", 0, true], ["max_ms", "max", 0, true],
+];
+function fmt(v, dp) { return v == null ? "—" : Number(v).toLocaleString(undefined, { maximumFractionDigits: dp, minimumFractionDigits: dp }); }
+function drawSummary(locust, D) {
+  const sk = "summary";
+  const names = [...new Set(locust.flatMap(s => (D.get(key(s))[sk] || []).map(r => r.name)))];
+  // Chosen request first, Aggregated last.
+  names.sort((a, b) => (a === S.request ? -1 : b === S.request ? 1 : a === "Aggregated" ? 1 : b === "Aggregated" ? -1 : a.localeCompare(b)));
+  const base = D.get(key(locust[0]))[sk] || [];
+  const h = [`<table><thead><tr><th>request / case</th>${SUM_COLS.map(c => `<th>${c[1]}</th>`).join("")}</tr></thead><tbody>`];
+  for (const n of names) {
+    const b = base.find(r => r.name === n);
+    locust.forEach((s, i) => {
+      const r = (D.get(key(s))[sk] || []).find(x => x.name === n);
+      if (i === 0 && locust.length > 1) h.push(`<tr><td colspan="${SUM_COLS.length + 1}" style="padding-top:10px"><b>${n}</b></td></tr>`);
+      h.push(`<tr><td>${locust.length > 1 ? "" : `<b>${n}</b> `}<span class="sw" style="background:${color(s)}"></span>${label(s)}</td>`);
+      for (const [col, , dp, lowerBetter] of SUM_COLS) {
+        const v = r ? r[col] : null;
+        let delta = "";
+        if (i > 0 && b && v != null && b[col]) {
+          const pct = (v - b[col]) / b[col] * 100;
+          if (Math.abs(pct) >= 0.5) {
+            const worse = lowerBetter ? pct > 0 : pct < 0;
+            delta = ` <small class="${worse ? "delta-up" : "delta-down"}">${pct > 0 ? "+" : ""}${pct.toFixed(1)}%</small>`;
+          }
+        }
+        h.push(`<td>${fmt(v, dp)}${delta}</td>`);
+      }
+      h.push(`</tr>`);
+    });
+  }
+  h.push(`</tbody></table>`);
+  const el = $("t-sum");  // gone if the selection changed while the data loaded
+  if (el) el.innerHTML = h.join("");
+}
+
+const PROV_ORDER = ["substrate", "local", "e2b", "daytona", "modal", "anthropic", "openai"];
+function provRank(p) { const i = PROV_ORDER.findIndex(o => p === o || p.startsWith(o + "-")); return i < 0 ? 99 : i; }
+function provOrder(a, b) { return provRank(a) - provRank(b) || a.localeCompare(b); }
+const SBX_METRICS = ["Workspace Creation", "Suspend", "Resume", "Dependency Installation", "Environment Setup", "Code Execution", "Cleanup", "Total Time"];
+function drawSandboxBars(sandbox, D) {
+  // One bar per (case, provider), grouped by metric; error bars = stddev.
+  const traces = [];
+  const multi = sandbox.length > 1;
+  const all = sandbox.flatMap(s => (D.get(key(s)).sandbox || []).map(r => ({ ...r, s })));
+  const tests = [...new Set(all.map(r => r.test))].sort();
+  const test = tests[0];
+  const metrics = SBX_METRICS.filter(m => all.some(r => r.test === test && r.metric === m && m !== "Total Time"));
+  const providers = [...new Set(all.map(r => r.provider))].sort(provOrder);
+  let ci = 0;
+  for (const s of sandbox) for (const p of providers) {
+    const rows = all.filter(r => r.s === s && r.provider === p && r.test === test);
+    if (!rows.length) continue;
+    const y = metrics.map(m => rows.find(r => r.metric === m)?.mean_ms ?? null);
+    const e = metrics.map(m => rows.find(r => r.metric === m)?.stddev_ms ?? null);
+    const name = multi ? `${p} · ${label(s)}` : p;
+    traces.push({ type: "bar", x: metrics, y, name, marker: { color: css(COLORS[ci++ % COLORS.length]) },
+      error_y: { type: "data", array: e, visible: true, thickness: 1, width: 3, color: css("--text-3") },
+      hovertemplate: `%{y:,.1f} ms<extra>${name}</extra>` });
+  }
+  const t = baseLayout("ms", { barmode: "group", hovermode: "closest", xaxis: { gridcolor: "rgba(0,0,0,0)", linecolor: css("--border") }, legend: { orientation: "h", x: 0, y: -0.15, yanchor: "top", font: { size: 11 } } });
+  if ($("logy").checked) t.yaxis = { ...t.yaxis, type: "log", rangemode: undefined, title: { text: "ms (log)", font: { size: 11 } } };
+  plot("c-sbx", traces, t);
+  const sub = $("c-sbx-sub"); if (sub) sub.textContent = `${test}${tests.length > 1 ? ` (first of ${tests.length} tests)` : ""} — mean ms per run, error bar = population stddev; Total Time in the table below`;
+}
+function drawSandbox(sandbox, D) {
+  drawSandboxBars(sandbox, D);
+  const providers = [...new Set(sandbox.flatMap(s => (D.get(key(s)).sandbox || []).map(r => r.provider)))];
+  providers.sort(provOrder);
+  const metrics = SBX_METRICS;
+  const h = [`<table><thead><tr><th>test / metric / case</th>${providers.map(p => `<th>${p}</th>`).join("")}</tr></thead><tbody>`];
+  const tests = [...new Set(sandbox.flatMap(s => (D.get(key(s)).sandbox || []).map(r => r.test)))].sort();
+  for (const t of tests) {
+    h.push(`<tr><td colspan="${providers.length + 1}" style="padding-top:10px"><b>${t}</b></td></tr>`);
+    const ms = [...new Set(sandbox.flatMap(s => (D.get(key(s)).sandbox || []).filter(r => r.test === t).map(r => r.metric)))];
+    ms.sort((a, b) => (metrics.indexOf(a) + 1 || 99) - (metrics.indexOf(b) + 1 || 99));
+    for (const m of ms) for (const s of sandbox) {
+      const rows = (D.get(key(s)).sandbox || []).filter(r => r.test === t && r.metric === m);
+      if (!rows.length) continue;
+      h.push(`<tr><td>${m} <span class="sw" style="background:${color(s)};margin-left:6px"></span>${label(s)}</td>`);
+      for (const p of providers) {
+        const r = rows.find(x => x.provider === p);
+        h.push(`<td>${r ? `${fmt(r.mean_ms, 1)}${m !== "Total Time" && r.stddev_ms != null ? ` <small class="muted">±${fmt(r.stddev_ms, 1)}</small>` : ""}${r.failed_runs ? ` <small class="delta-up">${r.failed_runs}/${r.test_runs} failed</small>` : ""}` : "—"}</td>`);
+      }
+      h.push(`</tr>`);
+    }
+  }
+  h.push(`</tbody></table>`);
+  const el = $("t-sbx");
+  if (el) el.innerHTML = h.join("");
+}
+
+// ---------- events ----------
+$("runs").addEventListener("click", (e) => { const c = e.target.closest(".case"); if (c) toggle(decodeURIComponent(c.dataset.k)); });
+$("selected").addEventListener("click", (e) => { const b = e.target.closest("button[data-i]"); if (b) toggle(key(S.selected[+b.dataset.i])); });
+$("clear").onclick = () => { S.selected = []; renderSelected(); renderRuns(); saveHash(); refreshCharts(); };
+$("dataset").onchange = () => { saveHash(); loadRuns($("dataset").value); };
+$("filter").oninput = renderRuns;
+$("hidewarmup").onchange = renderRuns;
+$("request").onchange = () => { S.request = $("request").value; saveHash(); refreshCharts(); };
+$("pcts").addEventListener("change", () => { S.pcts = [...document.querySelectorAll("#pcts input:checked")].map(i => i.value); saveHash(); refreshCharts(); });
+for (const id of ["xaxis", "steadyonly", "pernode", "logy"]) $(id).onchange = () => { saveHash(); refreshCharts(); };
+$("refresh").onclick = async () => { await api("/api/refresh"); S.runs = {}; S.runErr = {}; S.data = {}; await loadRuns($("dataset").value); refreshCharts(); };
+$("theme").onclick = () => {
+  const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("theme", document.documentElement.dataset.theme); } catch {}
+  $("content").dataset.sig = ""; renderSelected(); renderRuns(); refreshCharts();
+};
+
+(async function init() {
+  try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+  await loadDatasets();
+  const h = loadHash();
+  const ids = S.config.datasets.map(d => d.id);
+  const ds = ids.includes(h.get("ds")) ? h.get("ds") : (ids.includes("substrate_bench_auto") ? "substrate_bench_auto" : ids[0]);
+  $("dataset").value = ds;
+  if (h.get("p")) S.pcts = h.get("p").split(",");
+  if (h.get("req")) S.request = h.get("req");
+  if (h.get("x")) $("xaxis").value = h.get("x");
+  $("steadyonly").checked = h.get("steady") === "1";
+  await loadRuns(ds);
+  for (const k of h.getAll("s")) {
+    const [d] = k.split("|");
+    if (!ids.includes(d) || S.runErr[d]) continue;
+    if (!S.runs[d]) {
+      try { S.runs[d] = await api("/api/runs", { dataset: d }); }
+      catch (e) { S.runErr[d] = e.message; continue; }
+    }
+    const [, run_id, test_case] = k.split("|");
+    const c = findCase(d, run_id, test_case);
+    if (c && S.selected.length < MAX_SEL) S.selected.push({ dataset: d, run_id, test_case, kind: c.kind, requests: c.requests || [], start: c.start, end: c.end, slot: nextSlot() });
+  }
+  renderSelected(); renderRuns();
+  refreshCharts();
+})();
+</script>
+</body>
+</html>
