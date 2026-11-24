@@ -122,6 +122,10 @@ class ShippedCases(unittest.TestCase):
             self.assertEqual(mine["locust"].pop("install"), {"agent-sandbox": {"sandbox-class": "gvisor"}})
             # Its pods' gVisor is GKE Sandbox's.
             self.assertIs(mine["locust"]["infra"]["cluster"].pop("gke-sandbox"), True)
+            # Its nodes write little, so they keep the default boot disk.
+            self.assertEqual(pair["locust"]["infra"]["cluster"].pop("sandboxed-disk-size-gb"), 500)
+            self.assertEqual(pair["locust"]["infra"]["cluster"].pop("sandboxed-disk-type"), "pd-ssd")
+            self.assertFalse({"sandboxed-disk-size-gb", "sandboxed-disk-type"} & mine["locust"]["infra"]["cluster"].keys())
             # It may run fewer VUs, a worker each.
             for case in (mine, pair):
                 self.assertEqual(case["locust"]["workers"].pop("count"), case["locust"]["master"].pop("users"))
@@ -139,11 +143,14 @@ class ShippedCases(unittest.TestCase):
         cases = SHIPPED.cases
         clusters = {name: benchmarks.cluster_config(name, case) for name, case in cases.items()}
         self.assertEqual(
-            clusters["glutton-substrate-gvisor"], CommonCluster(sandboxed_nodes=30, sandboxed_disk_size_gb=1000)
+            clusters["glutton-substrate-gvisor"],
+            CommonCluster(sandboxed_nodes=30, sandboxed_disk_size_gb=500, sandboxed_disk_type="pd-ssd"),
         )
         self.assertEqual(
             clusters["glutton-substrate-microvm"],
-            CommonCluster(sandboxed_nodes=30, nested_virtualization=True, sandboxed_disk_size_gb=1000),
+            CommonCluster(
+                sandboxed_nodes=30, nested_virtualization=True, sandboxed_disk_size_gb=500, sandboxed_disk_type="pd-ssd"
+            ),
         )
         self.assertEqual(clusters["openclaw-density-baseline"], MockLlmCluster(sandboxed_nodes=10))
         self.assertEqual(

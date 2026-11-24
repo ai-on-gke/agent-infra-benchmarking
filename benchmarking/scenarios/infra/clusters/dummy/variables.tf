@@ -60,6 +60,12 @@ variable "sandboxed_disk_size_gb" {
   default     = 100
 }
 
+variable "sandboxed_disk_type" {
+  description = "Unused; taken as common takes it."
+  type        = string
+  default     = null
+}
+
 variable "nested_virtualization" {
   description = "Unused; taken as common takes it."
   type        = bool

@@ -103,7 +103,7 @@ class ClusterConfig:
     # The fields a case's infra.cluster may give.
     INPUTS: ClassVar[tuple[str, ...]] = (
         "sandboxed_nodes", "sandboxed_max_nodes", "sandboxed_machine_type", "zone", "nested_virtualization",
-        "gke_sandbox", "sandboxed_disk_size_gb",
+        "gke_sandbox", "sandboxed_disk_size_gb", "sandboxed_disk_type",
     )
 
     sandboxed_nodes: int = 1
@@ -116,6 +116,8 @@ class ClusterConfig:
     gke_sandbox: bool = False
     # Snapshots are written to the boot disk, whose throughput grows with its size.
     sandboxed_disk_size_gb: int = 100
+    # None for the config's own: pd-balanced, or hyperdisk-balanced on bare metal.
+    sandboxed_disk_type: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("sandboxed_nodes", "sandboxed_max_nodes", "sandboxed_disk_size_gb"):
@@ -126,7 +128,7 @@ class ClusterConfig:
             raise ValueError(
                 f"`sandboxed-max-nodes` {self.sandboxed_max_nodes} is less than `sandboxed-nodes` {self.sandboxed_nodes}"
             )
-        for name in ("sandboxed_machine_type", "zone"):
+        for name in ("sandboxed_machine_type", "zone", "sandboxed_disk_type"):
             value = getattr(self, name)
             if value is not None and not (isinstance(value, str) and value):
                 raise ValueError(f"`{kebab(name)}` must be a non-empty string, got {value!r}")
@@ -172,6 +174,7 @@ class ClusterConfig:
             "gke_sandbox": self.gke_sandbox,
             "sandboxed_machine_type": self.sandboxed_machine_type,
             "sandboxed_disk_size_gb": self.sandboxed_disk_size_gb,
+            "sandboxed_disk_type": self.sandboxed_disk_type,
             "sandboxed_node_count": self.sandboxed_nodes,
             "sandboxed_min_node_count": self.sandboxed_nodes,
             "sandboxed_max_node_count": self.sandboxed_max_nodes or self.sandboxed_nodes,
