@@ -15,6 +15,7 @@
 package scenario
 
 import (
+	"net/http"
 	"slices"
 	"testing"
 	"time"
@@ -94,5 +95,33 @@ func TestNewProviderDefaultsToSubstrate(t *testing.T) {
 	if !s.ImplicitResume || !s.SuspendDisabled || !s.WaitForWorker {
 		t.Errorf("ImplicitResume, SuspendDisabled and WaitForWorker: got %t, %t and %t, want all",
 			s.ImplicitResume, s.SuspendDisabled, s.WaitForWorker)
+	}
+}
+
+// e2b takes its key from the environment and fills in the defaults left unset.
+func TestNewProviderE2B(t *testing.T) {
+	cfg := &userclass.Config{Atespace: "benchmark", HTTPClient: &http.Client{}}
+	c := Setup(Options{Config: cfg, Provider: "e2b", E2B: E2BOptions{CPUCount: 2}})
+	rec := measure.Recorder{UserClass: "SomeUser"}
+
+	t.Setenv("E2B_API_KEY", "")
+	if _, err := c.NewProvider(rec, false, false); err == nil {
+		t.Fatal("NewProvider without E2B_API_KEY: got nil, want an error")
+	}
+
+	t.Setenv("E2B_API_KEY", "key")
+	p, err := c.NewProvider(rec, true, false)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	e, ok := p.(*sandbox.E2B)
+	if !ok {
+		t.Fatalf("provider: got %T, want *sandbox.E2B", p)
+	}
+	if e.APIKey != "key" || e.APIURL != sandbox.E2BDefaultAPIURL || e.Domain != sandbox.E2BDefaultDomain || e.Port != 80 {
+		t.Errorf("API and routing: got key %q, url %q, domain %q, port %d", e.APIKey, e.APIURL, e.Domain, e.Port)
+	}
+	if e.Template != c.ActorTemplate() || e.CPUCount != 2 || !e.SuspendDisabled || e.ActorClient != cfg.HTTPClient {
+		t.Errorf("sandbox settings: got template %q, cpu %d, suspend disabled %t", e.Template, e.CPUCount, e.SuspendDisabled)
 	}
 }

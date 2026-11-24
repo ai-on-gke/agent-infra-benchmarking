@@ -41,6 +41,7 @@ import (
 
 	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/density"
 	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/runworkload"
+	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/sandbox"
 	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/scenario"
 	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/workload"
 
@@ -99,9 +100,18 @@ func main() {
 			"agent-substrate only: comma-separated hostnames every actor may reach over TLS, such as an https:// endpoint, on any port, passed through undecrypted. A cleartext rule does not let TLS through.")
 		apiConnections = flag.Int("api-connections", 1,
 			"Connections to ateapi this worker spreads its users over.")
-		provider     = flag.String("provider", "agent-substrate", "Provider: agent-substrate or agent-sandbox.")
+		provider     = flag.String("provider", "agent-substrate", "Provider: agent-substrate, agent-sandbox or e2b.")
 		warmPoolName = flag.String("warm-pool-name", "",
 			"agent-sandbox only: the SandboxWarmPools to claim from, comma-separated; the users are spread over them.")
+
+		// e2b's own; its API key is read from E2B_API_KEY, and its template
+		// is --workload-template's, an E2B template ID or alias.
+		e2bAPIURL   = flag.String("e2b-api-url", "", fmt.Sprintf("e2b only: the E2B API. Unset selects %s.", sandbox.E2BDefaultAPIURL))
+		e2bDomain   = flag.String("e2b-domain", "", fmt.Sprintf("e2b only: the domain sandboxes are served on. Unset selects %s.", sandbox.E2BDefaultDomain))
+		e2bPort     = flag.Int("e2b-port", 0, "e2b only: the port the workload listens on inside the sandbox. Unset selects 80.")
+		e2bCPU      = flag.Int("e2b-cpu", 0, "e2b only: vCPUs per sandbox. Unset leaves the template's.")
+		e2bMemoryMB = flag.Int("e2b-memory-mb", 0, "e2b only: memory per sandbox in MiB. Unset leaves the template's.")
+		e2bLifetime = flag.Duration("e2b-lifetime", 0, "e2b only: the TTL each create and wake gives a running sandbox, after which E2B kills it. Unset selects 10m.")
 
 		// runworkload's own settings, read only when --user-class selects it.
 		instructionsPerCycle = flag.Int("instructions-per-cycle", 1,
@@ -235,6 +245,14 @@ func main() {
 				EgressAllow:    splitList(*actorEgressAllow),
 				EgressAllowTLS: splitList(*actorEgressAllowTLS),
 				Flags:          flag.CommandLine,
+				E2B: scenario.E2BOptions{
+					APIURL:   *e2bAPIURL,
+					Domain:   *e2bDomain,
+					Port:     *e2bPort,
+					CPUCount: *e2bCPU,
+					MemoryMB: *e2bMemoryMB,
+					Lifetime: *e2bLifetime,
+				},
 			}),
 			SuspendDisabled:        *suspendDisabled,
 			InstructionsPerCycle:   *instructionsPerCycle,

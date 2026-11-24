@@ -24,7 +24,9 @@ import (
 	"errors"
 	"flag"
 	"log/slog"
+	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
@@ -65,8 +67,12 @@ type Options struct {
 	// APIStubs is empty.
 	Config *userclass.Config
 
-	// Provider names the infrastructure provider: agent-substrate or agent-sandbox.
+	// Provider names the infrastructure provider: agent-substrate,
+	// agent-sandbox or e2b.
 	Provider string
+
+	// E2B is the e2b provider's settings.
+	E2B E2BOptions
 
 	// WarmPoolNames are the agent-sandbox SandboxWarmPools the users are
 	// spread over.
@@ -114,6 +120,24 @@ type Options struct {
 	// workload.RegisterFlags). Nil skips the check that none of another
 	// workload's is set.
 	Flags *flag.FlagSet
+}
+
+// E2BOptions are the e2b provider's settings; its API key is read from
+// E2B_API_KEY. The zero value asks for the defaults.
+type E2BOptions struct {
+	// APIURL is the E2B API, and Domain the one sandboxes are served on.
+	APIURL string
+	Domain string
+
+	// Port is the one the workload listens on inside the sandbox.
+	Port int
+
+	// CPUCount and MemoryMB size the sandboxes; zero leaves the template's.
+	CPUCount int
+	MemoryMB int
+
+	// Lifetime is the TTL a running sandbox gets on each create and wake.
+	Lifetime time.Duration
 }
 
 // Common is Options as Setup resolved them.
@@ -166,6 +190,9 @@ func (c Common) ActorTemplate() string {
 // reported through rec. suspendDisabled has substrate skip the suspend phase,
 // and waitForWorker wait for a free worker on a resume that finds none.
 func (c Common) NewProvider(rec measure.Recorder, suspendDisabled, waitForWorker bool) (sandbox.Provider, error) {
+	if c.Provider == "e2b" {
+		return c.newE2B(rec, suspendDisabled)
+	}
 	if c.Provider == "agent-sandbox" {
 		if len(c.WarmPoolNames) == 0 {
 			return nil, errors.New("agent-sandbox needs a --warm-pool-name to claim from")
@@ -194,5 +221,44 @@ func (c Common) NewProvider(rec measure.Recorder, suspendDisabled, waitForWorker
 		SuspendDisabled: suspendDisabled,
 		SuspendMode:     suspendModes[c.SuspendMode],
 		WaitForWorker:   waitForWorker,
+	}, nil
+}
+
+func (c Common) newE2B(rec measure.Recorder, suspendDisabled bool) (sandbox.Provider, error) {
+	key := os.Getenv("E2B_API_KEY")
+	if key == "" {
+		return nil, errors.New("e2b needs its API key in E2B_API_KEY")
+	}
+	o := c.E2B
+	if o.APIURL == "" {
+		o.APIURL = sandbox.E2BDefaultAPIURL
+	}
+	if o.Domain == "" {
+		o.Domain = sandbox.E2BDefaultDomain
+	}
+	if o.Port == 0 {
+		o.Port = 80
+	}
+	if o.Lifetime == 0 {
+		o.Lifetime = 10 * time.Minute
+	}
+	return &sandbox.E2B{
+		Rec:         rec,
+		APIURL:      strings.TrimSuffix(o.APIURL, "/"),
+		APIKey:      key,
+		API:         &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()},
+		ActorClient: c.Config.HTTPClient,
+		Domain:      o.Domain,
+		Port:        o.Port,
+		Workload:    c.Workload.Name(),
+		Template:    c.ActorTemplate(),
+		CPUCount:    o.CPUCount,
+		MemoryMB:    o.MemoryMB,
+		Lifetime:    o.Lifetime,
+		Metadata: map[string]string{
+			"benchmark-user": rec.UserClass,
+			"atespace":       c.Config.Atespace,
+		},
+		SuspendDisabled: suspendDisabled,
 	}, nil
 }
