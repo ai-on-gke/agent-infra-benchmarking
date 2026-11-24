@@ -100,7 +100,7 @@ func main() {
 			"agent-substrate only: comma-separated hostnames every actor may reach over TLS, such as an https:// endpoint, on any port, passed through undecrypted. A cleartext rule does not let TLS through.")
 		apiConnections = flag.Int("api-connections", 1,
 			"Connections to ateapi this worker spreads its users over.")
-		provider     = flag.String("provider", "agent-substrate", "Provider: agent-substrate, agent-sandbox or e2b.")
+		provider     = flag.String("provider", "agent-substrate", "Provider: agent-substrate, agent-sandbox, e2b or daytona.")
 		warmPoolName = flag.String("warm-pool-name", "",
 			"agent-sandbox only: the SandboxWarmPools to claim from, comma-separated; the users are spread over them.")
 
@@ -112,6 +112,16 @@ func main() {
 		e2bCPU      = flag.Int("e2b-cpu", 0, "e2b only: vCPUs per sandbox. Unset leaves the template's.")
 		e2bMemoryMB = flag.Int("e2b-memory-mb", 0, "e2b only: memory per sandbox in MiB. Unset leaves the template's.")
 		e2bLifetime = flag.Duration("e2b-lifetime", 0, "e2b only: the TTL each create and wake gives a running sandbox, after which E2B kills it. Unset selects 10m.")
+
+		// daytona's own; its API key is read from DAYTONA_API_KEY, and its
+		// snapshot is --workload-template's, which has to be a linux-vm one
+		// for pause to keep memory.
+		daytonaAPIURL   = flag.String("daytona-api-url", "", fmt.Sprintf("daytona only: the Daytona API. Unset selects %s.", sandbox.DaytonaDefaultAPIURL))
+		daytonaTarget   = flag.String("daytona-target", "", "daytona only: the region sandboxes run in. Unset leaves the organization's default.")
+		daytonaPort     = flag.Int("daytona-port", 0, "daytona only: the port the workload listens on inside the sandbox. Unset selects 80.")
+		daytonaCPU      = flag.Int("daytona-cpu", 0, "daytona only: vCPUs per sandbox. Unset leaves the snapshot's.")
+		daytonaMemoryGB = flag.Int("daytona-memory-gb", 0, "daytona only: memory per sandbox in GB. Unset leaves the snapshot's.")
+		daytonaTTL      = flag.Duration("daytona-ttl", 0, "daytona only: how long after its creation a sandbox is destroyed, whatever its state, rounded up to minutes. Unset leaves Daytona's default.")
 
 		// runworkload's own settings, read only when --user-class selects it.
 		instructionsPerCycle = flag.Int("instructions-per-cycle", 1,
@@ -252,6 +262,14 @@ func main() {
 					CPUCount: *e2bCPU,
 					MemoryMB: *e2bMemoryMB,
 					Lifetime: *e2bLifetime,
+				},
+				Daytona: scenario.DaytonaOptions{
+					APIURL:   *daytonaAPIURL,
+					Target:   *daytonaTarget,
+					Port:     *daytonaPort,
+					CPU:      *daytonaCPU,
+					MemoryGB: *daytonaMemoryGB,
+					TTL:      *daytonaTTL,
 				},
 			}),
 			SuspendDisabled:        *suspendDisabled,

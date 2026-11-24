@@ -68,11 +68,12 @@ type Options struct {
 	Config *userclass.Config
 
 	// Provider names the infrastructure provider: agent-substrate,
-	// agent-sandbox or e2b.
+	// agent-sandbox, e2b or daytona.
 	Provider string
 
-	// E2B is the e2b provider's settings.
-	E2B E2BOptions
+	// E2B is the e2b provider's settings, and Daytona the daytona one's.
+	E2B     E2BOptions
+	Daytona DaytonaOptions
 
 	// WarmPoolNames are the agent-sandbox SandboxWarmPools the users are
 	// spread over.
@@ -140,6 +141,25 @@ type E2BOptions struct {
 	Lifetime time.Duration
 }
 
+// DaytonaOptions are the daytona provider's settings; its API key is read
+// from DAYTONA_API_KEY. The zero value asks for the defaults.
+type DaytonaOptions struct {
+	// APIURL is the Daytona API, and Target the region sandboxes run in.
+	APIURL string
+	Target string
+
+	// Port is the one the workload listens on inside the sandbox.
+	Port int
+
+	// CPU and MemoryGB size the sandboxes; zero leaves the snapshot's.
+	CPU      int
+	MemoryGB int
+
+	// TTL destroys a sandbox that long after its creation, whatever its
+	// state.
+	TTL time.Duration
+}
+
 // Common is Options as Setup resolved them.
 type Common struct {
 	Options
@@ -192,6 +212,9 @@ func (c Common) ActorTemplate() string {
 func (c Common) NewProvider(rec measure.Recorder, suspendDisabled, waitForWorker bool) (sandbox.Provider, error) {
 	if c.Provider == "e2b" {
 		return c.newE2B(rec, suspendDisabled)
+	}
+	if c.Provider == "daytona" {
+		return c.newDaytona(rec, suspendDisabled)
 	}
 	if c.Provider == "agent-sandbox" {
 		if len(c.WarmPoolNames) == 0 {
@@ -256,6 +279,39 @@ func (c Common) newE2B(rec measure.Recorder, suspendDisabled bool) (sandbox.Prov
 		MemoryMB:    o.MemoryMB,
 		Lifetime:    o.Lifetime,
 		Metadata: map[string]string{
+			"benchmark-user": rec.UserClass,
+			"atespace":       c.Config.Atespace,
+		},
+		SuspendDisabled: suspendDisabled,
+	}, nil
+}
+
+func (c Common) newDaytona(rec measure.Recorder, suspendDisabled bool) (sandbox.Provider, error) {
+	key := os.Getenv("DAYTONA_API_KEY")
+	if key == "" {
+		return nil, errors.New("daytona needs its API key in DAYTONA_API_KEY")
+	}
+	o := c.Daytona
+	if o.APIURL == "" {
+		o.APIURL = sandbox.DaytonaDefaultAPIURL
+	}
+	if o.Port == 0 {
+		o.Port = 80
+	}
+	return &sandbox.Daytona{
+		Rec:         rec,
+		APIURL:      strings.TrimSuffix(o.APIURL, "/"),
+		APIKey:      key,
+		API:         &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()},
+		ActorClient: c.Config.HTTPClient,
+		Port:        o.Port,
+		Workload:    c.Workload.Name(),
+		Snapshot:    c.ActorTemplate(),
+		Target:      o.Target,
+		CPU:         o.CPU,
+		MemoryGB:    o.MemoryGB,
+		TTL:         o.TTL,
+		Labels: map[string]string{
 			"benchmark-user": rec.UserClass,
 			"atespace":       c.Config.Atespace,
 		},

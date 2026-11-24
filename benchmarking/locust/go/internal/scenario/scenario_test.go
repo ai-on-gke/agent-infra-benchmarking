@@ -125,3 +125,32 @@ func TestNewProviderE2B(t *testing.T) {
 		t.Errorf("sandbox settings: got template %q, cpu %d, suspend disabled %t", e.Template, e.CPUCount, e.SuspendDisabled)
 	}
 }
+
+// daytona takes its key from the environment and fills in the defaults left
+// unset.
+func TestNewProviderDaytona(t *testing.T) {
+	cfg := &userclass.Config{Atespace: "benchmark", HTTPClient: &http.Client{}}
+	c := Setup(Options{Config: cfg, Provider: "daytona", Daytona: DaytonaOptions{MemoryGB: 4, Target: "us"}})
+	rec := measure.Recorder{UserClass: "SomeUser"}
+
+	t.Setenv("DAYTONA_API_KEY", "")
+	if _, err := c.NewProvider(rec, false, false); err == nil {
+		t.Fatal("NewProvider without DAYTONA_API_KEY: got nil, want an error")
+	}
+
+	t.Setenv("DAYTONA_API_KEY", "key")
+	p, err := c.NewProvider(rec, false, false)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	d, ok := p.(*sandbox.Daytona)
+	if !ok {
+		t.Fatalf("provider: got %T, want *sandbox.Daytona", p)
+	}
+	if d.APIKey != "key" || d.APIURL != sandbox.DaytonaDefaultAPIURL || d.Port != 80 || d.Target != "us" {
+		t.Errorf("API and routing: got key %q, url %q, port %d, target %q", d.APIKey, d.APIURL, d.Port, d.Target)
+	}
+	if d.Snapshot != c.ActorTemplate() || d.MemoryGB != 4 || d.TTL != 0 || d.ActorClient != cfg.HTTPClient {
+		t.Errorf("sandbox settings: got snapshot %q, memory %d, ttl %v", d.Snapshot, d.MemoryGB, d.TTL)
+	}
+}
