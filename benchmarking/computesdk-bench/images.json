@@ -1,0 +1,16 @@
+{
+  "computesdk-bench-runner": {
+    "description": "Runs ComputeSDK burst_TTI and DAX benchmarks inside GKE and uploads what they recorded.",
+    "dockerfile": "benchmarking/computesdk-bench/image/Dockerfile",
+    "context": "benchmarking/computesdk-bench/image",
+    "build_contexts": {
+      "computesdk-benchmarks": "dependency-repos/computesdk-benchmarks",
+      "substrate": "dependency-repos/substrate"
+    }
+  },
+  "computesdk-bench-rootfs": {
+    "description": "The rootfs of the sandboxes for burst_TTI and DAX benchmarks (Node.js 22, bash, git, curl, unzip).",
+    "dockerfile": "benchmarking/computesdk-bench/rootfs/Dockerfile",
+    "context": "benchmarking/computesdk-bench/rootfs"
+  }
+}

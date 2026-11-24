@@ -11,3 +11,7 @@
 [submodule "dependency-repos/env"]
 	path = dependency-repos/env
 	url = https://github.com/agent-substrate/env
+[submodule "dependency-repos/computesdk-benchmarks"]
+	path = dependency-repos/computesdk-benchmarks
+	url = https://github.com/akvelon/akvelon-computesdk
+	branch = main

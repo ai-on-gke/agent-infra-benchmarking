@@ -1,0 +1,54 @@
+diff --git a/internal/podidentity/podidentity.go b/internal/podidentity/podidentity.go
+index 9ba2e8a1..11297167 100644
+--- a/internal/podidentity/podidentity.go
++++ b/internal/podidentity/podidentity.go
+@@ -21,6 +21,7 @@ import (
+ 	"crypto/ecdsa"
+ 	"crypto/elliptic"
+ 	"crypto/rand"
++	"crypto/sha256"
+ 	"crypto/tls"
+ 	"crypto/x509"
+ 	"encoding/pem"
+@@ -74,11 +75,21 @@ func RequestCertificate(ctx context.Context, clientset kubernetes.Interface, req
+ 			StubPKCS10Request:    csr,
+ 		},
+ 	}
++	pkix, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
++	if err != nil {
++		return tls.Certificate{}, fmt.Errorf("marshaling PKIX public key: %w", err)
++	}
++	digest := sha256.Sum256([]byte(pcr.Spec.PodUID))
++	proof, err := ecdsa.SignASN1(rand.Reader, key, digest[:])
++	if err != nil {
++		return tls.Certificate{}, fmt.Errorf("signing proof of possession: %w", err)
++	}
++
+ 	pcrs, err := podCertificateRequests(clientset, namespace)
+ 	if err != nil {
+ 		return tls.Certificate{}, err
+ 	}
+-	name, err := pcrs.create(ctx, pcr)
++	name, err := pcrs.create(ctx, pcr, pkix, proof)
+ 	if err != nil {
+ 		return tls.Certificate{}, fmt.Errorf("creating PodCertificateRequest in %s: %w", namespace, err)
+ 	}
+@@ -164,7 +175,7 @@ func podCertificateRequests(clientset kubernetes.Interface, namespace string) (*
+ 	return nil, fmt.Errorf("the cluster serves neither v1 nor v1beta1 PodCertificateRequest")
+ }
+ 
+-func (c *pcrClient) create(ctx context.Context, pcr *certsv1.PodCertificateRequest) (string, error) {
++func (c *pcrClient) create(ctx context.Context, pcr *certsv1.PodCertificateRequest, pkix, proof []byte) (string, error) {
+ 	if c.v1 {
+ 		created, err := c.clientset.CertificatesV1().PodCertificateRequests(c.namespace).Create(ctx, pcr, metav1.CreateOptions{})
+ 		if err != nil {
+@@ -183,7 +194,8 @@ func (c *pcrClient) create(ctx context.Context, pcr *certsv1.PodCertificateReque
+ 			NodeName:             pcr.Spec.NodeName,
+ 			NodeUID:              pcr.Spec.NodeUID,
+ 			MaxExpirationSeconds: pcr.Spec.MaxExpirationSeconds,
+-			StubPKCS10Request:    pcr.Spec.StubPKCS10Request,
++			PKIXPublicKey:        pkix,
++			ProofOfPossession:    proof,
+ 		},
+ 	}
+ 	created, err := c.clientset.CertificatesV1beta1().PodCertificateRequests(c.namespace).Create(ctx, beta, metav1.CreateOptions{})

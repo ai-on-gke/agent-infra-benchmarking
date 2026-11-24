@@ -43,7 +43,7 @@ from typing import Callable, Iterator, NoReturn
 import yaml
 
 from .. import LABEL_RE, LOCAL_DATA_DIR, benchmarks, images, preflight, reports
-from ..benchmarks import noop, sandbox_benchmark
+from ..benchmarks import computesdk, noop, sandbox_benchmark
 from ..benchmarks.sandbox_benchmark import ate_env
 from ..control_planes import agent_sandbox, substrate
 from ..images import builder
@@ -389,9 +389,9 @@ def needed_images(args: argparse.Namespace, cases: dict[str, dict]) -> dict[str,
         needed["agent-sandbox"] = agent_sandbox.image_refs(args.image_repo)
     # env's images are only read when it is deployed, for the substrate provider.
     if not args.no_deploy_workloads and any(
-        sandbox_benchmark.provider_name(case) == "substrate"
+        (case["type"] == sandbox_benchmark.TYPE and sandbox_benchmark.provider_name(case) == "substrate")
+        or (case["type"] == computesdk.TYPE and case[computesdk.TYPE].get("provider") == "substrate")
         for case in cases.values()
-        if case["type"] == sandbox_benchmark.TYPE
     ):
         needed["env"] = ate_env.image_refs(args.image_repo)
     files = list(dict.fromkeys(file for case in cases.values() for file in benchmarks.image_files(case)))

@@ -34,10 +34,15 @@ ROOT = RUNNER_DIR.parent.parent
 LOCUST_IMAGES = ROOT / "benchmarking" / "locust" / "images.json"
 WORKLOADS_IMAGES = ROOT / "benchmarking" / "workloads" / "images.json"
 SANDBOX_BENCHMARK_IMAGES = ROOT / "benchmarking" / "sandbox-benchmark" / "images.json"
-IMAGE_FILES = [LOCUST_IMAGES, WORKLOADS_IMAGES, SANDBOX_BENCHMARK_IMAGES]
+COMPUTESDK_BENCH_IMAGES = ROOT / "benchmarking" / "computesdk-bench" / "images.json"
+IMAGE_FILES = [LOCUST_IMAGES, WORKLOADS_IMAGES, SANDBOX_BENCHMARK_IMAGES, COMPUTESDK_BENCH_IMAGES]
 # The submodules the images build from besides substrate, whose uncommitted
 # changes the tag covers when they are checked out.
-OTHER_SOURCES = [ROOT / "dependency-repos" / "env", ROOT / "dependency-repos" / "ai-sandbox-benchmark"]
+OTHER_SOURCES = [
+    ROOT / "dependency-repos" / "env",
+    ROOT / "dependency-repos" / "ai-sandbox-benchmark",
+    ROOT / "dependency-repos" / "computesdk-benchmarks",
+]
 # The nodes', whatever the build host's.
 DEFAULT_PLATFORM = "linux/amd64"
 # Of the uncommitted changes' digest in a dirty tree's image tag, which a

@@ -22,14 +22,15 @@ from .. import images, reports, workloads
 from ..infra.cluster import Cluster
 from ..infra.cluster_configs import ClusterConfig
 from ..log import log
-from . import locust, monitoring, node_probe, noop, sandbox_benchmark
+from . import computesdk, locust, monitoring, noop, sandbox_benchmark
 from .sandbox_benchmark import ate_env
 
-RUNNERS = {module.TYPE: module for module in (locust, noop, sandbox_benchmark)}
+RUNNERS = {module.TYPE: module for module in (locust, noop, sandbox_benchmark, computesdk)}
 # What a failed run raises besides CalledProcessError.
 ERRORS = (
     locust.LocustError,
     sandbox_benchmark.SandboxBenchmarkError,
+    computesdk.ComputeSDKError,
     ate_env.EnvError,
     reports.ReportError,
     workloads.WorkloadError,
@@ -37,7 +38,7 @@ ERRORS = (
     monitoring.MonitoringError,
 )
 # A run that may still be going, which a series on a shared cluster stops at.
-STILL_RUNNING = (locust.LocustStillRunning, sandbox_benchmark.SandboxBenchmarkTimeout)
+STILL_RUNNING = (locust.LocustStillRunning, sandbox_benchmark.SandboxBenchmarkTimeout, computesdk.ComputeSDKTimeout)
 # The types whose repeats summary.write can summarize.
 SUMMARIZED = {"locust"}
 
