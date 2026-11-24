@@ -15,6 +15,8 @@
 package scenario
 
 import (
+	"context"
+	"net/http"
 	"slices"
 	"testing"
 	"time"
@@ -94,5 +96,97 @@ func TestNewProviderDefaultsToSubstrate(t *testing.T) {
 	if !s.ImplicitResume || !s.SuspendDisabled || !s.WaitForWorker {
 		t.Errorf("ImplicitResume, SuspendDisabled and WaitForWorker: got %t, %t and %t, want all",
 			s.ImplicitResume, s.SuspendDisabled, s.WaitForWorker)
+	}
+}
+
+// e2b takes its key from the environment and fills in the defaults left unset.
+func TestNewProviderE2B(t *testing.T) {
+	cfg := &userclass.Config{Atespace: "benchmark", HTTPClient: &http.Client{}}
+	c := Setup(Options{Config: cfg, Provider: "e2b", E2B: E2BOptions{CPUCount: 2}})
+	rec := measure.Recorder{UserClass: "SomeUser"}
+
+	t.Setenv("E2B_API_KEY", "")
+	if _, err := c.NewProvider(rec, false, false); err == nil {
+		t.Fatal("NewProvider without E2B_API_KEY: got nil, want an error")
+	}
+
+	t.Setenv("E2B_API_KEY", "key")
+	p, err := c.NewProvider(rec, true, false)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	e, ok := p.(*sandbox.E2B)
+	if !ok {
+		t.Fatalf("provider: got %T, want *sandbox.E2B", p)
+	}
+	if e.APIKey != "key" || e.APIURL != sandbox.E2BDefaultAPIURL || e.Domain != sandbox.E2BDefaultDomain || e.Port != 80 {
+		t.Errorf("API and routing: got key %q, url %q, domain %q, port %d", e.APIKey, e.APIURL, e.Domain, e.Port)
+	}
+	if e.Template != c.ActorTemplate() || e.CPUCount != 2 || !e.SuspendDisabled || e.ActorClient != cfg.HTTPClient {
+		t.Errorf("sandbox settings: got template %q, cpu %d, suspend disabled %t", e.Template, e.CPUCount, e.SuspendDisabled)
+	}
+}
+
+// daytona takes its key from the environment and fills in the defaults left
+// unset.
+func TestNewProviderDaytona(t *testing.T) {
+	cfg := &userclass.Config{Atespace: "benchmark", HTTPClient: &http.Client{}}
+	c := Setup(Options{Config: cfg, Provider: "daytona", Daytona: DaytonaOptions{MemoryGB: 4, Target: "us"}})
+	rec := measure.Recorder{UserClass: "SomeUser"}
+
+	t.Setenv("DAYTONA_API_KEY", "")
+	if _, err := c.NewProvider(rec, false, false); err == nil {
+		t.Fatal("NewProvider without DAYTONA_API_KEY: got nil, want an error")
+	}
+
+	t.Setenv("DAYTONA_API_KEY", "key")
+	p, err := c.NewProvider(rec, false, false)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	d, ok := p.(*sandbox.Daytona)
+	if !ok {
+		t.Fatalf("provider: got %T, want *sandbox.Daytona", p)
+	}
+	if d.APIKey != "key" || d.APIURL != sandbox.DaytonaDefaultAPIURL || d.Port != 80 || d.Target != "us" {
+		t.Errorf("API and routing: got key %q, url %q, port %d, target %q", d.APIKey, d.APIURL, d.Port, d.Target)
+	}
+	if d.Snapshot != c.ActorTemplate() || d.MemoryGB != 4 || d.TTL != 0 || d.ActorClient != cfg.HTTPClient {
+		t.Errorf("sandbox settings: got snapshot %q, memory %d, ttl %v", d.Snapshot, d.MemoryGB, d.TTL)
+	}
+}
+
+// modal needs a command, and fills in the defaults left unset.
+func TestNewProviderModal(t *testing.T) {
+	var got sandbox.ModalOptions
+	old := newModalAPI
+	newModalAPI = func(_ context.Context, o sandbox.ModalOptions) (sandbox.ModalAPI, error) {
+		got = o
+		return nil, nil
+	}
+	t.Cleanup(func() { newModalAPI = old })
+
+	cfg := &userclass.Config{Atespace: "benchmark", HTTPClient: &http.Client{}}
+	rec := measure.Recorder{UserClass: "SomeUser"}
+	c := Setup(Options{Config: cfg, Provider: "modal", Modal: ModalOptions{MemoryMiB: 2048}})
+	if _, err := c.NewProvider(rec, false, false); err == nil {
+		t.Fatal("NewProvider without a command: got nil, want an error")
+	}
+
+	c.Modal.Command = "python -m http.server 80"
+	p, err := c.NewProvider(rec, true, false)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	m, ok := p.(*sandbox.Modal)
+	if !ok {
+		t.Fatalf("provider: got %T, want *sandbox.Modal", p)
+	}
+	if m.Port != 80 || !m.SuspendDisabled || m.ActorClient != cfg.HTTPClient {
+		t.Errorf("provider: got port %d, suspend disabled %t", m.Port, m.SuspendDisabled)
+	}
+	if got.App != ModalDefaultApp || got.Image != c.ActorTemplate() || got.MemoryMiB != 2048 ||
+		!slices.Equal(got.Command, []string{"sh", "-c", "python -m http.server 80"}) || got.Tags["benchmark-user"] != "SomeUser" {
+		t.Errorf("modal options: got %+v", got)
 	}
 }

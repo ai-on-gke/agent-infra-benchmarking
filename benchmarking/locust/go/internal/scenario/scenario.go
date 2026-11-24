@@ -24,7 +24,9 @@ import (
 	"errors"
 	"flag"
 	"log/slog"
+	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"go.ate.dev/substrate/agent-infra-benchmarking/benchmarking/locust/go/internal/measure"
@@ -65,8 +67,14 @@ type Options struct {
 	// APIStubs is empty.
 	Config *userclass.Config
 
-	// Provider names the infrastructure provider: agent-substrate or agent-sandbox.
+	// Provider names the infrastructure provider: agent-substrate,
+	// agent-sandbox, e2b, daytona or modal.
 	Provider string
+
+	// E2B, Daytona and Modal are those providers' settings.
+	E2B     E2BOptions
+	Daytona DaytonaOptions
+	Modal   ModalOptions
 
 	// WarmPoolNames are the agent-sandbox SandboxWarmPools the users are
 	// spread over.
@@ -115,6 +123,75 @@ type Options struct {
 	// workload's is set.
 	Flags *flag.FlagSet
 }
+
+// E2BOptions are the e2b provider's settings; its API key is read from
+// E2B_API_KEY. The zero value asks for the defaults.
+type E2BOptions struct {
+	// APIURL is the E2B API, and Domain the one sandboxes are served on.
+	APIURL string
+	Domain string
+
+	// Port is the one the workload listens on inside the sandbox.
+	Port int
+
+	// CPUCount and MemoryMB size the sandboxes; zero leaves the template's.
+	CPUCount int
+	MemoryMB int
+
+	// Lifetime is the TTL a running sandbox gets on each create and wake.
+	Lifetime time.Duration
+}
+
+// DaytonaOptions are the daytona provider's settings; its API key is read
+// from DAYTONA_API_KEY. The zero value asks for the defaults.
+type DaytonaOptions struct {
+	// APIURL is the Daytona API, and Target the region sandboxes run in.
+	APIURL string
+	Target string
+
+	// Port is the one the workload listens on inside the sandbox.
+	Port int
+
+	// CPU and MemoryGB size the sandboxes; zero leaves the snapshot's.
+	CPU      int
+	MemoryGB int
+
+	// TTL destroys a sandbox that long after its creation, whatever its
+	// state.
+	TTL time.Duration
+}
+
+// ModalOptions are the modal provider's settings; its credentials are the
+// Modal SDK's own. The zero value asks for the defaults, but Command.
+type ModalOptions struct {
+	// App is the Modal App the sandboxes run under, made if missing.
+	App string
+
+	// Command starts the workload in the sandbox, run by sh -c, and Port is
+	// the one it listens on.
+	Command string
+	Port    int
+
+	// Regions are the ones sandboxes may run in.
+	Regions []string
+
+	// CPU and MemoryMiB size the sandboxes; zero leaves Modal's default.
+	CPU       float64
+	MemoryMiB int
+
+	// Timeout ends a sandbox that long after its start.
+	Timeout time.Duration
+}
+
+// ModalDefaultApp is the Modal App sandboxes run under when ModalOptions
+// names none.
+const ModalDefaultApp = "boomer-benchmark"
+
+// modalSetupTimeout bounds connecting to Modal and building the image.
+const modalSetupTimeout = 15 * time.Minute
+
+// newModalAPI is sandbox.NewModalAPI, swapped out by tests.
+var newModalAPI = sandbox.NewModalAPI
 
 // Common is Options as Setup resolved them.
 type Common struct {
@@ -166,6 +243,15 @@ func (c Common) ActorTemplate() string {
 // reported through rec. suspendDisabled has substrate skip the suspend phase,
 // and waitForWorker wait for a free worker on a resume that finds none.
 func (c Common) NewProvider(rec measure.Recorder, suspendDisabled, waitForWorker bool) (sandbox.Provider, error) {
+	if c.Provider == "e2b" {
+		return c.newE2B(rec, suspendDisabled)
+	}
+	if c.Provider == "daytona" {
+		return c.newDaytona(rec, suspendDisabled)
+	}
+	if c.Provider == "modal" {
+		return c.newModal(rec, suspendDisabled)
+	}
 	if c.Provider == "agent-sandbox" {
 		if len(c.WarmPoolNames) == 0 {
 			return nil, errors.New("agent-sandbox needs a --warm-pool-name to claim from")
@@ -194,5 +280,116 @@ func (c Common) NewProvider(rec measure.Recorder, suspendDisabled, waitForWorker
 		SuspendDisabled: suspendDisabled,
 		SuspendMode:     suspendModes[c.SuspendMode],
 		WaitForWorker:   waitForWorker,
+	}, nil
+}
+
+func (c Common) newE2B(rec measure.Recorder, suspendDisabled bool) (sandbox.Provider, error) {
+	key := os.Getenv("E2B_API_KEY")
+	if key == "" {
+		return nil, errors.New("e2b needs its API key in E2B_API_KEY")
+	}
+	o := c.E2B
+	if o.APIURL == "" {
+		o.APIURL = sandbox.E2BDefaultAPIURL
+	}
+	if o.Domain == "" {
+		o.Domain = sandbox.E2BDefaultDomain
+	}
+	if o.Port == 0 {
+		o.Port = 80
+	}
+	if o.Lifetime == 0 {
+		o.Lifetime = 10 * time.Minute
+	}
+	return &sandbox.E2B{
+		Rec:         rec,
+		APIURL:      strings.TrimSuffix(o.APIURL, "/"),
+		APIKey:      key,
+		API:         &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()},
+		ActorClient: c.Config.HTTPClient,
+		Domain:      o.Domain,
+		Port:        o.Port,
+		Workload:    c.Workload.Name(),
+		Template:    c.ActorTemplate(),
+		CPUCount:    o.CPUCount,
+		MemoryMB:    o.MemoryMB,
+		Lifetime:    o.Lifetime,
+		Metadata: map[string]string{
+			"benchmark-user": rec.UserClass,
+			"atespace":       c.Config.Atespace,
+		},
+		SuspendDisabled: suspendDisabled,
+	}, nil
+}
+
+func (c Common) newDaytona(rec measure.Recorder, suspendDisabled bool) (sandbox.Provider, error) {
+	key := os.Getenv("DAYTONA_API_KEY")
+	if key == "" {
+		return nil, errors.New("daytona needs its API key in DAYTONA_API_KEY")
+	}
+	o := c.Daytona
+	if o.APIURL == "" {
+		o.APIURL = sandbox.DaytonaDefaultAPIURL
+	}
+	if o.Port == 0 {
+		o.Port = 80
+	}
+	return &sandbox.Daytona{
+		Rec:         rec,
+		APIURL:      strings.TrimSuffix(o.APIURL, "/"),
+		APIKey:      key,
+		API:         &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()},
+		ActorClient: c.Config.HTTPClient,
+		Port:        o.Port,
+		Workload:    c.Workload.Name(),
+		Snapshot:    c.ActorTemplate(),
+		Target:      o.Target,
+		CPU:         o.CPU,
+		MemoryGB:    o.MemoryGB,
+		TTL:         o.TTL,
+		Labels: map[string]string{
+			"benchmark-user": rec.UserClass,
+			"atespace":       c.Config.Atespace,
+		},
+		SuspendDisabled: suspendDisabled,
+	}, nil
+}
+
+func (c Common) newModal(rec measure.Recorder, suspendDisabled bool) (sandbox.Provider, error) {
+	o := c.Modal
+	if o.Command == "" {
+		return nil, errors.New("modal needs --modal-command, which starts the workload in the sandbox")
+	}
+	if o.App == "" {
+		o.App = ModalDefaultApp
+	}
+	if o.Port == 0 {
+		o.Port = 80
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), modalSetupTimeout)
+	defer cancel()
+	api, err := newModalAPI(ctx, sandbox.ModalOptions{
+		App:       o.App,
+		Image:     c.ActorTemplate(),
+		Command:   []string{"sh", "-c", o.Command},
+		Regions:   o.Regions,
+		CPU:       o.CPU,
+		MemoryMiB: o.MemoryMiB,
+		Timeout:   o.Timeout,
+		Tags: map[string]string{
+			"benchmark-user": rec.UserClass,
+			"atespace":       c.Config.Atespace,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &sandbox.Modal{
+		Rec:             rec,
+		API:             api,
+		ActorClient:     c.Config.HTTPClient,
+		Port:            o.Port,
+		Workload:        c.Workload.Name(),
+		SuspendDisabled: suspendDisabled,
 	}, nil
 }
