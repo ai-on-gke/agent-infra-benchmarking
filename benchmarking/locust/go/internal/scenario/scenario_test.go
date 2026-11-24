@@ -15,6 +15,7 @@
 package scenario
 
 import (
+	"context"
 	"net/http"
 	"slices"
 	"testing"
@@ -152,5 +153,40 @@ func TestNewProviderDaytona(t *testing.T) {
 	}
 	if d.Snapshot != c.ActorTemplate() || d.MemoryGB != 4 || d.TTL != 0 || d.ActorClient != cfg.HTTPClient {
 		t.Errorf("sandbox settings: got snapshot %q, memory %d, ttl %v", d.Snapshot, d.MemoryGB, d.TTL)
+	}
+}
+
+// modal needs a command, and fills in the defaults left unset.
+func TestNewProviderModal(t *testing.T) {
+	var got sandbox.ModalOptions
+	old := newModalAPI
+	newModalAPI = func(_ context.Context, o sandbox.ModalOptions) (sandbox.ModalAPI, error) {
+		got = o
+		return nil, nil
+	}
+	t.Cleanup(func() { newModalAPI = old })
+
+	cfg := &userclass.Config{Atespace: "benchmark", HTTPClient: &http.Client{}}
+	rec := measure.Recorder{UserClass: "SomeUser"}
+	c := Setup(Options{Config: cfg, Provider: "modal", Modal: ModalOptions{MemoryMiB: 2048}})
+	if _, err := c.NewProvider(rec, false, false); err == nil {
+		t.Fatal("NewProvider without a command: got nil, want an error")
+	}
+
+	c.Modal.Command = "python -m http.server 80"
+	p, err := c.NewProvider(rec, true, false)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	m, ok := p.(*sandbox.Modal)
+	if !ok {
+		t.Fatalf("provider: got %T, want *sandbox.Modal", p)
+	}
+	if m.Port != 80 || !m.SuspendDisabled || m.ActorClient != cfg.HTTPClient {
+		t.Errorf("provider: got port %d, suspend disabled %t", m.Port, m.SuspendDisabled)
+	}
+	if got.App != ModalDefaultApp || got.Image != c.ActorTemplate() || got.MemoryMiB != 2048 ||
+		!slices.Equal(got.Command, []string{"sh", "-c", "python -m http.server 80"}) || got.Tags["benchmark-user"] != "SomeUser" {
+		t.Errorf("modal options: got %+v", got)
 	}
 }

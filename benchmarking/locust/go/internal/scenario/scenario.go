@@ -68,12 +68,13 @@ type Options struct {
 	Config *userclass.Config
 
 	// Provider names the infrastructure provider: agent-substrate,
-	// agent-sandbox, e2b or daytona.
+	// agent-sandbox, e2b, daytona or modal.
 	Provider string
 
-	// E2B is the e2b provider's settings, and Daytona the daytona one's.
+	// E2B, Daytona and Modal are those providers' settings.
 	E2B     E2BOptions
 	Daytona DaytonaOptions
+	Modal   ModalOptions
 
 	// WarmPoolNames are the agent-sandbox SandboxWarmPools the users are
 	// spread over.
@@ -160,6 +161,38 @@ type DaytonaOptions struct {
 	TTL time.Duration
 }
 
+// ModalOptions are the modal provider's settings; its credentials are the
+// Modal SDK's own. The zero value asks for the defaults, but Command.
+type ModalOptions struct {
+	// App is the Modal App the sandboxes run under, made if missing.
+	App string
+
+	// Command starts the workload in the sandbox, run by sh -c, and Port is
+	// the one it listens on.
+	Command string
+	Port    int
+
+	// Regions are the ones sandboxes may run in.
+	Regions []string
+
+	// CPU and MemoryMiB size the sandboxes; zero leaves Modal's default.
+	CPU       float64
+	MemoryMiB int
+
+	// Timeout ends a sandbox that long after its start.
+	Timeout time.Duration
+}
+
+// ModalDefaultApp is the Modal App sandboxes run under when ModalOptions
+// names none.
+const ModalDefaultApp = "boomer-benchmark"
+
+// modalSetupTimeout bounds connecting to Modal and building the image.
+const modalSetupTimeout = 15 * time.Minute
+
+// newModalAPI is sandbox.NewModalAPI, swapped out by tests.
+var newModalAPI = sandbox.NewModalAPI
+
 // Common is Options as Setup resolved them.
 type Common struct {
 	Options
@@ -215,6 +248,9 @@ func (c Common) NewProvider(rec measure.Recorder, suspendDisabled, waitForWorker
 	}
 	if c.Provider == "daytona" {
 		return c.newDaytona(rec, suspendDisabled)
+	}
+	if c.Provider == "modal" {
+		return c.newModal(rec, suspendDisabled)
 	}
 	if c.Provider == "agent-sandbox" {
 		if len(c.WarmPoolNames) == 0 {
@@ -315,6 +351,45 @@ func (c Common) newDaytona(rec measure.Recorder, suspendDisabled bool) (sandbox.
 			"benchmark-user": rec.UserClass,
 			"atespace":       c.Config.Atespace,
 		},
+		SuspendDisabled: suspendDisabled,
+	}, nil
+}
+
+func (c Common) newModal(rec measure.Recorder, suspendDisabled bool) (sandbox.Provider, error) {
+	o := c.Modal
+	if o.Command == "" {
+		return nil, errors.New("modal needs --modal-command, which starts the workload in the sandbox")
+	}
+	if o.App == "" {
+		o.App = ModalDefaultApp
+	}
+	if o.Port == 0 {
+		o.Port = 80
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), modalSetupTimeout)
+	defer cancel()
+	api, err := newModalAPI(ctx, sandbox.ModalOptions{
+		App:       o.App,
+		Image:     c.ActorTemplate(),
+		Command:   []string{"sh", "-c", o.Command},
+		Regions:   o.Regions,
+		CPU:       o.CPU,
+		MemoryMiB: o.MemoryMiB,
+		Timeout:   o.Timeout,
+		Tags: map[string]string{
+			"benchmark-user": rec.UserClass,
+			"atespace":       c.Config.Atespace,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &sandbox.Modal{
+		Rec:             rec,
+		API:             api,
+		ActorClient:     c.Config.HTTPClient,
+		Port:            o.Port,
+		Workload:        c.Workload.Name(),
 		SuspendDisabled: suspendDisabled,
 	}, nil
 }

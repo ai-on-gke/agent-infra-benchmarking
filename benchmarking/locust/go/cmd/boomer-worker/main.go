@@ -100,7 +100,7 @@ func main() {
 			"agent-substrate only: comma-separated hostnames every actor may reach over TLS, such as an https:// endpoint, on any port, passed through undecrypted. A cleartext rule does not let TLS through.")
 		apiConnections = flag.Int("api-connections", 1,
 			"Connections to ateapi this worker spreads its users over.")
-		provider     = flag.String("provider", "agent-substrate", "Provider: agent-substrate, agent-sandbox, e2b or daytona.")
+		provider     = flag.String("provider", "agent-substrate", "Provider: agent-substrate, agent-sandbox, e2b, daytona or modal.")
 		warmPoolName = flag.String("warm-pool-name", "",
 			"agent-sandbox only: the SandboxWarmPools to claim from, comma-separated; the users are spread over them.")
 
@@ -122,6 +122,17 @@ func main() {
 		daytonaCPU      = flag.Int("daytona-cpu", 0, "daytona only: vCPUs per sandbox. Unset leaves the snapshot's.")
 		daytonaMemoryGB = flag.Int("daytona-memory-gb", 0, "daytona only: memory per sandbox in GB. Unset leaves the snapshot's.")
 		daytonaTTL      = flag.Duration("daytona-ttl", 0, "daytona only: how long after its creation a sandbox is destroyed, whatever its state, rounded up to minutes. Unset leaves Daytona's default.")
+
+		// modal's own; its credentials are read from MODAL_TOKEN_ID and
+		// MODAL_TOKEN_SECRET or ~/.modal.toml, and its image is
+		// --workload-template's, a registry image tag.
+		modalApp       = flag.String("modal-app", "", fmt.Sprintf("modal only: the Modal App sandboxes run under, made if missing. Unset selects %s.", scenario.ModalDefaultApp))
+		modalCommand   = flag.String("modal-command", "", "modal only: the shell command that starts the workload in the sandbox. Required.")
+		modalPort      = flag.Int("modal-port", 0, "modal only: the port the workload listens on inside the sandbox. Unset selects 80.")
+		modalRegions   = flag.String("modal-regions", "", "modal only: comma-separated regions sandboxes may run in. Unset lets Modal pick.")
+		modalCPU       = flag.Float64("modal-cpu", 0, "modal only: physical CPU cores per sandbox, fractional. Unset leaves Modal's default.")
+		modalMemoryMiB = flag.Int("modal-memory-mib", 0, "modal only: memory per sandbox in MiB. Unset leaves Modal's default.")
+		modalTimeout   = flag.Duration("modal-timeout", 0, "modal only: how long a sandbox may run before Modal terminates it. Unset leaves Modal's default of 5m.")
 
 		// runworkload's own settings, read only when --user-class selects it.
 		instructionsPerCycle = flag.Int("instructions-per-cycle", 1,
@@ -270,6 +281,15 @@ func main() {
 					CPU:      *daytonaCPU,
 					MemoryGB: *daytonaMemoryGB,
 					TTL:      *daytonaTTL,
+				},
+				Modal: scenario.ModalOptions{
+					App:       *modalApp,
+					Command:   *modalCommand,
+					Port:      *modalPort,
+					Regions:   splitList(*modalRegions),
+					CPU:       *modalCPU,
+					MemoryMiB: *modalMemoryMiB,
+					Timeout:   *modalTimeout,
 				},
 			}),
 			SuspendDisabled:        *suspendDisabled,
