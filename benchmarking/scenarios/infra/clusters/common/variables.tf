@@ -159,6 +159,14 @@ variable "sandboxed_disk_size_gb" {
   default     = 100
 }
 
+# A case's infra.cluster.sandboxed-disk-type. pd-ssd writes faster per GB than
+# pd-balanced.
+variable "sandboxed_disk_type" {
+  description = "Boot disk type of the sandboxed node pool's nodes; null for pd-balanced, or hyperdisk-balanced on a -metal type."
+  type        = string
+  default     = null
+}
+
 # A case's infra.cluster.nested-virtualization: for /dev/kvm, which microvm's
 # guests boot on.
 variable "nested_virtualization" {

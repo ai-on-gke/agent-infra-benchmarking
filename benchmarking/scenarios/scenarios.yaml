@@ -121,6 +121,8 @@
 #   sandboxed-machine-type  its machine type, c2-standard-16 by default
 #   sandboxed-disk-size-gb  its nodes' boot disk in GB, 100 by default, where
 #                           substrate writes snapshots
+#   sandboxed-disk-type     its type, pd-balanced by default, hyperdisk-balanced
+#                           on bare metal
 #   zone                    the zone of every pool, in the run's --region;
 #                           --zone's by default
 #   nested-virtualization   true for /dev/kvm on the sandboxed pool off bare
@@ -258,8 +260,10 @@ cases:
       infra:
         cluster:
           sandboxed-nodes: 30
-          # openclaw's 2Gi snapshots saturate a 100GB disk's writes on microvm.
-          sandboxed-disk-size-gb: 1000
+          # Snapshot writes need the 480MiB/s a c2-standard-16 allows, which
+          # pd-ssd reaches at 500GB.
+          sandboxed-disk-size-gb: 500
+          sandboxed-disk-type: pd-ssd
           configuration: "{configuration}"
           nested-virtualization: "{nested-virtualization}"
       workers:
@@ -307,7 +311,6 @@ cases:
       infra:
         cluster:
           sandboxed-nodes: 30
-          sandboxed-disk-size-gb: 1000
           configuration: "{configuration}"
           gke-sandbox: true
       workers:

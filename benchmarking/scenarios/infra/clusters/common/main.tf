@@ -92,7 +92,7 @@ module "cluster" {
     }
     sandboxed = {
       machine_type   = var.sandboxed_machine_type
-      disk_type      = local.sandboxed_bare_metal ? "hyperdisk-balanced" : "pd-balanced"
+      disk_type      = coalesce(var.sandboxed_disk_type, local.sandboxed_bare_metal ? "hyperdisk-balanced" : "pd-balanced")
       disk_size_gb   = var.sandboxed_disk_size_gb
       node_count     = var.sandboxed_node_count
       min_node_count = var.sandboxed_min_node_count
