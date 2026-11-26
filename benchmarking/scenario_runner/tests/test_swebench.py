@@ -372,9 +372,9 @@ class Stack(unittest.TestCase):
             self.assertEqual(sandboxenv_rl.render_stack(cli, self.CLUSTER, "gvisor", 3, "api", 1), "pinned")
         self.assertIn("ko://go.ate.dev/substrate/cmd/ateworker-gvisor", resolve.call_args.args[1])
 
-    def test_the_template_has_the_guest_the_size_and_the_clusters_bucket(self):
+    def test_the_template_has_the_guest_and_the_size(self):
         with printing("template") as (cli, asked):
-            self.assertEqual(sandboxenv_rl.render_template(cli, self.CLUSTER, "guest@d", "2", "1Gi"), "template")
+            self.assertEqual(sandboxenv_rl.render_template(cli, "guest@d", "2", "1Gi"), "template")
         self.assertEqual(
             asked,
             [(
@@ -383,7 +383,6 @@ class Stack(unittest.TestCase):
                 "--template=default-template",
                 "--atespace=ate-env",
                 "--guest-image=guest@d",
-                "--snapshots-bucket=gs://bucket/ate-env/default-template/",
                 "--cpu=2",
                 "--memory=1Gi",
             )],
@@ -420,14 +419,14 @@ class Stack(unittest.TestCase):
 
     def test_the_access_policy_is_made_unless_the_atespace_has_one(self):
         def ate(*args):
-            return ["true"] if args[0] == "get" else ["ate", *args]
+            return ["echo", "bindings: []"] if args[0] == "get" else ["ate", *args]
 
         with mock.patch.object(sandboxenv_rl, "stream") as stream:
             sandboxenv_rl.ensure_access_policy(ate, "policy")
         stream.assert_not_called()
 
         def ate_without(*args):
-            return ["false"] if args[0] == "get" else ["ate", *args]
+            return ["true"] if args[0] == "get" else ["ate", *args]
 
         with mock.patch.object(sandboxenv_rl, "stream") as stream:
             sandboxenv_rl.ensure_access_policy(ate_without, "policy")

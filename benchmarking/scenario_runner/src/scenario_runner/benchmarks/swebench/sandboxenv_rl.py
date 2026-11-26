@@ -171,10 +171,11 @@ def render_stack(cli: AteEnv, cluster: Cluster, sandbox_class: str, worker_count
     return substrate.resolve(cluster, yaml.safe_dump_all(docs, sort_keys=False))
 
 
-def render_template(cli: AteEnv, cluster: Cluster, guest_image: str, actor_cpu: str, actor_memory: str) -> str:
+def render_template(cli: AteEnv, guest_image: str, actor_cpu: str, actor_memory: str) -> str:
     """default-template, whose actors run the guest, on the pool render_stack
-    makes, which its default workerSelector names, and whose snapshots go in
-    the cluster's bucket."""
+    makes, which its default workerSelector names. Its snapshots go in the
+    cluster's snapshot location: a location of the template's own needs a
+    preview gate substrate is not installed with."""
     return output(
         cli(
             "manifest",
@@ -182,7 +183,6 @@ def render_template(cli: AteEnv, cluster: Cluster, guest_image: str, actor_cpu: 
             f"--template={TEMPLATE}",
             f"--atespace={ATESPACE}",
             f"--guest-image={guest_image}",
-            f"--snapshots-bucket=gs://{cluster.bucket}/{ATESPACE}/{TEMPLATE}/",
             f"--cpu={actor_cpu}",
             f"--memory={actor_memory}",
         )
@@ -212,8 +212,9 @@ def ensure_auth_secret(cli: AteEnv, cluster: Cluster) -> None:
 def ensure_access_policy(ate: Callable[..., list[str]], policy: str) -> None:
     """Gives ate-env-api the editor role on its atespace, unless the atespace
     has a policy already: it has at most one, which an earlier run made, and
-    that is the same."""
-    if subprocess.run(ate("get", "access-policy", "-a", ATESPACE), capture_output=True).returncode == 0:
+    that is the same. kubectl ate get exits 0 for an atespace without a policy
+    too, printing nothing to stdout."""
+    if output(ate("get", "access-policy", "-a", ATESPACE)).strip():
         log(f"sandboxenv-rl: {ATESPACE} has its access policy already")
         return
     stream(ate("create", "access-policy", "-a", ATESPACE, "-f", "-"), input=policy)
@@ -236,7 +237,7 @@ def deploy(
     api_image, guest_image = pinned_image(image_repo, "ate-env-api"), pinned_image(image_repo, "ate-env-guest")
     with ate_env() as cli:
         stack = render_stack(cli, cluster, sandbox_class, worker_count, api_image, api_replicas)
-        template = render_template(cli, cluster, guest_image, actor_cpu, actor_memory)
+        template = render_template(cli, guest_image, actor_cpu, actor_memory)
         policy = output(cli("manifest", "access-policy", f"--namespace={NAMESPACE}"))
         # The Secret needs the namespace, which the stack applies too.
         cluster.apply_namespace(NAMESPACE)
@@ -254,8 +255,7 @@ def deploy(
         worker_pool.wait_ready(cluster, timeout, POOL, NAMESPACE)
 
         log(
-            f"sandboxenv-rl: registering {ATESPACE}/{TEMPLATE} (actor_memory={actor_memory}, actor_cpu={actor_cpu},"
-            f" bucket=gs://{cluster.bucket}/{ATESPACE}/{TEMPLATE}/)"
+            f"sandboxenv-rl: registering {ATESPACE}/{TEMPLATE} (actor_memory={actor_memory}, actor_cpu={actor_cpu})"
         )
         # Templates are immutable. Deleting one also deletes its golden actor and snapshot.
         workloads.delete_template(ate, TEMPLATE, ATESPACE)
