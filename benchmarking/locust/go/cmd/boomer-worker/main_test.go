@@ -24,7 +24,7 @@ import (
 // classes.
 func TestUserClassesListRunworkload(t *testing.T) {
 	names := userClasses()
-	for _, want := range []string{"runworkload", "density", "glutton"} {
+	for _, want := range []string{"runworkload", "density", "glutton", "sweperf"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("user classes: got %v, want %q among them", names, want)
 		}

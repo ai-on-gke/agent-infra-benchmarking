@@ -46,6 +46,7 @@ import (
 
 	// Imported for the user classes it registers via init().
 	_ "go.ate.dev/substrate/internal/benchmarking/boomer/glutton"
+	_ "go.ate.dev/substrate/internal/benchmarking/boomer/sweperf"
 )
 
 const (
@@ -116,6 +117,16 @@ func main() {
 			"density only: how many of this worker's actors are in a cycle at once, at least 1. Each actor waits after a cycle so that it spends this over the worker's users of its time in one, in place of --min-wait and --max-wait, which then only follow a failed start.")
 		skippedResumeSuspend = flag.Duration("skipped-resume-suspend", 0,
 			"density with --suspend-disabled only: the resume and suspend each cycle skips, which the pacing counts as if it ran, so the actors send instructions at the rate of ones that suspend.")
+
+		// sweperf's own settings, read only when --user-class selects it.
+		sweperfTemplate = flag.String("sweperf-template", "sweperf-astropy-7336",
+			"sweperf only: ActorTemplate name for the sweperf workload.")
+		sweperfTotalSteps = flag.Int("sweperf-total-steps", 21,
+			"sweperf only: total steps in the workload replay trace.")
+		sweperfNumCycles = flag.Int("sweperf-num-cycles", 4,
+			"sweperf only: number of suspend/resume cycles to partition the workload steps into.")
+		sweperfPollIntervalMs = flag.Int("sweperf-poll-interval-ms", 100,
+			"sweperf only: interval in ms between /status polls while a cycle's job runs.")
 	)
 	// Each workload's own, such as --glutton-write-ram, which only the
 	// workload --workload-name selects may be given.
@@ -268,13 +279,28 @@ func main() {
 		// The upstream user classes take the same values off their holder, as
 		// the keys their codec reads; a key a class does not have is ignored.
 		cfg.Dyn = dynconfig.NewHolder(entry.Config)
-		payload, err := json.Marshal(map[string]any{
+		dynMap := map[string]any{
 			"min_wait_time":     dynconfig.Seconds(*minWait),
 			"max_wait_time":     dynconfig.Seconds(*maxWait),
 			"resume_mode":       *resumeMode,
 			"lifecycle_mode":    *suspendMode,
 			"trace_probability": *traceProbability,
-		})
+		}
+		if class == "sweperf" {
+			if *sweperfTemplate != "" {
+				dynMap["sweperf_template"] = *sweperfTemplate
+			}
+			if *sweperfTotalSteps > 0 {
+				dynMap["sweperf_total_steps"] = *sweperfTotalSteps
+			}
+			if *sweperfNumCycles > 0 {
+				dynMap["sweperf_num_cycles"] = *sweperfNumCycles
+			}
+			if *sweperfPollIntervalMs > 0 {
+				dynMap["sweperf_poll_interval_ms"] = *sweperfPollIntervalMs
+			}
+		}
+		payload, err := json.Marshal(dynMap)
 		if err == nil {
 			_, _, err = cfg.Dyn.Apply(payload)
 		}

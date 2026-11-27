@@ -41,7 +41,15 @@ MANIFESTS_DIR = RUNNER_DIR.parent / "workloads" / "manifests"
 NAMESPACE = worker_pool.NAMESPACE
 ATESPACE = "benchmark-workloads"
 # The templates whose image is neither ko:// nor a literal, but one of ours.
-TEMPLATE_IMAGES = {"openclaw": "openclaw-workload", "claude-code": "claude-code-workload"}
+TEMPLATE_IMAGES = {
+    "openclaw": "openclaw-workload",
+    "claude-code": "claude-code-workload",
+    "sweperf-astropy-7336": "sweperf-workload",
+    "sweperf-django-11099": "sweperf-workload",
+    "sweperf-matplotlib-20826": "sweperf-workload",
+    "sweperf-sphinx-8638": "sweperf-workload",
+    "sweperf-sympy-13647": "sweperf-workload",
+}
 # The templates whose actors call mock-llm rather than a real LLM, which needs
 # a node pool of its own (cluster_configs.MOCK_LLM_POOL).
 MOCK_LLM_TEMPLATES = {"openclaw", "claude-code"}
@@ -99,6 +107,8 @@ def kubectl_ate(cluster: Cluster) -> Iterator[KubectlAte]:
 
 
 def default_actor_memory(workload: str | None) -> str:
+    if workload and workload.startswith("sweperf"):
+        return "4Gi"
     return DEFAULT_ACTOR_MEMORY_BY_WORKLOAD.get(workload or "", DEFAULT_ACTOR_MEMORY)
 
 

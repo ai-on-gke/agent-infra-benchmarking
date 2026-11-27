@@ -448,6 +448,49 @@ cases:
         workload-name: glutton
         workload-template: glutton
 
+  # sweperf replaying SWE-bench tasks on substrate gvisor and microvm.
+  "sweperf-{task}-substrate-{sandbox-class}":
+    repeats:
+      count: 1
+    locust:
+      user-class: sweperf
+      install:
+        substrate:
+          sandbox-class: "{sandbox-class}"
+      infra:
+        cluster:
+          sandboxed-nodes: 3
+          nested-virtualization: "{nested-virtualization}"
+      workers:
+        count: 10
+      actor-memory: 4Gi
+      master:
+        run-time: 5m
+        users: 10
+        spawn-rate: 10
+        warm-up: 10s
+      worker:
+        sweperf-template: "sweperf-{task}"
+        sweperf-total-steps: "{steps}"
+        sweperf-num-cycles: 4
+        sweperf-poll-interval-ms: 100
+    parameters:
+      class:
+      - sandbox-class: gvisor
+      - sandbox-class: microvm
+        nested-virtualization: true
+      task:
+      - task: astropy-7336
+        steps: 21
+      - task: django-11099
+        steps: 15
+      - task: matplotlib-20826
+        steps: 49
+      - task: sphinx-8638
+        steps: 64
+      - task: sympy-13647
+        steps: 33
+
   # 100 workers on 10 nodes, suspended between instructions, at 100, 250 and
   # 500 VUs, the variants named for their actors per node, against a baseline
   # of 100 that never suspend. The density user class paces each actor to be

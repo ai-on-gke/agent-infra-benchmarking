@@ -266,8 +266,32 @@ class CaseChecks(unittest.TestCase):
         self.assertEqual(master[:2], ["-f", "/app/tests/other.py"])
         self.assertIn("--user-class=other", locust.worker_args(options))
 
-    def test_the_master_has_a_locustfile_for_density_and_runworkload(self):
-        self.assertEqual(locust.user_classes(), ["density", "runworkload"])
+    def test_the_master_has_a_locustfile_for_density_runworkload_and_sweperf(self):
+        self.assertEqual(locust.user_classes(), ["density", "runworkload", "sweperf"])
+
+    def test_sweperf_case_args(self):
+        sweperf_case = {
+            "locust": {
+                "user-class": "sweperf",
+                "install": {"substrate": {"sandbox-class": "gvisor"}},
+                "master": {"run-time": "5m", "users": 10},
+                "worker": {
+                    "sweperf-template": "sweperf-astropy-7336",
+                    "sweperf-total-steps": 21,
+                    "sweperf-num-cycles": 4,
+                },
+            }
+        }
+        options = check("sweperf-test", sweperf_case)["locust"]
+        self.assertEqual(options["user-class"], "sweperf")
+        self.assertEqual(options["actor-memory"], "4Gi")
+        master = locust.master_args(options)
+        self.assertEqual(master[:2], ["-f", "/app/tests/sweperf.py"])
+        worker = locust.worker_args(options)
+        self.assertIn("--user-class=sweperf", worker)
+        self.assertIn("--sweperf-template=sweperf-astropy-7336", worker)
+        self.assertIn("--sweperf-total-steps=21", worker)
+        self.assertIn("--sweperf-num-cycles=4", worker)
 
     def test_flags(self):
         self.assertEqual(locust.flags({"a": True, "b": 2, "c": "x", "d": False}), ["--a", "--b=2", "--c=x", "--d=false"])

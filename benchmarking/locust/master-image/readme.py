@@ -233,6 +233,20 @@ def _header(info: dict) -> str:
 
 # The per-run results table: the request names in a cycle's order.
 RESULT_ROWS = ("Resume", "ExecutionTime", "TTFI", "Suspend", "CycleTime")
+# The per-run results table for sweperf runs.
+SWEPERF_ROWS = (
+    "TaskWallClock",
+    "TaskCEL",
+    "CycleCEL",
+    "ResumeToFirstExec",
+    "ResumeActor",
+    "SuspendActorAsync",
+    "SuspendActor",
+    "Workload_Cycle_1",
+    "Workload_Cycle_2",
+    "Workload_Cycle_3",
+    "Workload_Cycle_4",
+)
 # The worker's row for an actor after a failed cycle: a success kept it, a
 # failure replaced it.
 RECOVER_ROW = "Recover"
@@ -243,11 +257,12 @@ SLOW_INSTRUCTION_WORKLOADS = ("openclaw", "claude-code")
 
 def _results(info: dict, stats: list[dict], stats_file: str | None) -> str:
     rows = {row.get("Name"): row for row in stats}
-    if not any(name in rows for name in RESULT_ROWS):
+    result_rows = SWEPERF_ROWS if any(name in rows for name in SWEPERF_ROWS) else RESULT_ROWS
+    if not any(name in rows for name in result_rows):
         return ""
     lines = ["## Results", "", f"From `{stats_file or UNKNOWN}`; latencies in ms.", ""]
     table = []
-    for name in RESULT_ROWS:
+    for name in result_rows:
         row = rows.get(name)
         if row:
             table.append([f"`{name}`", row.get("Request Count", UNKNOWN), row.get("Failure Count", UNKNOWN),

@@ -24,5 +24,10 @@
     "description": "The glutton echo workload container for agent-sandbox.",
     "dockerfile": "benchmarking/workloads/images/glutton/Dockerfile",
     "context": "dependency-repos/substrate"
+  },
+  "sweperf-workload": {
+    "description": "The actor the sweperf workloads drive: replay.py and traces/ for all tasks.",
+    "dockerfile": "benchmarking/workloads/images/sweperf/Dockerfile",
+    "context": "benchmarking/workloads/images/sweperf"
   }
 }

@@ -45,7 +45,8 @@ TOO_MANY_FAILURES_EXIT = 4
 # The row of one whole cycle: resume, instruction, suspend. A cycle that fails
 # on any of its calls fails this row once, where each call's own row, TTFI's
 # and CycleTime's would count the one failure three times.
-CYCLE_ROW = "CycleTime"
+# In sweperf, each cycle reports CycleCEL, and each full trajectory TaskWallClock.
+CYCLE_ROWS = ("CycleTime", "CycleCEL", "TaskWallClock")
 # The calls that give a user its actor. One that fails is a cycle that never
 # started, so it counts as a failed cycle too.
 START_ROWS = ("CreateAtespace", "CreateActor", "CreateActorEgressPolicy")
@@ -87,7 +88,7 @@ def cycle_counts(stats_csv: Path) -> dict:
     None if there were none."""
     with open(stats_csv, newline="") as f:
         rows = {row["Name"]: row for row in csv.DictReader(f)}
-    cycle = rows.get(CYCLE_ROW) or {}
+    cycle = next((rows[name] for name in CYCLE_ROWS if name in rows), {})
     cycles, failed = int(cycle.get("Request Count") or 0), int(cycle.get("Failure Count") or 0)
     starts = sum(int(rows[name]["Failure Count"]) for name in START_ROWS if name in rows)
     attempted = cycles + starts

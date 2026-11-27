@@ -159,10 +159,12 @@ def check_case(name: str, case: dict, deploy_workloads: bool) -> dict:
     pods = options.get("locust-workers", 1)
     if not isinstance(pods, int) or isinstance(pods, bool) or pods < 1:
         raise ValueError(f"case {name}'s `{TYPE}.locust-workers` must be a whole number from 1, got {pods!r}")
-    template = worker.get("workload-template") or worker.get("workload-name")
+    template = worker.get("workload-template") or worker.get("workload-name") or worker.get("sweperf-template")
     if deploy_workloads:
         if not template:
-            raise ValueError(f"case {name}'s `{TYPE}.worker` names no `workload-template` or `workload-name` to deploy")
+            raise ValueError(
+                f"case {name}'s `{TYPE}.worker` names no `workload-template`, `workload-name`, or `sweperf-template` to deploy"
+            )
         workloads.check_templates([template])
     workload = worker.get("workload-name") or template
     memory = options.get("actor-memory", workloads.default_actor_memory(workload))
@@ -442,7 +444,11 @@ def run(
 
     provider = control_plane(case)
     options = case[TYPE]
-    template_name = options["worker"].get("workload-template") or options["worker"].get("workload-name")
+    template_name = (
+        options["worker"].get("workload-template")
+        or options["worker"].get("workload-name")
+        or options["worker"].get("sweperf-template")
+    )
     workload = options["worker"].get("workload-name") or template_name
     template = None
     if provider == AGENT_SANDBOX:
